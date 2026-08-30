@@ -1,0 +1,156 @@
+  <div class="utility-modal" id="utility-modal" hidden>
+    <div class="utility-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="utility-modal-title">
+      <div class="utility-modal-header">
+        <div>
+          <h2 class="utility-modal-title" id="utility-modal-title">Utilities</h2>
+          <div class="utility-modal-subtitle">Review fixes, loops, integrations, and library settings.</div>
+        </div>
+        <button class="icon-button utility-modal-close" type="button" id="utility-modal-close" data-close-utility-modal="1" aria-label="Close utilities">✕</button>
+      </div>
+      <div class="utility-modal-tabs">
+        <button class="utility-tab is-active" type="button" id="utility-problematic-tab" data-utility-tab="problematic-files" aria-selected="true">Problematic files</button>
+        <button class="utility-tab" type="button" id="utility-rules-tab" data-utility-tab="rules" aria-selected="false">Rules</button>
+        <button class="utility-tab" type="button" id="utility-loops-tab" data-utility-tab="loops" aria-selected="false">Loops</button>
+        <button class="utility-tab" type="button" id="utility-log-history-tab" data-utility-tab="log-history" aria-selected="false">Log History</button>
+        <button class="utility-tab" type="button" id="utility-integrations-tab" data-utility-tab="integrations" aria-selected="false">Integrations</button>
+        <button class="utility-tab" type="button" id="utility-appearance-tab" data-utility-tab="appearance" aria-selected="false">Appearance</button>
+      </div>
+      <div class="utility-modal-body">
+        <aside class="utility-sidebar">
+          <div class="utility-sidebar-title">
+            <span id="utility-sidebar-label">Albums</span>
+            <span class="utility-count" id="utility-problematic-count">0</span>
+          </div>
+          <div class="utility-sidebar-search">
+            <div class="utility-search-row">
+              <input class="utility-search-input" type="search" id="utility-problematic-search" placeholder="Filter artist, album, or track">
+              <div class="utility-problem-filter">
+                <button class="utility-problem-filter-button" type="button" id="utility-problem-filter-button" data-toggle-problem-filter="1" aria-haspopup="listbox" aria-expanded="false" title="Filter by problem type">Problems</button>
+                <div class="utility-problem-filter-menu" id="utility-problem-filter-menu" role="listbox" aria-multiselectable="true" hidden></div>
+              </div>
+            </div>
+            <div class="utility-problem-filter-chips" id="utility-problem-filter-chips"></div>
+          </div>
+          <div class="utility-list" id="utility-problematic-list"></div>
+        </aside>
+        <section class="utility-detail" id="utility-problematic-detail">
+          <div class="utility-empty-state" id="utility-empty-state">Loading problematic albums...</div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="tag-editor-modal" id="tag-editor-modal" hidden>
+    <div class="tag-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-editor-title">
+      <div class="tag-editor-header">
+        <div>
+          <h3 class="tag-editor-title" id="tag-editor-title">Edit tags</h3>
+          <div class="tag-editor-subtitle" id="tag-editor-subtitle">Select a track and edit tag values.</div>
+        </div>
+        <button class="icon-button tag-editor-close" type="button" data-close-tag-editor="1" aria-label="Close tag editor">x</button>
+      </div>
+      <div class="tag-editor-body">
+        <aside class="tag-editor-track-list" id="tag-editor-track-list"></aside>
+        <form class="tag-editor-form" id="tag-editor-form">
+          <div class="tag-editor-artwork" id="tag-editor-artwork"></div>
+          <label>Artist<input type="text" data-tag-field="artist"></label>
+          <label>Album Artist<input type="text" data-tag-field="album_artist"></label>
+          <label>Album Name<input id="tag-editor-album" type="text" data-tag-field="album"></label>
+          <label>Track Name<input type="text" data-tag-field="title"></label>
+          <label>Genre<input type="text" data-tag-field="genre"></label>
+          <label>Year<input type="text" data-tag-field="year"></label>
+          <label>Track Number<input type="text" data-tag-field="track_number"></label>
+          <label>Disc Number<input type="text" data-tag-field="disc_number"></label>
+          <label>Exception<select data-tag-field="exception_type">
+            <option value="">None</option>
+            <option value="Interview">Interview</option>
+            <option value="Non-album rarity">Non-album rarity</option>
+          </select></label>
+          <label>Edition<input type="text" data-tag-field="edition"></label>
+          <label>Album Rating<input type="text" data-tag-field="album_rating"></label>
+        </form>
+      </div>
+      <div class="tag-editor-actions">
+        <div class="tag-editor-auto-number-controls" id="tag-editor-auto-number-controls" hidden>
+          <label for="tag-editor-auto-number-start">Start at</label>
+          <input id="tag-editor-auto-number-start" type="number" min="1" step="1" inputmode="numeric">
+          <button
+            class="button tag-editor-auto-number"
+            id="tag-editor-auto-number"
+            type="button"
+            aria-pressed="false"
+            data-auto-number-selected="1"
+          >Auto-number</button>
+        </div>
+        <button class="button" type="button" data-close-tag-editor="1">Cancel</button>
+        <button class="button confirm-modal-danger" type="button" data-open-tag-edit-confirm="1" disabled>Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="track-modal" id="track-modal" hidden>
+    <div class="track-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="track-modal-title">
+      <div class="track-modal-header">
+        <div class="track-modal-title-wrap">
+          <h3 id="track-modal-title">Album</h3>
+          <div class="track-modal-subtitle" id="track-modal-subtitle"></div>
+        </div>
+        <div class="track-modal-actions">
+          <button class="icon-button track-modal-edit-tags" type="button" id="track-modal-edit-tags" data-open-track-modal-editor="1" aria-label="Edit album tags" title="Edit album tags">&#9998;</button>
+          <button class="icon-button track-modal-folder" type="button" id="track-modal-folder" data-open-track-modal-folder="1" aria-label="Open album in File Explorer" title="Open album in File Explorer">📁</button>
+          <button class="icon-button track-modal-close" type="button" id="track-modal-close" data-close-track-modal="1" aria-label="Close tracklist">✕</button>
+        </div>
+      </div>
+      <div class="track-modal-tabs" id="track-modal-tabs" hidden></div>
+      <div class="track-modal-body">
+        <div class="track-modal-cover" id="track-modal-cover"></div>
+        <div class="track-modal-main">
+          <div class="track-modal-duplicate-warning" id="track-modal-duplicate-warning" hidden></div>
+          <div class="track-modal-duplicate-tabs" id="track-modal-duplicate-tabs" hidden></div>
+          <ol class="track-modal-list" id="track-modal-list"></ol>
+          <div class="track-modal-footer" id="track-modal-footer"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cover-lookup-modal" id="cover-lookup-modal" hidden>
+    <div class="cover-lookup-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-lookup-modal-title">
+      <div class="cover-lookup-modal-header">
+        <div>
+          <h3 class="cover-lookup-modal-title" id="cover-lookup-modal-title">Cover Art Look Up Gallery</h3>
+          <div class="cover-lookup-modal-subtitle" id="cover-lookup-modal-subtitle"></div>
+        </div>
+        <button class="icon-button" type="button" data-close-cover-lookup-modal="1" aria-label="Close cover art look up gallery">✕</button>
+      </div>
+      <div class="cover-lookup-modal-body" id="cover-lookup-modal-body"></div>
+      <div class="cover-lookup-modal-actions">
+        <div class="cover-lookup-modal-actions-left">
+          <button class="button" type="button" id="cover-lookup-find-better-button" data-start-cover-lookup="1">Find Better Art</button>
+        </div>
+        <div class="cover-lookup-modal-status" id="cover-lookup-modal-status"></div>
+        <div class="cover-lookup-modal-actions-right">
+          <button class="button button-secondary" type="button" data-close-cover-lookup-modal="1">Cancel</button>
+          <button class="button" type="button" id="cover-lookup-save-remote-button" data-save-cover-lookup-remote="1" hidden>Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="non-album-modal" id="non-album-modal" hidden>
+    <div class="non-album-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="non-album-modal-title">
+      <div class="non-album-modal-header">
+        <div>
+          <h3 id="non-album-modal-title">Loose Non-Album Tracks</h3>
+          <div class="non-album-modal-subtitle" id="non-album-modal-subtitle">Tracks that are marked as non-album and cannot be grouped under any album tag.</div>
+        </div>
+        <div class="track-modal-actions">
+          <button class="icon-button track-modal-edit-tags" type="button" id="non-album-modal-edit-tags" data-open-non-album-tag-editor="1" aria-label="Edit album tags" title="Edit album tags">&#9998;</button>
+          <button class="icon-button" type="button" id="non-album-modal-close" data-close-non-album-modal="1" aria-label="Close loose non-album tracks">✕</button>
+        </div>
+      </div>
+      <div class="non-album-modal-table-wrap">
+        <div class="non-album-modal-table" id="non-album-modal-table"></div>
+      </div>
+    </div>
+  </div>

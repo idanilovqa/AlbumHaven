@@ -1,0 +1,30 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+tmp/
+.tmp/
+.codex-tmp/
+.env
+.venv/
+venv/
+dist/
+build/
+node_modules/
+playwright-report/
+test-results/
+*.zip
+*.log
+.DS_Store
+Thumbs.db
+
+# App/runtime cache
+library_cache.json
+.localappdata/
+
+# Legacy local-only fixture path left behind after camel-case rename
+tests/e2e/fixtures/real-cover-pool/
+
+# Windows / editor noise
+.vscode/
+.idea/

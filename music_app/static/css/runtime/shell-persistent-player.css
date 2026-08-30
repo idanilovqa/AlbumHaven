@@ -1,0 +1,70 @@
+/* The shell owns a persistent player lane below every app surface. */
+.global-player {
+  position: relative;
+  z-index: 4500;
+  isolation: isolate;
+}
+
+.track-modal,
+.utility-modal,
+.confirm-modal,
+.repair-progress-overlay,
+.tag-editor-modal,
+.cover-lookup-modal,
+.non-album-modal {
+  bottom: var(--player-height);
+}
+
+.image-lightbox {
+  bottom: 0;
+  z-index: 4600;
+}
+
+.cover-lookup-drawer {
+  height: calc(100vh - var(--player-height));
+}
+
+/* Dialogs retain their established proportions within the reduced surface lane. */
+.utility-modal-dialog {
+  height: min(88vh, calc(100vh - var(--player-height) - 48px), 920px);
+  max-height: min(88vh, calc(100vh - var(--player-height) - 48px), 920px);
+}
+
+.track-modal-dialog {
+  max-height: min(88vh, calc(100vh - var(--player-height) - 48px), 900px);
+}
+
+.cover-lookup-modal-dialog {
+  max-height: min(90vh, calc(100vh - var(--player-height) - 96px), 940px);
+}
+
+.non-album-modal-dialog {
+  max-height: calc(100vh - var(--player-height) - 40px);
+}
+
+.tag-editor-dialog {
+  max-height: calc(100vh - var(--player-height) - 48px);
+}
+
+.image-lightbox-image {
+  max-height: calc(100vh - 40px);
+}
+
+.version-picker-card {
+  max-height: min(80vh, calc(100vh - var(--player-height) - 48px), 760px);
+}
+
+@media (max-width: 720px) {
+  #utility-modal[data-active-tab="problematic-files"] .utility-modal-dialog,
+  #utility-modal[data-active-tab="rules"] .utility-modal-dialog {
+    height: calc(100dvh - var(--player-height) - 48px);
+    max-height: calc(100dvh - var(--player-height) - 48px);
+  }
+}
+
+@media (max-width: 760px) {
+  .tag-editor-dialog {
+    min-height: calc(100dvh - var(--player-height));
+    max-height: calc(100dvh - var(--player-height));
+  }
+}

@@ -1,0 +1,481 @@
+{
+  "schemaVersion": 1,
+  "approvalGate": {
+    "gate": 7,
+    "status": "approved",
+    "recommendations": [
+      "Run the autoplay-policy case as a separate invocation inside playback-utilities.",
+      "Keep Scan Page context and cancellation grouped under scan-page.",
+      "Assign immediate Album Details replacement to gapless-playback."
+    ]
+  },
+  "calibrationPolicy": {
+    "evidenceMode": "retained-cohorts",
+    "separateCampaignRequired": false,
+    "thresholdAuthority": "central-performance-times-registry",
+    "localAndCiThresholds": "environment-contracts",
+    "timingAuthority": "tests/ci/performance-times.json",
+    "approvedCiOverrideCount": 5,
+    "fingerprintFields": [
+      "runnerImage",
+      "chromeVersion",
+      "fixtureRelease",
+      "fixtureSchemaVersion",
+      "postgresMajor",
+      "measurementContract"
+    ],
+    "partitionBySourceRevision": true,
+    "minimumSamples": {
+      "median": 1,
+      "variance": 2,
+      "p90": 10,
+      "p95": 20
+    },
+    "exceptionsRequireOwnerApproval": true
+  },
+  "targets": [
+    {
+      "name": "idle-memory",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "isolated",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.performance.config.cjs",
+          "project": "idle-memory",
+          "test": "tests/e2e/performance/idleMemory.spec.js",
+          "case": "FTC-OPS-019 production app stays responsive throughout a sustained status and view observation window"
+        },
+        {
+          "config": "playwright.performance.config.cjs",
+          "project": "idle-memory",
+          "test": "tests/e2e/performance/idleMemory.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005 idle gallery memory stays under the budget once startup settles"
+        }
+      ]
+    },
+    {
+      "name": "playback-start",
+      "fixtureProfile": "playback-media",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "isolated",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.performance.config.cjs",
+          "project": "idle-memory",
+          "test": "tests/e2e/performance/playbackStart.spec.js",
+          "case": "FTC-PLAYER-013 album-detail playback starts promptly regardless of song length or prior use"
+        }
+      ]
+    },
+    {
+      "name": "gapless-playback",
+      "fixtureProfile": "playback-media",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "isolated",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.performance.config.cjs",
+          "project": "idle-memory",
+          "test": "tests/e2e/performance/gaplessPlayback.spec.js",
+          "case": "FTC-PLAYER-016 production playback crosses a sample-exact stable-stream boundary"
+        },
+        {
+          "config": "playwright.performance.config.cjs",
+          "project": "idle-memory",
+          "test": "tests/e2e/performance/gaplessPlayback.spec.js",
+          "case": "FTC-PLAYER-013 immediate Album Details replacement stays audible"
+        }
+      ],
+      "ownershipRecommendation": "Keep immediate Album Details replacement with the existing gapless-playback target."
+    },
+    {
+      "name": "all-artists",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings"
+        }
+      ]
+    },
+    {
+      "name": "artist-family",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
+          "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js",
+          "case": "FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data"
+        }
+      ]
+    },
+    {
+      "name": "search-all-artists",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
+          "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-005 direct-loads a filtered Ария gallery with the complete Artist Family labels"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
+          "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/allArtistsResponsiveness.spec.js",
+          "case": "FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-003A multi-family search keeps search-scoped All artists and follow-up tree selection responsive on synthetic data"
+        }
+      ]
+    },
+    {
+      "name": "utility-problematic-files",
+      "fixtureProfile": "utility-problematic-files",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.utility-problematic-files.config.cjs",
+          "project": "utility-problematic-files",
+          "test": "tests/e2e/utilityProblematicFiles/utilitiesResponsiveness.spec.js",
+          "case": "FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view"
+        }
+      ]
+    },
+    {
+      "name": "utility-rules",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/utilitiesResponsiveness.spec.js",
+          "case": "FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information"
+        }
+      ]
+    },
+    {
+      "name": "selected-artist",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › Selected artist UI reports library_browse telemetry and timing"
+        },
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/selectedArtist.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005Q synthetic-large selected-artist browse › FTC-ARTIST-FAMILY-004 keeps the IR8 / Sexoturica split release in the Devin Townsend family"
+        }
+      ]
+    },
+    {
+      "name": "search-browse",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/searchBrowse.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005R synthetic-large direct search browse › Search UI reports direct library_browse telemetry and timing"
+        }
+      ]
+    },
+    {
+      "name": "root-album-browse",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/rootAlbumBrowse.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005S synthetic-large root album browse UI › Root album browse UI reports library_browse telemetry and timing"
+        }
+      ]
+    },
+    {
+      "name": "app-open-all-artists",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/appOpenAllArtists.spec.js",
+          "case": "FTC-GALLERY-STARTUP-005T synthetic-large app-open All Artists UI › App open renders All Artists UI and explicit full root browse uses library_browse"
+        }
+      ]
+    },
+    {
+      "name": "problematic-files-focused",
+      "fixtureProfile": "utility-problematic-files",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.utility-problematic-files.config.cjs",
+          "project": "utility-problematic-files",
+          "test": "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+          "case": "FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail"
+        }
+      ]
+    },
+    {
+      "name": "rules-focused",
+      "fixtureProfile": "synthetic-large-library",
+      "fixtureMode": "preloaded-release",
+      "runnerClass": "synthetic",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.synthetic-large-library.config.cjs",
+          "project": "synthetic-large-library",
+          "test": "tests/e2e/syntheticLargeLibrary/utilityRules.spec.js",
+          "case": "FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI › Rules and sibling utility tabs report library_browse telemetry and timing"
+        }
+      ]
+    },
+    {
+      "name": "scan-cold",
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings"
+        }
+      ]
+    },
+    {
+      "name": "scan-cached",
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-015 unchanged isolated cached startup stays effectively idle"
+        }
+      ]
+    },
+    {
+      "name": "scan-add-album",
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-016 isolated incremental scan surfaces one new album promptly"
+        }
+      ]
+    },
+    {
+      "name": "scan-metadata",
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly"
+        }
+      ]
+    },
+    {
+      "name": "scan-page",
+      "measurementExpected": false,
+      "fixtureProfile": "scan-library",
+      "fixtureMode": "generated-isolated",
+      "runnerClass": "scan",
+      "workers": 1,
+      "defaultMember": true,
+      "calibrationState": "uncalibrated",
+      "blocking": false,
+      "targetMs": null,
+      "graceMs": null,
+      "ceilingMs": null,
+      "cases": [
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle"
+        },
+        {
+          "config": "playwright.scan-performance.config.cjs",
+          "project": "scan-performance",
+          "test": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+          "case": "isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "artistCount": 40,
+  "albumsPerArtist": 10,
+  "tracksPerAlbum": 18,
+  "duplicateSourcesPerAlbum": 2,
+  "approvedCoverPoolSize": 8,
+  "detailModalOpenCount": 2,
+  "idleSampleCount": 3,
+  "idleSampleDelayMs": 300,
+  "maxIdleMemoryMb": 15.0,
+  "maxIdleDriftMb": 2.0
+}

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "covers": [
+    {
+      "assetId": "approved-cover-01",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist",
+      "album": "Canonical Cover Fixture",
+      "year": 2026,
+      "width": 7500,
+      "height": 7500,
+      "sha256": "087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595"
+    },
+    {
+      "assetId": "approved-cover-02",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist",
+      "album": "Secondary Cover Fixture",
+      "year": 2026,
+      "width": 4518,
+      "height": 4518,
+      "sha256": "c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc"
+    },
+    {
+      "assetId": "approved-cover-03",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 03",
+      "album": "Portrait Fixture 03",
+      "year": 2026,
+      "width": 3273,
+      "height": 6234,
+      "sha256": "0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7"
+    },
+    {
+      "assetId": "approved-cover-04",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 04",
+      "album": "Portrait Fixture 04",
+      "year": 2026,
+      "width": 2937,
+      "height": 6819,
+      "sha256": "97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8"
+    },
+    {
+      "assetId": "approved-cover-05",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 05",
+      "album": "Portrait Fixture 05",
+      "year": 2026,
+      "width": 3229,
+      "height": 6181,
+      "sha256": "b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2"
+    },
+    {
+      "assetId": "approved-cover-06",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 06",
+      "album": "Portrait Fixture 06",
+      "year": 2026,
+      "width": 2923,
+      "height": 6726,
+      "sha256": "6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47"
+    },
+    {
+      "assetId": "approved-cover-07",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 07",
+      "album": "Landscape Fixture 07",
+      "year": 2026,
+      "width": 6684,
+      "height": 2929,
+      "sha256": "3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2"
+    },
+    {
+      "assetId": "approved-cover-08",
+      "extension": ".jpg",
+      "artist": "Synthetic Cover Artist 08",
+      "album": "Landscape Fixture 08",
+      "year": 2026,
+      "width": 6675,
+      "height": 2911,
+      "sha256": "737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6"
+    }
+  ]
+}

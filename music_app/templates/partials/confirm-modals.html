@@ -1,0 +1,61 @@
+  <div class="confirm-modal" id="repair-confirm-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="repair-confirm-title" aria-describedby="repair-confirm-text">
+      <h3 class="confirm-modal-title" id="repair-confirm-title">Repair local files</h3>
+      <div class="confirm-modal-text" id="repair-confirm-text">This will try to repair your local files with the selected fix. Are you sure?</div>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" id="repair-confirm-cancel" data-close-repair-confirm="1">Cancel</button>
+        <button class="button confirm-modal-danger" type="button" id="repair-confirm-accept" data-confirm-repair="1">Yes, repair files</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-modal" id="tag-edit-confirm-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-edit-confirm-title" aria-describedby="tag-edit-confirm-text tag-edit-non-album-warning">
+      <h3 class="confirm-modal-title" id="tag-edit-confirm-title">Apply tag edits</h3>
+      <div class="confirm-modal-text" id="tag-edit-confirm-text">Are you sure?</div>
+      <div class="tag-edit-non-album-warning" id="tag-edit-non-album-warning" role="alert" hidden>
+        <span class="tag-edit-non-album-warning-icon" data-non-album-rarity-warning-icon="1" aria-hidden="true">!</span>
+        <span data-non-album-rarity-warning-text="1">Applying non-album rarity exception to this track will remove it from the album. You sure?</span>
+      </div>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" data-close-tag-edit-confirm="1">Cancel</button>
+        <button class="button confirm-modal-danger" type="button" data-confirm-tag-edit="1">Yes, apply tags</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-modal" id="cover-lookup-delete-confirm-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="cover-lookup-delete-confirm-title">
+      <h3 class="confirm-modal-title" id="cover-lookup-delete-confirm-title">Delete local cover art</h3>
+      <div class="confirm-modal-text" id="cover-lookup-delete-confirm-text">Are you sure you want to delete this local cover art?</div>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" data-close-cover-lookup-delete-confirm="1">Cancel</button>
+        <button class="button confirm-modal-danger" type="button" data-confirm-cover-lookup-delete="1">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-modal" id="loop-name-modal" hidden>
+    <form class="confirm-modal-dialog" id="loop-name-form" role="dialog" aria-modal="true" aria-labelledby="loop-name-title" aria-describedby="loop-name-description" novalidate>
+      <h3 class="confirm-modal-title" id="loop-name-title">Save loop</h3>
+      <div class="confirm-modal-text" id="loop-name-description">Enter a name for this loop.</div>
+      <label class="confirm-modal-text" for="loop-name-input">Loop name</label>
+      <input class="utility-search-input" type="text" id="loop-name-input" autocomplete="off" aria-describedby="loop-name-error">
+      <div class="confirm-modal-text" id="loop-name-error" role="alert" aria-live="polite"></div>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" id="loop-name-cancel">Cancel</button>
+        <button class="button" type="submit" id="loop-name-submit">Save loop</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="confirm-modal" id="loop-delete-confirm-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="loop-delete-confirm-title" aria-describedby="loop-delete-confirm-text">
+      <h3 class="confirm-modal-title" id="loop-delete-confirm-title">Delete saved loop</h3>
+      <div class="confirm-modal-text" id="loop-delete-confirm-text">Are you sure you want to delete this saved loop?</div>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" id="loop-delete-confirm-cancel">No</button>
+        <button class="button confirm-modal-danger" type="button" id="loop-delete-confirm-accept">Yes</button>
+      </div>
+    </div>
+  </div>

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://album-haven.example/schemas/fixture-manifest-v1.json",
+  "title": "Album Haven CI fixture release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "release",
+    "generatorCommit",
+    "profiles"
+  ],
+  "properties": {
+    "manifestVersion": {
+      "const": 1
+    },
+    "release": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generatorCommit": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "functional-core",
+        "synthetic-large-library",
+        "utility-problematic-files",
+        "scan-library",
+        "playback-media"
+      ],
+      "properties": {
+        "functional-core": {
+          "$ref": "#/$defs/profile"
+        },
+        "synthetic-large-library": {
+          "$ref": "#/$defs/profile"
+        },
+        "utility-problematic-files": {
+          "$ref": "#/$defs/profile"
+        },
+        "scan-library": {
+          "$ref": "#/$defs/profile"
+        },
+        "playback-media": {
+          "$ref": "#/$defs/profile"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "safeRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![A-Za-z]:)(?![/\\\\])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$)).+$"
+    },
+    "counts": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "namedScenarioAssertions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean",
+          "null",
+          "array",
+          "object"
+        ]
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "archive",
+        "sha256",
+        "schemaVersion",
+        "databaseSeed",
+        "mediaRoot",
+        "counts",
+        "namedScenarioAssertions"
+      ],
+      "properties": {
+        "archive": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "databaseSeed": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "mediaRoot": {
+          "$ref": "#/$defs/safeRelativePath"
+        },
+        "counts": {
+          "$ref": "#/$defs/counts"
+        },
+        "namedScenarioAssertions": {
+          "$ref": "#/$defs/namedScenarioAssertions"
+        }
+      }
+    }
+  }
+}

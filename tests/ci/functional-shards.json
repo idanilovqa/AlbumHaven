@@ -1,0 +1,668 @@
+{
+  "schemaVersion": 1,
+  "browser": "chrome",
+  "workersPerInvocation": 1,
+  "approvalGate": {
+    "gate": 6,
+    "status": "approved",
+    "decision": "Approve the four static shard assignments and unmeasured relative balance units before enabling jobs."
+  },
+  "relativeDurationBalanceUnits": {
+    "gallery-search-visual": 45,
+    "cover-providers": 40,
+    "metadata-mutations": 26,
+    "playback-utilities": 52
+  },
+  "shards": [
+    {
+      "name": "gallery-search-visual",
+      "fixtureProfile": "functional-core",
+      "relativeDurationUnits": 45,
+      "suitePrerequisites": [
+        "functional-core seeded before application startup",
+        "approved cover pool and Joseph fixture mounted read-only",
+        "visual snapshots use pinned Chrome for Testing"
+      ],
+      "invocations": [
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
+              "case": "FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a Various Artists release"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-PLAYER-012 reopens a Various Artists album from player artwork after playing a credited track"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTrackCredits.spec.js",
+              "case": "FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistAliasParity.spec.js",
+              "case": "FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and keeps both raw credits"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistAliasParity.spec.js",
+              "case": "FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistAliasParity.spec.js",
+              "case": "FTC-SEARCH-NAV-022 starts with a collapsed scan identity and browses its repeated-space artist family"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relations while keeping ordinary shared releases related"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/artistCompositeCredits.spec.js",
+              "case": "FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
+              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/ddtStudioRecordsRenderer.spec.js",
+              "case": "FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+              "case": "FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+              "case": "FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryCoverStability.spec.js",
+              "case": "FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/responsiveGallery.spec.js",
+              "case": "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cover-providers",
+      "fixtureProfile": "functional-core",
+      "relativeDurationUnits": 40,
+      "suitePrerequisites": [
+        "functional-core seeded before application startup",
+        "approved cover pool mounted read-only with per-case writable media copies",
+        "loopback provider services started before Playwright discovery"
+      ],
+      "invocations": [
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-022 cover gallery loading starts before the task list responds"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-012 fake-album fast cover search appears in the drawer and can be canceled and cleared"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-007 lookup-start alert does not reposition the cover modal"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-007 notification states and bulk clear preserve active work"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-017 manual lookup progressively retains provider alternatives"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-020 provider deadline keeps candidates found by earlier services"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-021 artist conjunction differences still publish a visible remote candidate"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-019 later automatic improvement restores the unseen indicator"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/coverLookupMatching.spec.js",
+              "case": "FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
+              "case": "FTC-PLAYBACK-LASTFM-013 production UI connects and scrobbles through the signed Last.fm provider path"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
+              "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order"
+            }
+          ]
+        },
+        {
+          "config": "playwright.cover-rescan.config.js",
+          "project": "cover-rescan",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.cover-rescan.config.js",
+              "project": "cover-rescan",
+              "test": "tests/e2e/specs/coverLookup.spec.js",
+              "case": "FTC-COVERS-011 selected local art remains authoritative after rescan and app restart"
+            }
+          ]
+        },
+        {
+          "config": "playwright.lastfm-auto-timezone.config.js",
+          "project": "lastfm-auto-timezone",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.lastfm-auto-timezone.config.js",
+              "project": "lastfm-auto-timezone",
+              "test": "tests/e2e/specs/lastfmAutoTimezone.spec.js",
+              "case": "FTC-PLAYBACK-LASTFM-015 browser timezone is auto-detected and persisted exactly once"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "metadata-mutations",
+      "fixtureProfile": "functional-core",
+      "relativeDurationUnits": 26,
+      "suitePrerequisites": [
+        "functional-core seeded before application startup",
+        "each owned mutation receives its declared database identity and writable media copy",
+        "tag-write failure fixtures prepared before the suite"
+      ],
+      "invocations": [
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumRatings.spec.js",
+              "case": "FTC-ALBUM-TASTE-013 keeps app ratings authoritative while import and scan seed missing ratings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-008 completes an album rename before reporting the save task complete"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-008 keeps an accepted terminal failure readable without false success"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumTagRename.spec.js",
+              "case": "FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/sparseTagEditReconciliation.spec.js",
+              "case": "FTC-TAGS-010 keeps an album-only edit sparse and retains its optimistic split"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/sparseTagEditReconciliation.spec.js",
+              "case": "FTC-TAGS-011 keeps a track-name-only edit on one retained album card"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/sparseTagEditReconciliation.spec.js",
+              "case": "FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/sparseTagEditReconciliation.spec.js",
+              "case": "FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic split"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/tagEditorAutoNumber.spec.js",
+              "case": "FTC-TAGS-022 derives Start at from filename then deterministic editor position"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/tagEditorAutoNumber.spec.js",
+              "case": "FTC-TAGS-022 restarts one consecutive selection for each disc"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/tagEditorBackdrop.spec.js",
+              "case": "FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pending"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "playback-utilities",
+      "fixtureProfile": "functional-core",
+      "relativeDurationUnits": 52,
+      "suitePrerequisites": [
+        "functional-core and playback media prepared before application startup",
+        "each owned mutation receives its declared database identity and writable media copy",
+        "special autoplay, timezone, and non-album rescan configs run as independent invocations"
+      ],
+      "invocations": [
+        {
+          "config": "playwright.config.js",
+          "project": "functional",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loop-edit-expiry.functional.spec.js",
+              "case": "FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loop-edit-expiry.functional.spec.js",
+              "case": "FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 page reload exits bottom-player loop edit mode"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loop-edit-expiry.functional.spec.js",
+              "case": "FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 returning to a suspended tab reconciles an overdue loop edit lease"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-017 scissors remains available after saving a loop"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-017 loop-edit reload restores the active playhead"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-PLAYER-017 paused reload restores the current waveform"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-012 renders exception groups as the approved compact track table"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-TAGS-024 completes a verified Album and Exception intent during app restart"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
+              "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/problematicFileNavigation.spec.js",
+              "case": "FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerArtworkSearchContext.spec.js",
+              "case": "FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result"
+            }
+          ]
+        },
+        {
+          "config": "playwright.autoplay-allowed.config.js",
+          "project": "reload-autoplay-allowed",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.autoplay-allowed.config.js",
+              "project": "reload-autoplay-allowed",
+              "test": "tests/e2e/specs/playerReloadAutoplayAllowed.spec.js",
+              "case": "FTC-PLAYER-015 allowed Chrome policy automatically continues playback after reload"
+            }
+          ]
+        },
+        {
+          "config": "playwright.non-album-rescan.config.js",
+          "project": "non-album-rescan",
+          "workers": 1,
+          "cases": [
+            {
+              "config": "playwright.non-album-rescan.config.js",
+              "project": "non-album-rescan",
+              "test": "tests/e2e/specs/nonAlbumRarity.spec.js",
+              "case": "FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

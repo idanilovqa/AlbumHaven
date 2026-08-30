@@ -1,0 +1,6 @@
+[
+  {
+    "nodeIdPattern": "^tests\\.py\\.test_cover_lookup_live_provider_smoke::test_live_music_service_cover_lookup_smoke_logs_duration_and_returns_candidates\\[(?:apple-Apple Music|deezer-Deezer|youtube_music-YouTube Music|spotify-Spotify)\\]$",
+    "reasonPattern": "^Set ALBUM_HAVEN_RUN_LIVE_PROVIDER_TESTS=1 to run live provider smoke tests\\.$"
+  }
+]

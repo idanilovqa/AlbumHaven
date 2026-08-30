@@ -1,0 +1,35 @@
+{
+  "name": "musicapp",
+  "version": "0.9.41",
+  "private": true,
+  "description": "A local web app for browsing a music library by artist and album, with folder-based family context.",
+  "main": "index.js",
+  "scripts": {
+    "build:runtime": "node scripts/build-runtime-bundle.cjs",
+    "test": "powershell -ExecutionPolicy Bypass -File scripts/test.ps1",
+    "test:quiet": "powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -q",
+    "test:js": "node --test --test-concurrency=1 tests/js/runtime/*.test.js",
+    "test:js:all": "node scripts/ci/validate-foundation-gates.cjs --run-node-tests",
+    "test:component": "playwright test --config=playwright.component.config.js",
+    "check:e2e-production-parity": "node scripts/check-e2e-production-parity.cjs",
+    "test:e2e:functional": "node scripts/run-functional-playwright.cjs test",
+    "test:e2e:performance": "node scripts/run-performance-playwright.cjs",
+    "test:e2e:performance:idle-memory": "node scripts/run-performance-playwright.cjs --group idle-memory",
+    "test:e2e:performance:real-app": "node scripts/run-performance-playwright.cjs --group real-app",
+    "release:prepare": "powershell -ExecutionPolicy Bypass -File scripts/prepare_release.ps1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/idanilovqa/AlbumHaven.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/idanilovqa/AlbumHaven/issues"
+  },
+  "homepage": "https://github.com/idanilovqa/AlbumHaven#readme",
+  "devDependencies": {
+    "@playwright/test": "1.61.1"
+  }
+}

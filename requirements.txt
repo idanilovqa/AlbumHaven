@@ -1,0 +1,12 @@
+jinja2
+markupsafe
+fastapi==0.115.6
+uvicorn
+websockets
+mutagen
+pillow
+imageio-ffmpeg==0.6.0
+ytmusicapi
+pytest
+psycopg[binary]
+zstandard

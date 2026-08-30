@@ -1,0 +1,226 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="album-haven-version" content="{{ app_version }}">
+  <title>{{ app_name }} v{{ app_version }}</title>
+  <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script">
+  <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}">
+  <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
+  <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
+  {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
+</head>
+<body>
+  {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
+  {% set shell_slots = shell_layout.slots if shell_layout and shell_layout.slots else {} %}
+  {% set shell_rail = shell_slots.navigation_rail if shell_slots and shell_slots.navigation_rail else {} %}
+  {% set shell_app_bar = shell_slots.app_bar if shell_slots and shell_slots.app_bar else {} %}
+  {% set shell_header_surfaces = shell_app_bar.header_surfaces if shell_app_bar and shell_app_bar.header_surfaces else {} %}
+  {% set shell_notifications_surface = shell_header_surfaces.notifications if shell_header_surfaces and shell_header_surfaces.notifications else {} %}
+  {% set shell_discovery_center_surface = shell_header_surfaces.discovery_center if shell_header_surfaces and shell_header_surfaces.discovery_center else {} %}
+  {% set shell_contextual = shell_slots.contextual_pane if shell_slots and shell_slots.contextual_pane else {} %}
+  {% set shell_main = shell_slots.main_content if shell_slots and shell_slots.main_content else {} %}
+  {% set shell_drawer = shell_slots.info_drawer if shell_slots and shell_slots.info_drawer else {} %}
+  {% set shell_bottom_player = shell_slots.bottom_player if shell_slots and shell_slots.bottom_player else {} %}
+  {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
+  <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
+    <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
+      <div class="sidebar-top shell-navigation-rail-header">
+        <h2>Artists</h2>
+      </div>
+      <div class="artist-list" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
+    </aside>
+    <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
+
+    <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
+      <form class="toolbar shell-app-bar" id="search-form" method="get" action="/" data-shell-slot="app_bar" data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}">
+        <div class="toolbar-left">
+          <div class="search-input-wrap">
+            <input type="search" name="q" id="search-input" value="{{ query }}" placeholder="Search artist, album, or track" aria-label="Search music" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="recent-search-popover" aria-expanded="false">
+            <div class="recent-search-popover" id="recent-search-popover" role="listbox" aria-label="Recent searches" hidden></div>
+          </div>
+          {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
+          {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
+          {% if bootstrap_payload.initial_view.gallery_display_mode and bootstrap_payload.initial_view.gallery_display_mode != 'cards' %}<input type="hidden" name="gallery_display" value="{{ bootstrap_payload.initial_view.gallery_display_mode }}">{% endif %}
+          {% if effective_selected_artist and bootstrap_payload.initial_view.selected_artist_family_display_mode and bootstrap_payload.initial_view.selected_artist_family_display_mode != 'grouped' %}<input type="hidden" name="family_display" value="{{ bootstrap_payload.initial_view.selected_artist_family_display_mode }}">{% endif %}
+          {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
+          {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
+          <button class="button" type="submit">Apply</button>
+        </div>
+        <div class="toolbar-right">
+          <button class="icon-button cover-lookup-drawer-button" type="button" id="cover-lookup-drawer-button" data-toggle-cover-lookup-drawer="1" title="Cover art lookups" aria-label="Cover art lookups">
+            <span class="cover-lookup-drawer-glyph" aria-hidden="true">
+              <img class="cover-lookup-drawer-glyph-default" src="{{ url_for('static', filename='images/cover-lookup-notification-icon-offwhite.png') }}" alt="">
+              <img class="cover-lookup-drawer-glyph-hover" src="{{ url_for('static', filename='images/cover-lookup-notification-icon.png') }}" alt="">
+            </span>
+            <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
+          </button>
+          <button class="status-indicator is-idle" type="button" id="scan-indicator" aria-label="Library status" title="Library ready">
+            <span class="status-spinner" aria-hidden="true"></span>
+            <span class="status-check" aria-hidden="true">&#10003;</span>
+            <span class="status-refresh" aria-hidden="true">&#10227;</span>
+            <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
+          </button>
+          <button class="icon-button" type="button" id="settings-button" data-open-utilities="1" title="Settings" aria-label="Settings">&#9881;</button>
+        </div>
+      </form>
+
+      {% if last_error %}
+      <div class="error" id="last-error">Last scan error: {{ last_error }}</div>
+      {% else %}
+      <div class="error" id="last-error" style="display:none"></div>
+      {% endif %}
+
+      {% if shell_main.content_kind == 'discovery_center_page' and discovery_center_page %}
+      <section class="discovery-center-page" id="discovery-center-page" data-discovery-center-page-kind="{{ discovery_center_page.page_kind or 'discovery_center' }}" data-discovery-center-active-tab="{{ discovery_center_page.active_tab or 'inbox' }}" data-discovery-center-active-source="{{ discovery_center_page.active_source or 'all' }}">
+        <header class="discovery-center-page-header">
+          <h1>{{ discovery_center_page.page_title or 'Discovery Center' }}</h1>
+          <p>{{ discovery_center_page.page_subtitle or '' }}</p>
+        </header>
+        <nav class="discovery-center-page-tabs" aria-label="Discovery Center tabs">
+          {% for tab in discovery_center_page.supported_tabs or [] %}
+          <a href="/news?tab={{ tab }}" {% if discovery_center_page.active_tab == tab %}aria-current="page"{% endif %}>{{ tab|title }}</a>
+          {% endfor %}
+        </nav>
+        <section class="discovery-center-page-summary">
+          <h2>Open Discovery Center</h2>
+          <p>{{ discovery_center_page.summary.drawer_preview.empty_state.detail if discovery_center_page.summary and discovery_center_page.summary.drawer_preview and discovery_center_page.summary.drawer_preview.empty_state else '' }}</p>
+          <p><a href="{{ discovery_center_page.summary_route or '/news-center/summary' }}">Summary payload</a></p>
+          <p><a href="{{ discovery_center_page.entries_route or '/news-center/entries?tab=inbox&source=all' }}">Entries payload</a></p>
+          <p><a href="{{ discovery_center_page.preferences_route or '/news-center/preferences' }}">Preferences payload</a></p>
+        </section>
+      </section>
+      <div class="albums-scroll" id="albums-scroll" hidden aria-hidden="true">
+        <div class="albums-viewport" id="albums-viewport">
+          <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>
+          <div id="albums-spacer-top"></div>
+          <div id="artist-groups" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.gallery_html|safe }}</div>
+          <div id="albums-spacer-bottom"></div>
+        </div>
+      </div>
+      {% else %}
+      <div class="gallery-top-row">
+        <section class="related-box shell-contextual-pane {% if not startup_preview.related_expanded %}is-collapsed{% endif %}" id="related-box" data-shell-slot="contextual_pane" data-shell-content-kind="{{ shell_contextual.content_kind or 'contextual_navigation' }}" data-shell-is-visible="{{ 'true' if shell_contextual.is_visible else 'false' }}" data-shell-active-pane="{{ shell_contextual.active_pane or '' }}" data-shell-supported-panes="{{ (shell_contextual.supported_panes or [])|join(',') }}" data-shell-local-tree-submode="{{ shell_contextual.local_tree.active_submode if shell_contextual.local_tree else '' }}" data-shell-local-tree-submodes="{{ (shell_contextual.local_tree.supported_submodes if shell_contextual.local_tree else [])|join(',') }}" data-shell-splitter-desktop-only="{{ 'true' if shell_contextual.splitter and shell_contextual.splitter.desktop_only else 'false' }}" data-shell-splitter-placement="{{ shell_contextual.splitter.placement if shell_contextual.splitter else '' }}" data-shell-mobile-fallback="{{ shell_contextual.splitter.mobile_fallback if shell_contextual.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_contextual.splitter.state_scope if shell_contextual.splitter else '' }}" {% if startup_preview.has_related %}style="display:block"{% else %}style="display:none"{% endif %}>
+          <button class="related-toggle" id="related-toggle" type="button" aria-expanded="{% if startup_preview.related_expanded %}true{% else %}false{% endif %}" aria-controls="related-list-wrap">
+            <span class="related-title">Artist Family</span>
+            <span class="related-toggle-icon" id="related-toggle-icon" aria-hidden="true">&#9662;</span>
+          </button>
+          <div class="related-list-wrap" id="related-list-wrap" {% if not startup_preview.related_expanded %}hidden{% endif %}>
+            <div class="related-list" id="related-list">{{ startup_preview.related_html|safe }}</div>
+          </div>
+        </section>
+        <button class="icon-button gallery-options-floating-button" type="button" id="gallery-options-button" data-open-gallery-options="1" title="Gallery options" aria-label="Gallery options">&#8942;</button>
+      </div>
+
+      {% set show_initial_library_loader = startup_preview.mode == 'empty_shell' %}
+      <section class="library-loader" id="library-loader" {% if not show_initial_library_loader %}hidden{% endif %} aria-live="polite">
+        <button class="library-loader-back-button" id="library-loader-back-button" type="button" data-close-scan-page="1" aria-label="Back to previous library view" hidden>
+          <span class="library-loader-back-icon" aria-hidden="true">&#8592;</span>
+          <span>Back</span>
+        </button>
+        <div class="library-loader-spinner" aria-hidden="true"></div>
+        <h2 class="library-loader-title" id="library-loader-title">Loading library</h2>
+        <div class="library-loader-status" id="library-loader-status">
+          {% if show_initial_library_loader and not query and not selected_artist %}
+          Waiting for the first albums to become available...
+          {% else %}
+          Preparing scan...
+          {% endif %}
+        </div>
+        <div class="library-loader-progress" id="library-loader-progress"></div>
+        <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
+          <li><strong>Discovering music files</strong><span>Enumerates candidate files in your local library.</span></li>
+          <li><strong>Scanning music files</strong><span>Reads tags and metadata, then calculates file and folder progress.</span></li>
+          <li><strong>Updating cover art</strong><span>Refreshes artwork changes after scanning.</span></li>
+          <li><strong>Refreshing artist relations</strong><span>Updates artist-family links.</span></li>
+        </ol>
+        <div class="library-loader-actions" id="library-loader-actions" hidden>
+          <button class="button library-loader-cancel-button" type="button" id="library-loader-cancel-button" data-cancel-library-scan="1" hidden>Cancel Scan</button>
+          <button class="button library-loader-browse-button" type="button" id="library-loader-browse-button" data-browse-scanned-library="1" hidden>Browse Library</button>
+        </div>
+      </section>
+
+
+      <div class="albums-scroll" id="albums-scroll" {% if show_initial_library_loader %}hidden{% endif %}>
+        <div class="albums-viewport" id="albums-viewport">
+          <div class="gallery-focus-glow" id="gallery-focus-glow" hidden aria-hidden="true"></div>
+          <div id="albums-spacer-top"></div>
+          <div id="artist-groups" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.gallery_html|safe }}</div>
+          <div id="albums-spacer-bottom"></div>
+        </div>
+      </div>
+      {% endif %}
+    </main>
+  </div>
+
+  <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
+    <div class="player-shell">
+      <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
+      <span class="loop-play-control-cluster player-play-cluster">
+        <button class="loop-play-control-button player-play" type="button" id="player-play" aria-label="Play or pause">Play</button>
+        <span class="loop-play-control-actions player-loop-actions" data-loop-action-mount="global-player" data-loop-action-owner="global-player"></span>
+      </span>
+      <div class="player-main">
+        <div class="player-meta">
+          <div class="player-title" id="player-title"></div>
+          <button class="player-album-link" type="button" id="player-album-link" hidden></button>
+        </div>
+        <div class="player-time" id="player-time">0:00 / 0:00</div>
+        <div class="player-timeline-wrap" data-loop-range-owner="global-player">
+          <canvas class="player-waveform-canvas" id="player-waveform-canvas" data-loop-range-waveform aria-hidden="true" hidden></canvas>
+          <input class="player-timeline" type="range" id="player-timeline" min="0" max="100" step="0.01" value="0" aria-label="Playback position">
+          <div class="loop-range-surface" data-loop-range-surface hidden>
+            <div class="player-loop-region loop-range-selection" id="player-loop-region" hidden></div>
+            <button class="player-loop-handle loop-range-handle is-start" type="button" id="player-loop-start-handle" role="slider" data-loop-range-handle="start" aria-label="Loop start" hidden></button>
+            <button class="player-loop-handle loop-range-handle is-end" type="button" id="player-loop-end-handle" role="slider" data-loop-range-handle="end" aria-label="Loop end" hidden></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast-layer" id="toast-layer" aria-live="polite" aria-atomic="true"></div>
+  <div class="repair-alert" id="repair-alert" role="status" aria-live="polite" hidden>
+    <span class="repair-alert-message" id="repair-alert-message"></span>
+    <button class="repair-alert-inline-link" id="repair-alert-log-history" type="button" data-open-log-history-alert="1" hidden>View details</button>
+    <button class="repair-alert-close" type="button" data-dismiss-repair-alert="1" aria-label="Dismiss repair alert">x</button>
+  </div>
+
+  <aside class="cover-lookup-drawer shell-info-drawer" id="cover-lookup-drawer" data-shell-slot="info_drawer" data-shell-component-kind="{{ shell_drawer.component_kind or 'notification_drawer' }}" data-shell-content-kind="{{ shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-default-content-kind="{{ shell_drawer.default_content_kind or shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-supported-content-kinds="{{ (shell_drawer.supported_content_kinds or [shell_drawer.content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-surface-family="{{ shell_drawer.surface_family or 'notifications' }}" data-shell-default-surface-family="{{ shell_drawer.default_surface_family or shell_drawer.surface_family or 'notifications' }}" data-shell-placement="{{ shell_drawer.placement or 'right' }}" data-shell-splitter-desktop-only="{{ 'true' if shell_drawer.splitter and shell_drawer.splitter.desktop_only else 'false' }}" data-shell-mobile-fallback="{{ shell_drawer.splitter.mobile_fallback if shell_drawer.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_drawer.splitter.state_scope if shell_drawer.splitter else '' }}" hidden>
+    <div class="cover-lookup-drawer-header">
+      <div>
+        <h3 class="cover-lookup-drawer-title">Cover Art Look Ups</h3>
+        <div class="cover-lookup-drawer-subtitle">Track long-running manual cover searches here.</div>
+      </div>
+      <div class="cover-lookup-drawer-actions">
+        <button class="icon-button cover-lookup-drawer-clear" type="button" id="cover-lookup-drawer-clear" data-clear-cover-lookup-completed="1" aria-label="Clear completed cover art lookups" title="Clear completed lookups" hidden>
+          <span class="cover-lookup-drawer-clear-glyph" aria-hidden="true">
+            <img class="cover-lookup-drawer-clear-glyph-default" src="{{ url_for('static', filename='images/clear-notifications-icon-offwhite.png') }}" alt="">
+            <img class="cover-lookup-drawer-clear-glyph-hover" src="{{ url_for('static', filename='images/clear-notifications-icon.png') }}" alt="">
+          </span>
+        </button>
+        <button class="icon-button" type="button" data-close-cover-lookup-drawer="1" aria-label="Close cover art lookups">✕</button>
+      </div>
+    </div>
+    <div class="cover-lookup-drawer-body" id="cover-lookup-drawer-body"></div>
+  </aside>
+
+  {% include 'partials/primary-modals.html' %}
+  {% include 'partials/confirm-modals.html' %}
+  {% include 'partials/overlay-shells.html' %}
+
+  <script>
+    window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = {{ bootstrap_payload | tojson }};
+  </script>
+</body>
+</html>
+

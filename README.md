@@ -57,5 +57,8 @@ repository. Opt-in local tests resolve them only when
 - [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-The source repository is private and no license is granted for copying,
-redistribution, or commercial use.
+## License
+
+Album Haven is licensed under the [ISC License](LICENSE).
+
+Copyright (c) 2026 Ilia Danilov

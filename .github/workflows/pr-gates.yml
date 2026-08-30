@@ -1029,7 +1029,7 @@ jobs:
 
       - name: PR Agent action step
         id: pr_agent
-        uses: the-pr-agent/pr-agent@main
+        uses: the-pr-agent/pr-agent@7267ae1f7b855e7d4a3a34918d9b6c5683db3c12
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

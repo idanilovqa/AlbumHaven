@@ -169,7 +169,10 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(prAgentCredentialGuard, /PR_AGENT_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
   assert.match(prAgentCredentialGuard, /if \[\[ -z "\$\{PR_AGENT_OPENAI_API_KEY:-\}" \]\]; then[\s\S]*?exit 1/);
   assert.doesNotMatch(prAgentCredentialGuard, /^        continue-on-error:/m);
-  assert.match(prAgentAction, /- name: PR Agent action step\r?\n\s+id: pr_agent\r?\n\s+uses: the-pr-agent\/pr-agent@main/);
+  assert.match(
+    prAgentAction,
+    /- name: PR Agent action step\r?\n\s+id: pr_agent\r?\n\s+uses: the-pr-agent\/pr-agent@7267ae1f7b855e7d4a3a34918d9b6c5683db3c12/,
+  );
   assert.doesNotMatch(prAgentAction, /^        (?:if|continue-on-error):/m);
   assert.match(prAgentAction, /OPENAI_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
   assert.match(prAgentAction, /github_action_config\.auto_review: "true"/);

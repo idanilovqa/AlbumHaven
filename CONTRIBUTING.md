@@ -1,8 +1,8 @@
 # Contributing
 
 Album Haven is not accepting external contributions or pull requests at this
-time. Repository access is limited to authorized collaborators, and no license
-is granted for redistribution or commercial use. This policy may change later.
+time. The source code is available under the ISC License, but the contribution
+policy may change independently in the future.
 
 Do not use a pull request to report a vulnerability. Follow `SECURITY.md`.
 

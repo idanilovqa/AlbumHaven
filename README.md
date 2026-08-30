@@ -1,10 +1,55 @@
 # Album Haven
 
-Album Haven is a local-first music library application for browsing albums and
-artists, managing local music, and exploring a collection through a FastAPI web
-interface.
+Album Haven is a local-first music library for people who think in albums. It
+turns a personal music collection into a visual, searchable gallery for
+browsing artists, opening track lists, managing library details, and listening
+from a web interface.
 
-Current release: `0.9.41`
+> [!NOTE]
+> Album Haven is under active development. The current application is intended
+> for local use and still requires hands-on setup; features listed in the
+> roadmap are not yet available unless they also appear in the current-feature
+> section below.
+
+Current release: `0.9.42`
+
+## What Album Haven does today
+
+- Scans a local music collection and keeps application data in PostgreSQL.
+- Presents albums in a cover-focused gallery organized by artists and related
+  artist families.
+- Searches and filters the local collection.
+- Opens album track lists and plays local music through the web interface.
+- Finds, previews, selects, and maintains album cover art.
+- Records album ratings and track preferences.
+- Provides utilities for reviewing library problems and correcting music tags
+  and metadata.
+
+## Main goals
+
+- Make large personal music libraries beautiful, fast, and pleasant to browse.
+- Support deeper discovery through discographies, artist relationships,
+  metadata, releases, and listening context.
+- Keep personal media ownership, raw files, and playback access private and
+  permission-controlled.
+- Grow toward both self-hosted private-library use and metadata-first hosted
+  discovery and sharing without confusing shared information with file access.
+
+## Short roadmap
+
+The detailed roadmap is evolving, but the broad direction is:
+
+1. **Strengthen the foundation:** improve the web experience and search, then
+   add accounts, permissions, multi-library support, and clearer boundaries
+   between hosted metadata and private media.
+2. **Expand discovery and listening:** add richer album and artist pages,
+   discography and release discovery, lists, favorites, listening history,
+   playlists, and integrations such as MusicBrainz and Last.fm.
+3. **Reach more devices:** build a Windows desktop client first, followed by
+   mobile, TV, and macOS clients as the shared platform matures.
+
+Priorities may change as the application develops. Roadmap items describe
+direction rather than promised release dates.
 
 ## Requirements
 

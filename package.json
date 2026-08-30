@@ -1,6 +1,6 @@
 {
   "name": "musicapp",
-  "version": "0.9.41",
+  "version": "0.9.42",
   "private": true,
   "description": "A local web app for browsing a music library by artist and album, with folder-based family context.",
   "main": "index.js",

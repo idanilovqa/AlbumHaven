@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.42 - 2026-08-30
+
+- Reworked the repository landing page around what Album Haven offers users
+  today.
+- Added concise summaries of the project's main goals and longer-term roadmap.
+- Kept current capabilities separate from planned features and retained the
+  existing installation, policy, and licensing guidance.
+
 ## 0.9.41 - 2026-08-29
 
 - Established a sanitized Album Haven application baseline from the reviewed

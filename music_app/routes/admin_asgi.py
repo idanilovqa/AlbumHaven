@@ -20,11 +20,16 @@ from music_app.services.admin_account_creation_postgres import (
 )
 from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_session_csrf import issue_session_csrf
+from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.admin_members_postgres import PostgresAdminMembersService
 from music_app.services.admin_member_mutation_postgres import (
     DestructiveConfirmationRequired,
     PostgresAdminMemberMutationService,
     RecentAuthenticationRequired,
+)
+from music_app.services.admin_reauthentication_postgres import (
+    AdminReauthenticationOutcome,
+    PostgresAdminReauthenticationService,
 )
 
 
@@ -191,6 +196,31 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
     return JSONResponse({"revoked": True})
 
 
+@router.post("/admin/reauthenticate")
+async def reauthenticate_administrator(request: Request) -> Response:
+    payload = await _password_payload(request)
+    if payload is None:
+        return JSONResponse({"detail": "Reauthentication failed."}, status_code=400)
+    actor = request.state.current_actor
+    if actor.account_id is None or actor.session_id is None:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    try:
+        outcome = await run_in_threadpool(
+            _reauthentication_service(request).reauthenticate,
+            account_id=actor.account_id,
+            session_id=actor.session_id,
+            password=payload["password"],
+            request_ref=uuid4().hex,
+        )
+    except Exception:
+        return JSONResponse({"detail": "Reauthentication is temporarily unavailable."}, status_code=503)
+    if outcome is AdminReauthenticationOutcome.SUCCESS:
+        return JSONResponse({"refreshed": True})
+    if outcome is AdminReauthenticationOutcome.INVALID:
+        return JSONResponse({"detail": "Reauthentication failed."}, status_code=403)
+    return JSONResponse({"detail": "Session changed. Sign in again."}, status_code=409)
+
+
 @router.post("/admin/accounts", status_code=201)
 async def create_managed_account(request: Request, background_tasks: BackgroundTasks):
     payload = await _json_payload(request)
@@ -300,6 +330,13 @@ async def _confirmed_payload(request: Request) -> dict[str, object] | None:
     return payload if isinstance(payload["confirmed"], bool) else None
 
 
+async def _password_payload(request: Request) -> dict[str, object] | None:
+    payload = await _bounded_json_object(request)
+    if payload is None or set(payload) != {"password"}:
+        return None
+    return payload if isinstance(payload["password"], str) else None
+
+
 async def _bounded_json_object(request: Request) -> dict[str, object] | None:
     if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "application/json":
         return None
@@ -383,6 +420,25 @@ def _mutation_service(request: Request):
                 request.app.state.auth_policy_config
             )
             request.app.state.admin_member_mutation_service = existing
+    return existing
+
+
+def _reauthentication_service(request: Request):
+    existing = getattr(request.app.state, "admin_reauthentication_service", None)
+    if existing is not None:
+        return existing
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "admin_reauthentication_service", None)
+        if existing is None:
+            existing = PostgresAdminReauthenticationService(
+                request.app.state.auth_policy_config,
+                audit_repository=PostgresSecurityAuditRepository(),
+            )
+            request.app.state.admin_reauthentication_service = existing
     return existing
 
 

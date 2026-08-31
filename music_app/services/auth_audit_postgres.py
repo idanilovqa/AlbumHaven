@@ -48,6 +48,8 @@ class CredentialAuditReason(str, Enum):
     PASSWORD_CHANGED = "password_changed"
     CURRENT_PASSWORD_INVALID = "current_password_invalid"
     SUGGESTION_DISMISSED = "suggestion_dismissed"
+    ADMINISTRATOR_REAUTHENTICATED = "administrator_reauthenticated"
+    ADMINISTRATOR_REAUTHENTICATION_INVALID = "administrator_reauthentication_invalid"
 
 
 _LOGIN_REASON_MATRIX = {
@@ -81,10 +83,14 @@ _CREDENTIAL_REASON_MATRIX = {
         {
             CredentialAuditReason.PASSWORD_CHANGED,
             CredentialAuditReason.SUGGESTION_DISMISSED,
+            CredentialAuditReason.ADMINISTRATOR_REAUTHENTICATED,
         }
     ),
     SecurityAuditOutcome.INVALID: frozenset(
-        {CredentialAuditReason.CURRENT_PASSWORD_INVALID}
+        {
+            CredentialAuditReason.CURRENT_PASSWORD_INVALID,
+            CredentialAuditReason.ADMINISTRATOR_REAUTHENTICATION_INVALID,
+        }
     ),
     SecurityAuditOutcome.THROTTLED: frozenset(),
 }

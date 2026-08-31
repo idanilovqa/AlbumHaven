@@ -17,6 +17,9 @@
   if (!form) return;
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
   const submit = form.querySelector('button[type="submit"]');
+  const reauthPanel = form.querySelector('[data-reauth-panel]');
+  const reauthPassword = form.querySelector('[data-reauth-password]');
+  let pendingRetry = null;
 
   const showError = (message) => {
     if (!error) return;
@@ -39,6 +42,17 @@
       throw new Error(result.detail || 'Account management is temporarily unavailable.');
     }
     return response;
+  };
+
+  const requireReauthentication = (retry) => {
+    if (!reauthPanel || !reauthPassword) {
+      showError('Recent authentication is required. Sign in again and retry.');
+      return;
+    }
+    pendingRetry = retry;
+    reauthPanel.hidden = false;
+    reauthPassword.value = '';
+    reauthPassword.focus();
   };
 
   form.addEventListener('submit', async (event) => {
@@ -84,6 +98,11 @@
       }, csrfToken);
       window.location.assign('/admin/members');
     } catch (requestError) {
+      if (requestError.message === 'Recent authentication is required.') {
+        requireReauthentication(() => form.requestSubmit());
+        if (submit) submit.disabled = false;
+        return;
+      }
       showError(requestError.message);
       if (submit) submit.disabled = false;
     }
@@ -115,9 +134,48 @@
         );
         window.location.assign(`/admin/accounts/${encodeURIComponent(accountId)}`);
       } catch (requestError) {
+        if (requestError.message === 'Recent authentication is required.') {
+          requireReauthentication(() => button.click());
+          button.disabled = false;
+          return;
+        }
         showError(requestError.message);
         button.disabled = false;
       }
     });
+  });
+
+  form.querySelector('[data-reauth-cancel]')?.addEventListener('click', () => {
+    pendingRetry = null;
+    if (reauthPassword) reauthPassword.value = '';
+    if (reauthPanel) reauthPanel.hidden = true;
+  });
+
+  form.querySelector('[data-reauth-submit]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const password = reauthPassword?.value || '';
+    if (!password) {
+      reauthPassword?.focus();
+      return;
+    }
+    const data = new FormData(form);
+    button.disabled = true;
+    try {
+      await requestJson(
+        '/admin/reauthenticate',
+        'POST',
+        { password },
+        String(data.get('csrf_token') || ''),
+      );
+      reauthPassword.value = '';
+      reauthPanel.hidden = true;
+      const retry = pendingRetry;
+      pendingRetry = null;
+      retry?.();
+    } catch (requestError) {
+      showError(requestError.message);
+    } finally {
+      button.disabled = false;
+    }
   });
 })();

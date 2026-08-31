@@ -69,6 +69,17 @@
         <div class="detail-setting"><span><strong>Send welcome email</strong><small>Contains username and sign-in URL, never the password.<br>Delivery does not gate access.</small></span><input class="switch" type="checkbox" name="send_welcome" checked></div>
         {% endif %}
 
+        {% if member %}
+        <section class="reauth-panel" data-reauth-panel hidden aria-labelledby="reauth-title">
+          <div>
+            <h2 id="reauth-title">Confirm it’s you</h2>
+            <p>Enter your own current password to continue this sensitive administrator action.</p>
+          </div>
+          <label><span>Your current password</span><span class="password-control"><input id="admin-current-password" type="password" autocomplete="current-password" data-reauth-password><button type="button" data-password-toggle="admin-current-password" aria-pressed="false">Show</button></span></label>
+          <div class="reauth-actions"><button class="admin-button" type="button" data-reauth-cancel>Cancel</button><button class="admin-button is-primary" type="button" data-reauth-submit>Continue</button></div>
+        </section>
+        {% endif %}
+
         <footer class="detail-actions">
           <a class="admin-button" href="/admin/members">Cancel</a>
           <button class="admin-button is-primary" type="submit">{{ "Save changes" if member else "Create user" }}</button>

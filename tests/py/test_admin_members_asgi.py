@@ -8,6 +8,9 @@ from music_app.services.admin_members_postgres import (
     AdminMemberSummary,
     AdminMembersRoster,
 )
+from music_app.services.admin_reauthentication_postgres import (
+    AdminReauthenticationOutcome,
+)
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import (
     ActorState,
@@ -24,6 +27,7 @@ class Service:
         self.calls = []
         self.update_calls = []
         self.revoke_calls = []
+        self.reauthentication_calls = []
 
     def load_roster(self, **kwargs):
         self.calls.append(kwargs)
@@ -49,6 +53,10 @@ class Service:
     def revoke_sessions(self, **kwargs):
         self.revoke_calls.append(kwargs)
 
+    def reauthenticate(self, **kwargs):
+        self.reauthentication_calls.append(kwargs)
+        return AdminReauthenticationOutcome.SUCCESS
+
 
 def _app():
     from music_app.routes.admin_asgi import router
@@ -57,6 +65,7 @@ def _app():
     service = Service()
     app.state.admin_members_service = service
     app.state.admin_member_mutation_service = service
+    app.state.admin_reauthentication_service = service
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},
         "trusted_origins": ["https://music.test"],
@@ -240,3 +249,21 @@ def test_member_update_and_session_revoke_use_bounded_confirmed_contracts():
     assert revoke_body == b'{"revoked":true}'
     assert service.revoke_calls[0]["target_account_id"] == 41
     assert service.revoke_calls[0]["confirmed"] is True
+
+
+def test_admin_recent_auth_refresh_verifies_only_the_acting_account_password():
+    app, service = _app()
+
+    status, body = _json_request(
+        app,
+        "POST",
+        "/admin/reauthenticate",
+        {"password": "administrator private password"},
+    )
+
+    assert status == 200
+    assert body == b'{"refreshed":true}'
+    assert service.reauthentication_calls[0]["account_id"] == 7
+    assert service.reauthentication_calls[0]["session_id"] == 11
+    assert service.reauthentication_calls[0]["password"] == "administrator private password"
+    assert b"administrator private password" not in body

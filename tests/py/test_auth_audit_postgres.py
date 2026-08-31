@@ -41,6 +41,8 @@ def audit():
     }
     assert set(module.CredentialAuditReason.__members__) == {
         "PASSWORD_CHANGED", "CURRENT_PASSWORD_INVALID", "SUGGESTION_DISMISSED",
+        "ADMINISTRATOR_REAUTHENTICATED",
+        "ADMINISTRATOR_REAUTHENTICATION_INVALID",
     }
     return module
 

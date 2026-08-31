@@ -136,6 +136,8 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert "member.one" in body
     assert "Make this password your own" in body
     assert "Windows browser" in body
+    assert 'action="/logout"' in body
+    assert "Sign out" in body
     assert session not in body
 
 

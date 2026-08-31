@@ -263,17 +263,17 @@ class PostgresPasswordResetRequestService:
     ) -> Mapping[str, object] | None:
         rows = connection.execute(
             """
-            select app.accounts.id, app.accounts.is_active,
-                   app.accounts.disabled_at, app.accounts.contact_email,
-                   app.account_credentials.credential_version
-            from app.accounts
-            join app.account_credentials
-              on app.account_credentials.account_id = app.accounts.id
-            where app.accounts.username_normalized = %s
-               or app.accounts.contact_email_normalized = %s
-            order by app.accounts.id
+            select account.id, account.is_active,
+                   account.disabled_at, account.contact_email,
+                   credential.credential_version
+            from app.accounts account
+            join app.account_credentials credential
+              on credential.account_id = account.id
+            where account.username_normalized = %s
+               or account.contact_email_normalized = %s
+            order by account.id
             limit 1
-            for share of app.accounts, app.account_credentials
+            for share of account, credential
             """,
             (normalized_candidate, normalized_candidate),
         ).fetchall()

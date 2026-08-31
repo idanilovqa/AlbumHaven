@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -28,6 +30,7 @@ class HibpRangePasswordChecker:
         *,
         opener: Callable[..., Any] = urlopen,
         timeout_seconds: float = 3.0,
+        range_url_template: str | None = None,
     ) -> None:
         if (
             isinstance(timeout_seconds, bool)
@@ -37,6 +40,11 @@ class HibpRangePasswordChecker:
             raise ValueError("Breached-password checker configuration is invalid.")
         self._opener = opener
         self._timeout_seconds = float(timeout_seconds)
+        self._range_url_template = _validate_range_url_template(
+            range_url_template
+            if range_url_template is not None
+            else os.environ.get("ALBUM_HAVEN_HIBP_RANGE_URL_TEMPLATE", _RANGE_URL)
+        )
 
     def __call__(self, password: str) -> bool:
         if not isinstance(password, str) or not password:
@@ -46,7 +54,7 @@ class HibpRangePasswordChecker:
             password.encode("utf-8"), usedforsecurity=False
         ).hexdigest().upper()
         prefix, candidate_suffix = digest[:5], digest[5:]
-        expected_url = _RANGE_URL.format(prefix)
+        expected_url = self._range_url_template.format(prefix)
         request = Request(
             expected_url,
             headers={
@@ -78,6 +86,35 @@ class HibpRangePasswordChecker:
             if hmac.compare_digest(suffix, candidate_suffix):
                 matched_count = count
         return matched_count > 0
+
+
+def _validate_range_url_template(value: object) -> str:
+    template = str(value or "").strip()
+    if template.count("{}") != 1:
+        raise ValueError("Breached-password range URL template is invalid.")
+    try:
+        parsed = urlsplit(template.format("ABCDE"))
+        port = parsed.port
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Breached-password range URL template is invalid.") from exc
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.scheme not in {"http", "https"}
+    ):
+        raise ValueError("Breached-password range URL template is invalid.")
+    if parsed.scheme == "http" and parsed.hostname.casefold() not in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
+        raise ValueError("Breached-password range URL must use HTTPS outside loopback.")
+    if port is not None and not 1 <= port <= 65_535:
+        raise ValueError("Breached-password range URL template is invalid.")
+    return template
 
 
 def _parse_range_response(body: object) -> tuple[tuple[str, int], ...]:

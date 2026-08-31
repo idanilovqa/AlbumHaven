@@ -132,6 +132,10 @@ def test_eligible_request_charges_three_buckets_and_commits_one_reset_and_outbox
     assert RAW_TOKEN not in repr(result)
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _ in connection.operations]
+    account_lookup = next(sql for sql in statements if "from app.accounts" in sql)
+    assert "from app.accounts account" in account_lookup
+    assert "join app.account_credentials credential" in account_lookup
+    assert "for share of account, credential" in account_lookup
     assert sum("insert into app.auth_throttles" in sql for sql in statements) == 3
     assert any("update app.password_reset_tokens" in sql and "revoked_at" in sql for sql in statements)
     assert any("insert into app.password_reset_tokens" in sql for sql in statements)

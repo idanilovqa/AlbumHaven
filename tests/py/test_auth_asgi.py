@@ -241,6 +241,8 @@ def test_get_forgot_password_mints_purpose_bound_csrf_and_renders_approved_recov
     assert 'href="/static/css/password-recovery.css"' in rendered
     assert 'src="/static/js/password-recovery.js"' in rendered
     assert "Reset your password" in rendered
+    assert dict(headers)["referrer-policy"] == "same-origin"
+    assert '<meta name="referrer" content="same-origin">' in rendered
     cookie = next(
         value for value in _set_cookies(headers)
         if value.startswith(FORGOT_CSRF_COOKIE + "=")
@@ -323,6 +325,24 @@ def test_reset_link_rejects_duplicate_or_invalid_query_without_reflecting_token(
     assert lifecycle.exchanges == []
 
 
+def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    lifecycle.valid = False
+    app.state.password_reset_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/reset-password",
+        query="purpose=password-reset&token=" + CSRF,
+    )
+
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password?invalid=1"
+    assert CSRF not in dict(headers)["location"]
+
+
 def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeResetLifecycle()
@@ -341,7 +361,8 @@ def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
     assert 'action="/reset-password"' in rendered
     assert f'value="{csrf}"' in rendered
     assert RESET_TRANSACTION not in rendered
-    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert dict(headers)["referrer-policy"] == "same-origin"
+    assert '<meta name="referrer" content="same-origin">' in rendered
 
 
 def test_reset_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):

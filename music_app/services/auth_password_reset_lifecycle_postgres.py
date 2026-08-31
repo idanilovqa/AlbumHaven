@@ -125,33 +125,30 @@ class PostgresPasswordResetLifecycleService:
                 rows = connection.execute(
                     """
                     select null::bigint as transaction_id,
-                           app.password_reset_tokens.id as reset_token_id,
-                           app.accounts.id as account_id,
-                           app.accounts.username_display,
-                           app.accounts.contact_email,
-                           app.account_credentials.credential_version,
-                           app.accounts.is_active, app.accounts.disabled_at,
-                           app.password_reset_tokens.expires_at as reset_expires_at,
+                           reset_token.id as reset_token_id,
+                           account.id as account_id,
+                           account.username_display,
+                           account.contact_email,
+                           credential.credential_version,
+                           account.is_active, account.disabled_at,
+                           reset_token.expires_at as reset_expires_at,
                            null::timestamptz as transaction_expires_at,
-                           app.password_reset_tokens.consumed_at as reset_consumed_at,
-                           app.password_reset_tokens.revoked_at as reset_revoked_at,
+                           reset_token.consumed_at as reset_consumed_at,
+                           reset_token.revoked_at as reset_revoked_at,
                            null::timestamptz as transaction_consumed_at
-                    from app.password_reset_tokens
-                    join app.accounts
-                      on app.accounts.id = app.password_reset_tokens.account_id
-                    join app.account_credentials
-                      on app.account_credentials.account_id = app.accounts.id
-                    where app.password_reset_tokens.purpose = 'password_reset'
-                      and app.password_reset_tokens.token_hash = %s
-                      and app.password_reset_tokens.credential_version =
-                          app.account_credentials.credential_version
-                      and app.password_reset_tokens.consumed_at is null
-                      and app.password_reset_tokens.revoked_at is null
-                      and app.password_reset_tokens.expires_at > %s
-                      and app.accounts.is_active is true
-                      and app.accounts.disabled_at is null
-                    for share of app.password_reset_tokens, app.accounts,
-                                 app.account_credentials
+                    from app.password_reset_tokens reset_token
+                    join app.accounts account on account.id = reset_token.account_id
+                    join app.account_credentials credential
+                      on credential.account_id = account.id
+                    where reset_token.purpose = 'password_reset'
+                      and reset_token.token_hash = %s
+                      and reset_token.credential_version = credential.credential_version
+                      and reset_token.consumed_at is null
+                      and reset_token.revoked_at is null
+                      and reset_token.expires_at > %s
+                      and account.is_active is true
+                      and account.disabled_at is null
+                    for share of reset_token, account, credential
                     """,
                     (digest, now),
                 ).fetchall()

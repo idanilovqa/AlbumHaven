@@ -346,6 +346,176 @@ jobs:
       - name: Reject E2E production-path drift
         run: npm run check:e2e-production-parity
 
+  e2e_phase7_auth:
+    name: "E2E: Phase 7 Auth Lifecycle"
+    needs:
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Set up pinned Chrome
+        id: setup_phase7_auth_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Provision isolated PostgreSQL
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-phase7-auth.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Run Phase 7 auth lifecycle suite
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_auth_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          npm run test:e2e:phase7:auth
+
+      - name: Teardown isolated PostgreSQL
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-phase7-auth.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath
+          }
+
+      - name: Upload Phase 7 auth diagnostics
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-auth-debug-${{ github.run_attempt }}
+          path: test-results/playwright-artifacts/phase7-auth
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e_phase7_admin:
+    name: "E2E: Phase 7 Admin Management"
+    needs:
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Set up pinned Chrome
+        id: setup_phase7_admin_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Provision isolated PostgreSQL
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-phase7-admin.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Run Phase 7 admin-management suite
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_admin_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          npm run test:e2e:phase7:admin
+
+      - name: Teardown isolated PostgreSQL
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-phase7-admin.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath
+          }
+
+      - name: Upload Phase 7 admin diagnostics
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-admin-debug-${{ github.run_attempt }}
+          path: test-results/playwright-artifacts/phase7-admin
+          if-no-files-found: warn
+          retention-days: 7
+
   e2e_functional:
     name: "E2E: ${{ matrix.displayName }}"
     needs:
@@ -997,6 +1167,8 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
     if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' }}
@@ -1052,6 +1224,8 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
     if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' }}
@@ -1126,6 +1300,8 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
       - pr_agent_review
@@ -1144,6 +1320,8 @@ jobs:
           TEST_JS_RESULT: ${{ needs.test_js.result }}
           TEST_COMPONENTS_RESULT: ${{ needs.test_components.result }}
           PRODUCTION_PARITY_RESULT: ${{ needs.e2e_production_parity.result }}
+          PHASE7_AUTH_RESULT: ${{ needs.e2e_phase7_auth.result }}
+          PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
           WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
           PYTHON_RESULT: ${{ needs.test_python.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
@@ -1154,7 +1332,7 @@ jobs:
           test "$TEST_JS_RESULT" = success
           test "$TEST_COMPONENTS_RESULT" = success
           test "$PRODUCTION_PARITY_RESULT" = success
-          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT"; do
+          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT"; do
             test "$result" = skipped
           done
           {
@@ -1180,6 +1358,8 @@ jobs:
           WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
           PYTHON_RESULT: ${{ needs.test_python.result }}
           PRODUCTION_PARITY_RESULT: ${{ needs.e2e_production_parity.result }}
+          PHASE7_AUTH_RESULT: ${{ needs.e2e_phase7_auth.result }}
+          PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
@@ -1193,6 +1373,8 @@ jobs:
               test_node_windows = $env:WINDOWS_RESULT
               test_python = $env:PYTHON_RESULT
               e2e_production_parity = $env:PRODUCTION_PARITY_RESULT
+              e2e_phase7_auth = $env:PHASE7_AUTH_RESULT
+              e2e_phase7_admin = $env:PHASE7_ADMIN_RESULT
               e2e_functional = $env:FUNCTIONAL_RESULT
               e2e_performance_ci = $env:PERFORMANCE_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT

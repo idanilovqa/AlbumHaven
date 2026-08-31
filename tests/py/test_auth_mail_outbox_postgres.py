@@ -116,7 +116,8 @@ def test_claim_is_short_locked_eligible_welcome_only_and_secret_free(outbox):
     assert "message_category = 'welcome'" in select
     assert "delivery_status in ('pending', 'failed')" in select
     assert "attempt_count <" in select
-    assert "for update of app.mail_outbox skip locked" in select
+    assert "from app.mail_outbox outbox" in select
+    assert "for update of outbox skip locked" in select
     update = next(sql for sql, _ in connection.operations if sql.startswith("update app.mail_outbox"))
     assert "delivery_status = 'sending'" in update
     rendered = repr(claim) + repr(connection.operations)

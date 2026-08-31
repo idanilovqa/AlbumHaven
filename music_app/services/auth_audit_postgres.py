@@ -135,13 +135,12 @@ class PostgresSecurityAuditRepository:
         try:
             if Jsonb is None:
                 raise RuntimeError
-            cursor = connection.execute(
+            connection.execute(
                 """
                 insert into app.security_audit_events (
                   actor_account_id, target_account_id, event_category, outcome,
                   reason_code, request_ref, occurred_at, metadata
                 ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-                returning id
                 """,
                 (
                     actor_account_id,
@@ -153,6 +152,9 @@ class PostgresSecurityAuditRepository:
                     occurred_at,
                     Jsonb(metadata_payload),
                 ),
+            )
+            cursor = connection.execute(
+                "select currval('app.security_audit_events_id_seq') as id"
             )
             row = cursor.fetchone()
             event_id = _returned_id(row)

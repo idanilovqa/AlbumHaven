@@ -110,26 +110,26 @@ class PostgresWelcomeOutboxService:
                     return AmbiguousWelcomeClaim(outbox_id=identifier)
                 rows = connection.execute(
                     """
-                    select app.mail_outbox.id,
-                           app.mail_outbox.account_id,
-                           app.accounts.username_display,
-                           app.accounts.contact_email,
-                           app.mail_outbox.attempt_count
-                    from app.mail_outbox
-                    join app.accounts
-                      on app.accounts.id = app.mail_outbox.account_id
-                    where app.mail_outbox.id = %s
-                      and app.mail_outbox.message_category = 'welcome'
-                      and app.mail_outbox.delivery_status in ('pending', 'failed')
+                    select outbox.id,
+                           outbox.account_id,
+                           account.username_display,
+                           account.contact_email,
+                           outbox.attempt_count
+                    from app.mail_outbox outbox
+                    join app.accounts account
+                      on account.id = outbox.account_id
+                    where outbox.id = %s
+                      and outbox.message_category = 'welcome'
+                      and outbox.delivery_status in ('pending', 'failed')
                       and (
-                        app.mail_outbox.delivery_status = 'pending'
+                        outbox.delivery_status = 'pending'
                         or (
-                          app.mail_outbox.next_attempt_at is not null
-                          and app.mail_outbox.next_attempt_at <= %s
+                          outbox.next_attempt_at is not null
+                          and outbox.next_attempt_at <= %s
                         )
                       )
-                      and app.mail_outbox.attempt_count < %s
-                    for update of app.mail_outbox skip locked
+                      and outbox.attempt_count < %s
+                    for update of outbox skip locked
                     """,
                     (identifier, now, _MAX_ATTEMPTS),
                 ).fetchall()
@@ -248,33 +248,32 @@ class PostgresPasswordResetOutboxService:
             with _transaction(connection):
                 rows = connection.execute(
                     """
-                    select app.mail_outbox.id, app.mail_outbox.account_id,
-                           app.accounts.username_display,
-                           app.accounts.contact_email,
-                           app.mail_outbox.attempt_count
-                    from app.mail_outbox
-                    join app.password_reset_tokens
-                      on app.password_reset_tokens.id = app.mail_outbox.reset_token_id
-                    join app.accounts
-                      on app.accounts.id = app.mail_outbox.account_id
-                    join app.account_credentials
-                      on app.account_credentials.account_id = app.accounts.id
-                    where app.mail_outbox.id = %s
-                      and app.mail_outbox.account_id = %s
-                      and app.mail_outbox.message_category = 'password_reset'
-                      and app.mail_outbox.delivery_status = 'pending'
-                      and app.mail_outbox.attempt_count = 0
-                      and app.password_reset_tokens.token_hash = %s
-                      and app.password_reset_tokens.purpose = 'password_reset'
-                      and app.password_reset_tokens.credential_version =
-                          app.account_credentials.credential_version
-                      and app.password_reset_tokens.consumed_at is null
-                      and app.password_reset_tokens.revoked_at is null
-                      and app.password_reset_tokens.expires_at > %s
-                      and app.accounts.is_active is true
-                      and app.accounts.disabled_at is null
-                      and app.accounts.contact_email = %s
-                    for update of app.mail_outbox skip locked
+                    select outbox.id, outbox.account_id,
+                           account.username_display,
+                           account.contact_email,
+                           outbox.attempt_count
+                    from app.mail_outbox outbox
+                    join app.password_reset_tokens reset_token
+                      on reset_token.id = outbox.reset_token_id
+                    join app.accounts account
+                      on account.id = outbox.account_id
+                    join app.account_credentials credential
+                      on credential.account_id = account.id
+                    where outbox.id = %s
+                      and outbox.account_id = %s
+                      and outbox.message_category = 'password_reset'
+                      and outbox.delivery_status = 'pending'
+                      and outbox.attempt_count = 0
+                      and reset_token.token_hash = %s
+                      and reset_token.purpose = 'password_reset'
+                      and reset_token.credential_version = credential.credential_version
+                      and reset_token.consumed_at is null
+                      and reset_token.revoked_at is null
+                      and reset_token.expires_at > %s
+                      and account.is_active is true
+                      and account.disabled_at is null
+                      and account.contact_email = %s
+                    for update of outbox skip locked
                     """,
                     (outbox_id, account_id, digest, now, recipient),
                 ).fetchall()

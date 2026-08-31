@@ -9,7 +9,8 @@ const validatorPath = path.join(root, 'scripts', 'ci', 'validate-cloud-verificat
 
 const REQUIRED_JOBS = [
   'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
-  'e2e_functional', 'e2e_performance_ci', 'pr_agent_review', 'codex_review',
+  'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
+  'pr_agent_review', 'codex_review',
 ];
 
 function validInput(mode = 'trusted') {

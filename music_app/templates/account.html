@@ -20,6 +20,10 @@
         <a class="account-nav-item" href="#active-sessions">Sessions</a>
         <a class="account-nav-item" href="/">Back to library</a>
       </nav>
+      <form class="account-logout" method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit">Sign out</button>
+      </form>
     </aside>
 
     <section class="account-main">

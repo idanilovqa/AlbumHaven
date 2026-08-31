@@ -578,10 +578,18 @@ def seed_bootstrap_owner_and_library(setup_database_url: str) -> None:
         connection.execute(
             """
             with owner_account as (
-              insert into app.accounts (display_name, account_kind, metadata)
+              insert into app.accounts (
+                display_name, account_kind, username_display,
+                username_normalized, contact_email,
+                contact_email_normalized, metadata
+              )
               values (
                 'Isolated E2E Owner',
                 'bootstrap_owner',
+                'isolated-e2e-owner',
+                'isolated-e2e-owner',
+                'isolated-e2e-owner@example.test',
+                'isolated-e2e-owner@example.test',
                 '{"source":"isolated_e2e_launcher"}'::jsonb
               )
               returning id

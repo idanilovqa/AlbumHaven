@@ -139,7 +139,7 @@ def _append(audit, connection, **overrides):
 
 
 @pytest.mark.parametrize("returned_row", [{"id": 91}, (91,)])
-def test_append_in_transaction_inserts_once_and_returns_dict_or_tuple_id(
+def test_append_in_transaction_inserts_without_audit_read_access_and_returns_sequence_id(
     audit, returned_row
 ):
     connection = RecordingConnection(returned_row=returned_row)
@@ -147,10 +147,10 @@ def test_append_in_transaction_inserts_once_and_returns_dict_or_tuple_id(
     assert _append(audit, connection) == 91
 
     assert connection.transaction_calls == 0
-    assert len(connection.operations) == 1
+    assert len(connection.operations) == 2
     sql, params = connection.operations[0]
     assert sql.startswith("insert into app.security_audit_events")
-    assert "returning id" in sql
+    assert "returning" not in sql
     for column in (
         "actor_account_id", "target_account_id", "event_category", "outcome",
         "reason_code", "request_ref", "occurred_at", "metadata",
@@ -166,6 +166,9 @@ def test_append_in_transaction_inserts_once_and_returns_dict_or_tuple_id(
         "credential_rehashed": True,
         "source_class": "trusted_proxy",
     }
+    identity_sql, identity_params = connection.operations[1]
+    assert identity_sql == "select currval('app.security_audit_events_id_seq') as id"
+    assert identity_params is None
 
 
 @pytest.mark.parametrize(

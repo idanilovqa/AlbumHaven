@@ -61,19 +61,19 @@ class PostgresAdminAccountRepository:
                 with connection.transaction():
                     authority = connection.execute(
                         """
-                        select app.bootstrap_owners.account_id as actor_account_id,
-                               library.libraries.id as library_id
-                        from app.bootstrap_owners
-                        join app.accounts
-                          on app.accounts.id = app.bootstrap_owners.account_id
-                         and app.accounts.is_active is true
-                         and app.accounts.disabled_at is null
-                        join library.libraries
-                          on library.libraries.id = %s
-                         and library.libraries.owner_account_id = app.accounts.id
-                        where app.bootstrap_owners.account_id = %s
-                          and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
-                        for update of app.accounts, library.libraries
+                        select owner.account_id as actor_account_id,
+                               library.id as library_id
+                        from app.bootstrap_owners owner
+                        join app.accounts account
+                          on account.id = owner.account_id
+                         and account.is_active is true
+                         and account.disabled_at is null
+                        join library.libraries library
+                          on library.id = %s
+                         and library.owner_account_id = account.id
+                        where owner.account_id = %s
+                          and owner.owner_key = 'local-bootstrap-owner'
+                        for update of account, library
                         """,
                         (library_id, actor_account_id),
                     ).fetchall()

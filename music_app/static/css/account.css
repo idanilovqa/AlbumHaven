@@ -27,6 +27,9 @@ button, input { font: inherit; }
 .account-brand img { width: 62px; height: 58px; object-fit: contain; }
 .account-nav h2 { margin: 8px 0 25px; font-size: 18px; }
 .account-nav nav { display: grid; gap: 7px; }
+.account-logout { margin-top: 18px; }
+.account-logout button { width: 100%; min-height: 40px; padding: 0 13px; border: 1px solid #30475e; border-radius: 9px; color: #a4b1c2; background: transparent; font-weight: 700; cursor: pointer; }
+.account-logout button:hover, .account-logout button:focus-visible { color: #fff; border-color: #4b6885; outline: none; }
 .account-nav-item {
   min-height: 44px; padding: 0 13px; display: flex; align-items: center;
   border-radius: 10px; color: #8796aa; font-size: 14px; text-decoration: none;

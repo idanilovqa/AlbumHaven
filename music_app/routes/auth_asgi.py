@@ -94,7 +94,7 @@ def _render_recovery(
             "sent": sent,
         },
     )
-    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Referrer-Policy"] = "same-origin"
     return response
 
 
@@ -116,7 +116,7 @@ def _render_reset(
             "password_invalid": password_invalid,
         },
     )
-    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Referrer-Policy"] = "same-origin"
     return response
 
 
@@ -533,7 +533,9 @@ async def get_reset_password(request: Request) -> Response:
         except Exception:
             return _generic_reset_unavailable()
         if issued is None:
-            return _generic_reset_invalid()
+            return _no_store(
+                RedirectResponse("/reset-password?invalid=1", status_code=303)
+            )
         response = RedirectResponse("/reset-password", status_code=303)
         response.set_cookie(
             _RESET_TRANSACTION_COOKIE,

@@ -119,6 +119,30 @@ def test_checker_rejects_unbounded_or_invalid_timeout(breached_passwords, timeou
         _checker(breached_passwords, RecordingOpener(), timeout=timeout)
 
 
+def test_range_url_override_allows_only_https_or_plaintext_loopback(
+    breached_passwords,
+):
+    breached_passwords.HibpRangePasswordChecker(
+        range_url_template="https://password-screen.example/range/{}"
+    )
+    breached_passwords.HibpRangePasswordChecker(
+        range_url_template="http://127.0.0.1:6182/range/{}"
+    )
+    with pytest.raises(ValueError, match="HTTPS outside loopback"):
+        breached_passwords.HibpRangePasswordChecker(
+            range_url_template="http://password-screen.example/range/{}"
+        )
+    for invalid in (
+        "https://password-screen.example/range/static",
+        "https://user:secret@password-screen.example/range/{}",
+        "https://password-screen.example/range/{}?leak=true",
+    ):
+        with pytest.raises(ValueError, match="template is invalid"):
+            breached_passwords.HibpRangePasswordChecker(
+                range_url_template=invalid
+            )
+
+
 @pytest.mark.parametrize(
     "body",
     [

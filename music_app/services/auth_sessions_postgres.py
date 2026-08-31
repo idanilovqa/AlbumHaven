@@ -72,6 +72,30 @@ class IssuedBrowserSession:
         )
 
 
+@dataclass(frozen=True, repr=False, slots=True)
+class PreparedBrowserSession:
+    """A validated session issuance prepared before database work begins."""
+
+    raw_token: str
+    token_digest: bytes
+    account_id: int
+    authenticated_at: datetime
+    idle_expires_at: datetime
+    absolute_expires_at: datetime
+    user_agent: str | None
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(raw_token=<redacted>, "
+            "token_digest=<redacted>, "
+            f"account_id={self.account_id!r}, "
+            f"authenticated_at={self.authenticated_at!r}, "
+            f"idle_expires_at={self.idle_expires_at!r}, "
+            f"absolute_expires_at={self.absolute_expires_at!r}, "
+            "user_agent=<redacted>)"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedBrowserSession:
     session_id: int
@@ -128,12 +152,7 @@ class PostgresAuthSessionService:
         user_agent: str | None = None,
         connection: Any | None = None,
     ) -> IssuedBrowserSession:
-        account_id = _positive_integer(account_id, "account id")
-        user_agent = _validated_user_agent(user_agent)
-        issued = _issued_token(self._token_issuer)
-        now = _aware_now(self._clock)
-        idle_expires_at = now + timedelta(seconds=self._idle_seconds)
-        absolute_expires_at = now + timedelta(seconds=self._absolute_seconds)
+        prepared = self.prepare_session(account_id, user_agent=user_agent)
 
         with self._operation(connection) as active_connection:
             account_rows = _fetchall(active_connection,
@@ -148,64 +167,115 @@ class PostgresAuthSessionService:
             if len(account_rows) != 1 or not _account_is_active(account_rows[0]):
                 raise RuntimeError("Account is not eligible for a session.")
 
-            active_rows = _fetchall(active_connection,
-                """
-                select id
-                from app.account_sessions
-                where account_id = %s
-                  and revoked_at is null
-                  and idle_expires_at > %s
-                  and absolute_expires_at > %s
-                order by created_at, id
-                for update
-                """,
-                (account_id, now, now),
-            )
-            excess = max(0, len(active_rows) + 1 - self._active_cap)
-            if excess:
-                oldest_ids = [
-                    _positive_integer(_row(row, ("id",)).get("id"), "session id")
-                    for row in active_rows[:excess]
-                ]
-                _execute(active_connection,
-                    """
-                    update app.account_sessions
-                    set revoked_at = %s, revocation_reason = %s
-                    where id = any(%s) and revoked_at is null
-                    """,
-                    (now, SessionRevocationReason.SESSION_CAP.value, oldest_ids),
-                )
+            return self.persist_prepared_for_locked_account(prepared, active_connection)
 
-            inserted = _fetchone(active_connection,
+    def prepare_session(
+        self,
+        account_id: int,
+        user_agent: str | None = None,
+    ) -> PreparedBrowserSession:
+        account_id = _positive_integer(account_id, "account id")
+        user_agent = _validated_user_agent(user_agent)
+        issued = _issued_token(self._token_issuer)
+        authenticated_at = _aware_now(self._clock)
+        return PreparedBrowserSession(
+            raw_token=issued.raw,
+            token_digest=issued.digest,
+            account_id=account_id,
+            authenticated_at=authenticated_at,
+            idle_expires_at=(
+                authenticated_at + timedelta(seconds=self._idle_seconds)
+            ),
+            absolute_expires_at=(
+                authenticated_at + timedelta(seconds=self._absolute_seconds)
+            ),
+            user_agent=user_agent,
+        )
+
+    def persist_prepared_for_locked_account(
+        self,
+        prepared: PreparedBrowserSession,
+        connection: Any,
+    ) -> IssuedBrowserSession:
+        _validated_prepared_session(
+            prepared,
+            idle_seconds=self._idle_seconds,
+            absolute_seconds=self._absolute_seconds,
+        )
+        active_rows = _fetchall(
+            connection,
+            """
+            select id
+            from app.account_sessions
+            where account_id = %s
+              and revoked_at is null
+              and idle_expires_at > %s
+              and absolute_expires_at > %s
+            order by created_at, id
+            for update
+            """,
+            (
+                prepared.account_id,
+                prepared.authenticated_at,
+                prepared.authenticated_at,
+            ),
+        )
+        excess = max(0, len(active_rows) + 1 - self._active_cap)
+        if excess:
+            oldest_ids = [
+                _positive_integer(_row(row, ("id",)).get("id"), "session id")
+                for row in active_rows[:excess]
+            ]
+            cursor = _execute(
+                connection,
                 """
-                insert into app.account_sessions (
-                  account_id, session_token_hash, created_at, authenticated_at,
-                  last_seen_at, idle_expires_at, absolute_expires_at, user_agent
-                ) values (%s, %s, %s, %s, %s, %s, %s, %s)
-                returning id
+                update app.account_sessions
+                set revoked_at = %s, revocation_reason = %s
+                where id = any(%s) and revoked_at is null
                 """,
                 (
-                    account_id,
-                    issued.digest,
-                    now,
-                    now,
-                    now,
-                    idle_expires_at,
-                    absolute_expires_at,
-                    user_agent,
+                    prepared.authenticated_at,
+                    SessionRevocationReason.SESSION_CAP.value,
+                    oldest_ids,
                 ),
             )
+            rowcount = getattr(cursor, "rowcount", None)
+            if type(rowcount) is not int or rowcount != excess:
+                raise RuntimeError("Session persistence operation failed.")
+
+        inserted = _fetchone(
+            connection,
+            """
+            insert into app.account_sessions (
+              account_id, session_token_hash, created_at, authenticated_at,
+              last_seen_at, idle_expires_at, absolute_expires_at, user_agent
+            ) values (%s, %s, %s, %s, %s, %s, %s, %s)
+            returning id
+            """,
+            (
+                prepared.account_id,
+                prepared.token_digest,
+                prepared.authenticated_at,
+                prepared.authenticated_at,
+                prepared.authenticated_at,
+                prepared.idle_expires_at,
+                prepared.absolute_expires_at,
+                prepared.user_agent,
+            ),
+        )
+        try:
             session_id = _positive_integer(
                 _row(inserted, ("id",)).get("id"), "session id"
             )
-
+        except Exception:
+            raise RuntimeError("Session persistence operation failed.") from None
         return IssuedBrowserSession(
-            raw_token=issued.raw,
+            raw_token=prepared.raw_token,
             session_id=session_id,
-            account_id=account_id,
-            authenticated_at=now,
-            idle_expires_at=idle_expires_at,
-            absolute_expires_at=absolute_expires_at,
+            account_id=prepared.account_id,
+            authenticated_at=prepared.authenticated_at,
+            idle_expires_at=prepared.idle_expires_at,
+            absolute_expires_at=prepared.absolute_expires_at,
         )
 
     def resolve_session(self, raw_token: object) -> ResolvedBrowserSession | None:
@@ -381,10 +451,14 @@ def _positive_integer(value: object, label: str) -> int:
 def _aware_now(clock: Callable[[], datetime]) -> datetime:
     try:
         value = clock()
+        if (
+            not isinstance(value, datetime)
+            or value.tzinfo is None
+            or value.utcoffset() is None
+        ):
+            raise ValueError
     except Exception:
         raise RuntimeError("Session clock is unavailable.") from None
-    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
-        raise RuntimeError("Session clock must return an aware timestamp.")
     return value
 
 
@@ -395,6 +469,52 @@ def _validated_user_agent(value: object) -> str | None:
         raise ValueError("Invalid session user agent.")
     if any(unicodedata.category(character).startswith("C") for character in value):
         raise ValueError("Invalid session user agent.")
+    return value
+
+
+def _validated_prepared_session(
+    value: object,
+    *,
+    idle_seconds: int,
+    absolute_seconds: int,
+) -> PreparedBrowserSession:
+    try:
+        if not isinstance(value, PreparedBrowserSession):
+            raise TypeError
+        _positive_integer(value.account_id, "account id")
+        _validated_user_agent(value.user_agent)
+        expected_digest = hash_opaque_token(value.raw_token)
+        if (
+            not isinstance(value.token_digest, bytes)
+            or len(value.token_digest) != 32
+            or not hmac.compare_digest(expected_digest, value.token_digest)
+        ):
+            raise ValueError
+        authenticated_at = _prepared_timestamp(value.authenticated_at)
+        idle_expires_at = _prepared_timestamp(value.idle_expires_at)
+        absolute_expires_at = _prepared_timestamp(value.absolute_expires_at)
+        if (
+            idle_expires_at
+            != authenticated_at + timedelta(seconds=idle_seconds)
+            or absolute_expires_at
+            != authenticated_at + timedelta(seconds=absolute_seconds)
+        ):
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("Prepared session is invalid.") from None
+    return value
+
+
+def _prepared_timestamp(value: object) -> datetime:
+    try:
+        if (
+            not isinstance(value, datetime)
+            or value.tzinfo is None
+            or value.utcoffset() is None
+        ):
+            raise ValueError
+    except Exception:
+        raise ValueError from None
     return value
 
 

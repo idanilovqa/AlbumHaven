@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone, tzinfo
 from importlib import import_module, util
 from typing import Any
 
@@ -13,6 +14,11 @@ MODULE = "music_app.services.auth_sessions_postgres"
 DATABASE_URL = "postgresql://album_haven_app@localhost/album_haven_test"
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
 RAW_TOKEN = "s" * 43
+
+
+class RaisingTzinfo(tzinfo):
+    def utcoffset(self, _dt):
+        raise RuntimeError("private clock secret")
 
 
 def test_auth_sessions_postgres_contract_is_present():
@@ -85,6 +91,9 @@ class RecordingConnection:
             return Cursor(self.session_rows)
         if "from app.account_sessions" in statement and "account_id" in statement:
             return Cursor(self.active_rows)
+        if statement.startswith("update app.account_sessions"):
+            revoked_ids = params[2] if isinstance(params, tuple) and len(params) > 2 else ()
+            return Cursor(rowcount=len(revoked_ids) if isinstance(revoked_ids, list) else 0)
         return Cursor()
 
 
@@ -368,3 +377,325 @@ def test_database_failures_do_not_echo_session_digest_or_raw_token(sessions):
     message = str(caught.value)
     assert RAW_TOKEN not in message
     assert repr(digest) not in message
+
+
+def test_prepare_session_issues_and_validates_before_any_database_transaction(sessions):
+    connection = RecordingConnection()
+    issuer_observations = []
+    service = sessions.PostgresAuthSessionService(
+        _config(),
+        connect=lambda _url: connection,
+        token_issuer=lambda: issuer_observations.append(
+            (list(connection.events), list(connection.operations))
+        ) or RAW_TOKEN,
+        clock=lambda: NOW,
+    )
+
+    prepared = service.prepare_session(41, user_agent="Private Browser Label")
+
+    assert issuer_observations == [([], [])]
+    assert connection.events == [] and connection.operations == []
+    assert prepared.account_id == 41
+    assert prepared.raw_token == RAW_TOKEN
+    assert prepared.token_digest == hash_opaque_token(RAW_TOKEN)
+    assert prepared.authenticated_at == NOW
+    assert prepared.idle_expires_at == NOW + timedelta(hours=12)
+    assert prepared.absolute_expires_at == NOW + timedelta(days=7)
+    assert prepared.user_agent == "Private Browser Label"
+    rendered = repr(prepared)
+    assert RAW_TOKEN not in rendered
+    assert repr(prepared.token_digest) not in rendered
+    assert "Private Browser Label" not in rendered
+
+
+@pytest.mark.parametrize(
+    "user_agent", ["browser\tname", "browser\x7fname", "browser\u0085name"]
+)
+def test_prepare_session_rejects_user_agent_before_token_or_database(
+    sessions, user_agent
+):
+    connection = RecordingConnection()
+    token_calls = []
+    service = sessions.PostgresAuthSessionService(
+        _config(),
+        connect=lambda _url: connection,
+        token_issuer=lambda: token_calls.append(True) or RAW_TOKEN,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(ValueError):
+        service.prepare_session(41, user_agent=user_agent)
+
+    assert token_calls == []
+    assert connection.events == [] and connection.operations == []
+
+
+@pytest.mark.parametrize("user_agent", [123, "x" * 1025])
+def test_prepare_session_rejects_invalid_user_agent_before_token_or_database(
+    sessions, user_agent
+):
+    connection = RecordingConnection()
+    token_calls = []
+    service = sessions.PostgresAuthSessionService(
+        _config(),
+        connect=lambda _url: connection,
+        token_issuer=lambda: token_calls.append(True) or RAW_TOKEN,
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(ValueError):
+        service.prepare_session(41, user_agent=user_agent)
+
+    assert token_calls == []
+    assert connection.events == [] and connection.operations == []
+
+
+def test_prepare_session_sanitizes_clock_timezone_failure_before_database(sessions):
+    connection = RecordingConnection()
+    service = sessions.PostgresAuthSessionService(
+        _config(),
+        connect=lambda _url: connection,
+        token_issuer=lambda: RAW_TOKEN,
+        clock=lambda: datetime(2026, 8, 30, 12, 0, tzinfo=RaisingTzinfo()),
+    )
+
+    with pytest.raises(RuntimeError, match="^Session clock is unavailable\\.$") as caught:
+        service.prepare_session(41)
+
+    assert caught.value.__cause__ is None
+    assert "private clock secret" not in str(caught.value)
+    assert connection.events == [] and connection.operations == []
+
+
+def test_persist_prepared_uses_caller_connection_without_account_query_or_transaction(
+    sessions,
+):
+    connection = RecordingConnection()
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41, user_agent="Private Browser Label")
+
+    issued = service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert connection.events == []
+    assert not any("from app.accounts" in sql for sql in _sql(connection))
+    active = next(
+        i for i, sql in enumerate(_sql(connection))
+        if "from app.account_sessions" in sql
+    )
+    inserted = next(
+        i for i, sql in enumerate(_sql(connection))
+        if "insert into app.account_sessions" in sql
+    )
+    assert active < inserted
+    assert "order by created_at, id" in _sql(connection)[active]
+    assert "for update" in _sql(connection)[active]
+    insert_params = connection.operations[inserted][1]
+    assert prepared.token_digest in insert_params
+    assert RAW_TOKEN not in repr(insert_params)
+    assert issued.raw_token == RAW_TOKEN and issued.session_id == 88
+    assert issued.account_id == prepared.account_id
+    assert issued.authenticated_at == prepared.authenticated_at
+    assert issued.idle_expires_at == prepared.idle_expires_at
+    assert issued.absolute_expires_at == prepared.absolute_expires_at
+    assert RAW_TOKEN not in repr(issued)
+    assert "Private Browser Label" not in repr(issued)
+
+
+@pytest.mark.parametrize("inserted_row", [{"id": 88}, (88,)])
+def test_persist_prepared_accepts_dict_and_tuple_returning_rows(sessions, inserted_row):
+    class ReturningConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "insert into app.account_sessions" in " ".join(sql.casefold().split()):
+                return Cursor((inserted_row,))
+            return cursor
+
+    connection = ReturningConnection()
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41)
+
+    assert service.persist_prepared_for_locked_account(
+        prepared, connection
+    ).session_id == 88
+
+
+def test_persist_prepared_requires_truthful_cap_revocation_before_insert(sessions):
+    class LostRevocationConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if " ".join(sql.casefold().split()).startswith(
+                "update app.account_sessions"
+            ):
+                return Cursor(rowcount=0)
+            return cursor
+
+    connection = LostRevocationConnection(active_rows=({"id": 1}, {"id": 2}))
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41)
+
+    with pytest.raises(RuntimeError):
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert not any("insert into app.account_sessions" in sql for sql in _sql(connection))
+
+
+def test_persist_prepared_rejects_boolean_cap_rowcount_before_insert(sessions):
+    class BooleanRowcountConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if " ".join(sql.casefold().split()).startswith(
+                "update app.account_sessions"
+            ):
+                return Cursor(rowcount=True)
+            return cursor
+
+    connection = BooleanRowcountConnection(active_rows=({"id": 1}, {"id": 2}))
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41)
+
+    with pytest.raises(RuntimeError):
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert not any("insert into app.account_sessions" in sql for sql in _sql(connection))
+
+
+def test_persist_prepared_sanitizes_timestamp_timezone_failure_before_sql(sessions):
+    connection = RecordingConnection()
+    service = _service(sessions, connection)
+    prepared = replace(
+        service.prepare_session(41),
+        authenticated_at=datetime(2026, 8, 30, 12, 0, tzinfo=RaisingTzinfo()),
+    )
+
+    with pytest.raises(ValueError, match="^Prepared session is invalid\\.$") as caught:
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert caught.value.__cause__ is None
+    assert "private clock secret" not in str(caught.value)
+    assert connection.operations == [] and connection.events == []
+
+
+def test_persist_prepared_revokes_exact_excess_before_insert(sessions):
+    connection = RecordingConnection(active_rows=({"id": 1}, {"id": 2}))
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41)
+
+    issued = service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert issued.session_id == 88
+    update = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if sql.startswith("update app.account_sessions")
+    )
+    assert update[1][2] == [1]
+    assert _sql(connection).index(update[0]) < next(
+        i for i, sql in enumerate(_sql(connection))
+        if "insert into app.account_sessions" in sql
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"account_id": 0},
+        {"raw_token": "t" * 43},
+        {"token_digest": b"x" * 32},
+        {"authenticated_at": NOW.replace(tzinfo=None)},
+        {"idle_expires_at": NOW},
+        {"absolute_expires_at": NOW},
+        {"user_agent": "private\nagent"},
+    ],
+)
+def test_persist_prepared_rejects_tampering_before_sql(sessions, mutation):
+    connection = RecordingConnection()
+    service = _service(sessions, connection)
+    prepared = replace(service.prepare_session(41), **mutation)
+
+    with pytest.raises((TypeError, ValueError)) as caught:
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    assert RAW_TOKEN not in str(caught.value)
+    assert "private" not in str(caught.value)
+    assert connection.operations == [] and connection.events == []
+
+
+@pytest.mark.parametrize("prepared", [None, object(), {"account_id": 41}])
+def test_persist_prepared_rejects_wrong_object_before_sql(sessions, prepared):
+    connection = RecordingConnection()
+    with pytest.raises((TypeError, ValueError)):
+        _service(sessions, connection).persist_prepared_for_locked_account(
+            prepared, connection
+        )
+    assert connection.operations == [] and connection.events == []
+
+
+def test_persist_prepared_missing_insert_row_fails_without_secret_leak(sessions):
+    class MissingInsertConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "insert into app.account_sessions" in " ".join(sql.casefold().split()):
+                return Cursor(())
+            return cursor
+
+    connection = MissingInsertConnection()
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41, user_agent="Private Browser Label")
+
+    with pytest.raises(RuntimeError) as caught:
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    rendered = f"{caught.value!s} {caught.value!r}"
+    assert RAW_TOKEN not in rendered
+    assert "Private Browser Label" not in rendered
+
+
+def test_persist_prepared_provider_error_is_secret_safe(sessions):
+    class LeakyConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            raise RuntimeError(f"provider leaked {params!r} Private Browser Label")
+
+    connection = LeakyConnection()
+    service = _service(sessions, connection)
+    prepared = service.prepare_session(41, user_agent="Private Browser Label")
+
+    with pytest.raises(RuntimeError) as caught:
+        service.persist_prepared_for_locked_account(prepared, connection)
+
+    rendered = f"{caught.value!s} {caught.value!r}"
+    assert RAW_TOKEN not in rendered
+    assert repr(prepared.token_digest) not in rendered
+    assert "Private Browser Label" not in rendered
+    assert caught.value.__cause__ is None
+
+
+def test_issue_session_composes_prepare_and_persist_without_behavior_regression(
+    sessions,
+):
+    connection = RecordingConnection()
+    service = _service(sessions, connection)
+    calls = []
+    original_prepare = service.prepare_session
+    original_persist = service.persist_prepared_for_locked_account
+
+    def recording_prepare(*args, **kwargs):
+        calls.append(("prepare", list(connection.events)))
+        return original_prepare(*args, **kwargs)
+
+    def recording_persist(prepared, active_connection):
+        calls.append(("persist", active_connection, list(connection.events)))
+        return original_persist(prepared, active_connection)
+
+    service.prepare_session = recording_prepare
+    service.persist_prepared_for_locked_account = recording_persist
+
+    issued = service.issue_session(41, user_agent="Album Haven Browser")
+
+    assert issued.raw_token == RAW_TOKEN and issued.session_id == 88
+    assert calls[0] == ("prepare", [])
+    assert calls[1][0] == "persist"
+    assert calls[1][1] is connection
+    assert "tx:enter" in calls[1][2]
+    sql = _sql(connection)
+    assert any("from app.accounts" in item and "for update" in item for item in sql)
+    assert sql[-1].startswith("insert into app.account_sessions")

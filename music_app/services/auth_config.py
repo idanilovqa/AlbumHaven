@@ -21,6 +21,19 @@ _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_LOCAL = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+$")
 
 
+class _HmacConfig(dict[str, Any]):
+    """Dictionary-compatible HMAC config whose representation omits its secret."""
+
+    def __repr__(self) -> str:
+        safe = dict(self)
+        safe["secret"] = "<redacted>"
+        return repr(safe)
+
+
+class AuthConfig(dict[str, Any]):
+    """Dictionary-compatible authentication configuration with safe repr output."""
+
+
 def _reject_unsafe_text(value: str, key: str) -> None:
     if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
         raise ValueError(f"{key} contains whitespace or control characters")
@@ -78,6 +91,43 @@ def _required(env: Mapping[str, str], key: str) -> str:
     if not value:
         raise ValueError(f"{key} is required")
     return value
+
+
+def _auth_hmac_config(env: Mapping[str, str]) -> _HmacConfig:
+    key = "ALBUM_HAVEN_AUTH_HMAC_SECRET"
+    secret = env.get(key)
+    if secret is None or len(secret.encode("utf-8")) < 32:
+        raise ValueError(f"{key} must contain at least 32 UTF-8 bytes")
+    return _HmacConfig(
+        secret=secret,
+        key_version=_integer(
+            env, "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION", 1, minimum=1
+        ),
+    )
+
+
+def _trusted_proxies(env: Mapping[str, str]) -> tuple[str, ...]:
+    key = "ALBUM_HAVEN_TRUSTED_PROXIES"
+    raw = env.get(key)
+    if raw is None or raw == "":
+        return ()
+
+    normalized: list[str] = []
+    for raw_entry in raw.split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            raise ValueError(f"{key} must not contain empty entries")
+        if "%" in entry:
+            raise ValueError(f"{key} must not contain scoped IP addresses")
+        try:
+            if "/" in entry:
+                value = ipaddress.ip_network(entry, strict=False).compressed
+            else:
+                value = ipaddress.ip_address(entry).compressed
+        except ValueError as exc:
+            raise ValueError(f"{key} must contain only IP addresses or CIDRs") from exc
+        normalized.append(value)
+    return tuple(normalized)
 
 
 def _validated_https_url(value: str, key: str, *, origin_only: bool) -> str:
@@ -210,44 +260,102 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         ),
     }
 
-    return {
+    password = {
+        "min_codepoints": _integer(
+            env, "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", 15, minimum=15
+        ),
+        "max_codepoints": _integer(
+            env,
+            "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS",
+            256,
+            minimum=1,
+            maximum=256,
+        ),
+        "max_utf8_bytes": _integer(
+            env,
+            "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES",
+            1_024,
+            minimum=1,
+            maximum=1_024,
+        ),
+    }
+    if password["max_codepoints"] < password["min_codepoints"]:
+        raise ValueError(
+            "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS must be at least "
+            "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS"
+        )
+    if password["max_utf8_bytes"] < password["min_codepoints"]:
+        raise ValueError(
+            "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES must allow the configured "
+            "minimum password length"
+        )
+
+    session = {
+        "idle_seconds": _integer(
+            env,
+            "ALBUM_HAVEN_SESSION_IDLE_SECONDS",
+            43_200,
+            minimum=1,
+            maximum=43_200,
+        ),
+        "absolute_seconds": _integer(
+            env,
+            "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
+            604_800,
+            minimum=1,
+            maximum=604_800,
+        ),
+        "activity_write_seconds": _integer(
+            env,
+            "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS",
+            300,
+            minimum=300,
+        ),
+    }
+    if session["idle_seconds"] > session["absolute_seconds"]:
+        raise ValueError(
+            "ALBUM_HAVEN_SESSION_IDLE_SECONDS must not exceed "
+            "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS"
+        )
+    if session["activity_write_seconds"] >= session["idle_seconds"]:
+        raise ValueError(
+            "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS must be less than "
+            "ALBUM_HAVEN_SESSION_IDLE_SECONDS"
+        )
+
+    reset_token_seconds = _integer(
+        env,
+        "ALBUM_HAVEN_RESET_TOKEN_SECONDS",
+        1_800,
+        minimum=1,
+        maximum=1_800,
+    )
+
+    return AuthConfig({
         "bootstrap_username_display": username,
         "bootstrap_username_normalized": "rendref",
         "bootstrap_email_normalized": email,
         "public_base_url": public_base_url,
         "trusted_origins": origins,
+        "trusted_proxies": _trusted_proxies(env),
+        "hmac": _auth_hmac_config(env),
         "argon2": argon2,
-        "password": {
-            "min_codepoints": _integer(
-                env, "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", 15, minimum=15
-            ),
-            "max_codepoints": _integer(
-                env, "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS", 256, maximum=256
-            ),
-            "max_utf8_bytes": _integer(
-                env, "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES", 1_024, maximum=1_024
-            ),
-        },
-        "session": {
-            "idle_seconds": _integer(
-                env, "ALBUM_HAVEN_SESSION_IDLE_SECONDS", 43_200, maximum=43_200
-            ),
-            "absolute_seconds": _integer(
-                env,
-                "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
-                604_800,
-                maximum=604_800,
-            ),
-            "activity_write_seconds": _integer(
-                env,
-                "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS",
-                300,
-                minimum=300,
-            ),
-        },
-        "reset_token_seconds": _integer(
-            env, "ALBUM_HAVEN_RESET_TOKEN_SECONDS", 1_800, maximum=1_800
+        "argon2_policy_version": _integer(
+            env, "ALBUM_HAVEN_ARGON2_POLICY_VERSION", 1, minimum=1
         ),
+        "verification_semaphore": _integer(
+            env,
+            "ALBUM_HAVEN_AUTH_VERIFICATION_SEMAPHORE",
+            2,
+            minimum=1,
+            maximum=2,
+        ),
+        "active_session_cap": _integer(
+            env, "ALBUM_HAVEN_ACTIVE_SESSION_CAP", 10, minimum=1, maximum=10
+        ),
+        "password": password,
+        "session": session,
+        "reset_token_seconds": reset_token_seconds,
         "audit_retention_seconds": _integer(
             env,
             "ALBUM_HAVEN_AUTH_AUDIT_RETENTION_DAYS",
@@ -256,12 +364,52 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         )
         * 86_400,
         "throttles": {
-            "login_account": {"limit": 5, "window_seconds": 900},
-            "login_source": {"limit": 20, "window_seconds": 900},
-            "login_cooldown_seconds": 900,
-            "reset_account": {"limit": 5, "window_seconds": 3_600},
-            "reset_source": {"limit": 20, "window_seconds": 3_600},
-            "welcome_account": {"limit": 5, "window_seconds": 86_400},
+            "login_account": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_LOGIN_ACCOUNT_LIMIT", 5, minimum=1, maximum=5
+                ),
+                "window_seconds": _integer(
+                    env, "ALBUM_HAVEN_LOGIN_ACCOUNT_WINDOW_SECONDS", 900, minimum=900
+                ),
+            },
+            "login_source": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_LOGIN_SOURCE_LIMIT", 20, minimum=1, maximum=20
+                ),
+                "window_seconds": _integer(
+                    env, "ALBUM_HAVEN_LOGIN_SOURCE_WINDOW_SECONDS", 900, minimum=900
+                ),
+            },
+            "login_cooldown_seconds": _integer(
+                env, "ALBUM_HAVEN_LOGIN_COOLDOWN_SECONDS", 900, minimum=900
+            ),
+            "reset_account": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_RESET_ACCOUNT_LIMIT", 5, minimum=1, maximum=5
+                ),
+                "window_seconds": _integer(
+                    env, "ALBUM_HAVEN_RESET_ACCOUNT_WINDOW_SECONDS", 3_600, minimum=3_600
+                ),
+            },
+            "reset_source": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_RESET_SOURCE_LIMIT", 20, minimum=1, maximum=20
+                ),
+                "window_seconds": _integer(
+                    env, "ALBUM_HAVEN_RESET_SOURCE_WINDOW_SECONDS", 3_600, minimum=3_600
+                ),
+            },
+            "welcome_account": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_WELCOME_ACCOUNT_LIMIT", 5, minimum=1, maximum=5
+                ),
+                "window_seconds": _integer(
+                    env,
+                    "ALBUM_HAVEN_WELCOME_ACCOUNT_WINDOW_SECONDS",
+                    86_400,
+                    minimum=86_400,
+                ),
+            },
         },
         "cookie": {
             "name": "__Host-album_haven_session",
@@ -271,4 +419,4 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
             "path": "/",
             "domain": None,
         },
-    }
+    })

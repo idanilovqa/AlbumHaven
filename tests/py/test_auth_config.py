@@ -62,6 +62,7 @@ def contracts():
 
 def _auth_env(**overrides: str) -> dict[str, str]:
     env = {
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": "0123456789abcdef0123456789abcdef",
         "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
         "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "Rendref@Example.COM",
         "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.example.test/haven",
@@ -188,6 +189,206 @@ def test_auth_defaults_lock_throttle_contracts(contracts):
     }
 
 
+def test_auth_runtime_security_defaults_are_locked(contracts):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(_auth_env())
+
+    assert config["hmac"]["key_version"] == 1
+    assert config["trusted_proxies"] == ()
+    assert config["verification_semaphore"] == 2
+    assert config["active_session_cap"] == 10
+    assert config["argon2_policy_version"] == 1
+
+
+def test_auth_hmac_secret_is_available_but_redacted(contracts):
+    auth_config, _ = contracts
+    secret = "phase-seven-auth-hmac-secret-value"
+
+    config = auth_config.build_auth_config(
+        _auth_env(
+            ALBUM_HAVEN_AUTH_HMAC_SECRET=secret,
+            ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION="7",
+        )
+    )
+
+    assert config["hmac"] == {"secret": secret, "key_version": 7}
+    assert secret not in repr(config)
+
+    with pytest.raises(ValueError) as exc_info:
+        auth_config.build_auth_config(
+            _auth_env(
+                ALBUM_HAVEN_AUTH_HMAC_SECRET=secret,
+                ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION="0",
+            )
+        )
+    assert "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+
+
+def test_auth_hmac_secret_minimum_is_measured_in_utf8_bytes(contracts):
+    auth_config, _ = contracts
+    secret = "é" * 16
+
+    config = auth_config.build_auth_config(
+        _auth_env(ALBUM_HAVEN_AUTH_HMAC_SECRET=secret)
+    )
+
+    assert len(secret) == 16
+    assert len(secret.encode("utf-8")) == 32
+    assert config["hmac"]["secret"] == secret
+
+
+@pytest.mark.parametrize(
+    ("env_key", "value"),
+    [
+        ("ALBUM_HAVEN_AUTH_HMAC_SECRET", "x" * 31),
+        ("ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION", "0"),
+        ("ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION", "not-an-integer"),
+    ],
+)
+def test_auth_config_rejects_invalid_hmac_configuration(
+    contracts, env_key, value
+):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match=env_key):
+        auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+def test_auth_config_normalizes_ip_and_cidr_trusted_proxies(contracts):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(
+        _auth_env(
+            ALBUM_HAVEN_TRUSTED_PROXIES=(
+                "127.0.0.1, 192.0.2.9/24, "
+                "2001:0db8:0000:0000:0000:0000:0000:0001, 2001:db8:1::9/64"
+            )
+        )
+    )
+
+    assert config["trusted_proxies"] == (
+        "127.0.0.1",
+        "192.0.2.0/24",
+        "2001:db8::1",
+        "2001:db8:1::/64",
+    )
+
+
+@pytest.mark.parametrize(
+    "trusted_proxies",
+    [
+        "proxy.example.test",
+        "127.0.0.1,,192.0.2.1",
+        ",127.0.0.1",
+        "127.0.0.1,",
+        "192.0.2.1/33",
+        "010.000.000.001",
+        "fe80::1%eth0",
+    ],
+)
+def test_auth_config_rejects_non_ip_or_empty_trusted_proxy_entries(
+    contracts, trusted_proxies
+):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match="ALBUM_HAVEN_TRUSTED_PROXIES"):
+        auth_config.build_auth_config(
+            _auth_env(ALBUM_HAVEN_TRUSTED_PROXIES=trusted_proxies)
+        )
+
+
+def test_auth_config_accepts_stronger_throttle_settings(contracts):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(
+        _auth_env(
+            ALBUM_HAVEN_LOGIN_ACCOUNT_LIMIT="4",
+            ALBUM_HAVEN_LOGIN_ACCOUNT_WINDOW_SECONDS="901",
+            ALBUM_HAVEN_LOGIN_SOURCE_LIMIT="19",
+            ALBUM_HAVEN_LOGIN_SOURCE_WINDOW_SECONDS="901",
+            ALBUM_HAVEN_LOGIN_COOLDOWN_SECONDS="901",
+            ALBUM_HAVEN_RESET_ACCOUNT_LIMIT="4",
+            ALBUM_HAVEN_RESET_ACCOUNT_WINDOW_SECONDS="3601",
+            ALBUM_HAVEN_RESET_SOURCE_LIMIT="19",
+            ALBUM_HAVEN_RESET_SOURCE_WINDOW_SECONDS="3601",
+            ALBUM_HAVEN_WELCOME_ACCOUNT_LIMIT="4",
+            ALBUM_HAVEN_WELCOME_ACCOUNT_WINDOW_SECONDS="86401",
+        )
+    )
+
+    assert config["throttles"] == {
+        "login_account": {"limit": 4, "window_seconds": 901},
+        "login_source": {"limit": 19, "window_seconds": 901},
+        "login_cooldown_seconds": 901,
+        "reset_account": {"limit": 4, "window_seconds": 3_601},
+        "reset_source": {"limit": 19, "window_seconds": 3_601},
+        "welcome_account": {"limit": 4, "window_seconds": 86_401},
+    }
+
+
+@pytest.mark.parametrize(
+    ("env_key", "value"),
+    [
+        ("ALBUM_HAVEN_LOGIN_ACCOUNT_LIMIT", "0"),
+        ("ALBUM_HAVEN_LOGIN_ACCOUNT_LIMIT", "6"),
+        ("ALBUM_HAVEN_LOGIN_ACCOUNT_WINDOW_SECONDS", "899"),
+        ("ALBUM_HAVEN_LOGIN_SOURCE_LIMIT", "21"),
+        ("ALBUM_HAVEN_LOGIN_SOURCE_WINDOW_SECONDS", "899"),
+        ("ALBUM_HAVEN_LOGIN_COOLDOWN_SECONDS", "899"),
+        ("ALBUM_HAVEN_RESET_ACCOUNT_LIMIT", "6"),
+        ("ALBUM_HAVEN_RESET_ACCOUNT_WINDOW_SECONDS", "3599"),
+        ("ALBUM_HAVEN_RESET_SOURCE_LIMIT", "21"),
+        ("ALBUM_HAVEN_RESET_SOURCE_WINDOW_SECONDS", "3599"),
+        ("ALBUM_HAVEN_WELCOME_ACCOUNT_LIMIT", "6"),
+        ("ALBUM_HAVEN_WELCOME_ACCOUNT_WINDOW_SECONDS", "86399"),
+    ],
+)
+def test_auth_config_rejects_weaker_throttle_settings(contracts, env_key, value):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match=env_key):
+        auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+@pytest.mark.parametrize(
+    ("env_key", "accepted", "expected_key"),
+    [
+        ("ALBUM_HAVEN_AUTH_VERIFICATION_SEMAPHORE", "1", "verification_semaphore"),
+        ("ALBUM_HAVEN_ACTIVE_SESSION_CAP", "1", "active_session_cap"),
+        ("ALBUM_HAVEN_ARGON2_POLICY_VERSION", "2", "argon2_policy_version"),
+    ],
+)
+def test_auth_config_accepts_bounded_runtime_policy_values(
+    contracts, env_key, accepted, expected_key
+):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(_auth_env(**{env_key: accepted}))
+
+    assert config[expected_key] == int(accepted)
+
+
+@pytest.mark.parametrize(
+    ("env_key", "value"),
+    [
+        ("ALBUM_HAVEN_AUTH_VERIFICATION_SEMAPHORE", "0"),
+        ("ALBUM_HAVEN_AUTH_VERIFICATION_SEMAPHORE", "3"),
+        ("ALBUM_HAVEN_ACTIVE_SESSION_CAP", "0"),
+        ("ALBUM_HAVEN_ACTIVE_SESSION_CAP", "11"),
+        ("ALBUM_HAVEN_ARGON2_POLICY_VERSION", "0"),
+    ],
+)
+def test_auth_config_rejects_out_of_bounds_runtime_policy_values(
+    contracts, env_key, value
+):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match=env_key):
+        auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
 def test_auth_cookie_defaults_are_host_only_secure_and_http_only(contracts):
     auth_config, _ = contracts
 
@@ -228,6 +429,68 @@ def test_auth_config_rejects_values_weaker_than_the_locked_policy(
 
     with pytest.raises(ValueError, match=env_key):
         auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+@pytest.mark.parametrize(
+    ("env_key", "value"),
+    [
+        (env_key, value)
+        for env_key in (
+            "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS",
+            "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES",
+            "ALBUM_HAVEN_SESSION_IDLE_SECONDS",
+            "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
+            "ALBUM_HAVEN_RESET_TOKEN_SECONDS",
+        )
+        for value in ("0", "-1")
+    ],
+)
+def test_auth_config_rejects_non_positive_bounded_lifetimes_and_password_maxima(
+    contracts, env_key, value
+):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match=env_key):
+        auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "invalid_key"),
+    [
+        (
+            {
+                "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS": "20",
+                "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS": "19",
+            },
+            "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS",
+        ),
+        (
+            {"ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES": "14"},
+            "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES",
+        ),
+        (
+            {
+                "ALBUM_HAVEN_SESSION_IDLE_SECONDS": "40000",
+                "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS": "30000",
+            },
+            "ALBUM_HAVEN_SESSION_IDLE_SECONDS",
+        ),
+        (
+            {
+                "ALBUM_HAVEN_SESSION_IDLE_SECONDS": "600",
+                "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS": "600",
+            },
+            "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS",
+        ),
+    ],
+)
+def test_auth_config_rejects_inconsistent_cross_field_bounds(
+    contracts, overrides, invalid_key
+):
+    auth_config, _ = contracts
+
+    with pytest.raises(ValueError, match=invalid_key):
+        auth_config.build_auth_config(_auth_env(**overrides))
 
 
 @pytest.mark.parametrize(

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from inspect import isawaitable
+from pathlib import Path
 import threading
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.admin_account_creation import AdminAccountCreationService
@@ -16,13 +18,105 @@ from music_app.services.admin_account_creation_postgres import (
     PostgresAdminAccountRepository,
 )
 from music_app.services.auth_passwords import PasswordPolicyError
+from music_app.services.auth_session_csrf import issue_session_csrf
+from music_app.services.admin_members_postgres import PostgresAdminMembersService
 
 
 router = APIRouter()
+_SESSION_COOKIE = "__Host-album_haven_session"
+_FALLBACK_TEMPLATES = Jinja2Templates(
+    directory=str(Path(__file__).resolve().parent.parent / "templates")
+)
 _MAX_BODY_BYTES = 16_384
 _FIELDS = frozenset(
     {"username", "contact_email", "password", "capability_keys"}
 )
+
+_CAPABILITY_GROUPS = (
+    (
+        "Library",
+        (
+            ("library.browse.read", "View library"),
+            ("library.media.read", "Play and download files"),
+            ("library.problems.read", "Review library problems"),
+            ("library.resources.read", "View library resources"),
+        ),
+    ),
+    (
+        "Personal",
+        (
+            ("library.playlists.create", "Create playlists"),
+            ("library.playlists.manage", "Edit own playlists"),
+            ("library.playlists.items.manage", "Manage playlist items"),
+            ("library.track_preferences.manage", "Track preferences"),
+            ("library.discovery.read", "Discovery and listening views"),
+        ),
+    ),
+    (
+        "Management",
+        (
+            ("library.rules.read", "View library rules"),
+            ("library.logs.read", "View operational logs"),
+            ("library.virtual_discography.read", "View virtual discography"),
+        ),
+    ),
+)
+_LISTENER_DEFAULTS = frozenset(
+    {
+        "library.browse.read",
+        "library.media.read",
+        "library.resources.read",
+        "library.playlists.create",
+        "library.discovery.read",
+    }
+)
+
+
+@router.get("/admin/members", response_class=HTMLResponse)
+async def members_roster(request: Request) -> Response:
+    roster = await _load_roster(request)
+    if isinstance(roster, Response):
+        return roster
+    return _render_admin(
+        request,
+        "admin-members.html",
+        roster=roster,
+        created=request.query_params.get("created") == "1",
+        listener_defaults=_LISTENER_DEFAULTS,
+    )
+
+
+@router.get("/admin/accounts/new", response_class=HTMLResponse)
+async def new_managed_account(request: Request) -> Response:
+    roster = await _load_roster(request)
+    if isinstance(roster, Response):
+        return roster
+    return _render_admin(
+        request,
+        "admin-account-detail.html",
+        roster=roster,
+        member=None,
+        capability_groups=_CAPABILITY_GROUPS,
+        listener_defaults=_LISTENER_DEFAULTS,
+    )
+
+
+@router.get("/admin/accounts/{account_id}", response_class=HTMLResponse)
+async def edit_managed_account(request: Request, account_id: int) -> Response:
+    roster = await _load_roster(request)
+    if isinstance(roster, Response):
+        return roster
+    member = next((item for item in roster.members if item.account_id == account_id), None)
+    if member is None:
+        return HTMLResponse("Account was not found.", status_code=404)
+    return _render_admin(
+        request,
+        "admin-account-detail.html",
+        roster=roster,
+        member=member,
+        capability_groups=_CAPABILITY_GROUPS,
+        listener_defaults=_LISTENER_DEFAULTS,
+    )
 
 
 @router.post("/admin/accounts", status_code=201)
@@ -96,6 +190,55 @@ async def _json_payload(request: Request) -> dict[str, object] | None:
     ):
         return None
     return payload
+
+
+async def _load_roster(request: Request):
+    actor = request.state.current_actor
+    if actor.account_id is None or actor.current_library_id is None:
+        return HTMLResponse("Action not permitted.", status_code=403)
+    try:
+        return await run_in_threadpool(
+            _members_service(request).load_roster,
+            actor_account_id=actor.account_id,
+            library_id=actor.current_library_id,
+        )
+    except PermissionError:
+        return HTMLResponse("Action not permitted.", status_code=403)
+    except Exception:
+        return HTMLResponse("Members & Access is temporarily unavailable.", status_code=503)
+
+
+def _render_admin(request: Request, template: str, **context) -> Response:
+    try:
+        csrf_token = issue_session_csrf(
+            request.cookies.get(_SESSION_COOKIE), request.app.state.auth_policy_config
+        )
+    except (TypeError, ValueError):
+        return HTMLResponse("Members & Access is temporarily unavailable.", status_code=503)
+    templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    response = templates.TemplateResponse(
+        request,
+        template,
+        {"request": request, "csrf_token": csrf_token, **context},
+    )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
+
+def _members_service(request: Request):
+    existing = getattr(request.app.state, "admin_members_service", None)
+    if existing is not None:
+        return existing
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "admin_members_service", None)
+        if existing is None:
+            existing = PostgresAdminMembersService(request.app.state.auth_policy_config)
+            request.app.state.admin_members_service = existing
+    return existing
 
 
 def _service(request: Request):

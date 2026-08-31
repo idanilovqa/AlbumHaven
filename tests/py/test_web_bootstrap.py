@@ -1545,4 +1545,10 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
     assert "window.MUSIC_APP_INITIAL_VIEW" not in bootstrap_state_js
     assert "window.MUSIC_APP_BOOTSTRAP" not in bootstrap_state_js
     assert "runtime_boot_complete" in startup_metrics_js
-    assert {path.name for path in legacy_js_dir.glob("*.js")} == {"runtime-bundle.js"}
+    assert {path.name for path in legacy_js_dir.glob("*.js")} == {
+        "runtime-bundle.js",
+        "login.js",
+        "password-recovery.js",
+        "account.js",
+        "admin-members.js",
+    }

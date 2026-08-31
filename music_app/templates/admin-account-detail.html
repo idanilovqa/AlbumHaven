@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ "Edit user" if member else "Add user" }} — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/admin-members.css">
+  <script src="/static/js/admin-members.js" defer></script>
+</head>
+<body>
+  <main class="settings-shell">
+    {% include "partials/admin-settings-nav.html" %}
+    <section class="settings-main detail-main">
+      <a class="detail-back" href="/admin/members">←&nbsp; Back to users</a>
+      <header class="detail-heading">
+        <h1>{{ "Edit user" if member else "Add user" }}</h1>
+        {% if member %}
+        <div class="detail-person">
+          <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
+          <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
+        </div>
+        {% else %}
+        <p>The account can sign in as soon as you create it.</p>
+        {% endif %}
+      </header>
+
+      <p class="admin-form-error" data-admin-form-error role="alert" hidden></p>
+      <form class="admin-detail-form" data-admin-account-form data-mode="{{ 'edit' if member else 'create' }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if member %}<input type="hidden" name="account_id" value="{{ member.account_id }}">{% endif %}
+
+        {% if not member %}
+        <label class="detail-field"><span>Username</span><input name="username" type="text" autocomplete="off" required></label>
+        <label class="detail-field"><span>Email address</span><input name="contact_email" type="email" autocomplete="off" required><small>Plus-addressing remains intact.</small></label>
+        <label class="detail-field"><span>Password</span><span class="password-control"><input id="admin-new-password" name="password" type="password" autocomplete="new-password" required><button type="button" data-password-toggle="admin-new-password" aria-pressed="false">Show</button></span><small>Use a strong, unique password.</small></label>
+        {% else %}
+        <div class="detail-setting"><span><strong>Account enabled</strong><small>When disabled, the user cannot sign in.</small></span><input class="switch" name="is_active" type="checkbox" {% if member.is_active %}checked{% endif %} aria-label="Account enabled"></div>
+        {% endif %}
+
+        <label class="detail-field"><span>Capability role</span><select name="capability_role"><option value="listener">Listener</option></select></label>
+        <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Listener applies a baseline set of capabilities.<br>Individual permissions below override the role and are authoritative.</span></aside>
+        {% set selected = member.capability_keys if member else listener_defaults %}
+        <div class="effective-access"><strong>Effective access</strong><span>Listener{% if member and member.capability_keys | list != listener_defaults | list %} · Customized <small>(overrides applied)</small>{% endif %}</span></div>
+
+        <fieldset class="permission-fieldset">
+          <legend>{{ "Individual" if member else "Explicit" }} permissions</legend>
+          <div class="permission-groups">
+            {% for group_name, capabilities in capability_groups %}
+            <section class="permission-group">
+              <h2>{{ group_name }}</h2>
+              {% for capability_key, label in capabilities %}
+              <label><span>{{ label }}</span><input class="switch" type="checkbox" name="capability_keys" value="{{ capability_key }}" {% if capability_key in selected %}checked{% endif %}></label>
+              {% endfor %}
+            </section>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        {% if member %}
+        <section class="account-settings" aria-labelledby="account-settings-title">
+          <h2 id="account-settings-title">Account settings</h2>
+          <div class="detail-setting"><span><strong>Library access</strong><small>Restrict which libraries this user can access.</small></span><span>{{ roster.library_name if member.membership_role else "No access" }}</span></div>
+          <div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>
+          <div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>
+          {% if not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
+        </section>
+        {% else %}
+        <div class="detail-setting"><span><strong>Current library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" checked></div>
+        <div class="detail-setting"><span><strong>Send welcome email</strong><small>Contains username and sign-in URL, never the password.<br>Delivery does not gate access.</small></span><input class="switch" type="checkbox" name="send_welcome" checked></div>
+        {% endif %}
+
+        <footer class="detail-actions">
+          <a class="admin-button" href="/admin/members">Cancel</a>
+          <button class="admin-button is-primary" type="submit">{{ "Save changes" if member else "Create user" }}</button>
+        </footer>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

@@ -12,11 +12,16 @@ from starlette.routing import Match
 
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
+from music_app.services.auth_session_csrf import matches_session_csrf
 
 
 _PUBLIC_AUTH_PATHS = frozenset({"/login", "/forgot-password", "/reset-password"})
 _READ_METHODS = frozenset({"GET", "HEAD"})
+_SESSION_COOKIE = "__Host-album_haven_session"
+_SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
+_SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
+    ("WEBSOCKET", "/playback/pcm"): "library.media.stream",
     ("POST", "/logout"): "auth.session.logout",
     ("GET", "/"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
@@ -149,6 +154,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 status_code=exc.status_code,
                 headers=exc.headers,
             )
+        csrf_mode = csrf_mode_for_route(request.method, route_path)
+        if csrf_mode == "session_header" and not _valid_session_csrf(request):
+            return JSONResponse(
+                {"detail": "CSRF validation failed."},
+                status_code=403,
+            )
         return await call_next(request)
 
 
@@ -165,6 +176,15 @@ def _is_public(method: str, path: str) -> bool:
 
 def private_action_for_route(method: str, route_path: str) -> str | None:
     return _PRIVATE_ROUTE_ACTIONS.get((str(method).upper(), str(route_path)))
+
+
+def csrf_mode_for_route(method: str, route_path: str) -> str:
+    normalized_method = str(method).upper()
+    if normalized_method in _READ_METHODS or normalized_method in {"OPTIONS", "WEBSOCKET"}:
+        return "none"
+    if normalized_method == "POST" and route_path == "/logout":
+        return "route_form"
+    return "session_header"
 
 
 def _matched_route_path(app: FastAPI, request: Request) -> str:
@@ -218,3 +238,39 @@ def _privacy_reference(value: str, request: Request) -> str:
         hashlib.sha256,
     ).hexdigest()
     return f"hmac:v{int(version or 1)}:{digest}"
+
+
+def _valid_session_csrf(request: Request) -> bool:
+    if not _same_origin(request):
+        return False
+    cookie_value = request.cookies.get(_SESSION_CSRF_COOKIE)
+    header_value = request.headers.get(_SESSION_CSRF_HEADER)
+    if not isinstance(cookie_value, str) or not isinstance(header_value, str):
+        return False
+    try:
+        if not hmac.compare_digest(cookie_value, header_value):
+            return False
+    except TypeError:
+        return False
+    return matches_session_csrf(
+        request.cookies.get(_SESSION_COOKIE),
+        header_value,
+        getattr(request.app.state, "auth_policy_config", {}),
+    )
+
+
+def _same_origin(request: Request) -> bool:
+    supplied = request.headers.get("origin")
+    if not supplied:
+        referer = request.headers.get("referer")
+        if not referer:
+            return False
+        supplied = referer.split("/", 3)[:3]
+        supplied = "/".join(supplied)
+    expected = f"{request.url.scheme}://{request.url.netloc}"
+    config = getattr(request.app.state, "auth_policy_config", {})
+    trusted = config.get("trusted_origins") if isinstance(config, Mapping) else None
+    allowed = {expected}
+    if isinstance(trusted, (tuple, list)):
+        allowed.update(str(item) for item in trusted)
+    return supplied in allowed

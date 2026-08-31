@@ -162,6 +162,29 @@ async def run_asgi_request_async(
     request_headers = [(b"host", b"testserver")]
     for key, value in (headers or {}).items():
         request_headers.append((key.lower().encode("latin1"), value.encode("latin1")))
+    if (
+        hasattr(getattr(app, "state", None), "runtime_asset_version")
+        and method.upper() not in {"GET", "HEAD", "OPTIONS"}
+    ):
+        from music_app.services.auth_session_csrf import issue_session_csrf
+
+        session = "s" * 43
+        csrf = issue_session_csrf(session, app.state.auth_policy_config)
+        present = {key for key, _value in request_headers}
+        if b"cookie" not in present:
+            request_headers.append(
+                (
+                    b"cookie",
+                    (
+                        f"__Host-album_haven_session={session}; "
+                        f"__Host-album_haven_csrf={csrf}"
+                    ).encode("ascii"),
+                )
+            )
+        if b"origin" not in present:
+            request_headers.append((b"origin", b"http://testserver"))
+        if b"x-album-haven-csrf" not in present:
+            request_headers.append((b"x-album-haven-csrf", csrf.encode("ascii")))
     if json_body is not None:
         request_body = json.dumps(json_body).encode("utf-8")
         request_headers.append((b"content-type", b"application/json"))

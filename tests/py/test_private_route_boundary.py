@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from music_app.services.current_actor import CurrentActor
 from music_app.services.private_route_boundary import (
+    csrf_mode_for_route,
     install_private_route_boundary,
     private_action_for_route,
 )
@@ -26,13 +27,24 @@ def test_private_routes_have_explicit_action_classification():
     missing = []
     for route in app.routes:
         path = getattr(route, "path", "")
-        for method in getattr(route, "methods", ()):
+        methods = getattr(route, "methods", None)
+        if methods is None and type(route).__name__ == "APIWebSocketRoute":
+            methods = {"WEBSOCKET"}
+        for method in methods or ():
             if method == "HEAD":
                 continue
             if path in {"/health", "/login", "/favicon.ico", "/static"}:
                 continue
             action = private_action_for_route(method, path)
-            if action is None:
+            csrf_mode = csrf_mode_for_route(method, path)
+            expected_csrf = (
+                "none"
+                if method in {"GET", "HEAD", "OPTIONS", "WEBSOCKET"}
+                else "route_form"
+                if (method, path) == ("POST", "/logout")
+                else "session_header"
+            )
+            if action is None or csrf_mode != expected_csrf:
                 missing.append((method, path))
 
     assert missing == []
@@ -54,6 +66,14 @@ def test_private_routes_have_explicit_action_classification():
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):
     assert private_action_for_route(method, path) == action
+
+
+def test_write_inventory_classifies_header_and_route_owned_csrf():
+    assert csrf_mode_for_route("POST", "/logout") == "route_form"
+    assert csrf_mode_for_route("POST", "/refresh-api") == "session_header"
+    assert csrf_mode_for_route("GET", "/status") == "none"
+    assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
+    assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.stream"
 
 
 class Resolver:
@@ -95,14 +115,20 @@ def _app(actor):
     async def track():
         return {"media": True}
 
+    @app.post("/mutation")
+    async def mutation():
+        return {"changed": True}
+
     install_private_route_boundary(app)
     return app, resolver
 
 
-async def _request_async(app, path, *, method="GET", cookie=None, query=""):
-    headers = [(b"host", b"music.test")]
+async def _request_async(app, path, *, method="GET", cookie=None, query="", headers=None):
+    request_headers = [(b"host", b"music.test")]
     if cookie:
-        headers.append((b"cookie", cookie.encode("ascii")))
+        request_headers.append((b"cookie", cookie.encode("ascii")))
+    for key, value in (headers or {}).items():
+        request_headers.append((key.lower().encode("ascii"), value.encode("ascii")))
     messages = []
     sent = False
 
@@ -126,7 +152,7 @@ async def _request_async(app, path, *, method="GET", cookie=None, query=""):
             "path": path,
             "raw_path": path.encode("ascii"),
             "query_string": query.encode("ascii"),
-            "headers": headers,
+            "headers": request_headers,
             "client": ("127.0.0.1", 50000),
             "server": ("music.test", 443),
         },
@@ -235,3 +261,34 @@ def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_au
     assert contexts[0].resource.resource_kind == "media"
     assert contexts[0].resource.resource_ref.startswith("hmac:v7:")
     assert "Music" not in repr(contexts[0])
+
+
+def test_private_write_requires_same_origin_session_bound_double_submit_csrf():
+    from music_app.services.auth_session_csrf import issue_session_csrf
+
+    actor = CurrentActor(
+        state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Rendref",
+        is_bootstrap_owner=True,
+    )
+    app, _ = _app(actor)
+    session = "s" * 43
+    csrf = issue_session_csrf(session, app.state.auth_policy_config)
+
+    missing_status, _ = _request(app, "/mutation", method="POST")
+    valid_status, valid_body = _request(
+        app,
+        "/mutation",
+        method="POST",
+        cookie=(
+            f"__Host-album_haven_session={session}; "
+            f"__Host-album_haven_csrf={csrf}"
+        ),
+        headers={"origin": "https://music.test", "x-album-haven-csrf": csrf},
+    )
+
+    assert missing_status == 403
+    assert valid_status == 200
+    assert valid_body == b'{"changed":true}'

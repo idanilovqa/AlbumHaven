@@ -23,6 +23,7 @@ _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
     ("WEBSOCKET", "/playback/pcm"): "library.media.stream",
     ("POST", "/logout"): "auth.session.logout",
+    ("POST", "/admin/accounts"): "accounts.create",
     ("GET", "/"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",

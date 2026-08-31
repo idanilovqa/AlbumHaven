@@ -94,6 +94,12 @@ class PolicyEvaluator:
             return False, "request_origin_denied"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
+        if (
+            context.action.startswith("account.self.")
+            and actor.account_id is not None
+            and context.target_account_id == actor.account_id
+        ):
+            return True, "account_self_service"
         if context.action == "system.admin":
             return False, "bootstrap_only"
         if any(

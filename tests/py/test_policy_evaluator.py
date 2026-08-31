@@ -76,6 +76,29 @@ def test_system_admin_is_never_available_as_an_ordinary_grant():
     assert result.decision.reason_code == "bootstrap_only"
 
 
+def test_active_actor_has_only_their_own_inherent_profile_actions():
+    actor = _actor()
+    own = PolicyContext.build(
+        actor=actor,
+        action="account.self.password.change",
+        target_account_id=7,
+        deployment_mode="self_hosted",
+        request_origin=RequestOrigin("network", "privacy-key"),
+        client_surface_class="private_web",
+    )
+    other = PolicyContext.build(
+        actor=actor,
+        action="account.self.password.change",
+        target_account_id=8,
+        deployment_mode="self_hosted",
+        request_origin=RequestOrigin("network", "privacy-key"),
+        client_surface_class="private_web",
+    )
+
+    assert PolicyEvaluator().evaluate(own).decision.reason_code == "account_self_service"
+    assert PolicyEvaluator().evaluate(other).decision.allowed is False
+
+
 @pytest.mark.parametrize(
     ("grant", "library_id", "allowed"),
     [

@@ -24,7 +24,9 @@ def audit():
         pytest.skip("contract presence is covered by the dedicated RED test")
     module = import_module(MODULE)
     assert callable(module.PostgresSecurityAuditRepository)
-    assert set(module.SecurityAuditCategory.__members__) == {"LOGIN", "PASSWORD_RECOVERY"}
+    assert set(module.SecurityAuditCategory.__members__) == {
+        "LOGIN", "PASSWORD_RECOVERY", "CREDENTIAL",
+    }
     assert set(module.SecurityAuditOutcome.__members__) == {
         "SUCCESS", "INVALID", "THROTTLED"
     }
@@ -36,6 +38,9 @@ def audit():
     assert set(module.RecoveryAuditReason.__members__) == {
         "RESET_ISSUED", "RESET_COMPLETED", "RESET_INVALID",
         "ACCOUNT_INELIGIBLE", "BUCKET_BLOCKED",
+    }
+    assert set(module.CredentialAuditReason.__members__) == {
+        "PASSWORD_CHANGED", "CURRENT_PASSWORD_INVALID", "SUGGESTION_DISMISSED",
     }
     return module
 

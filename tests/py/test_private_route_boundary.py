@@ -69,6 +69,8 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/loops/delete", "library.loops.delete"),
         ("POST", "/playlists/{playlist_ref}/items", "library.playlists.items.manage"),
         ("POST", "/logout", "auth.session.logout"),
+        ("GET", "/account", "account.self.read"),
+        ("POST", "/account/password", "account.self.password.change"),
     ],
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):
@@ -78,6 +80,7 @@ def test_representative_routes_use_specific_action_keys(method, path, action):
 def test_write_inventory_classifies_header_and_route_owned_csrf():
     assert csrf_mode_for_route("POST", "/logout") == "route_form"
     assert csrf_mode_for_route("POST", "/refresh-api") == "session_header"
+    assert csrf_mode_for_route("POST", "/account/password") == "route_form"
     assert csrf_mode_for_route("GET", "/status") == "none"
     assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
     assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.stream"

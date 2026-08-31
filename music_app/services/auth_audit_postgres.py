@@ -17,6 +17,7 @@ except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
 class SecurityAuditCategory(str, Enum):
     LOGIN = "login"
     PASSWORD_RECOVERY = "password_recovery"
+    CREDENTIAL = "credential"
 
 
 class SecurityAuditOutcome(str, Enum):
@@ -41,6 +42,12 @@ class RecoveryAuditReason(str, Enum):
     RESET_INVALID = "reset_invalid"
     ACCOUNT_INELIGIBLE = "account_ineligible"
     BUCKET_BLOCKED = "bucket_blocked"
+
+
+class CredentialAuditReason(str, Enum):
+    PASSWORD_CHANGED = "password_changed"
+    CURRENT_PASSWORD_INVALID = "current_password_invalid"
+    SUGGESTION_DISMISSED = "suggestion_dismissed"
 
 
 _LOGIN_REASON_MATRIX = {
@@ -69,6 +76,18 @@ _RECOVERY_REASON_MATRIX = {
     ),
     SecurityAuditOutcome.THROTTLED: frozenset({RecoveryAuditReason.BUCKET_BLOCKED}),
 }
+_CREDENTIAL_REASON_MATRIX = {
+    SecurityAuditOutcome.SUCCESS: frozenset(
+        {
+            CredentialAuditReason.PASSWORD_CHANGED,
+            CredentialAuditReason.SUGGESTION_DISMISSED,
+        }
+    ),
+    SecurityAuditOutcome.INVALID: frozenset(
+        {CredentialAuditReason.CURRENT_PASSWORD_INVALID}
+    ),
+    SecurityAuditOutcome.THROTTLED: frozenset(),
+}
 _SOURCE_CLASSES = frozenset({"loopback", "private", "public", "trusted_proxy"})
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _METADATA_KEYS = frozenset(
@@ -91,7 +110,7 @@ class PostgresSecurityAuditRepository:
         *,
         category: SecurityAuditCategory,
         outcome: SecurityAuditOutcome,
-        reason: LoginAuditReason | RecoveryAuditReason,
+        reason: LoginAuditReason | RecoveryAuditReason | CredentialAuditReason,
         actor_account_id: int | None,
         target_account_id: int | None,
         request_ref: str | None,
@@ -154,13 +173,16 @@ def _reason(
     category: SecurityAuditCategory,
     value: object,
     outcome: SecurityAuditOutcome,
-) -> LoginAuditReason | RecoveryAuditReason:
+) -> LoginAuditReason | RecoveryAuditReason | CredentialAuditReason:
     if category is SecurityAuditCategory.LOGIN:
         valid_type = LoginAuditReason
         matrix = _LOGIN_REASON_MATRIX
-    else:
+    elif category is SecurityAuditCategory.PASSWORD_RECOVERY:
         valid_type = RecoveryAuditReason
         matrix = _RECOVERY_REASON_MATRIX
+    else:
+        valid_type = CredentialAuditReason
+        matrix = _CREDENTIAL_REASON_MATRIX
     if not isinstance(value, valid_type):
         raise TypeError("Security audit reason is invalid.")
     if value not in matrix[outcome]:

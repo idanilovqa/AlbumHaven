@@ -32,7 +32,11 @@ def require_action(
             actor=actor,
             action=action,
             library_id=_library_scope(actor, action, library_id),
-            target_account_id=target_account_id,
+            target_account_id=(
+                actor.account_id
+                if action.startswith("account.self.")
+                else target_account_id
+            ),
             resource=resource,
             deployment_mode=_deployment_mode(request),
             request_origin=_request_origin(request),

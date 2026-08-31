@@ -24,6 +24,9 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("WEBSOCKET", "/playback/pcm"): "library.media.stream",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
+    ("GET", "/account"): "account.self.read",
+    ("POST", "/account/password"): "account.self.password.change",
+    ("POST", "/account/password-suggestion/dismiss"): "account.self.password_suggestion.dismiss",
     ("GET", "/"): "app.shell.read",
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
@@ -200,7 +203,11 @@ def csrf_mode_for_route(method: str, route_path: str) -> str:
     normalized_method = str(method).upper()
     if normalized_method in _READ_METHODS or normalized_method in {"OPTIONS", "WEBSOCKET"}:
         return "none"
-    if normalized_method == "POST" and route_path == "/logout":
+    if normalized_method == "POST" and route_path in {
+        "/logout",
+        "/account/password",
+        "/account/password-suggestion/dismiss",
+    }:
         return "route_form"
     return "session_header"
 

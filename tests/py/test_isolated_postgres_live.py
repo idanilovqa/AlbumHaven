@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
+from argon2 import PasswordHasher
 
 from tests.e2e.support import isolatedPostgres
 
@@ -224,6 +225,116 @@ def test_live_auth_preauth_migration_reapply_privileges_and_concurrent_consume(
     finally:
         if not cleanup_complete:
             _drop_application_schemas(setup_url)
+
+
+def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential(
+    monkeypatch,
+):
+    from music_app.services.auth_bootstrap_postgres import (
+        PostgresAuthBootstrapService,
+    )
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    passwords = (
+        "first isolated owner credential value",
+        "second isolated owner credential value",
+    )
+    encoded_hashes = tuple(PasswordHasher().hash(value) for value in passwords)
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            initial = connection.execute(
+                """
+                select app.bootstrap_owners.account_id,
+                       library.libraries.id as library_id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id =
+                     app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                """
+            ).fetchone()
+        assert initial is not None
+
+        def reconcile(encoded_hash):
+            service = PostgresAuthBootstrapService(
+                {
+                    "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+                    "bootstrap_email_normalized": "Rendref+owner@example.test",
+                    "argon2": {
+                        "memory_cost": 65_536,
+                        "time_cost": 3,
+                        "parallelism": 1,
+                        "salt_len": 16,
+                        "hash_len": 32,
+                    },
+                    "argon2_policy_version": 1,
+                },
+                connect=isolatedPostgres._connect,
+            )
+            return service.reconcile_owner(
+                encoded_hash=encoded_hash,
+                hash_policy_version=1,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(reconcile, encoded_hashes))
+
+        assert sorted(result.credential_created for result in results) == [False, True]
+        assert {result.account_id for result in results} == {int(initial["account_id"])}
+        assert {result.library_id for result in results} == {int(initial["library_id"])}
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = connection.execute(
+                """
+                select app.accounts.id,
+                       app.accounts.username_display,
+                       app.accounts.username_normalized,
+                       app.accounts.contact_email_normalized,
+                       app.account_credentials.encoded_hash,
+                       library.libraries.id as library_id,
+                       library.library_memberships.membership_role,
+                       (select count(*) from app.accounts) as account_count,
+                       (select count(*) from library.libraries) as library_count,
+                       (select count(*) from app.account_credentials)
+                         as credential_count
+                from app.accounts
+                join app.account_credentials
+                  on app.account_credentials.account_id = app.accounts.id
+                join library.libraries
+                  on library.libraries.owner_account_id = app.accounts.id
+                join library.library_memberships
+                  on library.library_memberships.library_id = library.libraries.id
+                 and library.library_memberships.account_id = app.accounts.id
+                where app.accounts.id = %s
+                """,
+                (int(initial["account_id"]),),
+            ).fetchone()
+
+        assert persisted is not None
+        assert persisted["username_display"] == "Rendref"
+        assert persisted["username_normalized"] == "rendref"
+        assert persisted["contact_email_normalized"] == "Rendref+owner@example.test"
+        assert persisted["membership_role"] == "owner"
+        assert int(persisted["library_id"]) == int(initial["library_id"])
+        assert int(persisted["account_count"]) == 1
+        assert int(persisted["library_count"]) == 1
+        assert int(persisted["credential_count"]) == 1
+        persisted_hash = persisted["encoded_hash"]
+        assert persisted_hash in encoded_hashes
+        assert PasswordHasher().verify(
+            persisted_hash,
+            passwords[encoded_hashes.index(persisted_hash)],
+        )
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
 
 
 def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(

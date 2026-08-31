@@ -11,13 +11,21 @@ from argon2.low_level import Type
 MODULE = "music_app.services.auth_bootstrap_postgres"
 DATABASE_URL = "postgresql://album_haven_app@localhost/album_haven_test"
 ENCODED_HASH = PasswordHasher(
-    memory_cost=8,
-    time_cost=1,
+    memory_cost=65_536,
+    time_cost=3,
     parallelism=1,
     salt_len=16,
-    hash_len=16,
+    hash_len=32,
     type=Type.ID,
 ).hash("synthetic bootstrap fixture password")
+EXISTING_VALID_HASH = PasswordHasher(
+    memory_cost=65_536,
+    time_cost=3,
+    parallelism=1,
+    salt_len=16,
+    hash_len=32,
+    type=Type.ID,
+).hash("a different already provisioned password")
 
 
 def test_auth_bootstrap_postgres_contract_is_present():
@@ -92,7 +100,7 @@ class RecordingConnection:
         normalized = " ".join(sql.casefold().split())
         self.operations.append((normalized, params))
         if "from app.accounts" in normalized and "username_normalized" in normalized:
-            return Cursor(self.collision_rows)
+            return Cursor([*self.account_rows, *self.collision_rows])
         if "from app.accounts" in normalized and "for update" in normalized:
             return Cursor(self.account_rows)
         if "from app.bootstrap_owners" in normalized:
@@ -112,6 +120,14 @@ def _service(auth_bootstrap, connection, *, config=None):
     values = {
         "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
         "bootstrap_email_normalized": "Rendref+owner@example.test",
+        "argon2": {
+            "memory_cost": 65_536,
+            "time_cost": 3,
+            "parallelism": 1,
+            "salt_len": 16,
+            "hash_len": 32,
+        },
+        "argon2_policy_version": 3,
     }
     if config is not None:
         values = config
@@ -149,15 +165,15 @@ def test_reconcile_preserves_ids_and_uses_one_ordered_transaction(auth_bootstrap
     assert result.credential_created is True
     assert connection.events == ["transaction:enter", "transaction:commit"]
     assert _indexes(connection, [
-        "from app.accounts",
         "from app.bootstrap_owners",
         "from library.libraries",
+        "from app.accounts",
         "from library.library_memberships",
         "from app.account_credentials",
     ]) == sorted(_indexes(connection, [
-        "from app.accounts",
         "from app.bootstrap_owners",
         "from library.libraries",
+        "from app.accounts",
         "from library.library_memberships",
         "from app.account_credentials",
     ]))
@@ -230,7 +246,10 @@ def test_collision_check_stays_in_the_account_lock_phase(auth_bootstrap):
     owner_index = next(
         index for index, statement in enumerate(sql) if "from app.bootstrap_owners" in statement
     )
-    assert collision_index < owner_index
+    library_index = next(
+        index for index, statement in enumerate(sql) if "from library.libraries" in statement
+    )
+    assert owner_index < library_index < collision_index
     assert "for update" in sql[collision_index]
     assert "order by app.accounts.id" in sql[collision_index]
 
@@ -283,21 +302,26 @@ def test_reconcile_rejects_missing_ambiguous_or_colliding_context_before_mutatio
     )
 
 
-def test_identical_existing_credential_is_idempotent_and_not_reinserted(auth_bootstrap):
+def test_any_existing_valid_credential_is_idempotently_preserved_and_not_reinserted(
+    auth_bootstrap,
+):
     connection = RecordingConnection(credential_rows=({
-        "encoded_hash": ENCODED_HASH,
-        "hash_policy_version": 3,
-        "credential_version": 1,
+        "encoded_hash": EXISTING_VALID_HASH,
+        "hash_algorithm": "argon2id",
+        "hash_policy_version": 2,
+        "credential_version": 7,
     },))
     result = _reconcile(_service(auth_bootstrap, connection))
 
     assert result.credential_created is False
     assert not any("insert into app.account_credentials" in sql for sql, _ in connection.operations)
+    assert not any("update app.account_credentials" in sql for sql, _ in connection.operations)
 
 
-def test_conflicting_existing_credential_rolls_back_without_exposing_hash(auth_bootstrap):
+def test_malformed_existing_credential_rolls_back_without_exposing_hash(auth_bootstrap):
     connection = RecordingConnection(credential_rows=({
-        "encoded_hash": "$argon2id$v=19$different",
+        "encoded_hash": "$argon2id$v=19$malformed",
+        "hash_algorithm": "argon2id",
         "hash_policy_version": 2,
         "credential_version": 1,
     },))
@@ -335,4 +359,36 @@ def test_reconcile_rejects_malformed_or_non_id_argon2_hash_before_connect(
         )
 
     assert encoded_hash not in str(caught.value)
+    assert connection.operations == []
+
+
+def test_reconcile_rejects_incoming_hash_below_the_configured_floor(auth_bootstrap):
+    weak_hash = PasswordHasher(
+        memory_cost=8,
+        time_cost=1,
+        parallelism=1,
+        salt_len=8,
+        hash_len=16,
+        type=Type.ID,
+    ).hash("weak bootstrap fixture hash")
+    connection = RecordingConnection()
+
+    with pytest.raises(ValueError, match="credential"):
+        _service(auth_bootstrap, connection).reconcile_owner(
+            encoded_hash=weak_hash,
+            hash_policy_version=3,
+        )
+
+    assert connection.operations == []
+
+
+def test_reconcile_requires_the_active_hash_policy_version(auth_bootstrap):
+    connection = RecordingConnection()
+
+    with pytest.raises(ValueError, match="policy version"):
+        _service(auth_bootstrap, connection).reconcile_owner(
+            encoded_hash=ENCODED_HASH,
+            hash_policy_version=2,
+        )
+
     assert connection.operations == []

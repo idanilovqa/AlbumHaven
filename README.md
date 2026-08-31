@@ -75,6 +75,30 @@ ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app@localhost:5432/album_h
 Use `ALBUM_HAVEN_DATABASE_URL` with the migration role when applying database
 migrations. Keep credentials outside the repository.
 
+### Provision the initial owner
+
+After applying the database migrations and setting the Phase 7 authentication
+values shown in `.env.example`, run this once from an interactive terminal:
+
+```text
+python scripts/bootstrap_auth_owner.py
+```
+
+The command reads Rendref's password twice through the terminal's protected
+password prompt. It does not accept command-line arguments, redirected input,
+or a password environment variable. Password policy screening uses the free
+[Pwned Passwords range API](https://haveibeenpwned.com/API/v3): only the first
+five characters of a SHA-1 digest are sent over HTTPS, padded responses are
+requested, and provisioning stops if a trustworthy screening result is
+unavailable. The accepted password is then hashed with the configured Argon2id
+policy before the short database transaction begins.
+
+Rerunning the command reconciles the retained account and library but never
+replaces an existing credential. If a credential already exists, the command
+states that the supplied password was not installed and exits with status `3`.
+This provisioning command is not a password reset or emergency recovery
+mechanism.
+
 ## Run
 
 ```text

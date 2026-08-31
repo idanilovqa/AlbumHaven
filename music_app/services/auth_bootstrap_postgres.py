@@ -8,7 +8,7 @@ from typing import Any
 
 from argon2 import extract_parameters
 from argon2.exceptions import InvalidHashError
-from argon2.low_level import Type
+from argon2.low_level import ARGON2_VERSION, Type
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -23,6 +23,13 @@ _OWNER_KEY = "local-bootstrap-owner"
 _IDENTITY_UNIQUE_INDEXES = frozenset(
     {"accounts_username_normalized_idx", "accounts_contact_email_normalized_idx"}
 )
+_ARGON2_FLOOR = {
+    "memory_cost": 65_536,
+    "time_cost": 3,
+    "parallelism": 1,
+    "salt_len": 16,
+    "hash_len": 32,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +53,8 @@ class PostgresAuthBootstrapService:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
         self._email = _validated_email(payload.get("bootstrap_email_normalized"))
+        self._argon2 = payload.get("argon2")
+        self._active_policy_version = payload.get("argon2_policy_version")
         self._connect = connect or _connect
 
     def reconcile_owner(
@@ -58,46 +67,16 @@ class PostgresAuthBootstrapService:
             raise RuntimeError(
                 "ALBUM_HAVEN_APP_DATABASE_URL is required for auth bootstrap."
             )
-        _validate_credential(encoded_hash, hash_policy_version)
+        _validate_credential(
+            encoded_hash,
+            hash_policy_version,
+            argon2=self._argon2,
+            active_policy_version=self._active_policy_version,
+        )
 
         try:
             with self._connect(self._database_url) as connection:
                 with _transaction(connection):
-                    account = _only_row(
-                        connection.execute(
-                            """
-                            select app.accounts.id
-                            from app.accounts
-                            join app.bootstrap_owners
-                              on app.bootstrap_owners.account_id = app.accounts.id
-                            where app.bootstrap_owners.owner_key = %s
-                            for update of app.accounts
-                            """,
-                            (_OWNER_KEY,),
-                        ).fetchall(),
-                        "Bootstrap account context is invalid.",
-                    )
-                    account_id = _required_id(account, ("id",))
-
-                    collisions = connection.execute(
-                        """
-                        select app.accounts.id
-                        from app.accounts
-                        where app.accounts.id <> %s
-                          and (
-                            app.accounts.username_normalized = %s
-                            or app.accounts.contact_email_normalized = %s
-                          )
-                        order by app.accounts.id
-                        for update
-                        """,
-                        (account_id, "rendref", self._email),
-                    ).fetchall()
-                    if collisions:
-                        raise RuntimeError(
-                            "Bootstrap identity conflicts with an account."
-                        )
-
                     owner = _only_row(
                         connection.execute(
                             """
@@ -110,8 +89,9 @@ class PostgresAuthBootstrapService:
                         ).fetchall(),
                         "Bootstrap owner context is invalid.",
                     )
-                    if _integer_field(owner, "account_id", ("account_id",)) != account_id:
-                        raise RuntimeError("Bootstrap owner context is invalid.")
+                    account_id = _integer_field(
+                        owner, "account_id", ("account_id",)
+                    )
 
                     library = _only_row(
                         connection.execute(
@@ -146,6 +126,30 @@ class PostgresAuthBootstrapService:
                                 "Bootstrap library context is invalid."
                             )
 
+                    account_rows = connection.execute(
+                        """
+                        select app.accounts.id
+                        from app.accounts
+                        where app.accounts.id = %s
+                           or (
+                            app.accounts.username_normalized = %s
+                            or app.accounts.contact_email_normalized = %s
+                          )
+                        order by app.accounts.id
+                        for update
+                        """,
+                        (account_id, "rendref", self._email),
+                    ).fetchall()
+                    if len(account_rows) != 1:
+                        raise RuntimeError(
+                            "Bootstrap identity conflicts with an account."
+                        )
+                    locked_account_id = _required_id(account_rows[0], ("id",))
+                    if locked_account_id != account_id:
+                        raise RuntimeError(
+                            "Bootstrap identity conflicts with an account."
+                        )
+
                     membership_rows = connection.execute(
                         """
                         select library.library_memberships.id,
@@ -163,6 +167,7 @@ class PostgresAuthBootstrapService:
                     credential_rows = connection.execute(
                         """
                         select app.account_credentials.encoded_hash,
+                               app.account_credentials.hash_algorithm,
                                app.account_credentials.hash_policy_version,
                                app.account_credentials.credential_version
                         from app.account_credentials
@@ -174,10 +179,10 @@ class PostgresAuthBootstrapService:
                     if len(credential_rows) > 1:
                         raise RuntimeError("Bootstrap credential context is invalid.")
                     credential_created = not credential_rows
-                    if credential_rows and not _credential_matches(
-                        credential_rows[0], encoded_hash, hash_policy_version
+                    if credential_rows and not _stored_credential_valid(
+                        credential_rows[0]
                     ):
-                        raise RuntimeError("Bootstrap credential already exists.")
+                        raise RuntimeError("Bootstrap credential context is invalid.")
 
                     connection.execute(
                         """
@@ -275,19 +280,52 @@ def _validated_email(value: object) -> str:
     return email
 
 
-def _validate_credential(encoded_hash: object, policy_version: object) -> None:
+def _validate_credential(
+    encoded_hash: object,
+    policy_version: object,
+    *,
+    argon2: object,
+    active_policy_version: object,
+) -> None:
     if not isinstance(encoded_hash, str) or not encoded_hash.strip():
         raise ValueError("Bootstrap credential is invalid.")
     try:
         parameters = extract_parameters(encoded_hash)
     except (InvalidHashError, TypeError, ValueError):
         raise ValueError("Bootstrap credential is invalid.") from None
-    if parameters.type is not Type.ID:
+    if parameters.type is not Type.ID or parameters.version != ARGON2_VERSION:
         raise ValueError("Bootstrap credential is invalid.")
+    if not isinstance(argon2, Mapping):
+        raise ValueError("Bootstrap credential configuration is invalid.")
+    configured: dict[str, int] = {}
+    for key, absolute_minimum in _ARGON2_FLOOR.items():
+        value = argon2.get(key)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < absolute_minimum
+        ):
+            raise ValueError("Bootstrap credential configuration is invalid.")
+        configured[key] = value
+    if (
+        parameters.memory_cost < configured["memory_cost"]
+        or parameters.time_cost < configured["time_cost"]
+        or parameters.parallelism < configured["parallelism"]
+        or parameters.salt_len < configured["salt_len"]
+        or parameters.hash_len < configured["hash_len"]
+    ):
+        raise ValueError("Bootstrap credential is below the configured floor.")
     if (
         isinstance(policy_version, bool)
         or not isinstance(policy_version, int)
         or policy_version < 1
+    ):
+        raise ValueError("Bootstrap credential policy version is invalid.")
+    if (
+        isinstance(active_policy_version, bool)
+        or not isinstance(active_policy_version, int)
+        or active_policy_version < 1
+        or policy_version != active_policy_version
     ):
         raise ValueError("Bootstrap credential policy version is invalid.")
 
@@ -325,16 +363,28 @@ def _required_id(row: object, columns: tuple[str, ...] = ("id",)) -> int:
     return _integer_field(row, "id", columns)
 
 
-def _credential_matches(
-    row: object, encoded_hash: str, hash_policy_version: int
-) -> bool:
+def _stored_credential_valid(row: object) -> bool:
     payload = _row_mapping(
-        row, ("encoded_hash", "hash_policy_version", "credential_version")
+        row,
+        (
+            "encoded_hash",
+            "hash_algorithm",
+            "hash_policy_version",
+            "credential_version",
+        ),
     )
+    encoded_hash = payload.get("encoded_hash")
+    try:
+        parameters = extract_parameters(encoded_hash)
+        hash_policy_version = int(payload.get("hash_policy_version"))
+        credential_version = int(payload.get("credential_version"))
+    except (InvalidHashError, TypeError, ValueError):
+        return False
     return (
-        payload.get("encoded_hash") == encoded_hash
-        and payload.get("hash_policy_version") == hash_policy_version
-        and payload.get("credential_version") == 1
+        parameters.type is Type.ID
+        and payload.get("hash_algorithm") == "argon2id"
+        and hash_policy_version >= 1
+        and credential_version >= 1
     )
 
 

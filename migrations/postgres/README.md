@@ -49,6 +49,8 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0042_track_distinct_cover_improvement_alerts.sql
 0043_create_local_track_waveform_peaks.sql
 0044_create_tag_edit_intents.sql
+0045_add_non_album_candidate_index.sql
+0046_add_local_auth_lifecycle.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -74,5 +76,9 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0043_create_local_track_waveform_peaks.sql` adds a compact, track-file-scoped cache for generated stereo waveform peaks. File stat and scan-owned content validators plus the analyzer version invalidate stale results; the table never exposes or duplicates raw media.
 
 `0044_create_tag_edit_intents.sql` adds the durable cross-boundary journal for Edit Tags. Each row records old and requested per-path values before media I/O; unfinished rows are reconciled against real files before startup hydration, and terminal completion is committed with the canonical inventory mutation. The application and migrator retain their bounded journal privileges, while the migration explicitly revokes readonly `SELECT` because the rows contain private paths and tag snapshots.
+
+`0045_add_non_album_candidate_index.sql` adds a narrow partial index for active track files whose generated album marker identifies a non-album candidate, keeping that cold discovery path off the full active-file set.
+
+`0046_add_local_auth_lifecycle.sql` adds normalized managed-account identity and contact fields, focused credentials, hashed reset tokens, durable throttles, bounded revocable sessions, append-only security audit events, and a durable mail outbox. Existing accounts receive unique transitional `pending-account-*` identities with non-routable `.invalid` contact addresses for later owner reconciliation, and all legacy sessions are hashed and explicitly revoked rather than promoted into Phase 7 authentication. Named foreign-key and runtime lookup indexes support the lifecycle queries; explicit application and migrator grants preserve role separation, while readonly access is revoked from secret-adjacent auth and delivery tables.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

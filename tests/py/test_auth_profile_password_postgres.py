@@ -48,6 +48,11 @@ class Connection:
         statement = " ".join(sql.casefold().split())
         self.operations.append((statement, params))
         if "from app.accounts" in statement and "join app.account_credentials" in statement:
+            if "username_display" in statement and "contact_email" not in statement:
+                return Cursor(({
+                    "username_display": "member.one",
+                    "administrator_set": True,
+                },))
             return Cursor(({
                 "account_id": 41,
                 "username_display": "member.one",
@@ -71,6 +76,11 @@ class Connection:
             },) if self.current else ())
         if "from app.account_sessions" in statement and "for update" in statement:
             return Cursor(({"id": 11}, {"id": 12}, {"id": 13}) if self.current else ())
+        if "from app.account_sessions" in statement and "last_seen_at" in statement:
+            return Cursor((
+                {"id": 11, "user_agent": "Current browser", "last_seen_at": NOW},
+                {"id": 12, "user_agent": "Android", "last_seen_at": NOW},
+            ) if self.current else ())
         return Cursor()
 
 
@@ -129,6 +139,24 @@ def test_password_change_verifies_current_then_atomically_replaces_and_revokes_o
     assert audit.calls[-1]["reason"].value == "password_changed"
     assert "$argon2id$new" in repr(connection.operations)
     assert "new sufficiently private password" not in repr(connection.operations)
+
+
+def test_profile_view_exposes_only_display_identity_suggestion_and_active_sessions():
+    connection = Connection()
+    audit = Audit()
+
+    profile = _service(connection, audit).load_profile(
+        account_id=41,
+        current_session_id=11,
+    )
+
+    assert profile is not None
+    assert profile.username == "member.one"
+    assert profile.administrator_set_suggestion is True
+    assert [item.session_id for item in profile.sessions] == [11, 12]
+    assert profile.sessions[0].current is True
+    assert profile.sessions[1].current is False
+    assert "contact_email" not in repr(profile)
 
 
 def test_wrong_current_password_changes_nothing_and_records_protected_invalid_reason():

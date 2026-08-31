@@ -48,7 +48,11 @@ def test_private_routes_have_explicit_action_classification():
                 "none"
                 if method in {"GET", "HEAD", "OPTIONS", "WEBSOCKET"}
                 else "route_form"
-                if (method, path) == ("POST", "/logout")
+                if (method, path) in {
+                    ("POST", "/logout"),
+                    ("POST", "/account/password"),
+                    ("POST", "/account/password-suggestion/dismiss"),
+                }
                 else "session_header"
             )
             if action is None or csrf_mode != expected_csrf:

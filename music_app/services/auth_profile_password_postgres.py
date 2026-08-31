@@ -51,6 +51,21 @@ class ProfilePasswordOutcome(str, Enum):
     STALE = "stale"
 
 
+@dataclass(frozen=True, slots=True)
+class ProfileSessionView:
+    session_id: int
+    user_agent: str | None
+    last_seen_at: datetime
+    current: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileAccountView:
+    username: str
+    administrator_set_suggestion: bool
+    sessions: tuple[ProfileSessionView, ...]
+
+
 @dataclass(frozen=True, repr=False, slots=True)
 class _CredentialSnapshot:
     account_id: int
@@ -105,6 +120,72 @@ class PostgresProfilePasswordService:
         self._password_hasher = password_hasher
         self._breached_checker = breached_checker
         self._audit = audit_repository
+
+    def load_profile(
+        self,
+        *,
+        account_id: object,
+        current_session_id: object,
+    ) -> ProfileAccountView | None:
+        account_id = _positive_integer(account_id, "account id")
+        current_session_id = _positive_integer(current_session_id, "session id")
+        now = _aware_utc(self._clock())
+        try:
+            with self._operation() as connection:
+                accounts = connection.execute(
+                    """
+                    select app.accounts.username_display,
+                           app.account_credentials.administrator_set
+                    from app.accounts
+                    join app.account_credentials
+                      on app.account_credentials.account_id = app.accounts.id
+                    where app.accounts.id = %s and app.accounts.is_active is true
+                      and app.accounts.disabled_at is null
+                    """,
+                    (account_id,),
+                ).fetchall()
+                sessions = connection.execute(
+                    """
+                    select id, user_agent, last_seen_at
+                    from app.account_sessions
+                    where account_id = %s and revoked_at is null
+                      and idle_expires_at > %s and absolute_expires_at > %s
+                    order by case when id = %s then 0 else 1 end,
+                             last_seen_at desc, id
+                    """,
+                    (account_id, now, now, current_session_id),
+                ).fetchall()
+            if len(accounts) != 1:
+                return None
+            account = _row(accounts[0], ("username_display", "administrator_set"))
+            views = tuple(
+                ProfileSessionView(
+                    session_id=_positive_integer(
+                        _row(item, ("id", "user_agent", "last_seen_at")).get("id"),
+                        "session id",
+                    ),
+                    user_agent=_optional_text(
+                        _row(item, ("id", "user_agent", "last_seen_at")).get("user_agent")
+                    ),
+                    last_seen_at=_aware_utc(
+                        _row(item, ("id", "user_agent", "last_seen_at")).get("last_seen_at")
+                    ),
+                    current=(
+                        _row(item, ("id", "user_agent", "last_seen_at")).get("id")
+                        == current_session_id
+                    ),
+                )
+                for item in sessions
+            )
+            if not any(item.current for item in views):
+                return None
+            return ProfileAccountView(
+                username=_required_text(account.get("username_display"), "username"),
+                administrator_set_suggestion=account.get("administrator_set") is True,
+                sessions=views,
+            )
+        except Exception:
+            raise RuntimeError("Profile view persistence failed.") from None
 
     def change_password(
         self,
@@ -420,6 +501,14 @@ def _required_text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value or "\r" in value or "\n" in value:
         raise RuntimeError(f"Profile password {field} is invalid.")
     return value
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or "\r" in value or "\n" in value:
+        raise RuntimeError("Profile session user agent is invalid.")
+    return value[:1024]
 
 
 def _request_ref(value: object) -> str:

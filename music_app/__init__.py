@@ -42,6 +42,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
     from music_app.routes.auth_asgi import router as auth_asgi_router
     from music_app.routes.admin_asgi import router as admin_asgi_router
+    from music_app.routes.account_asgi import router as account_asgi_router
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
     from music_app.routes.api_wave_c_asgi_routes import router as api_wave_c_asgi_router
@@ -111,6 +112,7 @@ def _configure_asgi_app(app, runtime) -> None:
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(auth_asgi_router)
+    app.include_router(account_asgi_router)
     app.include_router(admin_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)

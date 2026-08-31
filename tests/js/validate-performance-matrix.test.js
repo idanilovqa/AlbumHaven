@@ -27,7 +27,7 @@ const EXPECTED_SHARDS = [
 
 function performanceJobSource(source = workflow) {
   const start = source.indexOf('  e2e_performance_ci:');
-  const end = source.indexOf('\n  pr_agent_review:', start);
+  const end = source.indexOf('\n  review_scope:', start);
   assert.notEqual(start, -1, 'pr-gates.yml must define e2e_performance_ci');
   assert.notEqual(end, -1, 'e2e_performance_ci must remain independently bounded');
   return source.slice(start, end);

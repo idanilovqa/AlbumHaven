@@ -11,6 +11,7 @@ from fastapi import FastAPI
 
 from music_app.services.auth_login_postgres import LoginOutcome, LoginResult
 from music_app.services.auth_preauth_postgres import IssuedPreAuthToken
+from music_app.services.auth_session_csrf import matches_session_csrf
 from music_app.services.auth_sessions_postgres import IssuedBrowserSession
 
 
@@ -65,15 +66,28 @@ class FakeLogin:
         return LoginResult(self.outcome)
 
 
+class FakeSessions:
+    def __init__(self):
+        self.revoked = []
+        self.result = True
+
+    def revoke_current(self, raw_token, reason=None):
+        self.revoked.append((raw_token, reason))
+        return self.result
+
+
 def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.test",), proxies=()):
     app = FastAPI()
     preauth = FakePreAuth()
     login = FakeLogin(outcome)
+    sessions = FakeSessions()
     app.state.auth_preauth_service = preauth
     app.state.auth_login_service = login
+    app.state.auth_session_service = sessions
     app.state.auth_policy_config = {
         "trusted_origins": origins,
         "trusted_proxies": proxies,
+        "hmac": {"secret": "0123456789abcdef0123456789abcdef", "key_version": 7},
         "cookie": {"name": SESSION_COOKIE, "secure": True, "http_only": True, "same_site": "Lax", "path": "/", "domain": None},
     }
     app.include_router(auth_asgi.router)
@@ -254,6 +268,110 @@ def test_success_consumes_then_authenticates_sets_unrelated_session_and_clears_p
     assert all(flag in session_cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
     assert "Domain=" not in session_cookie and CSRF not in session_cookie
     assert any(value.startswith(CSRF_COOKIE + "=") and "Max-Age=0" in value for value in cookies)
+    csrf_cookie = next(
+        value
+        for value in cookies
+        if value.startswith("__Host-album_haven_csrf=")
+    )
+    assert "HttpOnly" not in csrf_cookie
+    assert all(flag in csrf_cookie for flag in ("Secure", "SameSite=lax", "Path=/"))
+    parsed = SimpleCookie()
+    parsed.load(csrf_cookie)
+    assert matches_session_csrf(
+        SESSION,
+        parsed["__Host-album_haven_csrf"].value,
+        app.state.auth_policy_config,
+    )
+
+
+def test_logout_requires_session_bound_csrf_revokes_and_clears_cookies(auth_asgi):
+    from music_app.services.auth_session_csrf import issue_session_csrf
+
+    app, _, _ = _app(auth_asgi)
+    token = issue_session_csrf(SESSION, app.state.auth_policy_config)
+    headers = {
+        "origin": "https://music.test",
+        "cookie": (
+            f"{SESSION_COOKIE}={SESSION}; "
+            f"__Host-album_haven_csrf={token}"
+        ),
+    }
+
+    status, response_headers, body = _request(
+        app,
+        "POST",
+        path="/logout",
+        form={"csrf_token": token},
+        headers=headers,
+    )
+
+    assert status == 303 and body == b""
+    assert dict(response_headers)["location"] == "/login"
+    revoked = app.state.auth_session_service.revoked
+    assert revoked[0][0] == SESSION
+    assert str(getattr(revoked[0][1], "value", revoked[0][1])) == "logout"
+    cookies = _set_cookies(response_headers)
+    assert any(value.startswith(SESSION_COOKIE + "=") and "Max-Age=0" in value for value in cookies)
+    assert any(value.startswith("__Host-album_haven_csrf=") and "Max-Age=0" in value for value in cookies)
+
+
+@pytest.mark.parametrize(
+    ("headers", "form"),
+    [
+        (
+            {"cookie": f"{SESSION_COOKIE}={SESSION}"},
+            {"csrf_token": "x" * 43},
+        ),
+        (
+            {"origin": "https://evil.test", "cookie": f"{SESSION_COOKIE}={SESSION}"},
+            {"csrf_token": "x" * 43},
+        ),
+        (
+            {"origin": "https://music.test", "cookie": f"{SESSION_COOKIE}={SESSION}"},
+            {"csrf_token": "x" * 43},
+        ),
+    ],
+)
+def test_logout_rejects_missing_origin_or_session_bound_csrf_before_revocation(
+    auth_asgi, headers, form
+):
+    app, _, _ = _app(auth_asgi)
+
+    status, _, _ = _request(
+        app,
+        "POST",
+        path="/logout",
+        form=form,
+        headers=headers,
+    )
+
+    assert status == 400
+    assert app.state.auth_session_service.revoked == []
+
+
+def test_logout_rejects_cookie_mismatch_and_non_ascii_csrf_without_error(auth_asgi):
+    from music_app.services.auth_session_csrf import issue_session_csrf
+
+    app, _, _ = _app(auth_asgi)
+    token = issue_session_csrf(SESSION, app.state.auth_policy_config)
+
+    for supplied in ("x" * 43, "snowman-☃"):
+        status, _, _ = _request(
+            app,
+            "POST",
+            path="/logout",
+            form={"csrf_token": supplied},
+            headers={
+                "origin": "https://music.test",
+                "cookie": (
+                    f"{SESSION_COOKIE}={SESSION}; "
+                    f"__Host-album_haven_csrf={token}"
+                ),
+            },
+        )
+        assert status == 400
+
+    assert app.state.auth_session_service.revoked == []
 
 
 @pytest.mark.parametrize("return_to", ["https://evil.test/x", "//evil.test/x", "/%2f%2fevil.test", "/\\evil.test", "/%5cevil.test", "/safe\nSet-Cookie:x"])

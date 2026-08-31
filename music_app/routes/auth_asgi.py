@@ -19,6 +19,11 @@ from music_app.services.auth_audit_postgres import PostgresSecurityAuditReposito
 from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAuthService
 from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
 from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+from music_app.services.auth_sessions_postgres import SessionRevocationReason
+from music_app.services.auth_session_csrf import (
+    issue_session_csrf,
+    matches_session_csrf,
+)
 from music_app.services.auth_tokens import hash_opaque_token
 
 
@@ -26,6 +31,7 @@ router = APIRouter()
 
 _PREAUTH_COOKIE = "__Host-album_haven_login_csrf"
 _SESSION_COOKIE = "__Host-album_haven_session"
+_SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _MAXIMUM_BODY_BYTES = 8_192
 _FALLBACK_TEMPLATES = Jinja2Templates(
@@ -113,6 +119,7 @@ def _services(request: Request):
             request.app.state.auth_preauth_service = preauth
         if login is None:
             sessions = PostgresAuthSessionService(config)
+            request.app.state.auth_session_service = sessions
             audit = PostgresSecurityAuditRepository(config)
             login = PostgresLoginAuthService(
                 config, session_service=sessions, audit_repository=audit
@@ -233,6 +240,14 @@ async def post_login(request: Request) -> Response:
         samesite="lax",
         path="/",
     )
+    response.set_cookie(
+        _SESSION_CSRF_COOKIE,
+        issue_session_csrf(result.session.raw_token, config),
+        httponly=False,
+        secure=secure,
+        samesite="lax",
+        path="/",
+    )
     response.delete_cookie(
         _PREAUTH_COOKIE,
         path="/",
@@ -241,6 +256,79 @@ async def post_login(request: Request) -> Response:
         samesite="lax",
     )
     return _no_store(response)
+
+
+def _session_service(request: Request):
+    sessions = getattr(request.app.state, "auth_session_service", None)
+    if sessions is not None:
+        return sessions
+    config = _policy_config(request)
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        sessions = getattr(request.app.state, "auth_session_service", None)
+        if sessions is None:
+            sessions = PostgresAuthSessionService(config)
+            request.app.state.auth_session_service = sessions
+    return sessions
+
+
+@router.post("/logout")
+async def post_logout(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+    except Exception:
+        return _no_store(HTMLResponse("Logout is temporarily unavailable.", status_code=503))
+    secure = _cookie_secure(request, config)
+    if secure is None or not _same_origin(request, config):
+        return _no_store(HTMLResponse("Logout request was invalid.", status_code=400))
+    payload = await _form_payload(
+        request,
+        allowed=frozenset({"csrf_token"}),
+        required=frozenset({"csrf_token"}),
+    )
+    raw_session = request.cookies.get(_SESSION_COOKIE)
+    csrf_cookie = request.cookies.get(_SESSION_CSRF_COOKIE)
+    if (
+        payload is None
+        or not _safe_text_match(payload["csrf_token"], csrf_cookie)
+        or not matches_session_csrf(raw_session, payload["csrf_token"], config)
+    ):
+        return _no_store(HTMLResponse("Logout request was invalid.", status_code=400))
+    try:
+        sessions = _session_service(request)
+        await run_in_threadpool(
+            sessions.revoke_current,
+            raw_session,
+            SessionRevocationReason.LOGOUT,
+        )
+    except Exception:
+        return _no_store(HTMLResponse("Logout is temporarily unavailable.", status_code=503))
+
+    response = RedirectResponse("/login", status_code=303)
+    for cookie_name, httponly in (
+        (_SESSION_COOKIE, True),
+        (_SESSION_CSRF_COOKIE, False),
+    ):
+        response.delete_cookie(
+            cookie_name,
+            path="/",
+            secure=secure,
+            httponly=httponly,
+            samesite="lax",
+        )
+    return _no_store(response)
+
+
+def _safe_text_match(left: object, right: object) -> bool:
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    try:
+        return hmac.compare_digest(left, right)
+    except TypeError:
+        return False
 
 
 def _tokens_match(cookie_token: object, form_token: object) -> bool:
@@ -252,7 +340,16 @@ def _tokens_match(cookie_token: object, form_token: object) -> bool:
     return hmac.compare_digest(cookie_digest, form_digest)
 
 
-async def _form_payload(request: Request) -> dict[str, str] | None:
+async def _form_payload(
+    request: Request,
+    *,
+    allowed: frozenset[str] = frozenset(
+        {"username", "password", "csrf_token", "return_to"}
+    ),
+    required: frozenset[str] = frozenset(
+        {"username", "password", "csrf_token"}
+    ),
+) -> dict[str, str] | None:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     if content_type != _FORM_CONTENT_TYPE:
         return None
@@ -274,13 +371,12 @@ async def _form_payload(request: Request) -> dict[str, str] | None:
         )
     except (UnicodeDecodeError, ValueError):
         return None
-    allowed = {"username", "password", "csrf_token", "return_to"}
     values: dict[str, str] = {}
     for key, value in pairs:
         if key not in allowed or key in values:
             return None
         values[key] = value
-    if not all(key in values for key in ("username", "password", "csrf_token")):
+    if not required.issubset(values):
         return None
     return values
 

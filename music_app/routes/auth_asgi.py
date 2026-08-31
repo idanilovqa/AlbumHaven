@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import hmac
-import html
 import ipaddress
 import threading
 from collections.abc import Mapping
+from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import uuid4
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
@@ -27,6 +28,9 @@ _PREAUTH_COOKIE = "__Host-album_haven_login_csrf"
 _SESSION_COOKIE = "__Host-album_haven_session"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _MAXIMUM_BODY_BYTES = 8_192
+_FALLBACK_TEMPLATES = Jinja2Templates(
+    directory=str(Path(__file__).resolve().parent.parent / "templates")
+)
 
 
 def _no_store(response: Response) -> Response:
@@ -36,18 +40,23 @@ def _no_store(response: Response) -> Response:
     return response
 
 
-def _render_login(token: str, *, failed: bool) -> str:
-    error = '<p role="alert">Sign-in failed. Check your credentials and try again.</p>' if failed else ""
-    escaped = html.escape(token, quote=True)
-    return (
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Album Haven sign in</title></head>"
-        "<body><main><h1>Sign in</h1>" + error
-        + '<form method="post" action="/login">'
-        + '<label>Username<input name="username" autocomplete="username"></label>'
-        + '<label>Password<input name="password" type="password" autocomplete="current-password"></label>'
-        + f'<input type="hidden" name="csrf_token" value="{escaped}">'
-        + '<input type="hidden" name="return_to" value="/">'
-        + '<button type="submit">Sign in</button></form></main></body></html>'
+def _render_login(
+    request: Request,
+    token: str,
+    *,
+    failed: bool,
+    return_to: str,
+) -> Response:
+    templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {
+            "request": request,
+            "csrf_token": token,
+            "failed": failed,
+            "return_to": return_to,
+        },
     )
 
 
@@ -112,7 +121,13 @@ def _services(request: Request):
     return preauth, login
 
 
-async def _login_page(request: Request, *, status_code: int, failed: bool) -> HTMLResponse:
+async def _login_page(
+    request: Request,
+    *,
+    status_code: int,
+    failed: bool,
+    return_to: object | None = None,
+) -> Response:
     try:
         config = _policy_config(request)
         secure = _cookie_secure(request, config)
@@ -120,9 +135,18 @@ async def _login_page(request: Request, *, status_code: int, failed: bool) -> HT
             return _generic_bad_request()
         preauth, _ = _services(request)
         issued = await run_in_threadpool(preauth.issue_login_token)
+        resolved_return_to = _safe_return_path(
+            request.query_params.get("return_to") if return_to is None else return_to
+        )
+        response = _render_login(
+            request,
+            issued.raw_token,
+            failed=failed,
+            return_to=resolved_return_to,
+        )
     except Exception:
         return _generic_unavailable()
-    response = HTMLResponse(_render_login(issued.raw_token, failed=failed), status_code=status_code)
+    response.status_code = status_code
     response.set_cookie(
         _PREAUTH_COOKIE,
         issued.raw_token,
@@ -185,10 +209,20 @@ async def post_login(request: Request) -> Response:
             source_class=source_class,
         )
     except Exception:
-        return await _login_page(request, status_code=503, failed=True)
+        return await _login_page(
+            request,
+            status_code=503,
+            failed=True,
+            return_to=payload.get("return_to"),
+        )
 
     if result.outcome is not LoginOutcome.SUCCESS or result.session is None:
-        return await _login_page(request, status_code=401, failed=True)
+        return await _login_page(
+            request,
+            status_code=401,
+            failed=True,
+            return_to=payload.get("return_to"),
+        )
 
     response = RedirectResponse(_safe_return_path(payload.get("return_to")), status_code=303)
     response.set_cookie(

@@ -80,7 +80,7 @@ def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.tes
     return app, preauth, login
 
 
-async def _request_async(app, method, path="/login", *, form=None, headers=None, scheme="https", client="127.0.0.1", host="music.test"):
+async def _request_async(app, method, path="/login", *, form=None, headers=None, scheme="https", client="127.0.0.1", host="music.test", query=""):
     body = urlencode(form or {}).encode("utf-8") if form is not None else b""
     raw_headers = [(b"host", host.encode("ascii"))]
     for key, value in (headers or {}).items():
@@ -97,7 +97,7 @@ async def _request_async(app, method, path="/login", *, form=None, headers=None,
         return {"type": "http.request", "body": body, "more_body": False}
     async def send(message):
         messages.append(message)
-    await app({"type":"http","asgi":{"version":"3.0"},"http_version":"1.1","method":method,"scheme":scheme,"path":path,"raw_path":path.encode(),"query_string":b"","headers":raw_headers,"client":(client,50000),"server":(host,443 if scheme=="https" else 80)}, receive, send)
+    await app({"type":"http","asgi":{"version":"3.0"},"http_version":"1.1","method":method,"scheme":scheme,"path":path,"raw_path":path.encode(),"query_string":query.encode("ascii"),"headers":raw_headers,"client":(client,50000),"server":(host,443 if scheme=="https" else 80)}, receive, send)
     start = next(message for message in messages if message["type"] == "http.response.start")
     response_body = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
     response_headers = [(key.decode("latin1").lower(), value.decode("latin1")) for key, value in start.get("headers", [])]
@@ -134,6 +134,48 @@ def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):
     cookie = next(value for value in _set_cookies(headers) if value.startswith(CSRF_COOKIE + "="))
     assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
     assert "Domain=" not in cookie
+
+
+def test_get_login_renders_approved_v007_semantic_controls_and_assets(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+
+    status, _, body = _request(app, "GET")
+    rendered = body.decode()
+
+    assert status == 200
+    assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in rendered
+    assert 'class="login-glow"' in rendered
+    assert 'src="/static/images/album-haven-cloud-vinyl.png"' in rendered
+    assert 'href="/static/css/login.css"' in rendered
+    assert 'src="/static/js/login.js"' in rendered
+    assert '<label for="login-username">Username</label>' in rendered
+    assert 'id="login-username"' in rendered and 'autocomplete="username"' in rendered
+    assert '<label for="login-password">Password</label>' in rendered
+    assert 'id="login-password"' in rendered and 'autocomplete="current-password"' in rendered
+    assert 'type="button"' in rendered and 'aria-controls="login-password"' in rendered
+    assert 'aria-pressed="false"' in rendered and '>Show<' in rendered
+    assert '<button class="login-submit" type="submit">' in rendered
+    assert 'required' in rendered
+
+
+def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):
+    app, _, _ = _app(auth_asgi, outcome=LoginOutcome.INVALID)
+    status, _, body = _request(
+        app,
+        "GET",
+        query="return_to=%2Falbums%3Fview%3Dgrid",
+    )
+    assert status == 200
+    assert 'name="return_to" value="/albums?view=grid"' in body.decode()
+
+    status, _, body = _request(
+        app,
+        "POST",
+        form=_valid_form(return_to="/albums?view=grid"),
+        headers=_valid_headers(),
+    )
+    assert status == 401
+    assert 'name="return_to" value="/albums?view=grid"' in body.decode()
 
 
 @pytest.mark.parametrize("outcome", [LoginOutcome.INVALID, LoginOutcome.THROTTLED])

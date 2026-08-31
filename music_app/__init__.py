@@ -53,6 +53,7 @@ def _configure_asgi_app(app, runtime) -> None:
         PostgresWaveformPeakCacheRepository,
     )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
+    from music_app.services.private_route_boundary import install_private_route_boundary
     from music_app.routes.web_asgi import (
         _runtime_asset_version,
         router as web_asgi_router,
@@ -78,6 +79,7 @@ def _configure_asgi_app(app, runtime) -> None:
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()
     app.state.auth_service_lock = threading.Lock()
+    install_private_route_boundary(app)
     immutable_runtime_asset_paths = {
         "/static/app.js",
         "/static/js/runtime-bundle.js",

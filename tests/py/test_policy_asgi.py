@@ -2,7 +2,12 @@ import asyncio
 
 from fastapi import FastAPI
 
-from music_app.services.current_actor import ActorState, CurrentActor
+from music_app.services.current_actor import (
+    ActorState,
+    CapabilityGrant,
+    CurrentActor,
+    LibraryRelationship,
+)
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy_evaluator import PolicyEvaluationConstraints
 
@@ -137,3 +142,20 @@ def test_authenticated_constraint_denial_is_403_and_origin_key_is_minimized():
     assert captured[0].request_origin.origin_type == "network"
     assert captured[0].request_origin.origin_key != "198.51.100.44"
     assert "198.51.100.44" not in repr(captured[0].request_origin)
+
+
+def test_single_current_library_is_applied_to_a_library_scoped_grant():
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=9,
+        session_id=12,
+        username_display="member",
+        library_relationships=(LibraryRelationship(23, "member", False),),
+        capability_grants=(CapabilityGrant("library.read", "library", 23),),
+    )
+    app, _ = _app(actor)
+
+    status, body = _request(app)
+
+    assert status == 200
+    assert body == b'{"ok":true,"reason":"explicit_grant"}'

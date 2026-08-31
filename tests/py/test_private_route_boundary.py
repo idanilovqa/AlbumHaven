@@ -5,7 +5,10 @@ import pytest
 from fastapi import FastAPI
 
 from music_app.services.current_actor import CurrentActor
-from music_app.services.private_route_boundary import install_private_route_boundary
+from music_app.services.private_route_boundary import (
+    install_private_route_boundary,
+    private_action_for_route,
+)
 
 
 def test_production_factory_installs_private_route_boundary():
@@ -14,6 +17,43 @@ def test_production_factory_installs_private_route_boundary():
     )
 
     assert "install_private_route_boundary(app)" in source
+
+
+def test_private_routes_have_explicit_action_classification():
+    from music_app import create_asgi_app
+
+    app = create_asgi_app()
+    missing = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        for method in getattr(route, "methods", ()):
+            if method == "HEAD":
+                continue
+            if path in {"/health", "/login", "/favicon.ico", "/static"}:
+                continue
+            action = private_action_for_route(method, path)
+            if action is None:
+                missing.append((method, path))
+
+    assert missing == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "action"),
+    [
+        ("GET", "/status", "app.status.read"),
+        ("GET", "/", "app.shell.read"),
+        ("GET", "/track", "library.media.read"),
+        ("POST", "/refresh-api", "library.refresh"),
+        ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
+        ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
+        ("POST", "/loops/delete", "library.loops.delete"),
+        ("POST", "/playlists/{playlist_ref}/items", "library.playlists.items.manage"),
+        ("POST", "/logout", "auth.session.logout"),
+    ],
+)
+def test_representative_routes_use_specific_action_keys(method, path, action):
+    assert private_action_for_route(method, path) == action
 
 
 class Resolver:

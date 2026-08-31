@@ -31,7 +31,7 @@ def require_action(
         context = PolicyContext.build(
             actor=actor,
             action=action,
-            library_id=library_id,
+            library_id=_library_scope(actor, action, library_id),
             target_account_id=target_account_id,
             resource=resource,
             deployment_mode=_deployment_mode(request),
@@ -67,6 +67,20 @@ def require_action(
         return result
 
     return dependency
+
+
+def _library_scope(actor, action: str, explicit_library_id: int | None) -> int | None:
+    if explicit_library_id is not None:
+        return explicit_library_id
+    if not (action.startswith("library.") or action.startswith("integration.")):
+        return None
+    relationships = actor.library_relationships
+    if len(relationships) == 1:
+        return relationships[0].library_id
+    primary = tuple(item for item in relationships if item.is_primary_owner)
+    if len(primary) == 1:
+        return primary[0].library_id
+    return None
 
 
 def _deployment_mode(request: Request) -> str:

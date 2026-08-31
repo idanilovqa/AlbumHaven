@@ -36,6 +36,7 @@ class CurrentActor:
     display_name: str | None = None
     authenticated_at: datetime | None = None
     is_bootstrap_owner: bool = False
+    current_library_id: int | None = None
     library_relationships: tuple[LibraryRelationship, ...] = ()
     capability_grants: tuple[CapabilityGrant, ...] = ()
 

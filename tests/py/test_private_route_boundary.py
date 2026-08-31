@@ -91,11 +91,15 @@ def _app(actor):
     async def status():
         return {"private": True}
 
+    @app.get("/track")
+    async def track():
+        return {"media": True}
+
     install_private_route_boundary(app)
     return app, resolver
 
 
-async def _request_async(app, path, *, method="GET", cookie=None):
+async def _request_async(app, path, *, method="GET", cookie=None, query=""):
     headers = [(b"host", b"music.test")]
     if cookie:
         headers.append((b"cookie", cookie.encode("ascii")))
@@ -121,7 +125,7 @@ async def _request_async(app, path, *, method="GET", cookie=None):
             "scheme": "https",
             "path": path,
             "raw_path": path.encode("ascii"),
-            "query_string": b"",
+            "query_string": query.encode("ascii"),
             "headers": headers,
             "client": ("127.0.0.1", 50000),
             "server": ("music.test", 443),
@@ -201,3 +205,33 @@ def test_authenticated_bootstrap_owner_reaches_private_route():
     assert status == 200
     assert body == b'{"private":true}'
     assert resolver.calls == ["opaque-session"]
+
+
+def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_auth():
+    actor = CurrentActor(
+        state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Rendref",
+        is_bootstrap_owner=True,
+    )
+    app, _ = _app(actor)
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context)
+        or __import__(
+            "music_app.services.policy_evaluator",
+            fromlist=["PolicyEvaluationConstraints"],
+        ).PolicyEvaluationConstraints()
+    )
+
+    status, _ = _request(
+        app,
+        "/track",
+        query="path=C%3A%5CMusic%5Cprivate.mp3",
+    )
+
+    assert status == 200
+    assert contexts[0].resource.resource_kind == "media"
+    assert contexts[0].resource.resource_ref.startswith("hmac:v7:")
+    assert "Music" not in repr(contexts[0])

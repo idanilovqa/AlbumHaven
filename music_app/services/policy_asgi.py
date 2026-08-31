@@ -74,12 +74,14 @@ def _library_scope(actor, action: str, explicit_library_id: int | None) -> int |
         return explicit_library_id
     if not (action.startswith("library.") or action.startswith("integration.")):
         return None
-    relationships = actor.library_relationships
-    if len(relationships) == 1:
-        return relationships[0].library_id
-    primary = tuple(item for item in relationships if item.is_primary_owner)
-    if len(primary) == 1:
-        return primary[0].library_id
+    current_library_id = actor.current_library_id
+    if current_library_id is None:
+        return None
+    if any(
+        relationship.library_id == current_library_id
+        for relationship in actor.library_relationships
+    ):
+        return current_library_id
     return None
 
 

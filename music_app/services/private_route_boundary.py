@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import hashlib
+import hmac
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.routing import Match
 
 from music_app.services.policy_asgi import require_action
+from music_app.services.policy import ResourceScope
 
 
 _PUBLIC_AUTH_PATHS = frozenset({"/login", "/forgot-password", "/reset-password"})
@@ -135,8 +140,9 @@ def install_private_route_boundary(app: FastAPI) -> None:
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
+        resource = _private_resource(request, route_path)
         try:
-            await require_action(action)(request)
+            await require_action(action, resource=resource)(request)
         except HTTPException as exc:
             return JSONResponse(
                 {"detail": exc.detail},
@@ -167,3 +173,48 @@ def _matched_route_path(app: FastAPI, request: Request) -> str:
         if match is Match.FULL:
             return str(getattr(route, "path", request.url.path))
     return request.url.path
+
+
+def _private_resource(request: Request, route_path: str) -> ResourceScope | None:
+    if route_path in {"/track", "/cover", "/playback/waveform"}:
+        loop_id = str(request.query_params.get("loop_id") or "").strip()
+        if loop_id:
+            return ResourceScope("loop", _safe_reference(loop_id, request))
+        private_path = str(request.query_params.get("path") or "").strip()
+        if private_path:
+            return ResourceScope("media", _privacy_reference(private_path, request))
+    if route_path == "/loops/media/{loop_id}":
+        return ResourceScope(
+            "loop", _safe_reference(request.url.path.rsplit("/", 1)[-1], request)
+        )
+    if route_path == "/loops/pitch-preview/{preview_id}":
+        return ResourceScope(
+            "loop_preview",
+            _safe_reference(request.url.path.rsplit("/", 1)[-1], request),
+        )
+    if route_path == "/utilities/cover-lookup/remote-image":
+        remote_ref = str(request.query_params.get("url") or "").strip()
+        if remote_ref:
+            return ResourceScope("cover_candidate", _privacy_reference(remote_ref, request))
+    return None
+
+
+def _safe_reference(value: str, request: Request) -> str:
+    if value and all(character.isalnum() or character in "-_.:" for character in value):
+        return value[:256]
+    return _privacy_reference(value, request)
+
+
+def _privacy_reference(value: str, request: Request) -> str:
+    config = getattr(request.app.state, "auth_policy_config", {})
+    hmac_config = config.get("hmac") if isinstance(config, Mapping) else None
+    secret = hmac_config.get("secret") if isinstance(hmac_config, Mapping) else None
+    version = hmac_config.get("key_version") if isinstance(hmac_config, Mapping) else None
+    if not isinstance(secret, str) or len(secret) < 32:
+        raise RuntimeError("Policy resource-key configuration is invalid.")
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"policy-resource\0{value}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"hmac:v{int(version or 1)}:{digest}"

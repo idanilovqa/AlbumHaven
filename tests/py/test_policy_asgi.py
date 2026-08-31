@@ -150,6 +150,7 @@ def test_single_current_library_is_applied_to_a_library_scoped_grant():
         account_id=9,
         session_id=12,
         username_display="member",
+        current_library_id=23,
         library_relationships=(LibraryRelationship(23, "member", False),),
         capability_grants=(CapabilityGrant("library.read", "library", 23),),
     )

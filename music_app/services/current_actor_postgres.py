@@ -70,6 +70,15 @@ class PostgresCurrentActorResolver:
                          from app.bootstrap_owners
                          where app.bootstrap_owners.account_id = app.accounts.id
                        ) as is_bootstrap_owner,
+                       (
+                         select library.libraries.id
+                         from app.bootstrap_owners as runtime_owner
+                         join library.libraries
+                           on library.libraries.owner_account_id = runtime_owner.account_id
+                         where runtime_owner.owner_key = 'local-bootstrap-owner'
+                         order by library.libraries.id
+                         limit 1
+                       ) as current_library_id,
                        coalesce((
                          select jsonb_agg(
                            jsonb_build_object(
@@ -121,6 +130,14 @@ class PostgresCurrentActorResolver:
                 display_name=_required_text(payload.get("display_name"), "display name"),
                 authenticated_at=session.authenticated_at,
             )
+        relationships = _library_relationships(payload.get("library_relationships"))
+        current_library_id = _positive_integer(
+            payload.get("current_library_id"), "current library id"
+        )
+        if not any(
+            item.library_id == current_library_id for item in relationships
+        ):
+            raise RuntimeError("Current actor current library context is invalid.")
         return CurrentActor(
             state=ActorState.ACTIVE,
             account_id=account_id,
@@ -129,9 +146,8 @@ class PostgresCurrentActorResolver:
             display_name=_required_text(payload.get("display_name"), "display name"),
             authenticated_at=session.authenticated_at,
             is_bootstrap_owner=payload.get("is_bootstrap_owner") is True,
-            library_relationships=_library_relationships(
-                payload.get("library_relationships")
-            ),
+            current_library_id=current_library_id,
+            library_relationships=relationships,
             capability_grants=_capability_grants(payload.get("capability_grants")),
         )
 

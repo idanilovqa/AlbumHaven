@@ -80,6 +80,7 @@ def _row(**overrides):
         "is_active": True,
         "disabled_at": None,
         "is_bootstrap_owner": True,
+        "current_library_id": 73,
         "library_relationships": [
             {
                 "library_id": 73,
@@ -154,6 +155,7 @@ def test_active_actor_loads_bootstrap_memberships_and_grants_in_one_snapshot(act
     assert actor.session_id == 8
     assert actor.username_display == "Rendref"
     assert actor.is_bootstrap_owner is True
+    assert actor.current_library_id == 73
     assert actor.library_relationships == (
         actors.LibraryRelationship(73, "owner", True),
     )
@@ -166,6 +168,7 @@ def test_active_actor_loads_bootstrap_memberships_and_grants_in_one_snapshot(act
     assert "from app.accounts" in sql
     assert "from app.bootstrap_owners" in sql
     assert "from library.library_memberships" in sql
+    assert "local-bootstrap-owner" in sql
     assert "from app.capabilities" in sql
     assert "revoked_at is null" in sql
     assert params == (41,)
@@ -188,6 +191,19 @@ def test_account_disabled_after_session_resolution_returns_inactive_without_auth
     assert actor.session_id == 8
     assert actor.library_relationships == ()
     assert actor.capability_grants == ()
+    assert actor.current_library_id is None
+
+
+def test_actor_without_current_library_membership_fails_closed(actors):
+    row = _row(
+        current_library_id=99,
+        library_relationships=[
+            {"library_id": 73, "membership_role": "member", "is_primary_owner": False}
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="current library"):
+        _resolver(actors, Sessions(_resolved()), Connection((row,))).resolve(RAW_SESSION)
 
 
 @pytest.mark.parametrize("rows", [(), (_row(), _row())])

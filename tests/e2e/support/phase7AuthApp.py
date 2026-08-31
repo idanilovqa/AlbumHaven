@@ -184,6 +184,7 @@ def _configure_environment(
     *,
     app_port: int,
     smtp_port: int,
+    control_port: int,
 ) -> None:
     configure_isolated_environment(temp_root, runtime_database_url, smtp_port)
     os.environ.update(
@@ -202,7 +203,7 @@ def _configure_environment(
             "ALBUM_HAVEN_SMTP_FROM_ADDRESS": "album-haven@example.test",
             "ALBUM_HAVEN_SMTP_FROM_NAME": "Album Haven E2E",
             "ALBUM_HAVEN_HIBP_RANGE_URL_TEMPLATE": (
-                f"http://127.0.0.1:{smtp_port + 1}/range/{{}}"
+                f"http://127.0.0.1:{control_port}/range/{{}}"
             ),
         }
     )
@@ -347,6 +348,7 @@ def main() -> None:
             runtime_database_url,
             app_port=args.port,
             smtp_port=args.smtp_port,
+            control_port=args.control_port,
         )
         (temp_root / "media").mkdir(parents=True, exist_ok=True)
         prepare_isolated_database(setup_database_url, runtime_database_url)

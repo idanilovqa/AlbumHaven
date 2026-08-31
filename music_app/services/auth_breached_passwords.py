@@ -112,6 +112,11 @@ def _validate_range_url_template(value: object) -> str:
         "localhost",
     }:
         raise ValueError("Breached-password range URL must use HTTPS outside loopback.")
+    is_loopback = parsed.hostname.casefold() in {"127.0.0.1", "::1", "localhost"}
+    if not is_loopback and template != _RANGE_URL:
+        raise ValueError(
+            "Breached-password range URL must use the official service or loopback."
+        )
     if port is not None and not 1 <= port <= 65_535:
         raise ValueError("Breached-password range URL template is invalid.")
     return template

@@ -84,4 +84,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0047_add_auth_preauth_tokens.sql` adds short-lived, purpose-bound login preflight state for one-time CSRF enforcement. Only SHA-256 token hashes are stored; consumed and expired rows are queryable for bounded cleanup, and the runtime role receives only the privileges needed to issue, consume, and clean up this state.
 
+`0048_add_password_reset_transactions.sql` adds short-lived, hashed clean-URL reset transactions so raw emailed reset tokens leave the browser address bar before a password is submitted.
+
+`0049_enforce_single_use_password_reset_exchange.sql` makes each emailed password-reset token exchangeable only once. It retains the earliest transaction if a pre-release database contains duplicate exchanges, then enforces the invariant with a unique index.
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

@@ -8,11 +8,12 @@ import hmac
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 from starlette.routing import Match
 
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
-from music_app.services.auth_session_csrf import matches_session_csrf
+from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
 
 
 _PUBLIC_AUTH_PATHS = frozenset({"/login", "/forgot-password", "/reset-password"})
@@ -173,7 +174,31 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 {"detail": "CSRF validation failed."},
                 status_code=403,
             )
-        return await call_next(request)
+        response = await call_next(request)
+        if request.method.upper() in _READ_METHODS:
+            _refresh_session_csrf_cookie(request, response)
+        return response
+
+
+def _refresh_session_csrf_cookie(request: Request, response: Response) -> None:
+    raw_session = request.cookies.get(_SESSION_COOKIE)
+    try:
+        current = issue_session_csrf(
+            raw_session,
+            getattr(request.app.state, "auth_policy_config", {}),
+        )
+    except (TypeError, ValueError):
+        return
+    if request.cookies.get(_SESSION_CSRF_COOKIE) == current:
+        return
+    response.set_cookie(
+        _SESSION_CSRF_COOKIE,
+        current,
+        httponly=False,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
 
 
 def _redact_reset_link_query(request: Request) -> None:

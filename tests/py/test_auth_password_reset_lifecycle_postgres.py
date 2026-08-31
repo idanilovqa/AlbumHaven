@@ -31,8 +31,9 @@ class Transaction:
 
 
 class Connection:
-    def __init__(self, *, valid=True):
+    def __init__(self, *, valid=True, exchange_inserted=True):
         self.valid = valid
+        self.exchange_inserted = exchange_inserted
         self.events = []
         self.operations = []
 
@@ -64,7 +65,7 @@ class Connection:
             "transaction_consumed_at": None,
         }
         if "insert into app.password_reset_transactions" in statement:
-            return Cursor(({"id": 61},))
+            return Cursor(({"id": 61},) if self.exchange_inserted else ())
         if "from app.password_reset_transactions" in statement and "for update" in statement:
             return Cursor(({
                 "id": 61,
@@ -129,7 +130,7 @@ def _service(connection, audit):
     )
 
 
-def test_exchange_validates_without_consuming_and_returns_redacted_clean_url_state():
+def test_exchange_is_single_use_and_returns_redacted_clean_url_state():
     connection = Connection()
     issued = _service(connection, Audit()).exchange_reset_token(
         RESET_RAW, request_ref="exchange-1"
@@ -140,9 +141,24 @@ def test_exchange_validates_without_consuming_and_returns_redacted_clean_url_sta
     assert issued.expires_at == NOW + timedelta(minutes=15)
     assert LIFECYCLE_RAW not in repr(issued)
     statements = [sql for sql, _ in connection.operations]
-    assert any("insert into app.password_reset_transactions" in sql for sql in statements)
+    assert any(
+        "insert into app.password_reset_transactions" in sql
+        and "on conflict (reset_token_id) do nothing" in sql
+        for sql in statements
+    )
+    assert any("for update of reset_token, account, credential" in sql for sql in statements)
     assert not any("set consumed_at" in sql for sql in statements)
     assert RESET_RAW not in repr(connection.operations)
+
+
+def test_replayed_reset_link_is_one_safe_invalid_result():
+    connection = Connection(exchange_inserted=False)
+
+    issued = _service(connection, Audit()).exchange_reset_token(
+        RESET_RAW, request_ref="exchange-replay"
+    )
+
+    assert issued is None
 
 
 def test_completion_replaces_credential_increments_version_and_revokes_all_state():

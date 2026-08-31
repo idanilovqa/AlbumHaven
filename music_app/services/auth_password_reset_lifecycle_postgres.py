@@ -148,7 +148,7 @@ class PostgresPasswordResetLifecycleService:
                       and reset_token.expires_at > %s
                       and account.is_active is true
                       and account.disabled_at is null
-                    for share of reset_token, account, credential
+                    for update of reset_token, account, credential
                     """,
                     (digest, now),
                 ).fetchall()
@@ -163,10 +163,13 @@ class PostgresPasswordResetLifecycleService:
                     insert into app.password_reset_transactions (
                       reset_token_id, transaction_hash, created_at, expires_at
                     ) values (%s, %s, %s, %s)
+                    on conflict (reset_token_id) do nothing
                     returning id
                     """,
                     (reset_token_id, issued.digest, now, expires_at),
                 ).fetchall()
+                if not inserted:
+                    return None
                 transaction_id = _single_id(inserted, "transaction id")
             return IssuedResetTransaction(
                 raw_token=issued.raw,

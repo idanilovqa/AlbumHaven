@@ -1,24 +1,13 @@
-import { expect, test as base } from '@playwright/test';
+import { expect } from '@playwright/test';
 
 const controlURL = String(process.env.PHASE7_AUTH_CONTROL_URL || '').replace(/\/$/, '');
 
-async function control(path) {
+export async function control(path) {
   const response = await fetch(`${controlURL}${path}`, { method: 'POST' });
   if (!response.ok) {
     throw new Error(`Phase 7 E2E control ${path} failed: ${await response.text()}`);
   }
 }
-
-export const test = base.extend({
-  resetPhase7State: [
-    async ({}, use) => {
-      await control('/reset');
-      await use();
-      await control('/smtp/release');
-    },
-    { auto: true },
-  ],
-});
 
 export async function messages() {
   const response = await fetch(`${controlURL}/messages`);

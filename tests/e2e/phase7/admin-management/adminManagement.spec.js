@@ -7,7 +7,7 @@ import {
   releaseMail,
   test,
   waitForMessage,
-} from '../support/fixtures.js';
+} from '../support/baseFixtures.js';
 
 const LISTENER = Object.freeze({
   username: 'listener.plus',
@@ -39,12 +39,12 @@ async function createListener(page, { holdDelivery = false } = {}) {
   return { completion: creation };
 }
 
-test('FTC-PERMISSIONS-005 creates an active plus-addressed user before password-free welcome delivery', async ({ browser, page }) => {
+test('FTC-PERMISSIONS-005 creates an active plus-addressed user before password-free welcome delivery', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const { completion } = await createListener(page, { holdDelivery: true });
 
-  const listenerContext = await browser.newContext();
-  const listenerPage = await listenerContext.newPage();
+  const listenerSession = await freshBrowserSession.create();
+  const listenerPage = listenerSession.page;
   await signIn(listenerPage, {
     username: LISTENER.username,
     password: LISTENER.password,
@@ -59,10 +59,9 @@ test('FTC-PERMISSIONS-005 creates an active plus-addressed user before password-
   expect(message.body).toContain('/login');
   expect(message.body).not.toContain(LISTENER.password);
   expect(message.body).not.toMatch(/activat(e|ion)/i);
-  await listenerContext.close();
 });
 
-test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority', async ({ browser, page }) => {
+test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const { completion } = await createListener(page);
   await completion;
@@ -73,8 +72,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   await page.goto('/admin/accounts/new');
   await expect(page.getByText('system.admin')).toHaveCount(0);
 
-  const listenerContext = await browser.newContext();
-  const listenerPage = await listenerContext.newPage();
+  const listenerSession = await freshBrowserSession.create();
+  const listenerPage = listenerSession.page;
   await signIn(listenerPage, {
     username: LISTENER.username,
     password: LISTENER.password,
@@ -82,7 +81,6 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   const denied = await listenerPage.goto('/admin/members');
   expect(denied.status()).toBe(403);
   await expect(listenerPage.getByText('Action not permitted.')).toBeVisible();
-  await listenerContext.close();
 
   await page.goto(`/admin/accounts/${ownerId}`);
   const members = new MembersPage(page);

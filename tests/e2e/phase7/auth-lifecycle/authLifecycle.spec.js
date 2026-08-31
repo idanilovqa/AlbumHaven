@@ -7,7 +7,7 @@ import {
   messages,
   test,
   waitForMessage,
-} from '../support/fixtures.js';
+} from '../support/baseFixtures.js';
 
 async function loginResponse(page, username, password) {
   const login = new LoginPage(page);
@@ -35,7 +35,7 @@ test('FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free s
   expect(after.owner.library_id).toBe(before.owner.library_id);
 });
 
-test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async ({ browser, page }) => {
+test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async ({ page, freshBrowserSession }) => {
   const unknown = await loginResponse(page, 'unknown.user', 'Wrong private passphrase 2026!');
   const wrong = await loginResponse(page, OWNER.username, 'Wrong private passphrase 2026!');
   await databaseAction('disable-owner');
@@ -57,12 +57,12 @@ test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async (
   );
   expect(accountThrottle).toMatchObject({ failure_count: 5, blocked: true });
 
-  const secondWorker = await browser.newContext({
-    baseURL: process.env.PHASE7_AUTH_WORKER_URL,
-  });
-  const secondWorkerPage = await secondWorker.newPage();
+  const secondWorker = await freshBrowserSession.create();
+  const secondWorkerPage = secondWorker.page;
   const secondWorkerLogin = new LoginPage(secondWorkerPage);
-  await secondWorkerLogin.open('/account');
+  await secondWorkerPage.goto(
+    `${process.env.PHASE7_AUTH_WORKER_URL}/login?return_to=%2Faccount`,
+  );
   const secondWorkerResponse = secondWorkerPage.waitForResponse(
     (response) => response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/login',
@@ -72,16 +72,17 @@ test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async (
   await expect(secondWorkerPage.getByRole('alert')).toHaveText(
     'Sign-in failed. Check your credentials and try again.',
   );
-  await secondWorker.close();
 });
 
-test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ browser, page }) => {
-  const first = await browser.newContext();
-  const second = await browser.newContext();
-  const firstPage = await first.newPage();
-  const secondPage = await second.newPage();
-  await signIn(firstPage);
-  await signIn(secondPage);
+test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ page, freshBrowserSession }) => {
+  await signIn(page);
+  const firstSession = (await page.context().cookies()).find(
+    (cookie) => cookie.name === '__Host-album_haven_session',
+  );
+  await signIn(page);
+  const secondSession = (await page.context().cookies()).find(
+    (cookie) => cookie.name === '__Host-album_haven_session',
+  );
   expect((await databaseState()).owner.active_sessions).toBe(2);
 
   const recovery = new RecoveryPage(page);
@@ -100,13 +101,20 @@ test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes p
   await page.goto(resetPath);
   await expect(page).toHaveURL(/\/reset-password$/);
   expect(page.url()).not.toContain('token=');
+  const linkReplay = await page.request.get(resetPath, { maxRedirects: 0 });
+  expect(linkReplay.status()).toBe(303);
+  expect(linkReplay.headers().location).toBe('/reset-password?invalid=1');
   const newPassword = 'Phase Seven Replacement Passphrase 2026!';
   await recovery.complete(newPassword);
 
-  await firstPage.goto('/account');
-  await secondPage.goto('/account');
-  await expect(firstPage.getByText('Authentication required.')).toBeVisible();
-  await expect(secondPage.getByText('Authentication required.')).toBeVisible();
+  const revokedSession = await freshBrowserSession.create();
+  for (const cookie of [firstSession, secondSession]) {
+    await revokedSession.context.clearCookies();
+    await revokedSession.context.addCookies([cookie]);
+    const revoked = await revokedSession.page.goto('/account');
+    expect(revoked.status()).toBe(401);
+    await expect(revokedSession.page.getByText('Authentication required.')).toBeVisible();
+  }
   expect((await loginResponse(page, OWNER.username, OWNER.password)).status()).toBe(401);
   expect((await loginResponse(page, OWNER.username, newPassword)).status()).toBe(303);
 
@@ -114,8 +122,6 @@ test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes p
   expect(replay.status()).toBe(400);
   await expect(page).toHaveURL(/\/reset-password\?invalid=1$/);
   expect(page.url()).not.toContain('token=');
-  await first.close();
-  await second.close();
 });
 
 test('FTC-PERMISSIONS-007 rejects expired sessions across HTML, API, and media without leaks', async ({ page }) => {
@@ -133,7 +139,7 @@ test('FTC-PERMISSIONS-007 rejects expired sessions across HTML, API, and media w
   expect(await media.text()).not.toContain(privatePath);
 });
 
-test('FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse', async ({ browser, page, context }) => {
+test('FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse', async ({ page, context, freshBrowserSession }) => {
   await signIn(page);
   const cookies = await context.cookies();
   const session = cookies.find((cookie) => cookie.name === '__Host-album_haven_session');
@@ -169,8 +175,8 @@ test('FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse', 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login$/);
 
-  const replayContext = await browser.newContext();
-  await replayContext.addCookies([{
+  const replaySession = await freshBrowserSession.create();
+  await replaySession.context.addCookies([{
     name: session.name,
     value: session.value,
     domain: session.domain,
@@ -179,8 +185,6 @@ test('FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse', 
     secure: true,
     sameSite: 'Lax',
   }]);
-  const replayPage = await replayContext.newPage();
-  const replay = await replayPage.goto('/account');
+  const replay = await replaySession.page.goto('/account');
   expect(replay.status()).toBe(401);
-  await replayContext.close();
 });

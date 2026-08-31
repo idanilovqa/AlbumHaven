@@ -139,7 +139,7 @@ def _app(actor):
     return app, resolver
 
 
-async def _request_async(app, path, *, method="GET", cookie=None, query="", headers=None):
+async def _request_async(app, path, *, method="GET", cookie=None, query="", headers=None, include_headers=False):
     request_headers = [(b"host", b"music.test")]
     if cookie:
         request_headers.append((b"cookie", cookie.encode("ascii")))
@@ -177,7 +177,8 @@ async def _request_async(app, path, *, method="GET", cookie=None, query="", head
     )
     start = next(item for item in messages if item["type"] == "http.response.start")
     body = b"".join(item.get("body", b"") for item in messages if item["type"] == "http.response.body")
-    return start["status"], body
+    result = (start["status"], body)
+    return (*result, start["headers"]) if include_headers else result
 
 
 def _request(*args, **kwargs):
@@ -333,3 +334,41 @@ def test_private_write_requires_same_origin_session_bound_double_submit_csrf():
     assert missing_status == 403
     assert valid_status == 200
     assert valid_body == b'{"changed":true}'
+
+
+def test_authenticated_get_refreshes_stale_session_csrf_cookie_after_key_rotation():
+    from music_app.services.auth_session_csrf import issue_session_csrf
+
+    actor = CurrentActor(
+        state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Rendref",
+        is_bootstrap_owner=True,
+    )
+    app, _ = _app(actor)
+    session = "s" * 43
+    stale = issue_session_csrf(
+        session,
+        {"hmac": {"secret": "old-secret-0123456789abcdef0123456789", "key_version": 6}},
+    )
+    expected = issue_session_csrf(session, app.state.auth_policy_config)
+
+    status, _, headers = _request(
+        app,
+        "/status",
+        cookie=(
+            f"__Host-album_haven_session={session}; "
+            f"__Host-album_haven_csrf={stale}"
+        ),
+        include_headers=True,
+    )
+
+    cookies = [
+        value.decode("latin-1")
+        for key, value in headers
+        if key.lower() == b"set-cookie"
+    ]
+    assert status == 200
+    assert any(cookie.startswith(f"__Host-album_haven_csrf={expected}") for cookie in cookies)
+    assert all(stale not in cookie for cookie in cookies)

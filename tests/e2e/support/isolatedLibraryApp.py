@@ -2439,7 +2439,11 @@ def materialize_fixture_track_files(
             is_cover_candidate_scan_fixture_track = (
                 str(metadata.get("album_artist") or "").strip() == "Mastodon"
                 and str(metadata.get("album") or "").strip()
-                in {"Crack The Skye Fixture 08", "Crack The Skye Fixture 09"}
+                in {
+                    "Crack The Skye",
+                    "Crack The Skye Fixture 08",
+                    "Crack The Skye Fixture 09",
+                }
             )
             is_problematic_encoding_fixture_track = (
                 str(metadata.get("album_artist") or "").strip()

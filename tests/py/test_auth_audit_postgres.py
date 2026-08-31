@@ -24,7 +24,7 @@ def audit():
         pytest.skip("contract presence is covered by the dedicated RED test")
     module = import_module(MODULE)
     assert callable(module.PostgresSecurityAuditRepository)
-    assert set(module.SecurityAuditCategory.__members__) == {"LOGIN"}
+    assert set(module.SecurityAuditCategory.__members__) == {"LOGIN", "PASSWORD_RECOVERY"}
     assert set(module.SecurityAuditOutcome.__members__) == {
         "SUCCESS", "INVALID", "THROTTLED"
     }
@@ -33,7 +33,17 @@ def audit():
         "CANDIDATE_INVALID", "BUCKET_BLOCKED", "VERIFICATION_CAPACITY",
         "CREDENTIAL_RACE",
     }
+    assert set(module.RecoveryAuditReason.__members__) == {
+        "RESET_ISSUED", "ACCOUNT_INELIGIBLE", "BUCKET_BLOCKED",
+    }
     return module
+
+
+def test_password_recovery_audit_values_are_stable(audit):
+    assert audit.SecurityAuditCategory.PASSWORD_RECOVERY.value == "password_recovery"
+    assert audit.RecoveryAuditReason.RESET_ISSUED.value == "reset_issued"
+    assert audit.RecoveryAuditReason.ACCOUNT_INELIGIBLE.value == "account_ineligible"
+    assert audit.RecoveryAuditReason.BUCKET_BLOCKED.value == "bucket_blocked"
 
 
 class Cursor:

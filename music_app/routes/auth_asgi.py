@@ -6,17 +6,21 @@ import hmac
 import ipaddress
 import threading
 from collections.abc import Mapping
+from inspect import isawaitable
 from pathlib import Path
 from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import uuid4
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAuthService
+from music_app.services.auth_password_reset_request_postgres import (
+    PostgresPasswordResetRequestService,
+)
 from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
 from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
 from music_app.services.auth_sessions_postgres import SessionRevocationReason
@@ -30,6 +34,7 @@ from music_app.services.auth_tokens import hash_opaque_token
 router = APIRouter()
 
 _PREAUTH_COOKIE = "__Host-album_haven_login_csrf"
+_FORGOT_PREAUTH_COOKIE = "__Host-album_haven_forgot_csrf"
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -64,6 +69,26 @@ def _render_login(
             "return_to": return_to,
         },
     )
+
+
+def _render_recovery(
+    request: Request,
+    *,
+    token: str | None,
+    sent: bool,
+) -> Response:
+    templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    response = templates.TemplateResponse(
+        request,
+        "password-recovery.html",
+        {
+            "request": request,
+            "csrf_token": token,
+            "sent": sent,
+        },
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 
 def _cookie_secure(request: Request, config: Mapping[str, object]) -> bool | None:
@@ -120,12 +145,32 @@ def _services(request: Request):
         if login is None:
             sessions = PostgresAuthSessionService(config)
             request.app.state.auth_session_service = sessions
-            audit = PostgresSecurityAuditRepository(config)
+            audit = PostgresSecurityAuditRepository()
             login = PostgresLoginAuthService(
                 config, session_service=sessions, audit_repository=audit
             )
             request.app.state.auth_login_service = login
     return preauth, login
+
+
+def _reset_request_service(request: Request):
+    existing = getattr(request.app.state, "password_reset_request_service", None)
+    if existing is not None:
+        return existing
+    config = _policy_config(request)
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "password_reset_request_service", None)
+        if existing is None:
+            existing = PostgresPasswordResetRequestService(
+                config,
+                audit_repository=PostgresSecurityAuditRepository(),
+            )
+            request.app.state.password_reset_request_service = existing
+    return existing
 
 
 async def _login_page(
@@ -256,6 +301,132 @@ async def post_login(request: Request) -> Response:
         samesite="lax",
     )
     return _no_store(response)
+
+
+@router.get("/forgot-password", response_class=HTMLResponse)
+async def get_forgot_password(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+        secure = _cookie_secure(request, config)
+        if secure is None:
+            return _generic_bad_request()
+        preauth, _ = _services(request)
+        issued = await run_in_threadpool(preauth.issue_forgot_token)
+        response = _render_recovery(
+            request,
+            token=issued.raw_token,
+            sent=False,
+        )
+    except Exception:
+        return _generic_recovery_unavailable()
+    response.set_cookie(
+        _FORGOT_PREAUTH_COOKIE,
+        issued.raw_token,
+        max_age=600,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path="/",
+    )
+    return _no_store(response)
+
+
+@router.post("/forgot-password", response_class=HTMLResponse)
+async def post_forgot_password(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    try:
+        config = _policy_config(request)
+    except Exception:
+        return _generic_recovery_unavailable()
+    secure = _cookie_secure(request, config)
+    if secure is None or not _same_origin(request, config):
+        return _generic_recovery_bad_request()
+    payload = await _form_payload(
+        request,
+        allowed=frozenset({"candidate", "csrf_token"}),
+        required=frozenset({"candidate", "csrf_token"}),
+    )
+    if payload is None or not _tokens_match(
+        request.cookies.get(_FORGOT_PREAUTH_COOKIE), payload.get("csrf_token")
+    ):
+        return _generic_recovery_bad_request()
+    try:
+        preauth, _ = _services(request)
+        consumed = await run_in_threadpool(
+            preauth.consume_forgot_token,
+            payload["csrf_token"],
+        )
+    except Exception:
+        return _generic_recovery_unavailable()
+    if consumed is not True:
+        return _generic_recovery_bad_request()
+
+    source_key, source_class = _request_source(request, config)
+    try:
+        service = _reset_request_service(request)
+        result = await run_in_threadpool(
+            service.request_reset,
+            candidate=payload["candidate"],
+            source_key=source_key,
+            request_ref=uuid4().hex,
+            source_class=source_class,
+        )
+    except Exception:
+        result = None
+
+    delivery = getattr(result, "delivery", None)
+    if delivery is not None:
+        background_tasks.add_task(_deliver_password_reset, request.app, delivery)
+    response = _render_recovery(request, token=None, sent=True)
+    response.background = background_tasks
+    response.delete_cookie(
+        _FORGOT_PREAUTH_COOKIE,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+    return _no_store(response)
+
+
+def _generic_recovery_bad_request() -> HTMLResponse:
+    response = HTMLResponse("Password recovery request was invalid.", status_code=400)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
+
+
+def _generic_recovery_unavailable() -> HTMLResponse:
+    response = HTMLResponse("Password recovery is temporarily unavailable.", status_code=503)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
+
+
+async def _deliver_password_reset(app, delivery) -> None:
+    try:
+        callback = getattr(app.state, "password_reset_delivery", None)
+        if callable(callback):
+            result = callback(delivery)
+            if isawaitable(result):
+                await result
+            return
+        from config import build_mail_config
+        from music_app.services.auth_mail_outbox_postgres import deliver_password_reset
+
+        mail_config = build_mail_config()
+        if mail_config.get("password_reset_enabled") is not True:
+            return
+        await deliver_password_reset(
+            delivery,
+            config=mail_config,
+            database_url=app.state.auth_policy_config[
+                "ALBUM_HAVEN_APP_DATABASE_URL"
+            ],
+        )
+    except Exception:
+        # Public response and token issuance remain independent of SMTP outcome.
+        return
 
 
 def _session_service(request: Request):

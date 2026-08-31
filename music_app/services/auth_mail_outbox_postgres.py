@@ -9,9 +9,11 @@ from typing import Any, Awaitable
 
 from music_app.services.auth_mail import (
     DeliveryResult,
+    compose_password_reset_email,
     compose_welcome_email,
     send_auth_email,
 )
+from music_app.services.auth_tokens import hash_opaque_token
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -43,6 +45,24 @@ class AmbiguousWelcomeClaim:
     """A stale send whose provider acceptance cannot be determined safely."""
 
     outbox_id: int
+
+
+@dataclass(frozen=True, repr=False, slots=True)
+class PasswordResetClaim:
+    outbox_id: int
+    account_id: int
+    username: str
+    recipient: str
+    attempt_count: int
+    claimed_at: datetime
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
+            f"account_id={self.account_id!r}, username=<redacted>, "
+            f"recipient=<redacted>, attempt_count={self.attempt_count!r}, "
+            f"claimed_at={self.claimed_at!r})"
+        )
 
 
 class PostgresWelcomeOutboxService:
@@ -197,6 +217,131 @@ class PostgresWelcomeOutboxService:
                 )
 
 
+class PostgresPasswordResetOutboxService:
+    """Deliver only the reset row matching the in-memory raw token."""
+
+    def __init__(
+        self,
+        config: Mapping[str, object],
+        *,
+        connect: Callable[[str], Any] | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
+        if not self._database_url:
+            raise RuntimeError(
+                "ALBUM_HAVEN_APP_DATABASE_URL is required for reset delivery."
+            )
+        self._connect = connect or _connect
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def claim_password_reset(self, delivery: object) -> PasswordResetClaim | None:
+        outbox_id = _positive_integer(getattr(delivery, "outbox_id", None), "outbox id")
+        account_id = _positive_integer(getattr(delivery, "account_id", None), "account id")
+        recipient = _required_text(getattr(delivery, "recipient", None), "recipient")
+        try:
+            digest = hash_opaque_token(getattr(delivery, "raw_token", None))
+        except (TypeError, ValueError):
+            raise ValueError("Password reset delivery token is invalid.") from None
+        now = _aware_utc(self._now())
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                rows = connection.execute(
+                    """
+                    select app.mail_outbox.id, app.mail_outbox.account_id,
+                           app.accounts.username_display,
+                           app.accounts.contact_email,
+                           app.mail_outbox.attempt_count
+                    from app.mail_outbox
+                    join app.password_reset_tokens
+                      on app.password_reset_tokens.id = app.mail_outbox.reset_token_id
+                    join app.accounts
+                      on app.accounts.id = app.mail_outbox.account_id
+                    join app.account_credentials
+                      on app.account_credentials.account_id = app.accounts.id
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.account_id = %s
+                      and app.mail_outbox.message_category = 'password_reset'
+                      and app.mail_outbox.delivery_status = 'pending'
+                      and app.mail_outbox.attempt_count = 0
+                      and app.password_reset_tokens.token_hash = %s
+                      and app.password_reset_tokens.purpose = 'password_reset'
+                      and app.password_reset_tokens.credential_version =
+                          app.account_credentials.credential_version
+                      and app.password_reset_tokens.consumed_at is null
+                      and app.password_reset_tokens.revoked_at is null
+                      and app.password_reset_tokens.expires_at > %s
+                      and app.accounts.is_active is true
+                      and app.accounts.disabled_at is null
+                      and app.accounts.contact_email = %s
+                    for update of app.mail_outbox skip locked
+                    """,
+                    (outbox_id, account_id, digest, now, recipient),
+                ).fetchall()
+                if not rows:
+                    return None
+                if len(rows) != 1:
+                    raise RuntimeError("Password reset outbox claim context is invalid.")
+                payload = _row_mapping(
+                    rows[0],
+                    ("id", "account_id", "username_display", "contact_email", "attempt_count"),
+                )
+                claimed_at = now
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'sending', attempt_count = 1,
+                        claimed_at = %s, next_attempt_at = null
+                    where id = %s and delivery_status = 'pending' and attempt_count = 0
+                    """,
+                    (claimed_at, outbox_id),
+                )
+        return PasswordResetClaim(
+            outbox_id=outbox_id,
+            account_id=account_id,
+            username=_required_text(payload.get("username_display"), "username"),
+            recipient=recipient,
+            attempt_count=1,
+            claimed_at=claimed_at,
+        )
+
+    def finalize_password_reset(
+        self, claim: PasswordResetClaim, result: DeliveryResult
+    ) -> None:
+        if not isinstance(claim, PasswordResetClaim):
+            raise ValueError("Password reset claim is invalid.")
+        now = _aware_utc(self._now())
+        delivered = bool(getattr(result, "delivered", False)) and str(
+            getattr(result, "reason", "")
+        ) == "delivered"
+        reason = str(getattr(result, "reason", "failed"))
+        status = "sent" if delivered else ("unknown" if reason == "unknown" else "failed")
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                rows = connection.execute(
+                    """
+                    select id from app.mail_outbox
+                    where id = %s and message_category = 'password_reset'
+                      and delivery_status = 'sending' and attempt_count = 1
+                      and claimed_at = %s
+                    for update
+                    """,
+                    (claim.outbox_id, claim.claimed_at),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise RuntimeError("Password reset outbox finalization context is invalid.")
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = %s, sent_at = %s,
+                        next_attempt_at = null, provider_reference = null
+                    where id = %s and delivery_status = 'sending'
+                      and attempt_count = 1 and claimed_at = %s
+                    """,
+                    (status, now if delivered else None, claim.outbox_id, claim.claimed_at),
+                )
+
+
 async def deliver_welcome(
     outbox_id: int,
     *,
@@ -224,6 +369,40 @@ async def deliver_welcome(
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
     repository.finalize_welcome(claim, result)
+    return result
+
+
+async def deliver_password_reset(
+    delivery: object,
+    *,
+    config: Mapping[str, Any],
+    repository: PostgresPasswordResetOutboxService | Any | None = None,
+    database_url: str | None = None,
+    composer: Callable[..., Any] = compose_password_reset_email,
+    sender: Callable[..., Awaitable[DeliveryResult]] = send_auth_email,
+) -> DeliveryResult:
+    """Attempt the one committed reset without persisting its raw token."""
+
+    if repository is None:
+        repository = PostgresPasswordResetOutboxService(
+            {_DATABASE_URL_KEY: str(database_url or "").strip()}
+        )
+    claim = repository.claim_password_reset(delivery)
+    if claim is None:
+        return DeliveryResult(delivered=False, reason="not_eligible")
+    try:
+        message = composer(
+            username=claim.username,
+            recipient=claim.recipient,
+            token=getattr(delivery, "raw_token"),
+            config=config,
+        )
+        result = await sender(message, config=config)
+        if not isinstance(result, DeliveryResult):
+            result = DeliveryResult(delivered=False, reason="failed")
+    except Exception:
+        result = DeliveryResult(delivered=False, reason="failed")
+    repository.finalize_password_reset(claim, result)
     return result
 
 

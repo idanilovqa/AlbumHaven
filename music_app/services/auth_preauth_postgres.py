@@ -23,7 +23,8 @@ except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
 
 
 _DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
-_PURPOSE = "login"
+_LOGIN_PURPOSE = "login"
+_FORGOT_PURPOSE = "forgot_password"
 _MAXIMUM_TTL_SECONDS = 600
 _CLEANUP_BATCH_SIZE = 100
 
@@ -64,6 +65,12 @@ class PostgresPreAuthCsrfService:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def issue_login_token(self) -> IssuedPreAuthToken:
+        return self._issue_token(_LOGIN_PURPOSE)
+
+    def issue_forgot_token(self) -> IssuedPreAuthToken:
+        return self._issue_token(_FORGOT_PURPOSE)
+
+    def _issue_token(self, purpose: str) -> IssuedPreAuthToken:
         now = _aware_now(self._clock)
         issued = _issued_token(self._token_issuer)
         expires_at = now + timedelta(seconds=self._ttl_seconds)
@@ -89,7 +96,7 @@ class PostgresPreAuthCsrfService:
                 ) values (%s, %s, %s, %s)
                 returning id
                 """,
-                (issued.digest, _PURPOSE, now, expires_at),
+                (issued.digest, purpose, now, expires_at),
             )
             token_id = _single_returned_id(rows)
         return IssuedPreAuthToken(
@@ -99,6 +106,12 @@ class PostgresPreAuthCsrfService:
         )
 
     def consume_login_token(self, raw_token: object) -> bool:
+        return self._consume_token(raw_token, _LOGIN_PURPOSE)
+
+    def consume_forgot_token(self, raw_token: object) -> bool:
+        return self._consume_token(raw_token, _FORGOT_PURPOSE)
+
+    def _consume_token(self, raw_token: object, purpose: str) -> bool:
         try:
             digest = hash_opaque_token(raw_token)  # type: ignore[arg-type]
         except (TypeError, ValueError):
@@ -114,7 +127,7 @@ class PostgresPreAuthCsrfService:
                   and consumed_at is null and expires_at > %s
                 returning id
                 """,
-                (now, _PURPOSE, digest, now),
+                (now, purpose, digest, now),
             )
             if not rows:
                 return False

@@ -131,6 +131,25 @@ def test_issue_persists_digest_only_and_returns_redacted_token(preauth):
     assert "login" in params
 
 
+def test_forgot_token_is_separately_purpose_bound(preauth):
+    connection = RecordingConnection()
+    service = _service(preauth, connection)
+
+    issued = service.issue_forgot_token()
+    assert issued.raw_token == RAW_TOKEN
+    insert_params = next(
+        params
+        for sql, params in connection.operations
+        if sql.startswith("insert into app.auth_preflight_tokens")
+    )
+    assert "forgot_password" in insert_params
+
+    connection = RecordingConnection()
+    assert _service(preauth, connection).consume_forgot_token(RAW_TOKEN) is True
+    consume_params = connection.operations[0][1]
+    assert "forgot_password" in consume_params
+
+
 def test_issue_normalizes_aware_clock_to_utc(preauth):
     offset = NOW.astimezone(timezone(timedelta(hours=3)))
     connection = RecordingConnection()

@@ -16,6 +16,7 @@ except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
 
 class SecurityAuditCategory(str, Enum):
     LOGIN = "login"
+    PASSWORD_RECOVERY = "password_recovery"
 
 
 class SecurityAuditOutcome(str, Enum):
@@ -34,6 +35,12 @@ class LoginAuditReason(str, Enum):
     CREDENTIAL_RACE = "credential_race"
 
 
+class RecoveryAuditReason(str, Enum):
+    RESET_ISSUED = "reset_issued"
+    ACCOUNT_INELIGIBLE = "account_ineligible"
+    BUCKET_BLOCKED = "bucket_blocked"
+
+
 _LOGIN_REASON_MATRIX = {
     SecurityAuditOutcome.SUCCESS: frozenset({LoginAuditReason.VERIFIED}),
     SecurityAuditOutcome.INVALID: frozenset(
@@ -50,6 +57,11 @@ _LOGIN_REASON_MATRIX = {
             LoginAuditReason.VERIFICATION_CAPACITY,
         }
     ),
+}
+_RECOVERY_REASON_MATRIX = {
+    SecurityAuditOutcome.SUCCESS: frozenset({RecoveryAuditReason.RESET_ISSUED}),
+    SecurityAuditOutcome.INVALID: frozenset({RecoveryAuditReason.ACCOUNT_INELIGIBLE}),
+    SecurityAuditOutcome.THROTTLED: frozenset({RecoveryAuditReason.BUCKET_BLOCKED}),
 }
 _SOURCE_CLASSES = frozenset({"loopback", "private", "public", "trusted_proxy"})
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
@@ -73,7 +85,7 @@ class PostgresSecurityAuditRepository:
         *,
         category: SecurityAuditCategory,
         outcome: SecurityAuditOutcome,
-        reason: LoginAuditReason,
+        reason: LoginAuditReason | RecoveryAuditReason,
         actor_account_id: int | None,
         target_account_id: int | None,
         request_ref: str | None,
@@ -82,7 +94,7 @@ class PostgresSecurityAuditRepository:
     ) -> int:
         category = _category(category)
         outcome = _outcome(outcome)
-        reason = _login_reason(reason, outcome)
+        reason = _reason(category, reason, outcome)
         actor_account_id = _nullable_id(actor_account_id)
         target_account_id = _nullable_id(target_account_id)
         request_ref = _request_reference(request_ref)
@@ -132,12 +144,20 @@ def _outcome(value: object) -> SecurityAuditOutcome:
     return value
 
 
-def _login_reason(
-    value: object, outcome: SecurityAuditOutcome
-) -> LoginAuditReason:
-    if not isinstance(value, LoginAuditReason):
+def _reason(
+    category: SecurityAuditCategory,
+    value: object,
+    outcome: SecurityAuditOutcome,
+) -> LoginAuditReason | RecoveryAuditReason:
+    if category is SecurityAuditCategory.LOGIN:
+        valid_type = LoginAuditReason
+        matrix = _LOGIN_REASON_MATRIX
+    else:
+        valid_type = RecoveryAuditReason
+        matrix = _RECOVERY_REASON_MATRIX
+    if not isinstance(value, valid_type):
         raise TypeError("Security audit reason is invalid.")
-    if value not in _LOGIN_REASON_MATRIX[outcome]:
+    if value not in matrix[outcome]:
         raise ValueError("Security audit outcome and reason are incompatible.")
     return value
 

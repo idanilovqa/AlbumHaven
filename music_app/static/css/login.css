@@ -162,6 +162,21 @@ body {
   opacity: 0.72;
 }
 
+.login-forgot {
+  display: block;
+  width: max-content;
+  margin: 17px auto 0;
+  border-radius: 4px;
+  color: #89bdf2;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.login-forgot:focus-visible {
+  outline: 3px solid rgba(108, 174, 255, 0.55);
+  outline-offset: 3px;
+}
+
 @media (max-width: 560px) {
   .login-glow {
     place-items: center stretch;

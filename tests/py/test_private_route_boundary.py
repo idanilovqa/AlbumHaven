@@ -33,7 +33,14 @@ def test_private_routes_have_explicit_action_classification():
         for method in methods or ():
             if method == "HEAD":
                 continue
-            if path in {"/health", "/login", "/favicon.ico", "/static"}:
+            if path in {
+                "/health",
+                "/login",
+                "/forgot-password",
+                "/reset-password",
+                "/favicon.ico",
+                "/static",
+            }:
                 continue
             action = private_action_for_route(method, path)
             csrf_mode = csrf_mode_for_route(method, path)

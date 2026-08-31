@@ -383,6 +383,17 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
             "login_cooldown_seconds": _integer(
                 env, "ALBUM_HAVEN_LOGIN_COOLDOWN_SECONDS", 900, minimum=900
             ),
+            "reset_candidate": {
+                "limit": _integer(
+                    env, "ALBUM_HAVEN_RESET_CANDIDATE_LIMIT", 5, minimum=1, maximum=5
+                ),
+                "window_seconds": _integer(
+                    env,
+                    "ALBUM_HAVEN_RESET_CANDIDATE_WINDOW_SECONDS",
+                    3_600,
+                    minimum=3_600,
+                ),
+            },
             "reset_account": {
                 "limit": _integer(
                     env, "ALBUM_HAVEN_RESET_ACCOUNT_LIMIT", 5, minimum=1, maximum=5

@@ -10,6 +10,10 @@ import pytest
 from fastapi import FastAPI
 
 from music_app.services.auth_login_postgres import LoginOutcome, LoginResult
+from music_app.services.auth_password_reset_request_postgres import (
+    PasswordResetDelivery,
+    PasswordResetRequestResult,
+)
 from music_app.services.auth_preauth_postgres import IssuedPreAuthToken
 from music_app.services.auth_session_csrf import matches_session_csrf
 from music_app.services.auth_sessions_postgres import IssuedBrowserSession
@@ -17,6 +21,7 @@ from music_app.services.auth_sessions_postgres import IssuedBrowserSession
 
 MODULE = "music_app.routes.auth_asgi"
 CSRF_COOKIE = "__Host-album_haven_login_csrf"
+FORGOT_CSRF_COOKIE = "__Host-album_haven_forgot_csrf"
 SESSION_COOKIE = "__Host-album_haven_session"
 CSRF = "c" * 43
 NEXT_CSRF = "n" * 43
@@ -50,6 +55,12 @@ class FakePreAuth:
         self.consumed.append(raw)
         return self.consume_result
 
+    def issue_forgot_token(self):
+        return self.issue_login_token()
+
+    def consume_forgot_token(self, raw):
+        return self.consume_login_token(raw)
+
 
 class FakeLogin:
     def __init__(self, outcome=LoginOutcome.INVALID):
@@ -74,6 +85,21 @@ class FakeSessions:
     def revoke_current(self, raw_token, reason=None):
         self.revoked.append((raw_token, reason))
         return self.result
+
+
+class FakeResetRequests:
+    def __init__(self, *, eligible=False):
+        self.calls = []
+        self.eligible = eligible
+
+    def request_reset(self, **kwargs):
+        self.calls.append(kwargs)
+        delivery = (
+            PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+            if self.eligible
+            else None
+        )
+        return PasswordResetRequestResult(delivery=delivery)
 
 
 def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.test",), proxies=()):
@@ -170,6 +196,59 @@ def test_get_login_renders_approved_v007_semantic_controls_and_assets(auth_asgi)
     assert 'aria-pressed="false"' in rendered and '>Show<' in rendered
     assert '<button class="login-submit" type="submit">' in rendered
     assert 'required' in rendered
+    assert 'href="/forgot-password"' in rendered
+
+
+def test_get_forgot_password_mints_purpose_bound_csrf_and_renders_approved_recovery(auth_asgi):
+    app, preauth, _ = _app(auth_asgi)
+
+    status, headers, body = _request(app, "GET", path="/forgot-password")
+
+    rendered = body.decode()
+    assert status == 200
+    assert 'action="/forgot-password"' in rendered
+    assert 'name="candidate"' in rendered
+    assert f'value="{CSRF}"' in rendered
+    assert 'href="/static/css/password-recovery.css"' in rendered
+    assert 'src="/static/js/password-recovery.js"' in rendered
+    assert "Reset your password" in rendered
+    cookie = next(
+        value for value in _set_cookies(headers)
+        if value.startswith(FORGOT_CSRF_COOKIE + "=")
+    )
+    assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
+    assert preauth.consumed == []
+
+
+@pytest.mark.parametrize("eligible", [False, True])
+def test_forgot_password_submission_has_one_generic_response_and_background_delivery(auth_asgi, eligible):
+    app, preauth, _ = _app(auth_asgi)
+    reset_requests = FakeResetRequests(eligible=eligible)
+    delivered = []
+    app.state.password_reset_request_service = reset_requests
+    app.state.password_reset_delivery = lambda delivery: delivered.append(delivery)
+
+    status, headers, body = _request(
+        app,
+        "POST",
+        path="/forgot-password",
+        form={"candidate": "member@example.test", "csrf_token": CSRF},
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"{FORGOT_CSRF_COOKIE}={CSRF}",
+        },
+    )
+
+    assert status == 200
+    assert b"Check your email" in body
+    assert b"member@example.test" not in body
+    assert preauth.consumed == [CSRF]
+    assert len(reset_requests.calls) == 1
+    assert bool(delivered) is eligible
+    assert any(
+        value.startswith(FORGOT_CSRF_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
 
 
 def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):

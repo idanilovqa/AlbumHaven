@@ -81,6 +81,14 @@ def _service(outbox, connection):
     )
 
 
+def _reset_service(outbox, connection):
+    return outbox.PostgresPasswordResetOutboxService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@localhost/db"},
+        connect=lambda _url: connection,
+        now=lambda: NOW,
+    )
+
+
 def _claim_row(**overrides):
     row = {
         "id": 91,
@@ -283,3 +291,93 @@ def test_delivery_is_non_gating_when_transport_raises(outbox):
     assert result.reason == "failed"
     assert finalized[-1].reason == "failed"
     assert "smtp-secret" not in repr(result)
+
+
+def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once(outbox):
+    from music_app.services.auth_password_reset_request_postgres import (
+        PasswordResetDelivery,
+    )
+
+    events = []
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    claim = outbox.PasswordResetClaim(
+        outbox_id=81,
+        account_id=41,
+        username="member.one",
+        recipient="member@example.test",
+        attempt_count=1,
+        claimed_at=NOW,
+    )
+
+    class Repository:
+        def claim_password_reset(self, received):
+            assert received is delivery
+            events.append("claim")
+            return claim
+
+        def finalize_password_reset(self, received, result):
+            assert received is claim
+            events.append(("finalize", result.reason))
+
+    def composer(**kwargs):
+        assert kwargs["username"] == "member.one"
+        assert kwargs["recipient"] == "member@example.test"
+        assert kwargs["token"] == "r" * 43
+        events.append("compose")
+        return "message"
+
+    async def sender(message, *, config):
+        assert message == "message"
+        events.append("send")
+        return outbox.DeliveryResult(True, "delivered")
+
+    result = asyncio.run(
+        outbox.deliver_password_reset(
+            delivery,
+            config={"public_base_url": "https://music.example.test"},
+            repository=Repository(),
+            composer=composer,
+            sender=sender,
+        )
+    )
+
+    assert result.delivered is True
+    assert events == ["claim", "compose", "send", ("finalize", "delivered")]
+    assert "r" * 43 not in repr(claim)
+
+
+def test_password_reset_repository_claim_requires_matching_active_digest_and_is_not_retryable(outbox):
+    from music_app.services.auth_password_reset_request_postgres import (
+        PasswordResetDelivery,
+    )
+
+    connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one"),))
+    delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
+
+    claim = _reset_service(outbox, connection).claim_password_reset(delivery)
+
+    assert claim.outbox_id == 81
+    select, params = next(
+        item for item in connection.operations
+        if "join app.password_reset_tokens" in item[0]
+    )
+    assert "message_category = 'password_reset'" in select
+    assert "delivery_status = 'pending'" in select
+    assert "attempt_count = 0" in select
+    assert "credential_version" in select
+    assert "consumed_at is null" in select and "revoked_at is null" in select
+    assert "token_hash = %s" in select
+    assert "s" * 43 not in repr(params)
+    assert any("delivery_status = 'sending'" in sql for sql, _ in connection.operations)
+
+    final_connection = Connection(finalize_rows=({"id": 81},))
+    _reset_service(outbox, final_connection).finalize_password_reset(
+        claim,
+        outbox.DeliveryResult(False, "timeout"),
+    )
+    update_params = [
+        params for sql, params in final_connection.operations
+        if sql.startswith("update app.mail_outbox")
+    ][-1]
+    assert update_params[0] == "failed"
+    assert not any(value is not None for value in update_params[1:2])

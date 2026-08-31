@@ -15,13 +15,17 @@ const sourcePath = path.join(
   'password-recovery.js',
 );
 
-function loadRuntime({ valid = true, hasForm = true } = {}) {
+function loadRuntime({ valid = true, hasForm = true, loadingLabel = null } = {}) {
   const listeners = new Map();
   const form = hasForm ? {
     checkValidity: () => valid,
     addEventListener: (name, callback) => listeners.set(name, callback),
   } : null;
-  const submit = hasForm ? { disabled: false, textContent: 'Send reset link' } : null;
+  const submit = hasForm ? {
+    disabled: false,
+    textContent: 'Send reset link',
+    dataset: loadingLabel ? { loadingLabel } : {},
+  } : null;
   const selectors = new Map([
     ['.recovery-form', form],
     ['.recovery-submit', submit],
@@ -47,4 +51,10 @@ test('invalid submission and generic sent page remain safe', () => {
   assert.equal(invalid.submit.textContent, 'Send reset link');
 
   assert.doesNotThrow(() => loadRuntime({ hasForm: false }));
+});
+
+test('reset form can provide its specific loading action', () => {
+  const runtime = loadRuntime({ loadingLabel: 'Changing…' });
+  runtime.listeners.get('submit')();
+  assert.equal(runtime.submit.textContent, 'Changing…');
 });

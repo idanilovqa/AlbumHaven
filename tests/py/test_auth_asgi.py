@@ -14,6 +14,11 @@ from music_app.services.auth_password_reset_request_postgres import (
     PasswordResetDelivery,
     PasswordResetRequestResult,
 )
+from music_app.services.auth_password_reset_lifecycle_postgres import (
+    IssuedResetTransaction,
+    ResetCompletionOutcome,
+)
+from music_app.services.auth_reset_csrf import issue_reset_csrf
 from music_app.services.auth_preauth_postgres import IssuedPreAuthToken
 from music_app.services.auth_session_csrf import matches_session_csrf
 from music_app.services.auth_sessions_postgres import IssuedBrowserSession
@@ -26,6 +31,7 @@ SESSION_COOKIE = "__Host-album_haven_session"
 CSRF = "c" * 43
 NEXT_CSRF = "n" * 43
 SESSION = "s" * 43
+RESET_TRANSACTION = "s" * 43
 
 
 def test_auth_asgi_contract_is_present_and_registered_in_factory():
@@ -100,6 +106,29 @@ class FakeResetRequests:
             else None
         )
         return PasswordResetRequestResult(delivery=delivery)
+
+
+class FakeResetLifecycle:
+    def __init__(self):
+        self.exchanges = []
+        self.valid = True
+        self.completions = []
+        self.outcome = ResetCompletionOutcome.SUCCESS
+
+    def exchange_reset_token(self, raw, *, request_ref):
+        self.exchanges.append((raw, request_ref))
+        if not self.valid:
+            return None
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        return IssuedResetTransaction(RESET_TRANSACTION, 61, now + timedelta(minutes=15))
+
+    def validate_transaction(self, raw):
+        return self.valid and raw == RESET_TRANSACTION
+
+    def complete_reset(self, raw, *, new_password, request_ref):
+        self.completions.append((raw, new_password, request_ref))
+        return self.outcome
 
 
 def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.test",), proxies=()):
@@ -249,6 +278,143 @@ def test_forgot_password_submission_has_one_generic_response_and_background_deli
         value.startswith(FORGOT_CSRF_COOKIE + "=") and "Max-Age=0" in value
         for value in _set_cookies(headers)
     )
+
+
+def test_reset_link_exchanges_to_httponly_clean_url_transaction(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/reset-password",
+        query="purpose=password-reset&token=" + CSRF,
+    )
+
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password"
+    assert CSRF.encode() not in body and CSRF not in dict(headers)["location"]
+    cookie = next(
+        value for value in _set_cookies(headers)
+        if value.startswith("__Host-album_haven_reset=")
+    )
+    assert RESET_TRANSACTION in cookie
+    assert all(flag in cookie for flag in ("HttpOnly", "Secure", "SameSite=lax", "Path=/"))
+    assert lifecycle.exchanges[0][0] == CSRF
+
+
+def test_reset_link_rejects_duplicate_or_invalid_query_without_reflecting_token(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+
+    status, _, body = _request(
+        app,
+        "GET",
+        path="/reset-password",
+        query=(
+            "purpose=password-reset&token=" + CSRF + "&token=" + NEXT_CSRF
+        ),
+    )
+
+    assert status == 400
+    assert CSRF.encode() not in body and NEXT_CSRF.encode() not in body
+    assert lifecycle.exchanges == []
+
+
+def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/reset-password",
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
+    )
+
+    csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+    rendered = body.decode()
+    assert status == 200
+    assert 'action="/reset-password"' in rendered
+    assert f'value="{csrf}"' in rendered
+    assert RESET_TRANSACTION not in rendered
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+
+
+def test_reset_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+
+    status, headers, body = _request(
+        app,
+        "POST",
+        path="/reset-password",
+        form={
+            "new_password": "a private replacement password",
+            "confirm_password": "a private replacement password",
+            "csrf_token": csrf,
+        },
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}",
+        },
+    )
+
+    assert status == 200
+    assert b"Password changed" in body
+    assert len(lifecycle.completions) == 1
+    assert any(
+        value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+    invalid_status, _, _ = _request(
+        app,
+        "POST",
+        path="/reset-password",
+        form={
+            "new_password": "one private replacement",
+            "confirm_password": "different replacement",
+            "csrf_token": csrf,
+        },
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}",
+        },
+    )
+    assert invalid_status == 400
+    assert len(lifecycle.completions) == 1
+
+
+def test_reset_completion_accepts_matching_unicode_password_without_compare_error(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+    password = "très-long-private-password"
+
+    status, _, _ = _request(
+        app,
+        "POST",
+        path="/reset-password",
+        form={
+            "new_password": password,
+            "confirm_password": password,
+            "csrf_token": csrf,
+        },
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}",
+        },
+    )
+
+    assert status == 200
+    assert lifecycle.completions[0][1] == password
 
 
 def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):

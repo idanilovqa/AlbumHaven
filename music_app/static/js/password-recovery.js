@@ -8,6 +8,6 @@
   form.addEventListener("submit", () => {
     if (!form.checkValidity()) return;
     submit.disabled = true;
-    submit.textContent = "Sending…";
+    submit.textContent = submit.dataset?.loadingLabel || "Sending…";
   });
 })();

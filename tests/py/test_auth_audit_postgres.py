@@ -34,7 +34,8 @@ def audit():
         "CREDENTIAL_RACE",
     }
     assert set(module.RecoveryAuditReason.__members__) == {
-        "RESET_ISSUED", "ACCOUNT_INELIGIBLE", "BUCKET_BLOCKED",
+        "RESET_ISSUED", "RESET_COMPLETED", "RESET_INVALID",
+        "ACCOUNT_INELIGIBLE", "BUCKET_BLOCKED",
     }
     return module
 
@@ -42,6 +43,8 @@ def audit():
 def test_password_recovery_audit_values_are_stable(audit):
     assert audit.SecurityAuditCategory.PASSWORD_RECOVERY.value == "password_recovery"
     assert audit.RecoveryAuditReason.RESET_ISSUED.value == "reset_issued"
+    assert audit.RecoveryAuditReason.RESET_COMPLETED.value == "reset_completed"
+    assert audit.RecoveryAuditReason.RESET_INVALID.value == "reset_invalid"
     assert audit.RecoveryAuditReason.ACCOUNT_INELIGIBLE.value == "account_ineligible"
     assert audit.RecoveryAuditReason.BUCKET_BLOCKED.value == "bucket_blocked"
 

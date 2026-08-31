@@ -21,6 +21,11 @@ from music_app.services.auth_login_postgres import LoginOutcome, PostgresLoginAu
 from music_app.services.auth_password_reset_request_postgres import (
     PostgresPasswordResetRequestService,
 )
+from music_app.services.auth_password_reset_lifecycle_postgres import (
+    PostgresPasswordResetLifecycleService,
+    ResetCompletionOutcome,
+)
+from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
 from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
 from music_app.services.auth_sessions_postgres import SessionRevocationReason
@@ -28,6 +33,7 @@ from music_app.services.auth_session_csrf import (
     issue_session_csrf,
     matches_session_csrf,
 )
+from music_app.services.auth_reset_csrf import issue_reset_csrf, matches_reset_csrf
 from music_app.services.auth_tokens import hash_opaque_token
 
 
@@ -35,6 +41,7 @@ router = APIRouter()
 
 _PREAUTH_COOKIE = "__Host-album_haven_login_csrf"
 _FORGOT_PREAUTH_COOKIE = "__Host-album_haven_forgot_csrf"
+_RESET_TRANSACTION_COOKIE = "__Host-album_haven_reset"
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -85,6 +92,28 @@ def _render_recovery(
             "request": request,
             "csrf_token": token,
             "sent": sent,
+        },
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _render_reset(
+    request: Request,
+    *,
+    csrf_token: str | None,
+    completed: bool = False,
+    password_invalid: bool = False,
+) -> Response:
+    templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    response = templates.TemplateResponse(
+        request,
+        "password-reset.html",
+        {
+            "request": request,
+            "csrf_token": csrf_token,
+            "completed": completed,
+            "password_invalid": password_invalid,
         },
     )
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -170,6 +199,35 @@ def _reset_request_service(request: Request):
                 audit_repository=PostgresSecurityAuditRepository(),
             )
             request.app.state.password_reset_request_service = existing
+    return existing
+
+
+def _reset_lifecycle_service(request: Request):
+    existing = getattr(request.app.state, "password_reset_lifecycle_service", None)
+    if existing is not None:
+        return existing
+    config = _policy_config(request)
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "password_reset_lifecycle_service", None)
+        if existing is None:
+            checker = getattr(request.app.state, "breached_password_checker", None)
+            if checker is None:
+                from music_app.services.auth_breached_passwords import (
+                    HibpRangePasswordChecker,
+                )
+
+                checker = HibpRangePasswordChecker()
+                request.app.state.breached_password_checker = checker
+            existing = PostgresPasswordResetLifecycleService(
+                config,
+                breached_checker=checker,
+                audit_repository=PostgresSecurityAuditRepository(),
+            )
+            request.app.state.password_reset_lifecycle_service = existing
     return existing
 
 
@@ -427,6 +485,155 @@ async def _deliver_password_reset(app, delivery) -> None:
     except Exception:
         # Public response and token issuance remain independent of SMTP outcome.
         return
+
+
+@router.get("/reset-password", response_class=HTMLResponse)
+async def get_reset_password(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+        secure = _cookie_secure(request, config)
+        if secure is None:
+            return _generic_reset_invalid()
+        service = _reset_lifecycle_service(request)
+    except Exception:
+        return _generic_reset_unavailable()
+
+    stored_token = getattr(request.state, "password_reset_link_token", None)
+    stored_purpose = getattr(request.state, "password_reset_link_purpose", None)
+    stored_valid = getattr(request.state, "password_reset_link_query_valid", None)
+    query_pairs = list(request.query_params.multi_items())
+    if stored_valid is not None:
+        supplied_token = stored_token
+        supplied_purpose = stored_purpose
+        query_valid = stored_valid is True
+    else:
+        supplied_token = request.query_params.get("token")
+        supplied_purpose = request.query_params.get("purpose")
+        query_valid = (
+            not query_pairs
+            or (
+                len(query_pairs) == 2
+                and sum(key == "purpose" for key, _value in query_pairs) == 1
+                and sum(key == "token" for key, _value in query_pairs) == 1
+            )
+        )
+    if supplied_token is not None or supplied_purpose is not None:
+        if (
+            not query_valid
+            or supplied_purpose != "password-reset"
+            or not supplied_token
+        ):
+            return _generic_reset_invalid()
+        try:
+            issued = await run_in_threadpool(
+                service.exchange_reset_token,
+                supplied_token,
+                request_ref=uuid4().hex,
+            )
+        except Exception:
+            return _generic_reset_unavailable()
+        if issued is None:
+            return _generic_reset_invalid()
+        response = RedirectResponse("/reset-password", status_code=303)
+        response.set_cookie(
+            _RESET_TRANSACTION_COOKIE,
+            issued.raw_token,
+            max_age=15 * 60,
+            httponly=True,
+            secure=secure,
+            samesite="lax",
+            path="/",
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return _no_store(response)
+
+    raw_transaction = request.cookies.get(_RESET_TRANSACTION_COOKIE)
+    try:
+        valid = await run_in_threadpool(
+            service.validate_transaction,
+            raw_transaction,
+        )
+        if not valid:
+            return _generic_reset_invalid()
+        csrf_token = issue_reset_csrf(raw_transaction, config)
+    except Exception:
+        return _generic_reset_unavailable()
+    return _no_store(_render_reset(request, csrf_token=csrf_token))
+
+
+@router.post("/reset-password", response_class=HTMLResponse)
+async def post_reset_password(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+        secure = _cookie_secure(request, config)
+    except Exception:
+        return _generic_reset_unavailable()
+    if secure is None or not _same_origin(request, config):
+        return _generic_reset_invalid()
+    payload = await _form_payload(
+        request,
+        allowed=frozenset(
+            {"new_password", "confirm_password", "csrf_token"}
+        ),
+        required=frozenset(
+            {"new_password", "confirm_password", "csrf_token"}
+        ),
+    )
+    raw_transaction = request.cookies.get(_RESET_TRANSACTION_COOKIE)
+    if (
+        payload is None
+        or payload["new_password"] != payload["confirm_password"]
+        or not matches_reset_csrf(
+            raw_transaction,
+            payload["csrf_token"],
+            config,
+        )
+    ):
+        return _generic_reset_invalid()
+    try:
+        service = _reset_lifecycle_service(request)
+        outcome = await run_in_threadpool(
+            service.complete_reset,
+            raw_transaction,
+            new_password=payload["new_password"],
+            request_ref=uuid4().hex,
+        )
+    except PasswordPolicyError:
+        response = _render_reset(
+            request,
+            csrf_token=payload["csrf_token"],
+            password_invalid=True,
+        )
+        response.status_code = 400
+        return _no_store(response)
+    except Exception:
+        return _generic_reset_unavailable()
+    if outcome is not ResetCompletionOutcome.SUCCESS:
+        response = _generic_reset_invalid()
+    else:
+        response = _render_reset(request, csrf_token=None, completed=True)
+    response.delete_cookie(
+        _RESET_TRANSACTION_COOKIE,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+    return _no_store(response)
+
+
+def _generic_reset_invalid() -> HTMLResponse:
+    response = HTMLResponse(
+        "This password reset link is invalid or expired.", status_code=400
+    )
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
+
+
+def _generic_reset_unavailable() -> HTMLResponse:
+    response = HTMLResponse("Password reset is temporarily unavailable.", status_code=503)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
 
 
 def _session_service(request: Request):

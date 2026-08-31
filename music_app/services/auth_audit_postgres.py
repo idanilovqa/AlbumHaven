@@ -37,6 +37,8 @@ class LoginAuditReason(str, Enum):
 
 class RecoveryAuditReason(str, Enum):
     RESET_ISSUED = "reset_issued"
+    RESET_COMPLETED = "reset_completed"
+    RESET_INVALID = "reset_invalid"
     ACCOUNT_INELIGIBLE = "account_ineligible"
     BUCKET_BLOCKED = "bucket_blocked"
 
@@ -59,8 +61,12 @@ _LOGIN_REASON_MATRIX = {
     ),
 }
 _RECOVERY_REASON_MATRIX = {
-    SecurityAuditOutcome.SUCCESS: frozenset({RecoveryAuditReason.RESET_ISSUED}),
-    SecurityAuditOutcome.INVALID: frozenset({RecoveryAuditReason.ACCOUNT_INELIGIBLE}),
+    SecurityAuditOutcome.SUCCESS: frozenset(
+        {RecoveryAuditReason.RESET_ISSUED, RecoveryAuditReason.RESET_COMPLETED}
+    ),
+    SecurityAuditOutcome.INVALID: frozenset(
+        {RecoveryAuditReason.ACCOUNT_INELIGIBLE, RecoveryAuditReason.RESET_INVALID}
+    ),
     SecurityAuditOutcome.THROTTLED: frozenset({RecoveryAuditReason.BUCKET_BLOCKED}),
 }
 _SOURCE_CLASSES = frozenset({"loopback", "private", "public", "trusted_proxy"})

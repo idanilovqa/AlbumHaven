@@ -142,6 +142,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
+        _redact_reset_link_query(request)
         if _is_public(request.method, request.url.path):
             return await call_next(request)
         route_path = _matched_route_path(app, request)
@@ -162,6 +163,22 @@ def install_private_route_boundary(app: FastAPI) -> None:
                 status_code=403,
             )
         return await call_next(request)
+
+
+def _redact_reset_link_query(request: Request) -> None:
+    if request.method.upper() != "GET" or request.url.path != "/reset-password":
+        return
+    pairs = list(request.query_params.multi_items())
+    if not pairs:
+        return
+    request.state.password_reset_link_query_valid = (
+        len(pairs) == 2
+        and sum(key == "purpose" for key, _value in pairs) == 1
+        and sum(key == "token" for key, _value in pairs) == 1
+    )
+    request.state.password_reset_link_purpose = request.query_params.get("purpose")
+    request.state.password_reset_link_token = request.query_params.get("token")
+    request.scope["query_string"] = b""
 
 
 def _is_public(method: str, path: str) -> bool:

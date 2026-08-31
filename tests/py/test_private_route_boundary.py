@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from music_app.services.current_actor import CurrentActor
 from music_app.services.private_route_boundary import (
@@ -205,6 +205,31 @@ def test_health_is_public_and_sanitized():
 
     assert status == 200
     assert body == b'{"status":"ok"}'
+
+
+def test_reset_link_query_is_removed_from_downstream_scope_before_dispatch():
+    app = FastAPI()
+
+    @app.get("/reset-password")
+    async def reset_password(request: Request):
+        return {
+            "query": request.scope.get("query_string", b"").decode("ascii"),
+            "captured": bool(
+                getattr(request.state, "password_reset_link_token", None)
+            ),
+        }
+
+    install_private_route_boundary(app)
+    raw = "s" * 43
+    status, body = _request(
+        app,
+        "/reset-password",
+        query=f"purpose=password-reset&token={raw}",
+    )
+
+    assert status == 200
+    assert raw.encode() not in body
+    assert body == b'{"query":"","captured":true}'
 
 
 def test_status_and_every_nonpublic_path_require_authentication():

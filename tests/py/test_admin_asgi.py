@@ -22,6 +22,12 @@ def _app():
     app = FastAPI()
     service = Service()
     app.state.admin_account_creation_service = service
+    deliveries = []
+
+    async def deliver(outbox_id):
+        deliveries.append(outbox_id)
+
+    app.state.welcome_delivery = deliver
 
     @app.middleware("http")
     async def actor(request, call_next):
@@ -35,7 +41,7 @@ def _app():
         return await call_next(request)
 
     app.include_router(router)
-    return app, service
+    return app, service, deliveries
 
 
 async def _request_async(app, payload):
@@ -84,7 +90,7 @@ def _request(app, payload):
 
 
 def test_admin_account_route_creates_immediate_account_without_echoing_password():
-    app, service = _app()
+    app, service, deliveries = _app()
     payload = {
         "username": "member.one",
         "contact_email": "member+one@example.test",
@@ -99,10 +105,11 @@ def test_admin_account_route_creates_immediate_account_without_echoing_password(
     assert service.calls[0]["actor"].account_id == 7
     assert service.calls[0]["password"] == payload["password"]
     assert payload["password"].encode() not in body
+    assert deliveries == [51]
 
 
 def test_admin_account_route_rejects_unknown_or_malformed_fields_before_service():
-    app, service = _app()
+    app, service, deliveries = _app()
 
     status, body = _request(
         app,
@@ -118,3 +125,4 @@ def test_admin_account_route_rejects_unknown_or_malformed_fields_before_service(
     assert status == 400
     assert body == b'{"detail":"Account request was invalid."}'
     assert service.calls == []
+    assert deliveries == []

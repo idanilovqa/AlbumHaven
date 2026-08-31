@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from inspect import isawaitable
 import threading
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -25,7 +26,7 @@ _FIELDS = frozenset(
 
 
 @router.post("/admin/accounts", status_code=201)
-async def create_managed_account(request: Request):
+async def create_managed_account(request: Request, background_tasks: BackgroundTasks):
     payload = await _json_payload(request)
     if payload is None:
         return _invalid()
@@ -53,6 +54,11 @@ async def create_managed_account(request: Request):
             {"detail": "Account creation is temporarily unavailable."},
             status_code=503,
         )
+    background_tasks.add_task(
+        _deliver_pending_welcome,
+        request.app,
+        result.welcome_outbox_id,
+    )
     return JSONResponse(
         {
             "account_id": result.account_id,
@@ -60,6 +66,7 @@ async def create_managed_account(request: Request):
             "active": True,
         },
         status_code=201,
+        background=background_tasks,
     )
 
 
@@ -126,3 +133,34 @@ def _service(request: Request):
 
 def _invalid():
     return JSONResponse({"detail": "Account request was invalid."}, status_code=400)
+
+
+async def _deliver_pending_welcome(app, outbox_id: int) -> None:
+    try:
+        delivery = getattr(app.state, "welcome_delivery", None)
+        if callable(delivery):
+            result = delivery(outbox_id)
+            if isawaitable(result):
+                await result
+            return
+        from config import build_mail_config
+        from music_app.services.auth_mail_outbox_postgres import (
+            PostgresWelcomeOutboxService,
+            deliver_welcome,
+        )
+
+        mail_config = build_mail_config()
+        if mail_config.get("welcome_enabled") is not True:
+            return
+        repository_config = dict(mail_config)
+        repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = app.state.auth_policy_config[
+            "ALBUM_HAVEN_APP_DATABASE_URL"
+        ]
+        await deliver_welcome(
+            outbox_id,
+            config=mail_config,
+            repository=PostgresWelcomeOutboxService(repository_config),
+        )
+    except Exception:
+        # Account activation and the committed retryable outbox row are non-gating.
+        return

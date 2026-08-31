@@ -88,4 +88,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0049_enforce_single_use_password_reset_exchange.sql` makes each emailed password-reset token exchangeable only once. It retains the earliest transaction if a pre-release database contains duplicate exchanges, then enforces the invariant with a unique index.
 
+`0050_add_security_audit_cleanup_index.sql` adds the global UTC timestamp and ID index used by the migrator-owned bounded audit-retention command. It grants no runtime deletion privilege; `album_haven_app` remains append-only for security audit events.
+
+`0051_add_auth_throttle_cleanup_index.sql` adds the expiry and ID index used by the bounded throttle cleanup command. It does not expand privileges; the runtime role already owns the narrow delete permission required to remove expired HMAC-keyed buckets.
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

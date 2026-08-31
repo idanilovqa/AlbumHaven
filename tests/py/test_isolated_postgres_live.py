@@ -4,7 +4,9 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -78,6 +80,62 @@ def _lifecycle_counts(setup_url: str) -> tuple[int, int]:
             """
         ).fetchone()
     return int(row["seed_count"]), int(row["launcher_account_count"])
+
+
+def _account_foreign_key_integrity(connection) -> tuple[dict[str, int], int, set[int]]:
+    from psycopg import sql
+
+    references = connection.execute(
+        """
+        select constraint_table.oid::regclass::text as table_name,
+               source_column.attname as column_name
+        from pg_constraint constraint_record
+        join pg_class constraint_table
+          on constraint_table.oid = constraint_record.conrelid
+        join lateral unnest(constraint_record.conkey, constraint_record.confkey)
+          as key_columns(source_attnum, target_attnum) on true
+        join pg_attribute source_column
+          on source_column.attrelid = constraint_record.conrelid
+         and source_column.attnum = key_columns.source_attnum
+        join pg_attribute target_column
+          on target_column.attrelid = constraint_record.confrelid
+         and target_column.attnum = key_columns.target_attnum
+        where constraint_record.contype = 'f'
+          and constraint_record.confrelid = 'app.accounts'::regclass
+          and target_column.attname = 'id'
+        order by table_name, column_name
+        """
+    ).fetchall()
+    counts: dict[str, int] = {}
+    account_ids: set[int] = set()
+    orphan_count = 0
+    for reference in references:
+        table_name = str(reference["table_name"])
+        schema_name, relation_name = table_name.split(".", 1)
+        column_name = str(reference["column_name"])
+        row = connection.execute(
+            sql.SQL(
+                """
+                select count(*) filter (where source.{column} is not null) as row_count,
+                       count(*) filter (
+                         where source.{column} is not null and target.id is null
+                       ) as orphan_count,
+                       array_agg(distinct source.{column}) filter (
+                         where source.{column} is not null
+                       ) as account_ids
+                from {schema}.{table} source
+                left join app.accounts target on target.id = source.{column}
+                """
+            ).format(
+                column=sql.Identifier(column_name),
+                schema=sql.Identifier(schema_name),
+                table=sql.Identifier(relation_name),
+            )
+        ).fetchone()
+        counts[f"{table_name}.{column_name}"] = int(row["row_count"])
+        orphan_count += int(row["orphan_count"])
+        account_ids.update(int(value) for value in (row["account_ids"] or ()))
+    return counts, orphan_count, account_ids
 
 
 def _explain_index_names(plan_document: object) -> set[str]:
@@ -257,7 +315,12 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
                   and library.libraries.library_kind = 'local'
                 """
             ).fetchone()
+            initial_fk_counts, initial_orphans, initial_fk_account_ids = (
+                _account_foreign_key_integrity(connection)
+            )
         assert initial is not None
+        assert initial_orphans == 0
+        assert initial_fk_account_ids == {int(initial["account_id"])}
 
         def reconcile(encoded_hash):
             service = PostgresAuthBootstrapService(
@@ -322,6 +385,9 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
                 """,
                 (int(initial["account_id"]),),
             ).fetchone()
+            final_fk_counts, final_orphans, final_fk_account_ids = (
+                _account_foreign_key_integrity(connection)
+            )
 
         assert persisted is not None
         assert persisted["username_display"] == "Rendref"
@@ -334,12 +400,177 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
         assert int(persisted["credential_count"]) == 1
         assert int(persisted["welcome_count"]) == 1
         assert persisted["welcome_status"] == "pending"
+        assert final_orphans == 0
+        assert final_fk_account_ids == {int(initial["account_id"])}
+        assert all(
+            final_fk_counts[reference] >= row_count
+            for reference, row_count in initial_fk_counts.items()
+        )
         persisted_hash = persisted["encoded_hash"]
         assert persisted_hash in encoded_hashes
         assert PasswordHasher().verify(
             persisted_hash,
             passwords[encoded_hashes.index(persisted_hash)],
         )
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_admin_account_updates_serialize_on_the_same_target(monkeypatch):
+    from music_app.services.admin_member_mutation_postgres import (
+        PostgresAdminMemberMutationService,
+    )
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    now = datetime.now(timezone.utc)
+    first_locked = Event()
+    second_attempting_lock = Event()
+    connection_counter_lock = Lock()
+    connection_count = 0
+
+    class CoordinatedConnection:
+        def __init__(self, connection, sequence):
+            self._connection = connection
+            self._sequence = sequence
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return self._connection.__exit__(exc_type, exc, traceback)
+
+        def transaction(self):
+            return self._connection.transaction()
+
+        def execute(self, sql, params=()):
+            statement = " ".join(sql.casefold().split())
+            if "with locked_accounts as" not in statement:
+                return self._connection.execute(sql, params)
+            if self._sequence == 0:
+                cursor = self._connection.execute(sql, params)
+                first_locked.set()
+                assert second_attempting_lock.wait(timeout=10)
+                return cursor
+            assert first_locked.wait(timeout=10)
+            second_attempting_lock.set()
+            return self._connection.execute(sql, params)
+
+    def connect(database_url):
+        nonlocal connection_count
+        connection = isolatedPostgres._connect(database_url)
+        with connection_counter_lock:
+            sequence = connection_count
+            connection_count += 1
+        return CoordinatedConnection(connection, sequence)
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            authority = connection.execute(
+                """
+                select app.bootstrap_owners.account_id,
+                       library.libraries.id as library_id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id =
+                     app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                """
+            ).fetchone()
+            assert authority is not None
+            target_id = int(connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, account_kind, username_display,
+                  username_normalized, contact_email,
+                  contact_email_normalized
+                ) values (
+                  'Concurrent administrator target', 'managed',
+                  'Concurrent target', 'concurrent-target',
+                  'concurrent-target@example.test',
+                  'concurrent-target@example.test'
+                )
+                returning id
+                """
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.library_memberships (
+                  library_id, account_id, membership_role
+                ) values (%s, %s, 'member')
+                """,
+                (int(authority["library_id"]), target_id),
+            )
+
+        service = PostgresAdminMemberMutationService(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=connect,
+            clock=lambda: now,
+        )
+
+        def update(capability_key):
+            service.update_account(
+                actor_account_id=int(authority["account_id"]),
+                actor_authenticated_at=now,
+                library_id=int(authority["library_id"]),
+                target_account_id=target_id,
+                is_active=True,
+                current_library_access=True,
+                capability_keys=(capability_key,),
+                confirm_disable=False,
+                confirm_remove_access=False,
+                request_ref=f"concurrent-admin-{capability_key}",
+            )
+
+        requested_capabilities = (
+            "library.browse.read",
+            "library.media.read",
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(update, requested_capabilities))
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = connection.execute(
+                """
+                select
+                  array_agg(capability_key order by capability_key)
+                    filter (where revoked_at is null) as active_capabilities,
+                  count(*) filter (
+                    where revoked_at is not null
+                  ) as revoked_capability_count
+                from app.capabilities
+                where account_id = %s
+                  and scope_kind = 'library'
+                  and scope_id = %s
+                """,
+                (target_id, int(authority["library_id"])),
+            ).fetchone()
+            audit_count = int(connection.execute(
+                """
+                select count(*) as count
+                from app.security_audit_events
+                where target_account_id = %s
+                  and event_category = 'account_management'
+                  and outcome = 'success'
+                  and reason_code = 'account_updated'
+                """,
+                (target_id,),
+            ).fetchone()["count"])
+
+        assert tuple(persisted["active_capabilities"]) in {
+            (requested_capabilities[0],),
+            (requested_capabilities[1],),
+        }
+        assert int(persisted["revoked_capability_count"]) == 1
+        assert audit_count == 2
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

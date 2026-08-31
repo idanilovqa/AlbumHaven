@@ -108,6 +108,36 @@ STARTTLS SMTP provider with the `ALBUM_HAVEN_SMTP_*` values in `.env.example`
 to deliver to real email addresses. SMTP credentials are optional only for
 providers that do not require authentication.
 
+### Clean up retained security audit events
+
+Security audit events are retained for at least 90 days. Set
+`ALBUM_HAVEN_MIGRATOR_DATABASE_URL` to the migration-role connection and run
+one bounded cleanup batch with:
+
+```text
+python scripts/cleanup_auth_audit.py --batch-size 1000
+```
+
+Schedule this command daily or weekly through the host scheduler. Each run
+deletes only the oldest eligible batch, so large backlogs require repeated
+invocations and normal runs never hold an unbounded delete transaction. The
+command deliberately does not use `ALBUM_HAVEN_APP_DATABASE_URL`: the runtime
+role retains insert-only access to the append-only audit table, while the
+maintenance command uses existing migrator privileges. Output contains only
+the deleted-row count; connection details and event contents are never shown.
+
+Expired authentication throttle buckets also need bounded maintenance. Schedule
+the following command daily or weekly with the runtime application connection
+available through `ALBUM_HAVEN_APP_DATABASE_URL`:
+
+```text
+python scripts/cleanup_auth_throttles.py --batch-size 1000
+```
+
+The command deletes only buckets whose failure window and any cooldown have
+both expired. Active rows are locked or skipped, each transaction is capped at
+10,000 rows, and output contains only the deleted-row count.
+
 ## Run
 
 ```text

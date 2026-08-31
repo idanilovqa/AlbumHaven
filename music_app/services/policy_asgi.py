@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 import hashlib
 import hmac
 
 from fastapi import HTTPException, Request, status
 
 from music_app.services.current_actor_asgi import current_actor_from_request
+from music_app.services.allowed_actions import AllowedActions
 from music_app.services.policy import PolicyContext, RequestOrigin, ResourceScope
 from music_app.services.policy_evaluator import (
     PolicyEvaluationConstraints,
@@ -71,6 +72,48 @@ def require_action(
         return result
 
     return dependency
+
+
+def allowed_actions_for_request(
+    request: Request,
+    actions: Iterable[str],
+    *,
+    target_account_id: int | None = None,
+) -> AllowedActions:
+    """Project UI actions through the same evaluator used by route authority."""
+
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        raise RuntimeError("Current actor is unavailable for allowed actions.")
+    evaluator = getattr(request.app.state, "policy_evaluator", None)
+    if evaluator is None:
+        evaluator = PolicyEvaluator()
+        request.app.state.policy_evaluator = evaluator
+    if not isinstance(evaluator, PolicyEvaluator):
+        raise RuntimeError("Policy evaluator configuration is invalid.")
+    constraint_resolver = getattr(
+        request.app.state, "policy_constraint_resolver", None
+    )
+    decisions = []
+    for action in tuple(actions):
+        context = PolicyContext.build(
+            actor=actor,
+            action=action,
+            library_id=_library_scope(actor, action, None),
+            target_account_id=target_account_id,
+            deployment_mode=_deployment_mode(request),
+            request_origin=_request_origin(request),
+            client_surface_class="private_web",
+        )
+        constraints = (
+            constraint_resolver(context)
+            if callable(constraint_resolver)
+            else PolicyEvaluationConstraints()
+        )
+        decisions.append(
+            evaluator.evaluate(context, constraints=constraints).decision
+        )
+    return AllowedActions.from_decisions(decisions)
 
 
 def _library_scope(actor, action: str, explicit_library_id: int | None) -> int | None:

@@ -16,6 +16,7 @@ from music_app.services.auth_password_reset_request_postgres import PasswordRese
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import (
     ActorState,
+    CapabilityGrant,
     CurrentActor,
     LibraryRelationship,
 )
@@ -77,7 +78,7 @@ class Service:
         )
 
 
-def _app():
+def _app(actor_override=None):
     from music_app.routes.admin_asgi import router
 
     app = FastAPI()
@@ -95,7 +96,7 @@ def _app():
 
     @app.middleware("http")
     async def actor(request, call_next):
-        request.state.current_actor = CurrentActor(
+        request.state.current_actor = actor_override or CurrentActor(
             state=ActorState.ACTIVE,
             account_id=7,
             session_id=11,
@@ -246,6 +247,49 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "never a password" in edit_body
     assert "Back to users" in edit_body
     assert "modal" not in edit_body.casefold()
+    assert '"accounts.manage": true' in edit_body
+    assert '"accounts.membership.manage": true' in edit_body
+    assert '"accounts.capabilities.manage": true' in edit_body
+
+
+def test_members_controls_follow_server_derived_allowed_actions():
+    limited = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=8,
+        session_id=12,
+        username_display="limited.admin",
+        authenticated_at=NOW,
+        is_bootstrap_owner=False,
+        current_library_id=9,
+        library_relationships=(LibraryRelationship(9, "member", False),),
+        capability_grants=(CapabilityGrant("accounts.read", "library", 9),),
+    )
+    app, _service = _app(limited)
+
+    status, _headers, body = _get(app, "/admin/accounts/41")
+
+    assert status == 200
+    assert '"accounts.read": true' in body
+    assert 'data-admin-action="reset"' not in body
+    assert 'data-admin-action="welcome"' not in body
+    assert 'data-admin-action="revoke"' not in body
+    assert "Save changes" not in body
+
+    update_status, update_body = _json_request(
+        app,
+        "PATCH",
+        "/admin/accounts/41",
+        {
+            "is_active": True,
+            "current_library_access": True,
+            "capability_keys": ["library.browse.read"],
+            "confirm_disable": False,
+            "confirm_remove_access": False,
+        },
+    )
+    assert update_status == 403
+    assert update_body == b'{"detail":"Action not permitted."}'
+    assert _service.update_calls == []
 
 
 def test_member_update_and_session_revoke_use_bounded_confirmed_contracts():

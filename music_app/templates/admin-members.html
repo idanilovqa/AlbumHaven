@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/css/admin-members.css">
 </head>
 <body>
+  <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
   <main class="settings-shell">
     {% include "partials/admin-settings-nav.html" %}
     <section class="settings-main">
@@ -15,7 +16,7 @@
           <h1>Users &amp; access</h1>
           <p>Manage who can sign in and what they can do in {{ roster.library_name }}.</p>
         </div>
-        <a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>
+        {% if allowed_actions.allows('accounts.create') %}<a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>{% endif %}
       </header>
 
       {% if created %}<p class="admin-notice" role="status">The account was created and can sign in now.</p>{% endif %}

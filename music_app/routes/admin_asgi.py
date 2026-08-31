@@ -34,6 +34,7 @@ from music_app.services.admin_reauthentication_postgres import (
 from music_app.services.admin_mail_actions_postgres import (
     PostgresAdminMailActionService,
 )
+from music_app.services.policy_asgi import allowed_actions_for_request
 
 
 router = APIRouter()
@@ -84,6 +85,17 @@ _LISTENER_DEFAULTS = frozenset(
         "library.discovery.read",
     }
 )
+_ADMIN_ACTIONS = (
+    "accounts.read",
+    "accounts.create",
+    "accounts.manage",
+    "accounts.membership.manage",
+    "accounts.capabilities.manage",
+    "accounts.sessions.revoke",
+    "accounts.welcome.send",
+    "accounts.password_reset.send",
+    "accounts.reauthenticate",
+)
 
 
 @router.get("/admin/members", response_class=HTMLResponse)
@@ -97,6 +109,7 @@ async def members_roster(request: Request) -> Response:
         roster=roster,
         created=request.query_params.get("created") == "1",
         listener_defaults=_LISTENER_DEFAULTS,
+        allowed_actions=_allowed_actions(request),
     )
 
 
@@ -112,6 +125,7 @@ async def new_managed_account(request: Request) -> Response:
         member=None,
         capability_groups=_CAPABILITY_GROUPS,
         listener_defaults=_LISTENER_DEFAULTS,
+        allowed_actions=_allowed_actions(request),
     )
 
 
@@ -130,6 +144,7 @@ async def edit_managed_account(request: Request, account_id: int) -> Response:
         member=member,
         capability_groups=_CAPABILITY_GROUPS,
         listener_defaults=_LISTENER_DEFAULTS,
+        allowed_actions=_allowed_actions(request, target_account_id=account_id),
     )
 
 
@@ -140,6 +155,16 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
         return JSONResponse({"detail": "Account update was invalid."}, status_code=400)
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    decisions = _allowed_actions(request, target_account_id=account_id)
+    if not all(
+        decisions.allows(action)
+        for action in (
+            "accounts.manage",
+            "accounts.membership.manage",
+            "accounts.capabilities.manage",
+        )
+    ):
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
     try:
         await run_in_threadpool(
@@ -465,6 +490,12 @@ def _render_admin(request: Request, template: str, **context) -> Response:
     )
     response.headers["Cache-Control"] = "no-store, max-age=0"
     return response
+
+
+def _allowed_actions(request: Request, *, target_account_id: int | None = None):
+    return allowed_actions_for_request(
+        request, _ADMIN_ACTIONS, target_account_id=target_account_id
+    )
 
 
 def _members_service(request: Request):

@@ -8,6 +8,7 @@
   <script src="/static/js/admin-members.js" defer></script>
 </head>
 <body>
+  <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
   <main class="settings-shell">
     {% include "partials/admin-settings-nav.html" %}
     <section class="settings-main detail-main">
@@ -34,10 +35,13 @@
         <label class="detail-field"><span>Username</span><input name="username" type="text" autocomplete="off" required></label>
         <label class="detail-field"><span>Email address</span><input name="contact_email" type="email" autocomplete="off" required><small>Plus-addressing remains intact.</small></label>
         <label class="detail-field"><span>Password</span><span class="password-control"><input id="admin-new-password" name="password" type="password" autocomplete="new-password" required><button type="button" data-password-toggle="admin-new-password" aria-pressed="false">Show</button></span><small>Use a strong, unique password.</small></label>
-        {% else %}
+        {% elif allowed_actions.allows('accounts.manage') %}
         <div class="detail-setting"><span><strong>Account enabled</strong><small>When disabled, the user cannot sign in.</small></span><input class="switch" name="is_active" type="checkbox" {% if member.is_active %}checked{% endif %} aria-label="Account enabled"></div>
+        {% else %}
+        <div class="detail-setting"><span><strong>Account status</strong><small>Only an authorized administrator can change this setting.</small></span><span>{{ "Enabled" if member.is_active else "Disabled" }}</span></div>
         {% endif %}
 
+        {% if not member or allowed_actions.allows('accounts.capabilities.manage') %}
         <label class="detail-field"><span>Capability role</span><select name="capability_role"><option value="listener">Listener</option></select></label>
         <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Listener applies a baseline set of capabilities.<br>Individual permissions below override the role and are authoritative.</span></aside>
         {% set selected = member.capability_keys if member else listener_defaults %}
@@ -56,15 +60,16 @@
             {% endfor %}
           </div>
         </fieldset>
+        {% endif %}
 
         {% if member %}
         <section class="account-settings" aria-labelledby="account-settings-title">
           <h2 id="account-settings-title">Account settings</h2>
-          <div class="detail-setting"><span><strong>Library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" {% if member.membership_role %}checked{% endif %} aria-label="Current library access"></div>
-          <div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>
-          <div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>
-          <div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>
-          {% if not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
+          {% if allowed_actions.allows('accounts.membership.manage') %}<div class="detail-setting"><span><strong>Library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" {% if member.membership_role %}checked{% endif %} aria-label="Current library access"></div>{% endif %}
+          {% if allowed_actions.allows('accounts.password_reset.send') %}<div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>{% endif %}
+          {% if allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>{% endif %}
+          {% if allowed_actions.allows('accounts.sessions.revoke') %}<div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>{% endif %}
+          {% if allowed_actions.allows('accounts.manage') and not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
         </section>
         {% else %}
         <div class="detail-setting"><span><strong>Current library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" checked></div>
@@ -84,7 +89,7 @@
 
         <footer class="detail-actions">
           <a class="admin-button" href="/admin/members">Cancel</a>
-          <button class="admin-button is-primary" type="submit">{{ "Save changes" if member else "Create user" }}</button>
+          {% if (member and allowed_actions.allows('accounts.manage') and allowed_actions.allows('accounts.membership.manage') and allowed_actions.allows('accounts.capabilities.manage')) or (not member and allowed_actions.allows('accounts.create')) %}<button class="admin-button is-primary" type="submit">{{ "Save changes" if member else "Create user" }}</button>{% endif %}
         </footer>
       </form>
     </section>

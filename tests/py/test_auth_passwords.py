@@ -27,6 +27,7 @@ def test_password_policy_contract_is_present():
 
     assert callable(module.validate_password)
     assert callable(module.hash_password)
+    assert callable(module.rehash_verified_password)
     assert callable(module.verify_password)
     assert module.PasswordPolicyError.__mro__[1] is ValueError
 
@@ -239,6 +240,47 @@ def test_hash_result_repr_redacts_the_encoded_hash(passwords):
 
     assert credential.encoded_hash not in repr(credential)
     assert "repr-safe-unique-secret" not in repr(credential)
+
+
+def test_rehash_verified_password_normalizes_and_uses_current_argon2_without_admission(passwords):
+    raw = "Cafe\u0301"  # Too short for admission, but already authenticated.
+    normalized = unicodedata.normalize("NFC", raw)
+
+    credential = passwords.rehash_verified_password(
+        raw,
+        argon2=ARGON2_FLOOR,
+        policy_version=CURRENT_POLICY_VERSION,
+    )
+
+    assert credential.policy_version == CURRENT_POLICY_VERSION
+    assert credential.encoded_hash.startswith("$argon2id$v=19$m=65536,t=3,p=1$")
+    assert PasswordHasher().verify(credential.encoded_hash, normalized)
+    assert credential.encoded_hash not in repr(credential)
+    assert raw not in repr(credential)
+
+
+@pytest.mark.parametrize(
+    ("raw", "argon2", "policy_version", "private_value"),
+    [
+        (b"private-verified-password", ARGON2_FLOOR, CURRENT_POLICY_VERSION, "private-verified-password"),
+        ("private-invalid-config", {**ARGON2_FLOOR, "time_cost": 0}, CURRENT_POLICY_VERSION, "private-invalid-config"),
+        ("private-invalid-policy", ARGON2_FLOOR, 0, "private-invalid-policy"),
+    ],
+)
+def test_rehash_verified_password_rejects_invalid_inputs_without_disclosure(
+    passwords, raw, argon2, policy_version, private_value
+):
+    with pytest.raises(ValueError) as captured:
+        passwords.rehash_verified_password(
+            raw,
+            argon2=argon2,
+            policy_version=policy_version,
+        )
+
+    rendered = f"{captured.value!s} {captured.value!r}"
+    assert private_value not in rendered
+    assert "$argon2" not in rendered
+    assert captured.value.__cause__ is None
 
 
 def test_verify_password_accepts_the_correct_password(passwords):

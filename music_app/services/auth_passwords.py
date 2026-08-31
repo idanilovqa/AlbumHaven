@@ -150,6 +150,33 @@ def hash_password(
     )
 
 
+def rehash_verified_password(
+    raw: str,
+    *,
+    argon2: Mapping[str, int],
+    policy_version: int,
+) -> PasswordCredential:
+    """Rehash an already-verified password under the current Argon2id policy."""
+
+    if (
+        not isinstance(raw, str)
+        or isinstance(policy_version, bool)
+        or not isinstance(policy_version, int)
+        or policy_version < 1
+        or not isinstance(argon2, Mapping)
+    ):
+        raise ValueError("Unable to rehash verified password")
+    try:
+        normalized = unicodedata.normalize("NFC", raw)
+        encoded_hash = _hasher(argon2).hash(normalized)
+    except Exception:
+        raise ValueError("Unable to rehash verified password") from None
+    return PasswordCredential(
+        encoded_hash=encoded_hash,
+        policy_version=policy_version,
+    )
+
+
 def _parameters_meet_floor(encoded_hash: str, floor: Mapping[str, int]) -> bool:
     parameters = extract_parameters(encoded_hash)
     return (

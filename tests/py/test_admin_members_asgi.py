@@ -11,6 +11,8 @@ from music_app.services.admin_members_postgres import (
 from music_app.services.admin_reauthentication_postgres import (
     AdminReauthenticationOutcome,
 )
+from music_app.services.admin_mail_actions_postgres import AdminMailActionResult
+from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import (
     ActorState,
@@ -28,6 +30,8 @@ class Service:
         self.update_calls = []
         self.revoke_calls = []
         self.reauthentication_calls = []
+        self.welcome_calls = []
+        self.reset_calls = []
 
     def load_roster(self, **kwargs):
         self.calls.append(kwargs)
@@ -57,6 +61,21 @@ class Service:
         self.reauthentication_calls.append(kwargs)
         return AdminReauthenticationOutcome.SUCCESS
 
+    def queue_welcome(self, **kwargs):
+        self.welcome_calls.append(kwargs)
+        return AdminMailActionResult(welcome_outbox_id=71)
+
+    def queue_password_reset(self, **kwargs):
+        self.reset_calls.append(kwargs)
+        return AdminMailActionResult(
+            password_reset_delivery=PasswordResetDelivery(
+                outbox_id=72,
+                account_id=41,
+                recipient="listener@example.test",
+                raw_token="never-render-this-token",
+            )
+        )
+
 
 def _app():
     from music_app.routes.admin_asgi import router
@@ -66,6 +85,9 @@ def _app():
     app.state.admin_members_service = service
     app.state.admin_member_mutation_service = service
     app.state.admin_reauthentication_service = service
+    app.state.admin_mail_action_service = service
+    app.state.welcome_delivery = lambda _outbox_id: None
+    app.state.password_reset_delivery = lambda _delivery: None
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},
         "trusted_origins": ["https://music.test"],
@@ -219,6 +241,9 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "Edit user" in edit_body
     assert "test.user+1" in edit_body
     assert "Listener · Customized" in edit_body
+    assert "Send password reset email" in edit_body
+    assert "Resend welcome email" in edit_body
+    assert "never a password" in edit_body
     assert "Back to users" in edit_body
     assert "modal" not in edit_body.casefold()
 
@@ -267,3 +292,26 @@ def test_admin_recent_auth_refresh_verifies_only_the_acting_account_password():
     assert service.reauthentication_calls[0]["session_id"] == 11
     assert service.reauthentication_calls[0]["password"] == "administrator private password"
     assert b"administrator private password" not in body
+
+
+def test_admin_mail_routes_return_ambiguous_secret_free_responses():
+    app, service = _app()
+
+    welcome_status, welcome_body = _json_request(
+        app, "POST", "/admin/accounts/41/welcome", {}
+    )
+    reset_status, reset_body = _json_request(
+        app, "POST", "/admin/accounts/41/password-reset", {}
+    )
+
+    assert welcome_status == 202
+    assert reset_status == 202
+    assert welcome_body == b'{"accepted":true}'
+    assert reset_body == b'{"accepted":true}'
+    assert b"71" not in welcome_body
+    assert b"72" not in reset_body
+    assert b"listener@example.test" not in reset_body
+    assert b"never-render-this-token" not in reset_body
+    assert service.welcome_calls[0]["actor_account_id"] == 7
+    assert service.welcome_calls[0]["target_account_id"] == 41
+    assert service.reset_calls[0]["target_account_id"] == 41

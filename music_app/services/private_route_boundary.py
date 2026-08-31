@@ -29,6 +29,8 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/admin/accounts/{account_id}"): "accounts.read",
     ("PATCH", "/admin/accounts/{account_id}"): "accounts.manage",
     ("POST", "/admin/accounts/{account_id}/sessions/revoke"): "accounts.sessions.revoke",
+    ("POST", "/admin/accounts/{account_id}/welcome"): "accounts.welcome.send",
+    ("POST", "/admin/accounts/{account_id}/password-reset"): "accounts.password_reset.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
     ("POST", "/account/password"): "account.self.password.change",

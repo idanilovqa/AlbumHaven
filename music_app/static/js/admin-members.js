@@ -16,6 +16,7 @@
   const form = document.querySelector('[data-admin-account-form]');
   if (!form) return;
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
+  const status = form.parentElement?.querySelector('[data-admin-form-status]');
   const submit = form.querySelector('button[type="submit"]');
   const reauthPanel = form.querySelector('[data-reauth-panel]');
   const reauthPassword = form.querySelector('[data-reauth-password]');
@@ -25,6 +26,12 @@
     if (!error) return;
     error.hidden = false;
     error.textContent = message || 'Account management is temporarily unavailable.';
+  };
+
+  const showStatus = (message) => {
+    if (!status) return;
+    status.hidden = false;
+    status.textContent = message;
   };
 
   const requestJson = async (url, method, payload, csrfToken) => {
@@ -117,8 +124,32 @@
         form.requestSubmit();
         return;
       }
-      if (action === 'reset') {
-        showError('Password-reset delivery will be available after mail actions are configured.');
+      if (action === 'reset' || action === 'welcome') {
+        const data = new FormData(form);
+        const accountId = String(data.get('account_id') || '');
+        const endpoint = action === 'reset' ? 'password-reset' : 'welcome';
+        button.disabled = true;
+        if (error) error.hidden = true;
+        if (status) status.hidden = true;
+        try {
+          await requestJson(
+            `/admin/accounts/${encodeURIComponent(accountId)}/${endpoint}`,
+            'POST',
+            {},
+            String(data.get('csrf_token') || ''),
+          );
+          showStatus(action === 'reset'
+            ? 'If delivery is available, a password reset email has been queued.'
+            : 'If delivery is available, a welcome email has been queued.');
+        } catch (requestError) {
+          if (requestError.message === 'Recent authentication is required.') {
+            requireReauthentication(() => button.click());
+            return;
+          }
+          showError(requestError.message);
+        } finally {
+          button.disabled = false;
+        }
         return;
       }
       if (action !== 'revoke' || !window.confirm('Revoke every active session for this user?')) return;

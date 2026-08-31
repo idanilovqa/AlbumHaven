@@ -25,6 +25,7 @@
       </header>
 
       <p class="admin-form-error" data-admin-form-error role="alert" hidden></p>
+      <p class="admin-form-status" data-admin-form-status role="status" hidden></p>
       <form class="admin-detail-form" data-admin-account-form data-mode="{{ 'edit' if member else 'create' }}"{% if member %} data-initial-active="{{ 'true' if member.is_active else 'false' }}" data-initial-library-access="{{ 'true' if member.membership_role else 'false' }}"{% endif %}>
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         {% if member %}<input type="hidden" name="account_id" value="{{ member.account_id }}">{% endif %}
@@ -61,6 +62,7 @@
           <h2 id="account-settings-title">Account settings</h2>
           <div class="detail-setting"><span><strong>Library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" {% if member.membership_role %}checked{% endif %} aria-label="Current library access"></div>
           <div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>
+          <div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>
           <div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>
           {% if not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
         </section>

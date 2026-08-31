@@ -31,6 +31,9 @@ from music_app.services.admin_reauthentication_postgres import (
     AdminReauthenticationOutcome,
     PostgresAdminReauthenticationService,
 )
+from music_app.services.admin_mail_actions_postgres import (
+    PostgresAdminMailActionService,
+)
 
 
 router = APIRouter()
@@ -196,6 +199,44 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
     return JSONResponse({"revoked": True})
 
 
+@router.post("/admin/accounts/{account_id}/welcome", status_code=202)
+async def resend_managed_account_welcome(
+    request: Request, account_id: int, background_tasks: BackgroundTasks
+) -> Response:
+    if await _empty_payload(request) is None:
+        return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
+    outcome = await _queue_mail_action(request, account_id, "welcome")
+    if isinstance(outcome, Response):
+        return outcome
+    if outcome.welcome_outbox_id is not None:
+        background_tasks.add_task(
+            _deliver_pending_welcome, request.app, outcome.welcome_outbox_id
+        )
+    return JSONResponse(
+        {"accepted": True}, status_code=202, background=background_tasks
+    )
+
+
+@router.post("/admin/accounts/{account_id}/password-reset", status_code=202)
+async def send_managed_account_password_reset(
+    request: Request, account_id: int, background_tasks: BackgroundTasks
+) -> Response:
+    if await _empty_payload(request) is None:
+        return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
+    outcome = await _queue_mail_action(request, account_id, "password-reset")
+    if isinstance(outcome, Response):
+        return outcome
+    if outcome.password_reset_delivery is not None:
+        background_tasks.add_task(
+            _deliver_pending_password_reset,
+            request.app,
+            outcome.password_reset_delivery,
+        )
+    return JSONResponse(
+        {"accepted": True}, status_code=202, background=background_tasks
+    )
+
+
 @router.post("/admin/reauthenticate")
 async def reauthenticate_administrator(request: Request) -> Response:
     payload = await _password_payload(request)
@@ -337,6 +378,43 @@ async def _password_payload(request: Request) -> dict[str, object] | None:
     return payload if isinstance(payload["password"], str) else None
 
 
+async def _empty_payload(request: Request) -> dict[str, object] | None:
+    payload = await _bounded_json_object(request)
+    return payload if payload == {} else None
+
+
+async def _queue_mail_action(request: Request, account_id: int, action: str):
+    actor = request.state.current_actor
+    if actor.account_id is None or actor.current_library_id is None:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    method = (
+        _mail_action_service(request).queue_welcome
+        if action == "welcome"
+        else _mail_action_service(request).queue_password_reset
+    )
+    try:
+        return await run_in_threadpool(
+            method,
+            actor_account_id=actor.account_id,
+            actor_authenticated_at=actor.authenticated_at,
+            library_id=actor.current_library_id,
+            target_account_id=account_id,
+            request_ref=uuid4().hex,
+        )
+    except RecentAuthenticationRequired:
+        return JSONResponse(
+            {"detail": "Recent authentication is required."}, status_code=409
+        )
+    except PermissionError:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    except ValueError:
+        return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Mail action is temporarily unavailable."}, status_code=503
+        )
+
+
 async def _bounded_json_object(request: Request) -> dict[str, object] | None:
     if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "application/json":
         return None
@@ -442,6 +520,24 @@ def _reauthentication_service(request: Request):
     return existing
 
 
+def _mail_action_service(request: Request):
+    existing = getattr(request.app.state, "admin_mail_action_service", None)
+    if existing is not None:
+        return existing
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "admin_mail_action_service", None)
+        if existing is None:
+            existing = PostgresAdminMailActionService(
+                request.app.state.auth_policy_config
+            )
+            request.app.state.admin_mail_action_service = existing
+    return existing
+
+
 def _service(request: Request):
     existing = getattr(request.app.state, "admin_account_creation_service", None)
     if existing is not None:
@@ -507,4 +603,36 @@ async def _deliver_pending_welcome(app, outbox_id: int) -> None:
         )
     except Exception:
         # Account activation and the committed retryable outbox row are non-gating.
+        return
+
+
+async def _deliver_pending_password_reset(app, delivery) -> None:
+    try:
+        runner = getattr(app.state, "password_reset_delivery", None)
+        if callable(runner):
+            result = runner(delivery)
+            if isawaitable(result):
+                await result
+            return
+        from config import build_mail_config
+        from music_app.services.auth_mail_outbox_postgres import (
+            PostgresPasswordResetOutboxService,
+            deliver_password_reset,
+        )
+
+        mail_config = build_mail_config()
+        if mail_config.get("password_reset_enabled") is not True:
+            return
+        repository_config = dict(mail_config)
+        repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+            app.state.auth_policy_config["ALBUM_HAVEN_APP_DATABASE_URL"]
+        )
+        await deliver_password_reset(
+            delivery,
+            config=mail_config,
+            repository=PostgresPasswordResetOutboxService(repository_config),
+        )
+    except Exception:
+        # The committed token and outbox row remain authoritative; send attempts
+        # are deliberately non-gating and ambiguous failures are terminal.
         return

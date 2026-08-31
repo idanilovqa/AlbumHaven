@@ -25,6 +25,9 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false });
   const error = element({ hidden: true, textContent: '' });
+  const status = element({ hidden: true, textContent: '' });
+  const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
+  const welcome = element({ dataset: { adminAction: 'welcome' }, disabled: false });
   const form = element({
     dataset: {
       mode,
@@ -38,8 +41,14 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
       if (selector === '[name="is_active"]') return { checked: active };
       return null;
     },
-    querySelectorAll: () => [],
-    parentElement: { querySelector: () => error },
+    querySelectorAll: (selector) => (
+      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome] : []
+    ),
+    parentElement: {
+      querySelector: (selector) => (
+        selector === '[data-admin-form-status]' ? status : error
+      ),
+    },
   });
   const values = new Map([
     ['username', 'test.user+2'],
@@ -77,7 +86,10 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
-  return { password, toggle, submit, error, form, fetches, assigned: () => assigned };
+  return {
+    password, toggle, submit, error, status, reset, welcome, form, fetches,
+    assigned: () => assigned,
+  };
 }
 
 test('admin add-user password toggle preserves accessible pressed state', () => {
@@ -124,4 +136,19 @@ test('admin edit form confirms destructive state and sends the bounded patch con
     confirm_remove_access: false,
   });
   assert.equal(runtime.assigned(), '/admin/members');
+});
+
+test('admin mail actions use distinct endpoints and show ambiguous delivery status', async () => {
+  const runtime = loadRuntime({ mode: 'edit' });
+
+  await runtime.reset.listeners.get('click')();
+  await runtime.welcome.listeners.get('click')();
+
+  assert.deepEqual(runtime.fetches.map(([url]) => url), [
+    '/admin/accounts/41/password-reset',
+    '/admin/accounts/41/welcome',
+  ]);
+  assert.deepEqual(runtime.fetches.map(([, options]) => JSON.parse(options.body)), [{}, {}]);
+  assert.match(runtime.status.textContent, /If delivery is available/);
+  assert.equal(runtime.status.hidden, false);
 });

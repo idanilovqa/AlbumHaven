@@ -75,6 +75,8 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/logout", "auth.session.logout"),
         ("GET", "/account", "account.self.read"),
         ("POST", "/account/password", "account.self.password.change"),
+        ("POST", "/admin/accounts/{account_id}/welcome", "accounts.welcome.send"),
+        ("POST", "/admin/accounts/{account_id}/password-reset", "accounts.password_reset.send"),
     ],
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):

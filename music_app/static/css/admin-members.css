@@ -87,6 +87,7 @@ button, input, select { font: inherit; }
 .detail-setting.is-danger strong { color: var(--red); }
 .detail-actions { padding-top: 16px; display: flex; justify-content: flex-end; gap: 11px; }
 .admin-form-error { padding: 12px; border: 1px solid #7c4047; border-radius: 8px; color: #ffc0c4; background: #371c22; font-size: 12px; }
+.admin-form-status { padding: 12px; border: 1px solid #2c684c; border-radius: 8px; color: #afe2c4; background: #103426; font-size: 12px; }
 .reauth-panel { margin-top: 18px; padding: 17px; border: 1px solid #31587b; border-radius: 10px; background: #10263b; }
 .reauth-panel h2 { margin: 0; font-size: 15px; }
 .reauth-panel p { margin: 5px 0 15px; color: #a7b8ca; font-size: 11px; }

@@ -18,49 +18,106 @@
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
   const submit = form.querySelector('button[type="submit"]');
 
+  const showError = (message) => {
+    if (!error) return;
+    error.hidden = false;
+    error.textContent = message || 'Account management is temporarily unavailable.';
+  };
+
+  const requestJson = async (url, method, payload, csrfToken) => {
+    const response = await fetch(url, {
+      method,
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Album-Haven-CSRF': csrfToken,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      throw new Error(result.detail || 'Account management is temporarily unavailable.');
+    }
+    return response;
+  };
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!form.checkValidity()) {
       form.reportValidity();
       return;
     }
-    if (form.dataset.mode !== 'create') {
-      if (error) {
-        error.hidden = false;
-        error.textContent = 'No changes were saved. Choose a specific account action.';
-      }
-      return;
-    }
     const data = new FormData(form);
-    const payload = {
-      username: String(data.get('username') || ''),
-      contact_email: String(data.get('contact_email') || ''),
-      password: String(data.get('password') || ''),
-      capability_keys: data.getAll('capability_keys').map(String),
-    };
     if (submit) submit.disabled = true;
     if (error) error.hidden = true;
     try {
-      const response = await fetch('/admin/accounts', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Album-Haven-CSRF': String(data.get('csrf_token') || ''),
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        throw new Error(result.detail || 'Account creation is temporarily unavailable.');
+      const csrfToken = String(data.get('csrf_token') || '');
+      if (form.dataset.mode === 'create') {
+        await requestJson('/admin/accounts', 'POST', {
+          username: String(data.get('username') || ''),
+          contact_email: String(data.get('contact_email') || ''),
+          password: String(data.get('password') || ''),
+          capability_keys: data.getAll('capability_keys').map(String),
+        }, csrfToken);
+        window.location.assign('/admin/members?created=1');
+        return;
       }
-      window.location.assign('/admin/members?created=1');
+      const accountId = String(data.get('account_id') || '');
+      const isActive = data.get('is_active') === 'on';
+      const hasAccess = data.get('current_library_access') === 'on';
+      const confirmDisable = form.dataset.initialActive === 'true' && !isActive;
+      const confirmRemoveAccess = form.dataset.initialLibraryAccess === 'true' && !hasAccess;
+      if (confirmDisable && !window.confirm('Disable this account and revoke all active sessions?')) {
+        if (submit) submit.disabled = false;
+        return;
+      }
+      if (confirmRemoveAccess && !window.confirm('Remove this user from the current library?')) {
+        if (submit) submit.disabled = false;
+        return;
+      }
+      await requestJson(`/admin/accounts/${encodeURIComponent(accountId)}`, 'PATCH', {
+        is_active: isActive,
+        current_library_access: hasAccess,
+        capability_keys: data.getAll('capability_keys').map(String),
+        confirm_disable: confirmDisable,
+        confirm_remove_access: confirmRemoveAccess,
+      }, csrfToken);
+      window.location.assign('/admin/members');
     } catch (requestError) {
-      if (error) {
-        error.hidden = false;
-        error.textContent = requestError.message || 'Account creation is temporarily unavailable.';
-      }
+      showError(requestError.message);
       if (submit) submit.disabled = false;
     }
+  });
+
+  form.querySelectorAll?.('[data-admin-action]')?.forEach((button) => {
+    button.addEventListener('click', async () => {
+      const action = button.dataset.adminAction;
+      if (action === 'toggle-active') {
+        const checkbox = form.querySelector('[name="is_active"]');
+        if (checkbox) checkbox.checked = !checkbox.checked;
+        form.requestSubmit();
+        return;
+      }
+      if (action === 'reset') {
+        showError('Password-reset delivery will be available after mail actions are configured.');
+        return;
+      }
+      if (action !== 'revoke' || !window.confirm('Revoke every active session for this user?')) return;
+      const data = new FormData(form);
+      const accountId = String(data.get('account_id') || '');
+      button.disabled = true;
+      try {
+        await requestJson(
+          `/admin/accounts/${encodeURIComponent(accountId)}/sessions/revoke`,
+          'POST',
+          { confirmed: true },
+          String(data.get('csrf_token') || ''),
+        );
+        window.location.assign(`/admin/accounts/${encodeURIComponent(accountId)}`);
+      } catch (requestError) {
+        showError(requestError.message);
+        button.disabled = false;
+      }
+    });
   });
 })();

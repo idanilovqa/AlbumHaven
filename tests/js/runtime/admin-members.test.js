@@ -20,16 +20,25 @@ function element(initial = {}) {
   };
 }
 
-function loadRuntime() {
+function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = {}) {
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false });
   const error = element({ hidden: true, textContent: '' });
   const form = element({
-    dataset: { mode: 'create' },
+    dataset: {
+      mode,
+      initialActive: 'true',
+      initialLibraryAccess: 'true',
+    },
     checkValidity: () => true,
     reportValidity: () => {},
-    querySelector: (selector) => (selector === 'button[type="submit"]' ? submit : null),
+    querySelector: (selector) => {
+      if (selector === 'button[type="submit"]') return submit;
+      if (selector === '[name="is_active"]') return { checked: active };
+      return null;
+    },
+    querySelectorAll: () => [],
     parentElement: { querySelector: () => error },
   });
   const values = new Map([
@@ -37,6 +46,9 @@ function loadRuntime() {
     ['contact_email', 'test.user+2@example.test'],
     ['password', 'private passphrase'],
     ['csrf_token', 'csrf-value'],
+    ['account_id', '41'],
+    ['is_active', active ? 'on' : ''],
+    ['current_library_access', libraryAccess ? 'on' : ''],
   ]);
   const fetches = [];
   let assigned = '';
@@ -54,7 +66,10 @@ function loadRuntime() {
       fetches.push(args);
       return { ok: true, json: async () => ({ account_id: 42 }) };
     },
-    window: { location: { assign: (value) => { assigned = value; } } },
+    window: {
+      confirm: () => true,
+      location: { assign: (value) => { assigned = value; } },
+    },
     document: {
       querySelectorAll: () => [toggle],
       getElementById: (id) => (id === 'admin-new-password' ? password : null),
@@ -91,4 +106,22 @@ test('admin add-user form sends only the bounded JSON contract with session CSRF
     capability_keys: ['library.browse.read', 'library.media.read'],
   });
   assert.equal(runtime.assigned(), '/admin/members?created=1');
+});
+
+test('admin edit form confirms destructive state and sends the bounded patch contract', async () => {
+  const runtime = loadRuntime({ mode: 'edit', active: false, libraryAccess: true });
+
+  await runtime.form.listeners.get('submit')({ preventDefault() {} });
+
+  const [url, options] = runtime.fetches[0];
+  assert.equal(url, '/admin/accounts/41');
+  assert.equal(options.method, 'PATCH');
+  assert.deepEqual(JSON.parse(options.body), {
+    is_active: false,
+    current_library_access: true,
+    capability_keys: ['library.browse.read', 'library.media.read'],
+    confirm_disable: true,
+    confirm_remove_access: false,
+  });
+  assert.equal(runtime.assigned(), '/admin/members');
 });

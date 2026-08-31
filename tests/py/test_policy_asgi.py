@@ -32,7 +32,7 @@ def _actor(*, bootstrap=False, state=ActorState.ACTIVE):
     )
 
 
-def _app(actor, *, constraints=None):
+def _app(actor, *, constraints=None, action="library.read"):
     app = FastAPI()
     resolver = Resolver(actor)
     app.state.current_actor_resolver = resolver
@@ -44,7 +44,7 @@ def _app(actor, *, constraints=None):
         app.state.policy_constraint_resolver = lambda context: constraints
 
     @app.get("/private")
-    async def private(_result=__import__("fastapi").Depends(require_action("library.read"))):
+    async def private(_result=__import__("fastapi").Depends(require_action(action))):
         return {"ok": True, "reason": _result.decision.reason_code}
 
     return app, resolver
@@ -155,6 +155,24 @@ def test_single_current_library_is_applied_to_a_library_scoped_grant():
         capability_grants=(CapabilityGrant("library.read", "library", 23),),
     )
     app, _ = _app(actor)
+
+    status, body = _request(app)
+
+    assert status == 200
+    assert body == b'{"ok":true,"reason":"explicit_grant"}'
+
+
+def test_account_management_grants_are_scoped_to_the_current_library():
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=9,
+        session_id=12,
+        username_display="library administrator",
+        current_library_id=23,
+        library_relationships=(LibraryRelationship(23, "administrator", False),),
+        capability_grants=(CapabilityGrant("accounts.read", "library", 23),),
+    )
+    app, _ = _app(actor, action="accounts.read")
 
     status, body = _request(app)
 

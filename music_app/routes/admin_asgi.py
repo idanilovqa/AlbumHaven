@@ -6,6 +6,7 @@ import json
 from inspect import isawaitable
 from pathlib import Path
 import threading
+from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -20,6 +21,11 @@ from music_app.services.admin_account_creation_postgres import (
 from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.admin_members_postgres import PostgresAdminMembersService
+from music_app.services.admin_member_mutation_postgres import (
+    DestructiveConfirmationRequired,
+    PostgresAdminMemberMutationService,
+    RecentAuthenticationRequired,
+)
 
 
 router = APIRouter()
@@ -119,6 +125,72 @@ async def edit_managed_account(request: Request, account_id: int) -> Response:
     )
 
 
+@router.patch("/admin/accounts/{account_id}")
+async def update_managed_account(request: Request, account_id: int) -> Response:
+    payload = await _management_payload(request)
+    if payload is None:
+        return JSONResponse({"detail": "Account update was invalid."}, status_code=400)
+    actor = request.state.current_actor
+    if actor.account_id is None or actor.current_library_id is None:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    try:
+        await run_in_threadpool(
+            _mutation_service(request).update_account,
+            actor_account_id=actor.account_id,
+            actor_authenticated_at=actor.authenticated_at,
+            library_id=actor.current_library_id,
+            target_account_id=account_id,
+            is_active=payload["is_active"],
+            current_library_access=payload["current_library_access"],
+            capability_keys=payload["capability_keys"],
+            confirm_disable=payload["confirm_disable"],
+            confirm_remove_access=payload["confirm_remove_access"],
+            request_ref=uuid4().hex,
+        )
+    except RecentAuthenticationRequired:
+        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+    except DestructiveConfirmationRequired:
+        return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
+    except PermissionError:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    except ValueError:
+        return JSONResponse({"detail": "Account update was invalid."}, status_code=400)
+    except Exception:
+        return JSONResponse({"detail": "Account update is temporarily unavailable."}, status_code=503)
+    return JSONResponse({"updated": True})
+
+
+@router.post("/admin/accounts/{account_id}/sessions/revoke")
+async def revoke_managed_account_sessions(request: Request, account_id: int) -> Response:
+    payload = await _confirmed_payload(request)
+    if payload is None:
+        return JSONResponse({"detail": "Session revocation was invalid."}, status_code=400)
+    actor = request.state.current_actor
+    if actor.account_id is None or actor.current_library_id is None:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    try:
+        await run_in_threadpool(
+            _mutation_service(request).revoke_sessions,
+            actor_account_id=actor.account_id,
+            actor_authenticated_at=actor.authenticated_at,
+            library_id=actor.current_library_id,
+            target_account_id=account_id,
+            confirmed=payload["confirmed"],
+            request_ref=uuid4().hex,
+        )
+    except RecentAuthenticationRequired:
+        return JSONResponse({"detail": "Recent authentication is required."}, status_code=409)
+    except DestructiveConfirmationRequired:
+        return JSONResponse({"detail": "Explicit confirmation is required."}, status_code=409)
+    except PermissionError:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    except ValueError:
+        return JSONResponse({"detail": "Session revocation was invalid."}, status_code=400)
+    except Exception:
+        return JSONResponse({"detail": "Session revocation is temporarily unavailable."}, status_code=503)
+    return JSONResponse({"revoked": True})
+
+
 @router.post("/admin/accounts", status_code=201)
 async def create_managed_account(request: Request, background_tasks: BackgroundTasks):
     payload = await _json_payload(request)
@@ -192,6 +264,61 @@ async def _json_payload(request: Request) -> dict[str, object] | None:
     return payload
 
 
+async def _management_payload(request: Request) -> dict[str, object] | None:
+    payload = await _bounded_json_object(request)
+    expected = {
+        "is_active",
+        "current_library_access",
+        "capability_keys",
+        "confirm_disable",
+        "confirm_remove_access",
+    }
+    if payload is None or set(payload) != expected:
+        return None
+    if any(
+        not isinstance(payload[key], bool)
+        for key in (
+            "is_active",
+            "current_library_access",
+            "confirm_disable",
+            "confirm_remove_access",
+        )
+    ):
+        return None
+    capabilities = payload["capability_keys"]
+    if not isinstance(capabilities, list) or any(
+        not isinstance(item, str) for item in capabilities
+    ):
+        return None
+    return payload
+
+
+async def _confirmed_payload(request: Request) -> dict[str, object] | None:
+    payload = await _bounded_json_object(request)
+    if payload is None or set(payload) != {"confirmed"}:
+        return None
+    return payload if isinstance(payload["confirmed"], bool) else None
+
+
+async def _bounded_json_object(request: Request) -> dict[str, object] | None:
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "application/json":
+        return None
+    try:
+        length = int(request.headers.get("content-length", "0"))
+    except ValueError:
+        return None
+    if length < 2 or length > _MAX_BODY_BYTES:
+        return None
+    body = await request.body()
+    if len(body) != length:
+        return None
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 async def _load_roster(request: Request):
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
@@ -238,6 +365,24 @@ def _members_service(request: Request):
         if existing is None:
             existing = PostgresAdminMembersService(request.app.state.auth_policy_config)
             request.app.state.admin_members_service = existing
+    return existing
+
+
+def _mutation_service(request: Request):
+    existing = getattr(request.app.state, "admin_member_mutation_service", None)
+    if existing is not None:
+        return existing
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "admin_member_mutation_service", None)
+        if existing is None:
+            existing = PostgresAdminMemberMutationService(
+                request.app.state.auth_policy_config
+            )
+            request.app.state.admin_member_mutation_service = existing
     return existing
 
 

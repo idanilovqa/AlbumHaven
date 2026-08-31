@@ -76,7 +76,11 @@ def require_action(
 def _library_scope(actor, action: str, explicit_library_id: int | None) -> int | None:
     if explicit_library_id is not None:
         return explicit_library_id
-    if not (action.startswith("library.") or action.startswith("integration.")):
+    if not (
+        action.startswith("library.")
+        or action.startswith("integration.")
+        or action.startswith("accounts.")
+    ):
         return None
     current_library_id = actor.current_library_id
     if current_library_id is None:

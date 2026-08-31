@@ -163,6 +163,69 @@ def test_phase6_plan_evidence_uses_cumulative_root_buffer_counters_once():
     }
 
 
+def test_live_auth_preauth_migration_reapply_privileges_and_concurrent_consume(
+    monkeypatch,
+):
+    from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    migration_sql = (
+        Path(__file__).resolve().parents[2]
+        / "migrations"
+        / "postgres"
+        / "0047_add_auth_preauth_tokens.sql"
+    ).read_text(encoding="utf-8")
+    cleanup_complete = False
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(migration_sql)
+            connection.execute(migration_sql)
+            privileges = connection.execute(
+                """
+                select
+                  has_table_privilege('album_haven_app',
+                    'app.auth_preflight_tokens', 'SELECT, INSERT, UPDATE, DELETE')
+                    as app_table_access,
+                  has_sequence_privilege('album_haven_app',
+                    'app.auth_preflight_tokens_id_seq', 'USAGE, SELECT')
+                    as app_sequence_access,
+                  has_table_privilege('album_haven_readonly',
+                    'app.auth_preflight_tokens', 'SELECT') as readonly_select,
+                  has_sequence_privilege('album_haven_readonly',
+                    'app.auth_preflight_tokens_id_seq', 'USAGE') as readonly_usage
+                """
+            ).fetchone()
+
+        assert privileges == {
+            "app_table_access": True,
+            "app_sequence_access": True,
+            "readonly_select": False,
+            "readonly_usage": False,
+        }
+
+        service = PostgresPreAuthCsrfService(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=isolatedPostgres._connect,
+        )
+        issued = service.issue_login_token()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _attempt: service.consume_login_token(issued.raw_token),
+                    range(2),
+                )
+            )
+        assert sorted(results) == [False, True]
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
+
+
 def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
     monkeypatch,
     tmp_path,

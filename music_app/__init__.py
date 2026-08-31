@@ -40,6 +40,7 @@ def _configure_asgi_app(app, runtime) -> None:
     from fastapi.templating import Jinja2Templates
 
     from music_app.routes.api_read_asgi_routes import router as api_read_asgi_router
+    from music_app.routes.auth_asgi import router as auth_asgi_router
     from music_app.routes.api_wave_a_asgi_routes import router as api_wave_a_asgi_router
     from music_app.routes.api_wave_b_asgi_routes import router as api_wave_b_asgi_router
     from music_app.routes.api_wave_c_asgi_routes import router as api_wave_c_asgi_router
@@ -76,6 +77,7 @@ def _configure_asgi_app(app, runtime) -> None:
     )
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()
+    app.state.auth_service_lock = threading.Lock()
     immutable_runtime_asset_paths = {
         "/static/app.js",
         "/static/js/runtime-bundle.js",
@@ -105,6 +107,7 @@ def _configure_asgi_app(app, runtime) -> None:
         return response
 
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    app.include_router(auth_asgi_router)
     app.include_router(web_asgi_router)
     app.include_router(api_read_asgi_router)
     app.include_router(api_wave_a_asgi_router)

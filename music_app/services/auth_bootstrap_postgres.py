@@ -39,6 +39,8 @@ class BootstrapReconciliationResult:
     account_id: int
     library_id: int
     credential_created: bool
+    welcome_queued: bool
+    welcome_outbox_id: int | None
 
 
 class PostgresAuthBootstrapService:
@@ -55,6 +57,7 @@ class PostgresAuthBootstrapService:
         self._email = _validated_email(payload.get("bootstrap_email_normalized"))
         self._argon2 = payload.get("argon2")
         self._active_policy_version = payload.get("argon2_policy_version")
+        self._welcome_enabled = payload.get("welcome_enabled") is True
         self._connect = connect or _connect
 
     def reconcile_owner(
@@ -246,6 +249,41 @@ class PostgresAuthBootstrapService:
                                 False,
                             ),
                         )
+                    welcome_queued = False
+                    welcome_outbox_id = None
+                    if self._welcome_enabled:
+                        welcome_rows = connection.execute(
+                            """
+                            select app.mail_outbox.id
+                            from app.mail_outbox
+                            where app.mail_outbox.account_id = %s
+                              and app.mail_outbox.message_category = 'welcome'
+                            order by app.mail_outbox.id
+                            limit 1
+                            for update
+                            """,
+                            (account_id,),
+                        ).fetchall()
+                        if welcome_rows:
+                            welcome_outbox_id = _required_id(welcome_rows[0], ("id",))
+                        else:
+                            created_welcome = _only_row(
+                                connection.execute(
+                                    """
+                                    insert into app.mail_outbox (
+                                      account_id, message_category, delivery_status,
+                                      next_attempt_at
+                                    ) values (%s, %s, %s, now())
+                                    returning id
+                                    """,
+                                    (account_id, "welcome", "pending"),
+                                ).fetchall(),
+                                "Bootstrap welcome outbox context is invalid.",
+                            )
+                            welcome_outbox_id = _required_id(
+                                created_welcome, ("id",)
+                            )
+                            welcome_queued = True
         except Exception as exc:
             if _is_identity_unique_violation(exc):
                 raise RuntimeError(
@@ -257,6 +295,8 @@ class PostgresAuthBootstrapService:
             account_id=account_id,
             library_id=library_id,
             credential_created=credential_created,
+            welcome_queued=welcome_queued,
+            welcome_outbox_id=welcome_outbox_id,
         )
 
 

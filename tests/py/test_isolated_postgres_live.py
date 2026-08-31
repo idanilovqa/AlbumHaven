@@ -264,6 +264,7 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
                 {
                     "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
                     "bootstrap_email_normalized": "Rendref+owner@example.test",
+                    "welcome_enabled": True,
                     "argon2": {
                         "memory_cost": 65_536,
                         "time_cost": 3,
@@ -286,6 +287,8 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
         assert sorted(result.credential_created for result in results) == [False, True]
         assert {result.account_id for result in results} == {int(initial["account_id"])}
         assert {result.library_id for result in results} == {int(initial["library_id"])}
+        assert sorted(result.welcome_queued for result in results) == [False, True]
+        assert len({result.welcome_outbox_id for result in results}) == 1
 
         with isolatedPostgres._connect(setup_url) as connection:
             persisted = connection.execute(
@@ -300,7 +303,13 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
                        (select count(*) from app.accounts) as account_count,
                        (select count(*) from library.libraries) as library_count,
                        (select count(*) from app.account_credentials)
-                         as credential_count
+                         as credential_count,
+                       (select count(*)
+                          from app.mail_outbox
+                         where message_category = 'welcome') as welcome_count,
+                       (select min(delivery_status)
+                          from app.mail_outbox
+                         where message_category = 'welcome') as welcome_status
                 from app.accounts
                 join app.account_credentials
                   on app.account_credentials.account_id = app.accounts.id
@@ -323,6 +332,8 @@ def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential
         assert int(persisted["account_count"]) == 1
         assert int(persisted["library_count"]) == 1
         assert int(persisted["credential_count"]) == 1
+        assert int(persisted["welcome_count"]) == 1
+        assert persisted["welcome_status"] == "pending"
         persisted_hash = persisted["encoded_hash"]
         assert persisted_hash in encoded_hashes
         assert PasswordHasher().verify(

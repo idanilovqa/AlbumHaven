@@ -77,6 +77,7 @@ class RecordingConnection:
         library_rows=({"id": 73, "owner_account_id": 41},),
         membership_rows=(),
         credential_rows=(),
+        welcome_rows=(),
     ):
         self.account_rows = list(account_rows)
         self.owner_rows = list(owner_rows)
@@ -84,6 +85,7 @@ class RecordingConnection:
         self.library_rows = list(library_rows)
         self.membership_rows = list(membership_rows)
         self.credential_rows = list(credential_rows)
+        self.welcome_rows = list(welcome_rows)
         self.operations: list[tuple[str, object]] = []
         self.events: list[str] = []
 
@@ -111,8 +113,12 @@ class RecordingConnection:
             return Cursor(self.membership_rows)
         if "from app.account_credentials" in normalized:
             return Cursor(self.credential_rows)
+        if "from app.mail_outbox" in normalized:
+            return Cursor(self.welcome_rows)
         if "insert into app.account_credentials" in normalized:
             return Cursor(({"created": True},))
+        if "insert into app.mail_outbox" in normalized:
+            return Cursor(({"id": 91},))
         return Cursor()
 
 
@@ -128,6 +134,7 @@ def _service(auth_bootstrap, connection, *, config=None):
             "hash_len": 32,
         },
         "argon2_policy_version": 3,
+        "welcome_enabled": False,
     }
     if config is not None:
         values = config
@@ -163,6 +170,8 @@ def test_reconcile_preserves_ids_and_uses_one_ordered_transaction(auth_bootstrap
     assert result.account_id == 41
     assert result.library_id == 73
     assert result.credential_created is True
+    assert result.welcome_queued is False
+    assert result.welcome_outbox_id is None
     assert connection.events == ["transaction:enter", "transaction:commit"]
     assert _indexes(connection, [
         "from app.bootstrap_owners",
@@ -392,3 +401,60 @@ def test_reconcile_requires_the_active_hash_policy_version(auth_bootstrap):
         )
 
     assert connection.operations == []
+
+
+def test_enabled_welcome_is_queued_once_after_credential_lock(auth_bootstrap):
+    connection = RecordingConnection()
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
+        "bootstrap_email_normalized": "Rendref+owner@example.test",
+        "argon2": {
+            "memory_cost": 65_536,
+            "time_cost": 3,
+            "parallelism": 1,
+            "salt_len": 16,
+            "hash_len": 32,
+        },
+        "argon2_policy_version": 3,
+        "welcome_enabled": True,
+    }
+
+    result = _reconcile(_service(auth_bootstrap, connection, config=config))
+
+    assert result.welcome_queued is True
+    assert result.welcome_outbox_id == 91
+    outbox_insert = next(
+        operation
+        for operation in connection.operations
+        if "insert into app.mail_outbox" in operation[0]
+    )
+    assert {41, "welcome", "pending"}.issubset(set(outbox_insert[1]))
+    statements = [sql for sql, _params in connection.operations]
+    assert next(i for i, sql in enumerate(statements) if "from app.account_credentials" in sql) < next(
+        i for i, sql in enumerate(statements) if "from app.mail_outbox" in sql
+    )
+
+
+def test_existing_welcome_outbox_is_preserved_without_duplicate(auth_bootstrap):
+    connection = RecordingConnection(welcome_rows=({"id": 88},))
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
+        "bootstrap_email_normalized": "Rendref+owner@example.test",
+        "argon2": {
+            "memory_cost": 65_536,
+            "time_cost": 3,
+            "parallelism": 1,
+            "salt_len": 16,
+            "hash_len": 32,
+        },
+        "argon2_policy_version": 3,
+        "welcome_enabled": True,
+    }
+
+    result = _reconcile(_service(auth_bootstrap, connection, config=config))
+
+    assert result.welcome_queued is False
+    assert result.welcome_outbox_id == 88
+    assert not any(
+        "insert into app.mail_outbox" in sql for sql, _ in connection.operations
+    )

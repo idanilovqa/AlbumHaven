@@ -1,0 +1,298 @@
+"""Durable, non-gating welcome-mail delivery through the auth outbox."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any, Awaitable
+
+from music_app.services.auth_mail import (
+    DeliveryResult,
+    compose_welcome_email,
+    send_auth_email,
+)
+
+try:  # pragma: no cover - exercised when the optional runtime driver is present.
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - keeps non-Postgres tooling importable.
+    psycopg = None
+    dict_row = None
+
+
+_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
+_MAX_ATTEMPTS = 5
+_RETRY_DELAYS_SECONDS = (60, 300, 1_800, 7_200)
+_RETRYABLE_REASONS = frozenset({"timeout", "failed"})
+_CLAIM_LEASE = timedelta(hours=1)
+
+
+@dataclass(frozen=True, slots=True)
+class WelcomeClaim:
+    outbox_id: int
+    account_id: int
+    username: str
+    recipient: str
+    attempt_count: int
+    claimed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguousWelcomeClaim:
+    """A stale send whose provider acceptance cannot be determined safely."""
+
+    outbox_id: int
+
+
+class PostgresWelcomeOutboxService:
+    """Claim and finalize one welcome message with SMTP outside transactions."""
+
+    def __init__(
+        self,
+        config: Mapping[str, object],
+        *,
+        connect: Callable[[str], Any] | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
+        self._connect = connect or _connect
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def claim_welcome(
+        self, outbox_id: int
+    ) -> WelcomeClaim | AmbiguousWelcomeClaim | None:
+        if not self._database_url:
+            raise RuntimeError(
+                "ALBUM_HAVEN_APP_DATABASE_URL is required for welcome delivery."
+            )
+        identifier = _positive_integer(outbox_id, "outbox id")
+        now = _aware_utc(self._now())
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                stale_rows = connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'unknown',
+                        next_attempt_at = null
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.message_category = 'welcome'
+                      and app.mail_outbox.delivery_status = 'sending'
+                      and app.mail_outbox.claimed_at is not null
+                      and app.mail_outbox.claimed_at <= %s
+                    returning id
+                    """,
+                    (identifier, now - _CLAIM_LEASE),
+                ).fetchall()
+                if len(stale_rows) > 1:
+                    raise RuntimeError("Welcome stale-claim context is invalid.")
+                if stale_rows:
+                    return AmbiguousWelcomeClaim(outbox_id=identifier)
+                rows = connection.execute(
+                    """
+                    select app.mail_outbox.id,
+                           app.mail_outbox.account_id,
+                           app.accounts.username_display,
+                           app.accounts.contact_email,
+                           app.mail_outbox.attempt_count
+                    from app.mail_outbox
+                    join app.accounts
+                      on app.accounts.id = app.mail_outbox.account_id
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.message_category = 'welcome'
+                      and app.mail_outbox.delivery_status in ('pending', 'failed')
+                      and (
+                        app.mail_outbox.delivery_status = 'pending'
+                        or (
+                          app.mail_outbox.next_attempt_at is not null
+                          and app.mail_outbox.next_attempt_at <= %s
+                        )
+                      )
+                      and app.mail_outbox.attempt_count < %s
+                    for update of app.mail_outbox skip locked
+                    """,
+                    (identifier, now, _MAX_ATTEMPTS),
+                ).fetchall()
+                if not rows:
+                    return None
+                if len(rows) != 1:
+                    raise RuntimeError("Welcome outbox claim context is invalid.")
+                payload = _row_mapping(
+                    rows[0],
+                    (
+                        "id",
+                        "account_id",
+                        "username_display",
+                        "contact_email",
+                        "attempt_count",
+                    ),
+                )
+                attempt_count = _nonnegative_integer(
+                    payload.get("attempt_count"), "attempt count"
+                ) + 1
+                username = _required_text(payload.get("username_display"), "username")
+                recipient = _required_text(payload.get("contact_email"), "recipient")
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'sending',
+                        attempt_count = %s,
+                        claimed_at = %s,
+                        next_attempt_at = null
+                    where id = %s
+                    """,
+                    (attempt_count, now, identifier),
+                )
+        return WelcomeClaim(
+            outbox_id=identifier,
+            account_id=_positive_integer(payload.get("account_id"), "account id"),
+            username=username,
+            recipient=recipient,
+            attempt_count=attempt_count,
+            claimed_at=now,
+        )
+
+    def finalize_welcome(
+        self, claim: WelcomeClaim, result: DeliveryResult
+    ) -> None:
+        if not isinstance(claim, WelcomeClaim):
+            raise ValueError("Welcome claim is invalid.")
+        now = _aware_utc(self._now())
+        status, sent_at, next_attempt_at = _final_state(claim, result, now)
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                rows = connection.execute(
+                    """
+                    select app.mail_outbox.id
+                    from app.mail_outbox
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.delivery_status = 'sending'
+                      and app.mail_outbox.attempt_count = %s
+                      and app.mail_outbox.claimed_at = %s
+                    for update
+                    """,
+                    (claim.outbox_id, claim.attempt_count, claim.claimed_at),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise RuntimeError("Welcome outbox finalization context is invalid.")
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = %s,
+                        sent_at = %s,
+                        next_attempt_at = %s,
+                        provider_reference = null
+                    where id = %s
+                      and attempt_count = %s
+                      and claimed_at = %s
+                    """,
+                    (
+                        status,
+                        sent_at,
+                        next_attempt_at,
+                        claim.outbox_id,
+                        claim.attempt_count,
+                        claim.claimed_at,
+                    ),
+                )
+
+
+async def deliver_welcome(
+    outbox_id: int,
+    *,
+    config: Mapping[str, Any],
+    repository: PostgresWelcomeOutboxService,
+    composer: Callable[..., Any] = compose_welcome_email,
+    sender: Callable[..., Awaitable[DeliveryResult]] = send_auth_email,
+) -> DeliveryResult:
+    """Attempt one claimed welcome without changing account readiness."""
+
+    claim = repository.claim_welcome(outbox_id)
+    if claim is None:
+        return DeliveryResult(delivered=False, reason="not_eligible")
+    if isinstance(claim, AmbiguousWelcomeClaim):
+        return DeliveryResult(delivered=False, reason="unknown")
+    try:
+        message = composer(
+            username=claim.username,
+            recipient=claim.recipient,
+            config=config,
+        )
+        result = await sender(message, config=config)
+        if not isinstance(result, DeliveryResult):
+            result = DeliveryResult(delivered=False, reason="failed")
+    except Exception:
+        result = DeliveryResult(delivered=False, reason="failed")
+    repository.finalize_welcome(claim, result)
+    return result
+
+
+def _final_state(
+    claim: WelcomeClaim,
+    result: object,
+    now: datetime,
+) -> tuple[str, datetime | None, datetime | None]:
+    delivered = bool(getattr(result, "delivered", False))
+    reason = str(getattr(result, "reason", "failed"))
+    if delivered and reason == "delivered":
+        return "sent", now, None
+    if reason == "unknown":
+        return "unknown", None, None
+    retryable = reason in _RETRYABLE_REASONS and claim.attempt_count < _MAX_ATTEMPTS
+    if retryable:
+        delay = _RETRY_DELAYS_SECONDS[claim.attempt_count - 1]
+        return "failed", None, now + timedelta(seconds=delay)
+    return "failed", None, None
+
+
+def _connect(database_url: str) -> Any:
+    if psycopg is None:
+        raise RuntimeError("psycopg is required for welcome delivery.")
+    return psycopg.connect(database_url, row_factory=dict_row)
+
+
+def _transaction(connection: Any) -> Any:
+    transaction = getattr(connection, "transaction", None)
+    if not callable(transaction):
+        raise RuntimeError("Welcome delivery requires transaction support.")
+    return transaction()
+
+
+def _row_mapping(row: object, columns: tuple[str, ...]) -> Mapping[str, object]:
+    if isinstance(row, Mapping):
+        return row
+    if isinstance(row, (tuple, list)):
+        return dict(zip(columns, row, strict=False))
+    return {}
+
+
+def _positive_integer(value: object, field: str) -> int:
+    parsed = _nonnegative_integer(value, field)
+    if parsed < 1:
+        raise RuntimeError(f"Welcome {field} is invalid.")
+    return parsed
+
+
+def _nonnegative_integer(value: object, field: str) -> int:
+    if isinstance(value, bool):
+        raise RuntimeError(f"Welcome {field} is invalid.")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"Welcome {field} is invalid.") from None
+    if parsed < 0:
+        raise RuntimeError(f"Welcome {field} is invalid.")
+    return parsed
+
+
+def _required_text(value: object, field: str) -> str:
+    text = str(value or "").strip()
+    if not text or "\r" in text or "\n" in text:
+        raise RuntimeError(f"Welcome {field} is invalid.")
+    return text
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None:
+        raise RuntimeError("Welcome delivery clock is invalid.")
+    return value.astimezone(timezone.utc)

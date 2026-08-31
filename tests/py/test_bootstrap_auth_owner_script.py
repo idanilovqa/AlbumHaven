@@ -41,7 +41,9 @@ class GuardedInput:
         raise AssertionError("bootstrap must never read a password from stdin")
 
 
-def _dependencies(*, passwords=(PASSWORD, PASSWORD), credential_created=True):
+def _dependencies(
+    *, passwords=(PASSWORD, PASSWORD), credential_created=True, welcome_enabled=False
+):
     events = []
     prompts = []
     output = io.StringIO()
@@ -72,6 +74,14 @@ def _dependencies(*, passwords=(PASSWORD, PASSWORD), credential_created=True):
         assert received is environment
         return config
 
+    def mail_config_builder(received):
+        events.append("mail-config")
+        assert received is environment
+        return {
+            "welcome_enabled": welcome_enabled,
+            "public_base_url": "https://music.example.test",
+        }
+
     def breached_checker(raw):
         events.append("breach")
         assert raw == PASSWORD
@@ -95,12 +105,19 @@ def _dependencies(*, passwords=(PASSWORD, PASSWORD), credential_created=True):
                 account_id=41,
                 library_id=73,
                 credential_created=credential_created,
+                welcome_queued=welcome_enabled,
+                welcome_outbox_id=91 if welcome_enabled else None,
             )
 
     def service_factory(received):
         events.append("service")
         assert received is config
         return Service()
+
+    def delivery_runner(outbox_id, *, config):
+        events.append(("deliver-welcome", outbox_id))
+        assert config["public_base_url"] == "https://music.example.test"
+        return SimpleNamespace(delivered=True, reason="delivered")
 
     return SimpleNamespace(
         events=events,
@@ -109,10 +126,12 @@ def _dependencies(*, passwords=(PASSWORD, PASSWORD), credential_created=True):
         stderr=errors,
         environment=environment,
         config_builder=config_builder,
+        mail_config_builder=mail_config_builder,
         getpass_fn=getpass_fn,
         breached_checker=breached_checker,
         password_hasher=password_hasher,
         service_factory=service_factory,
+        delivery_runner=delivery_runner,
     )
 
 
@@ -125,9 +144,11 @@ def _main(module, dependencies, *, argv=(), stdin=None):
         stderr=dependencies.stderr,
         getpass_fn=dependencies.getpass_fn,
         config_builder=dependencies.config_builder,
+        mail_config_builder=dependencies.mail_config_builder,
         breached_checker=dependencies.breached_checker,
         password_hasher=dependencies.password_hasher,
         bootstrap_service_factory=dependencies.service_factory,
+        welcome_delivery_runner=dependencies.delivery_runner,
     )
 
 
@@ -140,6 +161,7 @@ def test_bootstrap_validates_full_config_then_reads_twice_and_hashes_before_db(
 
     assert dependencies.events == [
         "config",
+        "mail-config",
         "getpass",
         "getpass",
         "breach",
@@ -188,7 +210,7 @@ def test_password_confirmation_mismatch_fails_before_screen_hash_or_database(
 
     assert _main(bootstrap_script, dependencies) != 0
 
-    assert dependencies.events == ["config", "getpass", "getpass"]
+    assert dependencies.events == ["config", "mail-config", "getpass", "getpass"]
     combined = dependencies.stdout.getvalue() + dependencies.stderr.getvalue()
     assert PASSWORD not in combined
 
@@ -253,3 +275,48 @@ def test_script_main_guard_does_not_embed_password_flags_or_environment_reads():
     text = source.read_text(encoding="utf-8")
     assert "ALBUM_HAVEN_BOOTSTRAP_PASSWORD" not in text
     assert "argparse" not in text
+
+
+def test_enabled_welcome_is_delivered_only_after_bootstrap_commit(bootstrap_script):
+    dependencies = _dependencies(welcome_enabled=True)
+
+    assert _main(bootstrap_script, dependencies) == 0
+
+    assert dependencies.events[-2:] == ["reconcile", ("deliver-welcome", 91)]
+
+
+def test_welcome_delivery_failure_never_rolls_back_bootstrap(bootstrap_script):
+    dependencies = _dependencies(welcome_enabled=True)
+
+    def broken_delivery(_outbox_id, *, config):
+        dependencies.events.append("deliver-failed")
+        raise RuntimeError("smtp-secret")
+
+    dependencies.delivery_runner = broken_delivery
+
+    assert _main(bootstrap_script, dependencies) == 0
+    assert dependencies.events[-2:] == ["reconcile", "deliver-failed"]
+    combined = dependencies.stdout.getvalue() + dependencies.stderr.getvalue()
+    assert "smtp-secret" not in combined
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("failed", "was not delivered"),
+        ("unknown", "outcome is unknown"),
+    ],
+)
+def test_welcome_delivery_result_is_reported_without_changing_success(
+    bootstrap_script, reason, expected
+):
+    dependencies = _dependencies(welcome_enabled=True)
+
+    def delivery_result(_outbox_id, *, config):
+        return SimpleNamespace(delivered=False, reason=reason)
+
+    dependencies.delivery_runner = delivery_result
+
+    assert _main(bootstrap_script, dependencies) == 0
+    assert expected in dependencies.stderr.getvalue()
+    assert PASSWORD not in dependencies.stderr.getvalue()

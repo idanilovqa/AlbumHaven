@@ -99,6 +99,15 @@ states that the supplied password was not installed and exits with status `3`.
 This provisioning command is not a password reset or emergency recovery
 mechanism.
 
+When `ALBUM_HAVEN_WELCOME_EMAIL_ENABLED=true`, provisioning also commits one
+password-free welcome message to the Postgres mail outbox. Only after the owner
+transaction commits does the command make one bounded SMTP delivery attempt.
+The account remains ready if the provider is unavailable; retryable failures
+stay durably in the outbox for a later worker attempt. Configure a real TLS or
+STARTTLS SMTP provider with the `ALBUM_HAVEN_SMTP_*` values in `.env.example`
+to deliver to real email addresses. SMTP credentials are optional only for
+providers that do not require authentication.
+
 ## Run
 
 ```text

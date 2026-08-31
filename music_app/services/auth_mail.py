@@ -131,7 +131,7 @@ def _failure_result(exc: Exception, *, send_started: bool) -> DeliveryResult:
     if isinstance(exc, (SMTPRecipientRefused, SMTPRecipientsRefused)):
         return DeliveryResult(delivered=False, reason="refused")
     if isinstance(exc, ConnectionRefusedError):
-        return DeliveryResult(delivered=False, reason="refused")
+        return DeliveryResult(delivered=False, reason="failed")
     if isinstance(exc, TimeoutError):
         reason = "unknown" if send_started else "timeout"
         return DeliveryResult(delivered=False, reason=reason)

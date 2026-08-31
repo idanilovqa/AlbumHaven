@@ -54,7 +54,7 @@ class ProfilePasswordOutcome(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ProfileSessionView:
     session_id: int
-    user_agent: str | None
+    device_label: str
     last_seen_at: datetime
     current: bool
 
@@ -164,8 +164,10 @@ class PostgresProfilePasswordService:
                         _row(item, ("id", "user_agent", "last_seen_at")).get("id"),
                         "session id",
                     ),
-                    user_agent=_optional_text(
-                        _row(item, ("id", "user_agent", "last_seen_at")).get("user_agent")
+                    device_label=_session_device_label(
+                        _row(item, ("id", "user_agent", "last_seen_at")).get(
+                            "user_agent"
+                        )
                     ),
                     last_seen_at=_aware_utc(
                         _row(item, ("id", "user_agent", "last_seen_at")).get("last_seen_at")
@@ -509,6 +511,24 @@ def _optional_text(value: object) -> str | None:
     if not isinstance(value, str) or "\r" in value or "\n" in value:
         raise RuntimeError("Profile session user agent is invalid.")
     return value[:1024]
+
+
+def _session_device_label(value: object) -> str:
+    user_agent = _optional_text(value)
+    if user_agent is None:
+        return "Unknown browser"
+    normalized = user_agent.casefold()
+    for marker, label in (
+        ("ipad", "iPad"),
+        ("iphone", "iPhone"),
+        ("android", "Android"),
+        ("windows", "Windows"),
+        ("macintosh", "Mac"),
+        ("linux", "Linux"),
+    ):
+        if marker in normalized:
+            return label
+    return "Unknown browser"
 
 
 def _request_ref(value: object) -> str:

@@ -579,6 +579,88 @@ def test_live_admin_account_updates_serialize_on_the_same_target(monkeypatch):
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_phase_7_partial_indexes_match_representative_runtime_predicates(
+    monkeypatch,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    now = datetime.now(timezone.utc)
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            account_id = int(connection.execute(
+                """
+                select account_id
+                from app.bootstrap_owners
+                where owner_key = 'local-bootstrap-owner'
+                """
+            ).fetchone()["account_id"])
+            probes = (
+                (
+                    "password_reset_tokens_active_account_purpose_idx",
+                    """
+                    select id from app.password_reset_tokens
+                    where account_id = %s and purpose = 'password_reset'
+                      and consumed_at is null and revoked_at is null
+                    """,
+                    (account_id,),
+                ),
+                (
+                    "account_sessions_active_account_idx",
+                    """
+                    select id from app.account_sessions
+                    where account_id = %s and revoked_at is null
+                      and idle_expires_at > %s and absolute_expires_at > %s
+                    order by idle_expires_at
+                    """,
+                    (account_id, now, now),
+                ),
+                (
+                    "mail_outbox_pending_claim_idx",
+                    """
+                    select id from app.mail_outbox
+                    where delivery_status in ('pending', 'failed')
+                      and (next_attempt_at is null or next_attempt_at <= %s)
+                    order by next_attempt_at nulls first, id
+                    """,
+                    (now,),
+                ),
+                (
+                    "mail_outbox_unknown_reconciliation_idx",
+                    """
+                    select id from app.mail_outbox
+                    where delivery_status = 'unknown'
+                    order by claimed_at, id
+                    """,
+                    (),
+                ),
+                (
+                    "password_reset_transactions_active_expiry_idx",
+                    """
+                    select id from app.password_reset_transactions
+                    where consumed_at is null and expires_at > %s
+                    order by expires_at, id
+                    """,
+                    (now,),
+                ),
+            )
+            with connection.transaction():
+                connection.execute("set local enable_seqscan = off")
+                for expected_index, query, params in probes:
+                    plan = connection.execute(
+                        "explain (analyze, buffers, format json) " + query,
+                        params,
+                    ).fetchone()["QUERY PLAN"]
+                    assert expected_index in _explain_index_names(plan)
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
     monkeypatch,
     tmp_path,

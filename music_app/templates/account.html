@@ -104,7 +104,7 @@
           {% for session in profile.sessions %}
           <article class="session">
             <div>
-              <strong>{{ session.user_agent or "Unknown browser" }}{% if session.current %} · This device{% endif %}</strong>
+              <strong>{{ session.device_label }}{% if session.current %} · This device{% endif %}</strong>
               <span>{% if session.current %}Active now{% else %}Last active {{ session.last_seen_at.strftime("%b %d, %Y at %I:%M %p") }}{% endif %}</span>
             </div>
             {% if session.current %}<span class="session-pill">Current</span>{% else %}<span class="session-status">Active</span>{% endif %}

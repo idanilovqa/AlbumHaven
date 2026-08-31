@@ -107,6 +107,12 @@ button, input, select { font: inherit; }
   .settings-nav nav { margin-top: 14px; grid-template-columns: 1fr 1fr; }
   .settings-back { margin-top: 14px; padding-top: 14px; }
   .settings-main { padding: 28px 21px 45px; }
+  .members-table { overflow-x: visible; border: 0; }
+  .members-row { min-width: 0; padding: 14px 0; grid-template-columns: 1fr 1fr; align-items: start; gap: 12px 18px; }
+  .members-table-head { display: none; }
+  .member-identity { min-width: 0; grid-column: 1 / -1; }
+  .member-identity span:last-child { min-width: 0; overflow-wrap: anywhere; }
+  .members-row [role="cell"]:not(.member-identity)::before { content: attr(data-label); display: block; margin-bottom: 4px; color: #65778d; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
   .detail-field { grid-template-columns: 1fr; gap: 7px; }
   .detail-field > span:first-child { padding-top: 0; }
   .detail-field small { grid-column: 1; margin-top: -3px; }

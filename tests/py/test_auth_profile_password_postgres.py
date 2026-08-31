@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from music_app.services.auth_passwords import (
     PasswordCredential,
     PasswordVerification,
@@ -156,7 +158,35 @@ def test_profile_view_exposes_only_display_identity_suggestion_and_active_sessio
     assert [item.session_id for item in profile.sessions] == [11, 12]
     assert profile.sessions[0].current is True
     assert profile.sessions[1].current is False
+    assert [item.device_label for item in profile.sessions] == [
+        "Unknown browser",
+        "Android",
+    ]
+    assert all(not hasattr(item, "user_agent") for item in profile.sessions)
     assert "contact_email" not in repr(profile)
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "expected"),
+    [
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/149 Safari/537.36", "Windows"),
+        ("Mozilla/5.0 (Linux; Android 15; Pixel 9)", "Android"),
+        ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", "iPhone"),
+        ("Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X)", "iPad"),
+        ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6)", "Mac"),
+        ("Mozilla/5.0 (X11; Linux x86_64)", "Linux"),
+        (None, "Unknown browser"),
+        ("private custom agent value", "Unknown browser"),
+    ],
+)
+def test_profile_session_labels_are_bounded_and_do_not_echo_raw_user_agents(
+    user_agent, expected
+):
+    from music_app.services.auth_profile_password_postgres import (
+        _session_device_label,
+    )
+
+    assert _session_device_label(user_agent) == expected
 
 
 def test_wrong_current_password_changes_nothing_and_records_protected_invalid_reason():

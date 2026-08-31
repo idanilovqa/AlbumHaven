@@ -36,14 +36,14 @@
             <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
             <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
           </div>
-          <div class="member-access" role="cell">
+          <div class="member-access" role="cell" data-label="Role / access">
             <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | list != listener_defaults | list %} · Customized{% endif %}{% endif %}</strong>
             <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} explicit capabilities{% else %}No current-library access{% endif %}</small>
           </div>
-          <div role="cell"><span class="status-dot {% if not member.is_active %}is-disabled{% endif %}"></span>{{ "Enabled" if member.is_active else "Disabled" }}</div>
-          <div role="cell">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
-          <div role="cell">{% if member.welcome_status %}Welcome {{ member.welcome_status }}{% else %}—{% endif %}</div>
-          <div role="cell"><a class="member-edit" href="/admin/accounts/{{ member.account_id }}">Edit</a></div>
+          <div role="cell" data-label="Status"><span class="status-dot {% if not member.is_active %}is-disabled{% endif %}"></span>{{ "Enabled" if member.is_active else "Disabled" }}</div>
+          <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
+          <div role="cell" data-label="Welcome">{% if member.welcome_status %}Welcome {{ member.welcome_status }}{% else %}—{% endif %}</div>
+          <div role="cell" data-label="Actions"><a class="member-edit" href="/admin/accounts/{{ member.account_id }}">Edit</a></div>
         </article>
         {% endfor %}
       </div>

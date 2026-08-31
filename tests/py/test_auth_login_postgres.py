@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from importlib import import_module, util
 from typing import Any
@@ -8,7 +9,16 @@ import pytest
 from argon2 import extract_parameters
 
 from music_app.services.auth_passwords import PasswordCredential, PasswordVerification
-from music_app.services.auth_tokens import keyed_bucket_digest
+from music_app.services.auth_sessions_postgres import (
+    IssuedBrowserSession,
+    PreparedBrowserSession,
+)
+from music_app.services.auth_audit_postgres import (
+    LoginAuditReason,
+    SecurityAuditCategory,
+    SecurityAuditOutcome,
+)
+from music_app.services.auth_tokens import hash_opaque_token, keyed_bucket_digest
 
 
 MODULE = "music_app.services.auth_login_postgres"
@@ -131,6 +141,8 @@ class RecordingConnection:
             return Cursor(self.throttle_rows)
         if statement.startswith("update app.account_credentials"):
             return Cursor(rowcount=1)
+        if statement.startswith("update app.auth_throttles") and "greatest(failure_count - 1, 0)" in statement:
+            return Cursor(rowcount=1)
         return Cursor()
 
 
@@ -145,6 +157,48 @@ class Semaphore:
 
     def release(self):
         self.calls.append("release")
+
+
+class RecordingSessionService:
+    def __init__(self):
+        self.calls: list[tuple[str, object]] = []
+        raw_token = "s" * 43
+        self.prepared = PreparedBrowserSession(
+            raw_token=raw_token,
+            token_digest=hash_opaque_token(raw_token),
+            account_id=41,
+            authenticated_at=NOW,
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+            user_agent=None,
+        )
+        self.issued = IssuedBrowserSession(
+            raw_token=raw_token,
+            session_id=88,
+            account_id=41,
+            authenticated_at=NOW,
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+        )
+
+    def prepare_session(self, account_id, *, user_agent=None):
+        self.calls.append(("prepare", (account_id, user_agent)))
+        return self.prepared
+
+    def persist_prepared_for_locked_account(self, prepared, connection):
+        self.calls.append(("persist", connection))
+        connection.operations.append(("session:persist", None))
+        return self.issued
+
+
+class RecordingAuditRepository:
+    def __init__(self):
+        self.calls: list[dict[str, object]] = []
+
+    def append_in_transaction(self, connection, **event):
+        self.calls.append({"connection": connection, **event})
+        connection.operations.append(("audit:insert", event))
+        return 901
 
 
 def _config():
@@ -170,6 +224,8 @@ def _service(
     semaphore=None,
     rehasher=None,
     dummy_encoded_hash=_DEFAULT_DUMMY,
+    session_service=None,
+    audit_repository=None,
 ):
     observed = []
     verifier = verifier or (
@@ -182,6 +238,8 @@ def _service(
         "verification_semaphore": semaphore or Semaphore(),
         "clock": lambda: NOW,
         "rehasher": rehasher,
+        "session_service": session_service or RecordingSessionService(),
+        "audit_repository": audit_repository or RecordingAuditRepository(),
     }
     if dummy_encoded_hash is _DEFAULT_DUMMY:
         kwargs["dummy_encoded_hash"] = DUMMY_HASH
@@ -192,6 +250,17 @@ def _service(
         **kwargs,
     )
     return service, observed
+
+
+def test_constructor_rejects_malformed_coordination_collaborators(login):
+    with pytest.raises((TypeError, ValueError)):
+        login.PostgresLoginAuthService(
+            _config(),
+            connect=lambda _url: RecordingConnection(),
+            dummy_encoded_hash=DUMMY_HASH,
+            session_service=object(),
+            audit_repository=object(),
+        )
 
 
 def _authenticate(service, **overrides):
@@ -764,3 +833,606 @@ def test_provider_failures_are_generic_and_echo_no_private_input_or_digest(login
         for value in (params if isinstance(params, tuple) else ())
         if isinstance(value, bytes)
     )
+
+
+def test_success_coordinates_session_and_verified_audit_on_one_final_connection(login):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+    service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(
+        service,
+        user_agent="Private Browser Label",
+        request_ref="request-123",
+        source_class="public",
+    )
+
+    assert result.outcome is login.LoginOutcome.SUCCESS
+    assert result.session == session_service.issued
+    assert session_service.calls[0] == ("prepare", (41, "Private Browser Label"))
+    sql = [statement for statement, _ in connection.operations]
+    account_lock = next(i for i, s in enumerate(sql) if "from app.accounts" in s and "for update" in s)
+    credential_lock = next(i for i, s in enumerate(sql) if "from app.account_credentials" in s and "for update" in s)
+    persisted = next(i for i, s in enumerate(sql) if s == "session:persist")
+    throttle_lock = next(
+        i
+        for i, s in enumerate(sql)
+        if i > persisted and "from app.auth_throttles" in s and "for update" in s
+    )
+    audit = next(i for i, s in enumerate(sql) if s == "audit:insert")
+    assert account_lock < credential_lock < persisted < throttle_lock < audit
+    assert session_service.calls[1][1] is connection
+    assert audit_repository.calls[-1]["connection"] is connection
+    assert audit_repository.calls[-1]["category"] is SecurityAuditCategory.LOGIN
+    assert audit_repository.calls[-1]["outcome"] is SecurityAuditOutcome.SUCCESS
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.VERIFIED
+    assert audit_repository.calls[-1]["request_ref"] == "request-123"
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "request_ref", "source_class"),
+    [("Private Browser Label", "request-123", "public")],
+)
+def test_success_audit_metadata_is_allowlisted_and_result_redacts_private_values(
+    login, user_agent, request_ref, source_class
+):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+    service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(
+        service,
+        user_agent=user_agent,
+        request_ref=request_ref,
+        source_class=source_class,
+    )
+
+    metadata = audit_repository.calls[-1]["metadata"]
+    assert set(metadata) <= {
+        "session_id",
+        "hmac_key_version",
+        "argon2_policy_version",
+        "credential_rehashed",
+        "source_class",
+    }
+    assert audit_repository.calls[-1]["request_ref"] == request_ref
+    assert request_ref not in metadata
+    rendered = repr(result)
+    assert all(secret not in rendered for secret in (PASSWORD, user_agent, request_ref))
+    assert result.session.raw_token not in rendered
+
+
+def test_invalid_and_throttled_outcomes_have_no_session_and_audit_after_throttle(login):
+    invalid_connection = RecordingConnection()
+    invalid_session = RecordingSessionService()
+    invalid_audit = RecordingAuditRepository()
+    invalid_service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: invalid_connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(False, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=invalid_session,
+        audit_repository=invalid_audit,
+    )
+    invalid = _authenticate(invalid_service)
+    assert invalid.outcome is login.LoginOutcome.INVALID
+    assert invalid.session is None
+    assert invalid_session.calls == []
+    assert invalid_audit.calls[-1]["category"] is SecurityAuditCategory.LOGIN
+    assert invalid_audit.calls[-1]["outcome"] is SecurityAuditOutcome.INVALID
+    assert invalid_connection.operations[-1][0] == "audit:insert"
+
+    throttled_connection = RecordingConnection(
+        throttle_rows=_throttle_rows(
+            started_at=WINDOW_STARTED,
+            expires_at=NOW + timedelta(minutes=5),
+            blocked_until=NOW + timedelta(minutes=1),
+        )
+    )
+    throttled_session = RecordingSessionService()
+    throttled_audit = RecordingAuditRepository()
+    throttled_service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: throttled_connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=throttled_session,
+        audit_repository=throttled_audit,
+    )
+    throttled = _authenticate(throttled_service)
+    assert throttled.outcome is login.LoginOutcome.THROTTLED
+    assert throttled.session is None
+    assert throttled_session.calls == []
+    assert throttled_audit.calls[-1]["category"] is SecurityAuditCategory.LOGIN
+    assert throttled_audit.calls[-1]["outcome"] is SecurityAuditOutcome.THROTTLED
+
+
+def test_credential_race_is_audited_without_issuing_session(login):
+    class RacingCredentialConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            statement = " ".join(sql.casefold().split())
+            if "from app.account_credentials" in statement and "for update" in statement:
+                self.operations.append((statement, params))
+                return Cursor(({
+                    "account_id": 41,
+                    "encoded_hash": ENCODED_HASH,
+                    "hash_policy_version": 1,
+                    "credential_version": 2,
+                    "administrator_set": True,
+                },))
+            return super().execute(sql, params)
+
+    connection = RacingCredentialConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+    service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.INVALID
+    assert result.session is None
+    assert session_service.calls and session_service.calls[0][0] == "prepare"
+    assert not any(call[0] == "persist" for call in session_service.calls)
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+
+
+@pytest.mark.parametrize("failure_point", ["session", "audit"])
+def test_final_transaction_boundary_failures_roll_back_without_rolling_back_reservation(
+    login, failure_point
+):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+    if failure_point == "session":
+        def fail_persist(prepared, active_connection):
+            raise RuntimeError("session provider secret")
+        session_service.persist_prepared_for_locked_account = fail_persist
+    else:
+        def fail_audit(connection, **event):
+            raise RuntimeError("audit provider secret")
+        audit_repository.append_in_transaction = fail_audit
+    service = login.PostgresLoginAuthService(
+        _config(),
+        connect=lambda _url: connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, False),
+        verification_semaphore=Semaphore(),
+        clock=lambda: NOW,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert "secret" not in str(caught.value)
+    assert connection.events.count("tx:commit") >= 1
+    assert "tx:rollback" in connection.events
+
+
+def test_prepare_failure_finalizes_reservation_and_audits_without_session(login):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+
+    def fail_prepare(account_id, *, user_agent=None):
+        raise RuntimeError("prepared token secret")
+
+    session_service.prepare_session = fail_prepare
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert str(caught.value) == "Login persistence operation failed."
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert not any(call[0] == "persist" for call in session_service.calls)
+    assert audit_repository.calls[-1]["outcome"] is SecurityAuditOutcome.INVALID
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert connection.events.count("tx:commit") >= 1
+
+
+@pytest.mark.parametrize("returned", [
+    IssuedBrowserSession(
+        raw_token="s" * 43,
+        session_id=88,
+        account_id=99,
+        authenticated_at=NOW,
+        idle_expires_at=NOW + timedelta(hours=12),
+        absolute_expires_at=NOW + timedelta(days=7),
+    ),
+    object(),
+])
+def test_invalid_session_collaborator_return_rolls_back_without_success_audit(
+    login, returned
+):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    session_service.issued = returned
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert not any(
+        call.get("outcome") is SecurityAuditOutcome.SUCCESS
+        for call in audit_repository.calls
+    )
+    assert "tx:rollback" in connection.events
+
+
+@pytest.mark.parametrize("replacement", [
+    None,
+    "raise",
+])
+def test_rehash_failure_is_audited_as_credential_race(login, replacement):
+    connection = RecordingConnection()
+    audit_repository = RecordingAuditRepository()
+
+    def rehasher(*args, **kwargs):
+        if replacement == "raise":
+            raise RuntimeError("rehash provider secret")
+        return None
+
+    service, _ = _service(
+        login,
+        connection,
+        verifier=lambda *args, **kwargs: PasswordVerification(True, True),
+        rehasher=rehasher,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.INVALID
+    assert result.session is None
+    assert audit_repository.calls[-1]["outcome"] is SecurityAuditOutcome.INVALID
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert all(
+        call.get("reason") is not LoginAuditReason.CREDENTIAL_MISMATCH
+        for call in audit_repository.calls
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("request_ref", "request with spaces"),
+        ("request_ref", "request\nref"),
+        ("source_class", "web"),
+        ("source_class", "public\n"),
+    ],
+)
+def test_invalid_audit_context_rejected_before_sql_semaphore_or_verification(
+    login, field, value
+):
+    connection = RecordingConnection()
+    semaphore = Semaphore()
+    verifier_calls = []
+    service, _ = _service(
+        login,
+        connection,
+        semaphore=semaphore,
+        verifier=lambda *args, **kwargs: verifier_calls.append(True)
+        or PasswordVerification(True, False),
+    )
+
+    with pytest.raises(ValueError) as caught:
+        _authenticate(service, **{field: value})
+
+    assert caught.value.__cause__ is None
+    assert value not in str(caught.value)
+    assert connection.operations == []
+    assert semaphore.calls == []
+    assert verifier_calls == []
+
+
+def test_final_commit_failure_after_session_and_audit_returns_no_session(login):
+    class CommitFailTransaction(Transaction):
+        def __exit__(self, exc_type, exc, tb):
+            result = super().__exit__(exc_type, exc, tb)
+            if exc_type is None and self.connection.events.count("tx:commit") == 3:
+                raise RuntimeError("commit provider secret")
+            return result
+
+    class CommitFailConnection(RecordingConnection):
+        def transaction(self):
+            return CommitFailTransaction(self)
+
+    connection = CommitFailConnection()
+    session_service = RecordingSessionService()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert session_service.calls[-1][0] == "persist"
+    assert audit_repository.calls[-1]["outcome"] is SecurityAuditOutcome.SUCCESS
+
+
+@pytest.mark.parametrize("verifier_result", [None, object()])
+def test_verifier_failure_is_invalid_and_audited_as_credential_race(
+    login, verifier_result
+):
+    connection = RecordingConnection()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        verifier=lambda *args, **kwargs: verifier_result,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.INVALID
+    assert result.session is None
+    assert audit_repository.calls[-1]["outcome"] is SecurityAuditOutcome.INVALID
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert all(
+        call["reason"] is not LoginAuditReason.CREDENTIAL_MISMATCH
+        for call in audit_repository.calls
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"account_id": 99},
+        {"raw_token": "x" * 43},
+        {"token_digest": b"x" * 32},
+        {"authenticated_at": NOW + timedelta(minutes=1)},
+        {"idle_expires_at": NOW},
+    ],
+)
+def test_malformed_prepared_session_is_rejected_before_persist_and_audited(
+    login, mutation
+):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    session_service.prepared = replace(session_service.prepared, **mutation)
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert session_service.calls == [("prepare", (41, None))]
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert not any(call["outcome"] is SecurityAuditOutcome.SUCCESS for call in audit_repository.calls)
+
+
+@pytest.mark.parametrize(
+    "issued",
+    [
+        IssuedBrowserSession(
+            raw_token="s" * 43,
+            session_id=True,
+            account_id=41,
+            authenticated_at=NOW,
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+        ),
+        IssuedBrowserSession(
+            raw_token="s" * 43,
+            session_id=0,
+            account_id=41,
+            authenticated_at=NOW,
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+        ),
+        IssuedBrowserSession(
+            raw_token="bad-token",
+            session_id=88,
+            account_id=41,
+            authenticated_at=NOW,
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+        ),
+        IssuedBrowserSession(
+            raw_token="s" * 43,
+            session_id=88,
+            account_id=41,
+            authenticated_at=NOW.replace(tzinfo=None),
+            idle_expires_at=NOW + timedelta(hours=12),
+            absolute_expires_at=NOW + timedelta(days=7),
+        ),
+    ],
+)
+def test_malformed_issued_session_is_rejected_without_success_audit(login, issued):
+    connection = RecordingConnection()
+    session_service = RecordingSessionService()
+    session_service.issued = issued
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert not any(call["outcome"] is SecurityAuditOutcome.SUCCESS for call in audit_repository.calls)
+    assert "tx:rollback" in connection.events
+
+
+def test_non_utc_clock_is_normalized_before_reservation_and_audit(login):
+    offset_now = NOW.astimezone(timezone(timedelta(hours=2)))
+    connection = RecordingConnection()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(login, connection, audit_repository=audit_repository)
+    service._clock = lambda: offset_now
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.SUCCESS
+    occurred_at = audit_repository.calls[-1]["occurred_at"]
+    assert occurred_at == NOW
+    assert occurred_at.tzinfo is timezone.utc
+    throttle_params = [params for sql, params in connection.operations if "app.auth_throttles" in sql]
+    assert any(NOW in params for params in throttle_params)
+
+
+def test_session_clock_with_small_coordinator_skew_still_succeeds(login):
+    class SlightlyAdvancingSessionService(RecordingSessionService):
+        def prepare_session(self, account_id, *, user_agent=None):
+            delta = timedelta(milliseconds=100)
+            prepared = replace(
+                self.prepared,
+                authenticated_at=self.prepared.authenticated_at + delta,
+                idle_expires_at=self.prepared.idle_expires_at + delta,
+                absolute_expires_at=self.prepared.absolute_expires_at + delta,
+                user_agent=user_agent,
+            )
+            self.calls.append(("prepare", (account_id, user_agent)))
+            self.prepared = prepared
+            self.issued = replace(
+                self.issued,
+                authenticated_at=prepared.authenticated_at,
+                idle_expires_at=prepared.idle_expires_at,
+                absolute_expires_at=prepared.absolute_expires_at,
+            )
+            return prepared
+
+    connection = RecordingConnection()
+    session_service = SlightlyAdvancingSessionService()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        session_service=session_service,
+        audit_repository=audit_repository,
+    )
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.SUCCESS
+    assert session_service.prepared.authenticated_at - NOW == timedelta(milliseconds=100)
+    assert result.session == session_service.issued
+
+
+def test_semaphore_acquire_failure_finalizes_and_audits_genericly(login):
+    class AcquireFailureSemaphore(Semaphore):
+        def acquire(self, blocking=True):
+            raise RuntimeError("semaphore provider secret")
+
+    connection = RecordingConnection()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        semaphore=AcquireFailureSemaphore(),
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert "tx:commit" in connection.events
+
+
+def test_semaphore_release_failure_finalizes_and_audits_genericly(login):
+    class ReleaseFailureSemaphore(Semaphore):
+        def release(self):
+            raise RuntimeError("release provider secret")
+
+    connection = RecordingConnection()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(
+        login,
+        connection,
+        semaphore=ReleaseFailureSemaphore(),
+        audit_repository=audit_repository,
+    )
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert "tx:commit" in connection.events
+
+
+def test_identity_load_failure_finalizes_and_audits_genericly(login):
+    class IdentityFailureConnection(RecordingConnection):
+        def execute(self, sql, params=None):
+            statement = " ".join(sql.casefold().split())
+            if "from app.accounts" in statement and "for update" not in statement:
+                raise RuntimeError("identity provider secret")
+            return super().execute(sql, params)
+
+    connection = IdentityFailureConnection()
+    audit_repository = RecordingAuditRepository()
+    service, _ = _service(login, connection, audit_repository=audit_repository)
+
+    with pytest.raises(RuntimeError) as caught:
+        _authenticate(service)
+
+    assert caught.value.__cause__ is None
+    assert "secret" not in str(caught.value)
+    assert audit_repository.calls[-1]["reason"] is LoginAuditReason.CREDENTIAL_RACE
+    assert "tx:commit" in connection.events

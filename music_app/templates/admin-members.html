@@ -34,6 +34,9 @@
           <span role="columnheader">Actions</span>
         </div>
         {% for member in roster.members %}
+        {% set can_copy_invitation = member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
+        {% set can_send_invitation = member.account_status == 'Pending invitation' and invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}
+        {% set can_edit_member = allowed_actions.allows('accounts.manage') %}
         <article class="members-row" role="row">
           <div class="member-identity" role="cell">
             <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
@@ -47,19 +50,19 @@
           <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
           <div role="cell" data-label="Invitation">{% if member.invitation_delivery_status %}Invitation {{ member.invitation_delivery_status }}{% else %}—{% endif %}</div>
           <div role="cell" data-label="Actions">
+            {% if can_copy_invitation or can_send_invitation or can_edit_member %}
             <div class="member-actions">
               <button type="button" class="member-actions-trigger"
                       aria-label="Actions for {{ member.username }}"
                       aria-haspopup="menu" aria-expanded="false"
                       data-member-menu-trigger="{{ member.account_id }}">⋯</button>
               <div class="member-actions-menu" role="menu" hidden data-member-menu="{{ member.account_id }}">
-                {% if member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
-                <button type="button" role="menuitem" data-copy-invitation="{{ member.account_id }}">Copy invite link</button>
-                {% if invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}<button type="button" role="menuitem" data-send-invitation="{{ member.account_id }}">Send invitation email</button>{% endif %}
-                {% endif %}
-                <a class="member-edit" role="menuitem" href="/admin/accounts/{{ member.account_id }}">Edit</a>
+                {% if can_copy_invitation %}<button type="button" role="menuitem" data-copy-invitation="{{ member.account_id }}">Copy invite link</button>{% endif %}
+                {% if can_send_invitation %}<button type="button" role="menuitem" data-send-invitation="{{ member.account_id }}">Send invitation email</button>{% endif %}
+                {% if can_edit_member %}<a class="member-edit" role="menuitem" href="/admin/accounts/{{ member.account_id }}">Edit</a>{% endif %}
               </div>
             </div>
+            {% endif %}
           </div>
         </article>
         {% endfor %}

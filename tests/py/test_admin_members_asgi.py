@@ -285,7 +285,7 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "Edit user" in edit_body
     assert "test.user+1" in edit_body
     assert "Listener · Customized" in edit_body
-    assert "Send password reset email" in edit_body
+    assert "Send password reset email" not in edit_body
     assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
     assert "modal" not in edit_body.casefold()
@@ -352,6 +352,8 @@ def test_members_controls_follow_server_derived_allowed_actions():
     assert "Save changes" not in body
     assert 'data-copy-invitation="41"' not in roster_body
     assert 'data-send-invitation="41"' not in roster_body
+    assert 'data-member-menu-trigger="41"' not in roster_body
+    assert 'href="/admin/accounts/41"' not in roster_body
 
     update_status, update_body = _json_request(
         app,

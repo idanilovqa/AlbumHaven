@@ -71,6 +71,51 @@
     trigger.setAttribute('aria-expanded', 'false');
   };
 
+  const closeMenuForAction = (accountId) => {
+    const trigger = document.querySelector(
+      `[data-member-menu-trigger="${accountId}"]`,
+    );
+    const menu = document.querySelector(`[data-member-menu="${accountId}"]`);
+    if (!trigger || !menu) return;
+    closeMenu(trigger, menu);
+    trigger.focus();
+  };
+
+  const validatedInvitationUrl = (value) => {
+    if (typeof value !== 'string' || !value || value !== value.trim()) {
+      throw new Error('Invitation link could not be created.');
+    }
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      throw new Error('Invitation link could not be created.');
+    }
+    const purpose = parsed.searchParams.getAll('purpose');
+    const tokens = parsed.searchParams.getAll('token');
+    const queryKeys = [...parsed.searchParams.keys()];
+    const expectedKeys = queryKeys.every(
+      (key) => key === 'purpose' || key === 'token',
+    );
+    if (
+      !['http:', 'https:'].includes(parsed.protocol)
+      || !parsed.hostname
+      || parsed.username
+      || parsed.password
+      || parsed.hash
+      || parsed.pathname !== '/accept-invitation'
+      || purpose.length !== 1
+      || purpose[0] !== 'account-invitation'
+      || tokens.length !== 1
+      || !/^[A-Za-z0-9_-]{43}$/.test(tokens[0])
+      || queryKeys.length !== 2
+      || !expectedKeys
+    ) {
+      throw new Error('Invitation link could not be created.');
+    }
+    return value;
+  };
+
   for (const trigger of document.querySelectorAll('[data-member-menu-trigger]')) {
     const accountId = trigger.dataset.memberMenuTrigger;
     if (!accountId) continue;
@@ -118,13 +163,14 @@
       return;
     }
     if (!response.ok) throw new Error('Invitation link could not be created.');
-    const result = await response.json();
+    const result = await response.json().catch(() => null);
+    const invitationUrl = validatedInvitationUrl(result?.invitation_url);
     clearInvitationFallback();
     try {
-      await navigator.clipboard.writeText(result.invitation_url);
+      await navigator.clipboard.writeText(invitationUrl);
       announceRoster('Invitation link copied. Older links no longer work.');
     } catch {
-      showInvitationFallback(result.invitation_url);
+      showInvitationFallback(invitationUrl);
     }
   };
 
@@ -143,16 +189,22 @@
   for (const button of document.querySelectorAll('[data-copy-invitation]')) {
     const accountId = button.dataset.copyInvitation;
     if (!accountId) continue;
-    button.addEventListener('click', () => copyInvitation(accountId).catch(
-      (error) => showRosterError(error.message),
-    ));
+    button.addEventListener('click', () => {
+      closeMenuForAction(accountId);
+      return copyInvitation(accountId).catch(
+        (error) => showRosterError(error.message),
+      );
+    });
   }
   for (const button of document.querySelectorAll('[data-send-invitation]')) {
     const accountId = button.dataset.sendInvitation;
     if (!accountId) continue;
-    button.addEventListener('click', () => sendInvitation(accountId).catch(
-      (error) => showRosterError(error.message),
-    ));
+    button.addEventListener('click', () => {
+      closeMenuForAction(accountId);
+      return sendInvitation(accountId).catch(
+        (error) => showRosterError(error.message),
+      );
+    });
   }
 
   roster?.querySelector('[data-invitation-copy-dismiss]')?.addEventListener(
@@ -179,8 +231,15 @@
   roster?.querySelector('[data-roster-reauth-submit]')?.addEventListener(
     'click', async () => {
       try {
+        const password = rosterReauthPassword?.value || '';
+        if (!password.trim()) {
+          showRosterError('Administrator password is required.');
+          if (rosterReauthPanel) rosterReauthPanel.hidden = false;
+          rosterReauthPassword?.focus();
+          return;
+        }
         const response = await rosterRequest('/admin/reauthenticate', {
-          password: rosterReauthPassword?.value || '',
+          password,
         });
         if (!response.ok) throw new Error('Reauthentication failed.');
         if (rosterReauthPanel) rosterReauthPanel.hidden = true;

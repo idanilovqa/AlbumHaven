@@ -105,7 +105,11 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
   };
 }
 
-function loadRosterRuntime({ clipboardReject = false, reauthOnFirstCopy = false } = {}) {
+function loadRosterRuntime({
+  clipboardReject = false,
+  reauthOnFirstCopy = false,
+  copyResponse = null,
+} = {}) {
   const menuButton = element({
     dataset: { memberMenuTrigger: '41' },
     attributes: { 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
@@ -172,17 +176,18 @@ function loadRosterRuntime({ clipboardReject = false, reauthOnFirstCopy = false 
         return {
           ok: true,
           status: 200,
-          json: async () => ({
+          json: async () => copyResponse || ({
             invitation_url: successfulCopies === 1
-              ? 'https://example.test/accept-invitation?token=rotated'
-              : 'https://example.test/accept-invitation?token=newer',
+              ? 'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+              : 'https://example.test/accept-invitation?purpose=account-invitation&token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
           }),
         };
       }
       return { ok: true, status: 200, json: async () => ({ accepted: true }) };
     },
     navigator: { clipboard },
-    window: { location: { assign() {} } },
+    URL,
+    window: { location: { origin: 'https://example.test', assign() {} } },
     document: {
       addEventListener(name, callback) { documentListeners.set(name, callback); },
       querySelectorAll(selector) {
@@ -315,7 +320,7 @@ test('admin roster copy and send invitation actions use distinct endpoints with 
   assert.equal(runtime.fetches[0].options.headers['X-Album-Haven-CSRF'], 'roster-csrf');
   assert.equal(
     clipboard.value,
-    'https://example.test/accept-invitation?token=rotated',
+    'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
   );
   assert.match(runtime.status.textContent, /Older links no longer work/);
 
@@ -325,7 +330,7 @@ test('admin roster copy and send invitation actions use distinct endpoints with 
   assert.equal(fallback.input.readOnly, true);
   assert.equal(
     fallback.input.value,
-    'https://example.test/accept-invitation?token=newer',
+    'https://example.test/accept-invitation?purpose=account-invitation&token=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
   );
   assert.equal(fallback.input.focused, true);
   assert.equal(fallback.input.selected, true);
@@ -341,6 +346,44 @@ test('admin roster copy and send invitation actions use distinct endpoints with 
   );
   assert.match(runtime.status.textContent, /Invitation email queued/);
 });
+
+test('admin roster invitation actions close the menu and restore trigger focus', async () => {
+  const runtime = loadRosterRuntime();
+  const { row } = runtime;
+
+  await row.menuButton.click();
+  await row.copyInvite.click();
+  assert.equal(row.menu.hidden, true);
+  assert.equal(row.menuButton.getAttribute('aria-expanded'), 'false');
+  assert.equal(row.menuButton.focused, true);
+
+  row.menuButton.focused = false;
+  await row.menuButton.click();
+  await row.sendInvite.click();
+  assert.equal(row.menu.hidden, true);
+  assert.equal(row.menuButton.getAttribute('aria-expanded'), 'false');
+  assert.equal(row.menuButton.focused, true);
+});
+
+for (const [label, copyResponse] of [
+  ['missing', {}],
+  ['malformed', { invitation_url: 'not a URL' }],
+  ['non-http(s)', { invitation_url: 'javascript:alert(1)' }],
+  ['wrong-path', { invitation_url: 'https://example.test/reset-password?token=wrong' }],
+]) {
+  test(`admin roster rejects ${label} copied invitation URLs before exposing them`, async () => {
+    const runtime = loadRosterRuntime({ copyResponse });
+
+    await runtime.row.copyInvite.click();
+
+    assert.equal(runtime.fetches.length, 1);
+    assert.equal(runtime.clipboard.value, '');
+    assert.equal(runtime.fallback.panel.hidden, true);
+    assert.equal(runtime.fallback.input.value, '');
+    assert.equal(runtime.error.hidden, false);
+    assert.match(runtime.error.textContent, /Invitation link could not be created/);
+  });
+}
 
 test('admin roster invitation action performs one 409 reauthentication retry', async () => {
   const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
@@ -363,6 +406,22 @@ test('admin roster invitation action performs one 409 reauthentication retry', a
   assert.equal(runtime.reauth.panel.hidden, true);
   assert.equal(
     runtime.clipboard.value,
-    'https://example.test/accept-invitation?token=rotated',
+    'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
   );
+});
+
+test('admin roster empty reauthentication stays local and returns focus with an alert', async () => {
+  const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
+
+  await runtime.row.copyInvite.click();
+  assert.equal(runtime.fetches.length, 1);
+  runtime.reauth.password.focused = false;
+
+  await runtime.reauth.submit.click();
+
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.reauth.panel.hidden, false);
+  assert.equal(runtime.reauth.password.focused, true);
+  assert.equal(runtime.error.hidden, false);
+  assert.match(runtime.error.textContent, /password/i);
 });

@@ -52,10 +52,32 @@ class Transaction:
 
 
 class Connection:
-    def __init__(self, *, claim_rows=(), finalize_rows=(), stale_rows=()):
+    def __init__(
+        self,
+        *,
+        claim_rows=(),
+        finalize_rows=(),
+        stale_rows=(),
+        invitation_candidate_rows=None,
+        invitation_account_rows=None,
+        invitation_token_rows=None,
+        invitation_outbox_rows=None,
+    ):
         self.claim_rows = list(claim_rows)
         self.finalize_rows = list(finalize_rows)
         self.stale_rows = list(stale_rows)
+        self.invitation_candidate_rows = list(
+            claim_rows if invitation_candidate_rows is None else invitation_candidate_rows
+        )
+        self.invitation_account_rows = list(
+            claim_rows if invitation_account_rows is None else invitation_account_rows
+        )
+        self.invitation_token_rows = list(
+            claim_rows if invitation_token_rows is None else invitation_token_rows
+        )
+        self.invitation_outbox_rows = list(
+            claim_rows if invitation_outbox_rows is None else invitation_outbox_rows
+        )
         self.operations = []
         self.events = []
 
@@ -73,6 +95,23 @@ class Connection:
         self.operations.append((normalized, params))
         if "set delivery_status = 'unknown'" in normalized:
             return Cursor(self.stale_rows)
+        if (
+            "from app.mail_outbox outbox" in normalized
+            and "join app.account_invitation_tokens invitation" in normalized
+            and "for update" not in normalized
+        ):
+            return Cursor(self.invitation_candidate_rows)
+        if "from app.accounts account" in normalized and "for update" in normalized:
+            return Cursor(self.invitation_account_rows)
+        if (
+            "from app.account_invitation_tokens invitation" in normalized
+            and "for update" in normalized
+        ):
+            return Cursor(self.invitation_token_rows)
+        if "from app.mail_outbox outbox" in normalized and "for update" in normalized:
+            return Cursor(self.invitation_outbox_rows)
+        if normalized.startswith("update app.mail_outbox") and "returning id" in normalized:
+            return Cursor(({"id": 71},))
         if "from app.mail_outbox" in normalized and "join app.accounts" in normalized:
             return Cursor(self.claim_rows)
         if "from app.mail_outbox" in normalized and "join app.accounts" not in normalized:
@@ -104,22 +143,26 @@ def _invitation_service(outbox, connection):
     )
 
 
-def _invitation_delivery(raw_token="A" * 43):
-    return InvitationDelivery(
-        outbox_id=71,
-        invitation_token_id=72,
-        account_id=41,
-        recipient="listener@example.test",
-        username="listener.plus",
-        raw_token=raw_token,
-        expires_at=NOW + timedelta(days=3),
-    )
+def _invitation_delivery(raw_token="A" * 43, **overrides):
+    payload = {
+        "outbox_id": 71,
+        "invitation_token_id": 72,
+        "account_id": 41,
+        "recipient": "listener@example.test",
+        "username": "listener.plus",
+        "raw_token": raw_token,
+        "expires_at": NOW + timedelta(days=3),
+    }
+    payload.update(overrides)
+    return InvitationDelivery(**payload)
 
 
 def _invitation_claim_row(**overrides):
     row = {
         "outbox_id": 71,
+        "outbox_account_id": 41,
         "invitation_token_id": 72,
+        "invitation_account_id": 41,
         "account_id": 41,
         "username_display": "listener.plus",
         "contact_email": "listener@example.test",
@@ -430,9 +473,11 @@ def test_invitation_delivery_claims_matching_active_token_and_finalizes_once(out
     delivery = _invitation_delivery()
     claim = outbox.InvitationClaim(
         outbox_id=71,
+        invitation_token_id=72,
         account_id=41,
         username="listener.plus",
         recipient="listener@example.test",
+        expires_at=NOW + timedelta(days=3),
         attempt_count=1,
         claimed_at=NOW,
     )
@@ -448,9 +493,19 @@ def test_invitation_delivery_claims_matching_active_token_and_finalizes_once(out
             events.append(("finalize", result.reason))
 
     def composer(**kwargs):
-        assert kwargs == {
-            "delivery": delivery,
-            "config": {"public_base_url": "https://music.example.test"},
+        bound_delivery = kwargs["delivery"]
+        assert bound_delivery is not delivery
+        assert bound_delivery == InvitationDelivery(
+            outbox_id=claim.outbox_id,
+            invitation_token_id=claim.invitation_token_id,
+            account_id=claim.account_id,
+            recipient=claim.recipient,
+            username=claim.username,
+            raw_token=delivery.raw_token,
+            expires_at=claim.expires_at,
+        )
+        assert kwargs["config"] == {
+            "public_base_url": "https://music.example.test"
         }
         events.append("compose")
         return "message"
@@ -483,8 +538,10 @@ def test_invitation_repository_claim_requires_matching_pending_token_and_account
 
     assert claim.outbox_id == 71
     assert claim.account_id == 41
+    assert claim.invitation_token_id == 72
     assert claim.username == "listener.plus"
     assert claim.recipient == "listener@example.test"
+    assert claim.expires_at == NOW + timedelta(days=3)
     select, params = next(
         item for item in connection.operations
         if "join app.account_invitation_tokens" in item[0]
@@ -502,6 +559,120 @@ def test_invitation_repository_claim_requires_matching_pending_token_and_account
     assert INVITATION_DB_PURPOSE in params
     assert delivery.raw_token not in repr(params)
     assert any(
+        "delivery_status = 'sending'" in sql
+        for sql, _ in connection.operations
+    )
+
+
+def test_invitation_claim_locks_account_then_invitation_then_outbox_before_single_update(
+    outbox,
+):
+    row = _invitation_claim_row()
+    connection = Connection(
+        invitation_candidate_rows=(row,),
+        invitation_account_rows=(row,),
+        invitation_token_rows=(row,),
+        invitation_outbox_rows=(row,),
+    )
+
+    claim = _invitation_service(outbox, connection).claim_invitation(
+        _invitation_delivery()
+    )
+
+    assert claim is not None
+    statements = [sql for sql, _params in connection.operations]
+    candidate_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.mail_outbox outbox" in sql
+        and "join app.account_invitation_tokens invitation" in sql
+        and "for update" not in sql
+    )
+    account_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.accounts account" in sql and "for update" in sql
+    )
+    invitation_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.account_invitation_tokens invitation" in sql
+        and "for update" in sql
+    )
+    outbox_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.mail_outbox outbox" in sql
+        and "for update" in sql
+        and index != candidate_index
+    )
+    update_indexes = [
+        index
+        for index, sql in enumerate(statements)
+        if sql.startswith("update app.mail_outbox")
+        and "delivery_status = 'sending'" in sql
+    ]
+
+    assert candidate_index < account_index < invitation_index < outbox_index
+    assert outbox_index < update_indexes[0]
+    assert len(update_indexes) == 1
+    account_phase = " ".join(statements[account_index:invitation_index])
+    assert "account.is_active is true" in account_phase
+    assert "account.disabled_at is null" in account_phase
+    assert "app.account_credentials" in account_phase
+    invitation_sql = statements[invitation_index]
+    assert "invitation.purpose = %s" in invitation_sql
+    assert "invitation.token_hash = %s" in invitation_sql
+    assert "invitation.consumed_at is null" in invitation_sql
+    assert "invitation.revoked_at is null" in invitation_sql
+    assert "invitation.expires_at >" in invitation_sql
+    outbox_sql = statements[outbox_index]
+    assert "outbox.message_category = %s" in outbox_sql
+    assert "outbox.delivery_status = 'pending'" in outbox_sql
+    assert "outbox.attempt_count = 0" in outbox_sql
+    assert "outbox.account_id = %s" in outbox_sql
+    assert "outbox.invitation_token_id = %s" in outbox_sql
+    update_sql = statements[update_indexes[0]]
+    assert "delivery_status = 'pending'" in update_sql
+    assert "attempt_count = 0" in update_sql
+    assert "returning id" in update_sql
+
+
+@pytest.mark.parametrize(
+    ("field", "mismatch"),
+    (
+        ("account_id", 42),
+        ("recipient", "other@example.test"),
+        ("username", "other.listener"),
+        ("expires_at", NOW + timedelta(days=4)),
+    ),
+)
+def test_invitation_repository_rejects_delivery_metadata_not_bound_to_database(
+    outbox, field, mismatch
+):
+    connection = Connection(claim_rows=(_invitation_claim_row(),))
+    delivery = _invitation_delivery(**{field: mismatch})
+
+    claim = _invitation_service(outbox, connection).claim_invitation(delivery)
+
+    assert claim is None
+    assert not any(
+        "delivery_status = 'sending'" in sql
+        for sql, _ in connection.operations
+    )
+
+
+def test_invitation_repository_rejects_mismatched_outbox_account_linkage(outbox):
+    connection = Connection(
+        claim_rows=(_invitation_claim_row(outbox_account_id=42),)
+    )
+
+    claim = _invitation_service(outbox, connection).claim_invitation(
+        _invitation_delivery()
+    )
+
+    assert claim is None
+    assert not any(
         "delivery_status = 'sending'" in sql
         for sql, _ in connection.operations
     )
@@ -567,7 +738,14 @@ def test_invitation_finalize_maps_delivery_outcome_without_retry(
 ):
     connection = Connection(finalize_rows=({"id": 71},))
     claim = outbox.InvitationClaim(
-        71, 41, "listener.plus", "listener@example.test", 1, NOW
+        outbox_id=71,
+        invitation_token_id=72,
+        account_id=41,
+        username="listener.plus",
+        recipient="listener@example.test",
+        expires_at=NOW + timedelta(days=3),
+        attempt_count=1,
+        claimed_at=NOW,
     )
 
     _invitation_service(outbox, connection).finalize_invitation(
@@ -594,7 +772,14 @@ def test_invitation_delivery_finalizes_exception_and_non_result_as_safe_failure(
 ):
     delivery = _invitation_delivery()
     claim = outbox.InvitationClaim(
-        71, 41, "listener.plus", "listener@example.test", 1, NOW
+        outbox_id=71,
+        invitation_token_id=72,
+        account_id=41,
+        username="listener.plus",
+        recipient="listener@example.test",
+        expires_at=NOW + timedelta(days=3),
+        attempt_count=1,
+        claimed_at=NOW,
     )
     finalized = []
 

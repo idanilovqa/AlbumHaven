@@ -74,17 +74,21 @@ class PasswordResetClaim:
 @dataclass(frozen=True, repr=False, slots=True)
 class InvitationClaim:
     outbox_id: int
+    invitation_token_id: int
     account_id: int
     username: str
     recipient: str
+    expires_at: datetime
     attempt_count: int
     claimed_at: datetime
 
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
+            f"invitation_token_id={self.invitation_token_id!r}, "
             f"account_id={self.account_id!r}, username=<redacted>, "
-            f"recipient=<redacted>, attempt_count={self.attempt_count!r}, "
+            f"recipient=<redacted>, expires_at={self.expires_at!r}, "
+            f"attempt_count={self.attempt_count!r}, "
             f"claimed_at={self.claimed_at!r})"
         )
 
@@ -392,18 +396,19 @@ class PostgresInvitationOutboxService:
         invitation_token_id = _positive_integer(
             delivery.invitation_token_id, "invitation token id"
         )
+        try:
+            token_hash = hash_opaque_token(delivery.raw_token)
+        except (TypeError, ValueError):
+            return None
         now = _aware_utc(self._now())
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
-                rows = connection.execute(
+                candidates = connection.execute(
                     """
                     select outbox.id as outbox_id,
-                           invitation.id as invitation_token_id,
-                           invitation.account_id,
-                           account.contact_email,
-                           account.username_display,
-                           invitation.token_hash,
-                           invitation.expires_at
+                           outbox.account_id as outbox_account_id,
+                           outbox.invitation_token_id,
+                           invitation.account_id as invitation_account_id
                     from app.mail_outbox outbox
                     join app.account_invitation_tokens invitation
                       on invitation.id = outbox.invitation_token_id
@@ -417,65 +422,203 @@ class PostgresInvitationOutboxService:
                       and outbox.delivery_status = 'pending'
                       and outbox.attempt_count = 0
                       and invitation.purpose = %s
+                      and invitation.token_hash = %s
                       and invitation.consumed_at is null
                       and invitation.revoked_at is null
                       and invitation.expires_at > %s
                       and account.is_active is true
                       and account.disabled_at is null
                       and credential.account_id is null
-                    for update of outbox, invitation, account
                     """,
                     (
                         outbox_id,
                         invitation_token_id,
                         INVITATION_MESSAGE_CATEGORY,
                         INVITATION_DB_PURPOSE,
+                        token_hash,
                         now,
                     ),
                 ).fetchall()
-                if len(rows) != 1:
+                if len(candidates) != 1:
                     return None
-                payload = _row_mapping(
-                    rows[0],
+                candidate = _row_mapping(
+                    candidates[0],
                     (
                         "outbox_id",
+                        "outbox_account_id",
+                        "invitation_token_id",
+                        "invitation_account_id",
+                    ),
+                )
+                candidate_outbox_id = _positive_integer(
+                    candidate.get("outbox_id"), "outbox id"
+                )
+                candidate_invitation_id = _positive_integer(
+                    candidate.get("invitation_token_id"), "invitation token id"
+                )
+                outbox_account_id = _positive_integer(
+                    candidate.get("outbox_account_id"), "outbox account id"
+                )
+                account_id = _positive_integer(
+                    candidate.get("invitation_account_id"), "account id"
+                )
+                if not (
+                    candidate_outbox_id == outbox_id
+                    and candidate_invitation_id == invitation_token_id
+                    and outbox_account_id == account_id
+                ):
+                    return None
+                accounts = connection.execute(
+                    """
+                    select account.id as account_id,
+                           account.username_display,
+                           account.contact_email
+                    from app.accounts account
+                    where account.id = %s
+                      and account.account_kind = 'managed_user'
+                      and account.is_active is true
+                      and account.disabled_at is null
+                    for update of account
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if len(accounts) != 1:
+                    return None
+                credentials = connection.execute(
+                    """
+                    select account_id from app.account_credentials
+                    where account_id = %s for update
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if credentials:
+                    return None
+                account = _row_mapping(
+                    accounts[0],
+                    ("account_id", "username_display", "contact_email"),
+                )
+                username = _required_text(
+                    account.get("username_display"), "username"
+                )
+                recipient = _required_text(
+                    account.get("contact_email"), "recipient"
+                )
+                invitations = connection.execute(
+                    """
+                    select invitation.id as invitation_token_id,
+                           invitation.account_id,
+                           invitation.token_hash,
+                           invitation.expires_at
+                    from app.account_invitation_tokens invitation
+                    where invitation.id = %s
+                      and invitation.account_id = %s
+                      and invitation.purpose = %s
+                      and invitation.token_hash = %s
+                      and invitation.consumed_at is null
+                      and invitation.revoked_at is null
+                      and invitation.expires_at > %s
+                    for update of invitation
+                    """,
+                    (
+                        invitation_token_id,
+                        account_id,
+                        INVITATION_DB_PURPOSE,
+                        token_hash,
+                        now,
+                    ),
+                ).fetchall()
+                if len(invitations) != 1:
+                    return None
+                invitation = _row_mapping(
+                    invitations[0],
+                    (
                         "invitation_token_id",
                         "account_id",
-                        "contact_email",
-                        "username_display",
                         "token_hash",
                         "expires_at",
                     ),
                 )
-                if not matches_opaque_token(
-                    delivery.raw_token, payload.get("token_hash")
+                expires_at = _aware_utc(invitation.get("expires_at"))
+                if not (
+                    _positive_integer(
+                        invitation.get("invitation_token_id"),
+                        "invitation token id",
+                    )
+                    == invitation_token_id
+                    and _positive_integer(
+                        invitation.get("account_id"), "account id"
+                    )
+                    == account_id
+                    and matches_opaque_token(
+                        delivery.raw_token, invitation.get("token_hash")
+                    )
+                    and delivery.account_id == account_id
+                    and delivery.username == username
+                    and delivery.recipient == recipient
+                    and _aware_utc(delivery.expires_at) == expires_at
                 ):
                     return None
-                account_id = _positive_integer(
-                    payload.get("account_id"), "account id"
+                outboxes = connection.execute(
+                    """
+                    select outbox.id as outbox_id,
+                           outbox.account_id as outbox_account_id,
+                           outbox.invitation_token_id
+                    from app.mail_outbox outbox
+                    where outbox.id = %s
+                      and outbox.account_id = %s
+                      and outbox.invitation_token_id = %s
+                      and outbox.message_category = %s
+                      and outbox.delivery_status = 'pending'
+                      and outbox.attempt_count = 0
+                    for update of outbox
+                    """,
+                    (
+                        outbox_id,
+                        account_id,
+                        invitation_token_id,
+                        INVITATION_MESSAGE_CATEGORY,
+                    ),
+                ).fetchall()
+                if len(outboxes) != 1:
+                    return None
+                outbox = _row_mapping(
+                    outboxes[0],
+                    ("outbox_id", "outbox_account_id", "invitation_token_id"),
                 )
-                username = _required_text(
-                    payload.get("username_display"), "username"
-                )
-                recipient = _required_text(
-                    payload.get("contact_email"), "recipient"
-                )
+                if not (
+                    _positive_integer(outbox.get("outbox_id"), "outbox id")
+                    == outbox_id
+                    and _positive_integer(
+                        outbox.get("outbox_account_id"), "outbox account id"
+                    )
+                    == account_id
+                    and _positive_integer(
+                        outbox.get("invitation_token_id"), "invitation token id"
+                    )
+                    == invitation_token_id
+                ):
+                    return None
                 claimed_at = now
-                connection.execute(
+                claimed = connection.execute(
                     """
                     update app.mail_outbox
                     set delivery_status = 'sending', attempt_count = 1,
                         claimed_at = %s, next_attempt_at = null
                     where id = %s and delivery_status = 'pending'
                       and attempt_count = 0
+                    returning id
                     """,
                     (claimed_at, outbox_id),
-                )
+                ).fetchall()
+                if len(claimed) != 1:
+                    return None
         return InvitationClaim(
             outbox_id=outbox_id,
+            invitation_token_id=invitation_token_id,
             account_id=account_id,
             username=username,
             recipient=recipient,
+            expires_at=expires_at,
             attempt_count=1,
             claimed_at=claimed_at,
         )
@@ -608,7 +751,16 @@ async def deliver_invitation(
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     try:
-        message = composer(delivery=delivery, config=config)
+        bound_delivery = InvitationDelivery(
+            outbox_id=claim.outbox_id,
+            invitation_token_id=claim.invitation_token_id,
+            account_id=claim.account_id,
+            recipient=claim.recipient,
+            username=claim.username,
+            raw_token=delivery.raw_token,
+            expires_at=claim.expires_at,
+        )
+        message = composer(delivery=bound_delivery, config=config)
         result = await sender(message, config=config)
         if not isinstance(result, DeliveryResult):
             result = DeliveryResult(delivered=False, reason="failed")

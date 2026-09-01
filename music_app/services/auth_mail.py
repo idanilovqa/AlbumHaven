@@ -15,6 +15,10 @@ from aiosmtplib import SMTP
 from aiosmtplib.errors import SMTPRecipientRefused, SMTPRecipientsRefused
 
 from music_app.services.auth_config import normalize_email_address
+from music_app.services.auth_invitation_models import (
+    INVITATION_URL_PURPOSE,
+    InvitationDelivery,
+)
 from music_app.services.mail_config import build_public_url
 
 
@@ -108,6 +112,45 @@ def compose_password_reset_email(
         html=(
             f"<p>Hello {escape(username)},</p>"
             f'<p><a href="{escape(reset_url, quote=True)}">Reset your Album Haven sign-in</a></p>'
+        ),
+        config=config,
+    )
+
+
+def compose_invitation_email(
+    *, delivery: InvitationDelivery, config: Mapping[str, Any]
+) -> EmailMessage:
+    """Build a purpose-bound managed-account invitation message."""
+
+    if not isinstance(delivery, InvitationDelivery):
+        raise ValueError("Invitation delivery is invalid.")
+    _reject_line_breaks(delivery.username, "username")
+    _reject_line_breaks(delivery.raw_token, "invitation token")
+    invitation_page_url = build_public_url(
+        str(config["public_base_url"]), "/accept-invitation"
+    )
+    invitation_url = invitation_page_url + "?" + urlencode(
+        {
+            "purpose": INVITATION_URL_PURPOSE,
+            "token": delivery.raw_token,
+        },
+        quote_via=quote,
+    )
+    expires_at = delivery.expires_at.isoformat()
+    return _multipart_message(
+        subject="Accept your Album Haven invitation",
+        username=delivery.username,
+        recipient=delivery.recipient,
+        text=(
+            f"Hello {delivery.username},\n\n"
+            f"Accept your invitation: {invitation_url}\n"
+            f"This link expires at {expires_at}.\n"
+        ),
+        html=(
+            f"<p>Hello {escape(delivery.username)},</p>"
+            f'<p><a href="{escape(invitation_url, quote=True)}">'
+            "Accept invitation</a></p>"
+            f"<p>This link expires at {escape(expires_at)}.</p>"
         ),
         config=config,
     )

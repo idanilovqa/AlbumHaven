@@ -782,11 +782,33 @@ async def _deliver_pending_welcome(app, outbox_id: int) -> None:
 async def _deliver_pending_invitation(app, delivery) -> None:
     try:
         callback = getattr(app.state, "invitation_delivery", None)
-        if not callable(callback):
+        if callable(callback):
+            result = callback(delivery)
+            if isawaitable(result):
+                await result
             return
-        result = callback(delivery)
-        if isawaitable(result):
-            await result
+        from config import build_mail_config
+        from music_app.services.auth_mail_outbox_postgres import (
+            PostgresInvitationOutboxService,
+            deliver_invitation,
+        )
+
+        mail_config = getattr(app.state, "mail_config", None)
+        if not isinstance(mail_config, Mapping):
+            mail_config = build_mail_config()
+        if mail_config.get("invitation_enabled") is not True:
+            return
+        repository_config = getattr(app.state, "repository_config", None)
+        if not isinstance(repository_config, Mapping):
+            repository_config = dict(mail_config)
+            repository_config["ALBUM_HAVEN_APP_DATABASE_URL"] = (
+                app.state.auth_policy_config["ALBUM_HAVEN_APP_DATABASE_URL"]
+            )
+        await deliver_invitation(
+            delivery,
+            config=mail_config,
+            repository=PostgresInvitationOutboxService(repository_config),
+        )
     except Exception:
         # The committed token and outbox row remain authoritative; delivery is
         # deliberately non-gating and can be retried through the admin flow.

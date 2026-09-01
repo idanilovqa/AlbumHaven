@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from importlib import import_module, util
 import ssl
@@ -8,6 +9,8 @@ from typing import Any
 
 import pytest
 from aiosmtplib.errors import SMTPRecipientRefused, SMTPRecipientsRefused
+
+from music_app.services.auth_invitation_models import InvitationDelivery
 
 
 MODULE = "music_app.services.auth_mail"
@@ -22,6 +25,7 @@ def test_auth_mail_contract_is_present():
 
     assert callable(auth_mail.compose_welcome_email)
     assert callable(auth_mail.compose_password_reset_email)
+    assert callable(auth_mail.compose_invitation_email)
     assert callable(auth_mail.send_auth_email)
 
 
@@ -95,6 +99,56 @@ def test_reset_email_uses_a_purpose_bound_url_encoded_token_and_redacts_repr(
         assert "token=reset%20%2B%2F%3D%3F%26token%20value" in body
         assert TOKEN not in body
     assert TOKEN not in repr(message)
+
+
+def test_invitation_email_names_recipient_and_uses_expiring_purpose_bound_acceptance_url(
+    auth_mail,
+):
+    delivery = InvitationDelivery(
+        outbox_id=71,
+        invitation_token_id=72,
+        account_id=41,
+        recipient="listener@example.test",
+        username="listener.plus",
+        raw_token="A" * 43,
+        expires_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+    )
+    message = auth_mail.compose_invitation_email(
+        delivery=delivery,
+        config={
+            "public_base_url": "https://example.test",
+            "sender_address": "no-reply@example.test",
+            "sender_name": "Album Haven",
+        },
+    )
+
+    text, html = _body_parts(message)
+    for body in (text, html):
+        assert "listener.plus" in body
+        assert "purpose=account-invitation" in body
+        assert "token=" in body
+        assert "2026-09-04" in body
+        assert "password" not in body.casefold()
+    assert delivery.raw_token not in repr(delivery)
+    assert delivery.raw_token not in repr(message)
+
+
+def test_invitation_composer_rejects_token_crlf_without_echoing_secret(auth_mail):
+    secret = "opaque\r\nBcc: victim@example.test"
+    delivery = InvitationDelivery(
+        outbox_id=71,
+        invitation_token_id=72,
+        account_id=41,
+        recipient="listener@example.test",
+        username="listener.plus",
+        raw_token=secret,
+        expires_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
+    )
+
+    with pytest.raises(ValueError) as caught:
+        auth_mail.compose_invitation_email(delivery=delivery, config=_config())
+
+    assert secret not in str(caught.value)
 
 
 @pytest.mark.parametrize(

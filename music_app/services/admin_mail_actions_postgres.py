@@ -116,7 +116,10 @@ class PostgresAdminMailActionService:
                 target = self._lock_authority_and_target(
                     connection, actor_id, current_library_id, target_id
                 )
-                if not _eligible(target):
+                if (
+                    target.get("target_account_kind") != "bootstrap_owner"
+                    or not _eligible(target)
+                ):
                     self._audit(connection, actor_id, target_id, "welcome_resend_ineligible", "invalid", reference, now)
                     return AdminMailActionResult()
                 if self._charge(
@@ -245,7 +248,7 @@ class PostgresAdminMailActionService:
         rows = connection.execute(
             """
             with locked_accounts as (
-              select id, is_active, disabled_at, contact_email
+              select id, account_kind, is_active, disabled_at, contact_email
               from app.accounts where id in (%s, %s) order by id for update
             ), locked_library as (
               select id, owner_account_id from library.libraries
@@ -254,6 +257,7 @@ class PostgresAdminMailActionService:
             select actor.id as actor_account_id,
                    locked_library.id as library_id,
                    target.id as target_account_id,
+                   target.account_kind as target_account_kind,
                    target.is_active as target_is_active,
                    target.disabled_at as target_disabled_at,
                    target.contact_email,

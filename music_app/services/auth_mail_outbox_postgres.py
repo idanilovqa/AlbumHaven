@@ -9,11 +9,17 @@ from typing import Any, Awaitable
 
 from music_app.services.auth_mail import (
     DeliveryResult,
+    compose_invitation_email,
     compose_password_reset_email,
     compose_welcome_email,
     send_auth_email,
 )
-from music_app.services.auth_tokens import hash_opaque_token
+from music_app.services.auth_invitation_models import (
+    INVITATION_DB_PURPOSE,
+    INVITATION_MESSAGE_CATEGORY,
+    InvitationDelivery,
+)
+from music_app.services.auth_tokens import hash_opaque_token, matches_opaque_token
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -49,6 +55,24 @@ class AmbiguousWelcomeClaim:
 
 @dataclass(frozen=True, repr=False, slots=True)
 class PasswordResetClaim:
+    outbox_id: int
+    account_id: int
+    username: str
+    recipient: str
+    attempt_count: int
+    claimed_at: datetime
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
+            f"account_id={self.account_id!r}, username=<redacted>, "
+            f"recipient=<redacted>, attempt_count={self.attempt_count!r}, "
+            f"claimed_at={self.claimed_at!r})"
+        )
+
+
+@dataclass(frozen=True, repr=False, slots=True)
+class InvitationClaim:
     outbox_id: int
     account_id: int
     username: str
@@ -341,6 +365,171 @@ class PostgresPasswordResetOutboxService:
                 )
 
 
+class PostgresInvitationOutboxService:
+    """Deliver only the invitation matching the in-memory bearer token."""
+
+    def __init__(
+        self,
+        config: Mapping[str, object],
+        *,
+        connect: Callable[[str], Any] | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._database_url = str(config.get(_DATABASE_URL_KEY) or "").strip()
+        if not self._database_url:
+            raise RuntimeError(
+                "ALBUM_HAVEN_APP_DATABASE_URL is required for invitation delivery."
+            )
+        self._connect = connect or _connect
+        self._now = now or (lambda: datetime.now(timezone.utc))
+
+    def claim_invitation(
+        self, delivery: InvitationDelivery
+    ) -> InvitationClaim | None:
+        if not isinstance(delivery, InvitationDelivery):
+            raise ValueError("Invitation delivery is invalid.")
+        outbox_id = _positive_integer(delivery.outbox_id, "outbox id")
+        invitation_token_id = _positive_integer(
+            delivery.invitation_token_id, "invitation token id"
+        )
+        now = _aware_utc(self._now())
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                rows = connection.execute(
+                    """
+                    select outbox.id as outbox_id,
+                           invitation.id as invitation_token_id,
+                           invitation.account_id,
+                           account.contact_email,
+                           account.username_display,
+                           invitation.token_hash,
+                           invitation.expires_at
+                    from app.mail_outbox outbox
+                    join app.account_invitation_tokens invitation
+                      on invitation.id = outbox.invitation_token_id
+                    join app.accounts account
+                      on account.id = invitation.account_id
+                    left join app.account_credentials credential
+                      on credential.account_id = account.id
+                    where outbox.id = %s
+                      and invitation.id = %s
+                      and outbox.message_category = %s
+                      and outbox.delivery_status = 'pending'
+                      and outbox.attempt_count = 0
+                      and invitation.purpose = %s
+                      and invitation.consumed_at is null
+                      and invitation.revoked_at is null
+                      and invitation.expires_at > %s
+                      and account.is_active is true
+                      and account.disabled_at is null
+                      and credential.account_id is null
+                    for update of outbox, invitation, account
+                    """,
+                    (
+                        outbox_id,
+                        invitation_token_id,
+                        INVITATION_MESSAGE_CATEGORY,
+                        INVITATION_DB_PURPOSE,
+                        now,
+                    ),
+                ).fetchall()
+                if len(rows) != 1:
+                    return None
+                payload = _row_mapping(
+                    rows[0],
+                    (
+                        "outbox_id",
+                        "invitation_token_id",
+                        "account_id",
+                        "contact_email",
+                        "username_display",
+                        "token_hash",
+                        "expires_at",
+                    ),
+                )
+                if not matches_opaque_token(
+                    delivery.raw_token, payload.get("token_hash")
+                ):
+                    return None
+                account_id = _positive_integer(
+                    payload.get("account_id"), "account id"
+                )
+                username = _required_text(
+                    payload.get("username_display"), "username"
+                )
+                recipient = _required_text(
+                    payload.get("contact_email"), "recipient"
+                )
+                claimed_at = now
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'sending', attempt_count = 1,
+                        claimed_at = %s, next_attempt_at = null
+                    where id = %s and delivery_status = 'pending'
+                      and attempt_count = 0
+                    """,
+                    (claimed_at, outbox_id),
+                )
+        return InvitationClaim(
+            outbox_id=outbox_id,
+            account_id=account_id,
+            username=username,
+            recipient=recipient,
+            attempt_count=1,
+            claimed_at=claimed_at,
+        )
+
+    def finalize_invitation(
+        self, claim: InvitationClaim, result: DeliveryResult
+    ) -> None:
+        if not isinstance(claim, InvitationClaim):
+            raise ValueError("Invitation claim is invalid.")
+        now = _aware_utc(self._now())
+        delivered = bool(getattr(result, "delivered", False)) and str(
+            getattr(result, "reason", "")
+        ) == "delivered"
+        reason = str(getattr(result, "reason", "failed"))
+        status = "sent" if delivered else (
+            "unknown" if reason == "unknown" else "failed"
+        )
+        with self._connect(self._database_url) as connection:
+            with _transaction(connection):
+                rows = connection.execute(
+                    """
+                    select id from app.mail_outbox
+                    where id = %s and message_category = %s
+                      and delivery_status = 'sending' and attempt_count = 1
+                      and claimed_at = %s
+                    for update
+                    """,
+                    (
+                        claim.outbox_id,
+                        INVITATION_MESSAGE_CATEGORY,
+                        claim.claimed_at,
+                    ),
+                ).fetchall()
+                if len(rows) != 1:
+                    raise RuntimeError(
+                        "Invitation outbox finalization context is invalid."
+                    )
+                connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = %s, sent_at = %s,
+                        next_attempt_at = null, provider_reference = null
+                    where id = %s and delivery_status = 'sending'
+                      and attempt_count = 1 and claimed_at = %s
+                    """,
+                    (
+                        status,
+                        now if delivered else None,
+                        claim.outbox_id,
+                        claim.claimed_at,
+                    ),
+                )
+
+
 async def deliver_welcome(
     outbox_id: int,
     *,
@@ -402,6 +591,30 @@ async def deliver_password_reset(
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
     repository.finalize_password_reset(claim, result)
+    return result
+
+
+async def deliver_invitation(
+    delivery: InvitationDelivery,
+    *,
+    config: Mapping[str, Any],
+    repository: PostgresInvitationOutboxService,
+    composer: Callable[..., Any] = compose_invitation_email,
+    sender: Callable[..., Awaitable[DeliveryResult]] = send_auth_email,
+) -> DeliveryResult:
+    """Attempt one committed invitation without persisting its bearer token."""
+
+    claim = repository.claim_invitation(delivery)
+    if claim is None:
+        return DeliveryResult(delivered=False, reason="not_eligible")
+    try:
+        message = composer(delivery=delivery, config=config)
+        result = await sender(message, config=config)
+        if not isinstance(result, DeliveryResult):
+            result = DeliveryResult(delivered=False, reason="failed")
+    except Exception:
+        result = DeliveryResult(delivered=False, reason="failed")
+    repository.finalize_invitation(claim, result)
     return result
 
 

@@ -26,9 +26,12 @@ class Transaction:
 
 
 class Connection:
-    def __init__(self, *, throttle_count=0, active=True):
+    def __init__(
+        self, *, throttle_count=0, active=True, account_kind="bootstrap_owner"
+    ):
         self.throttle_count = throttle_count
         self.active = active
+        self.account_kind = account_kind
         self.events = []
         self.operations = []
 
@@ -49,6 +52,7 @@ class Connection:
                 "actor_account_id": 7,
                 "library_id": 9,
                 "target_account_id": 41,
+                "target_account_kind": self.account_kind,
                 "target_is_active": self.active,
                 "target_disabled_at": None if self.active else NOW,
                 "contact_email": "listener@example.test",
@@ -126,6 +130,29 @@ def test_welcome_throttle_is_ambiguous_and_does_not_queue_another_message():
     assert result.welcome_outbox_id is None
     assert not any("insert into app.mail_outbox" in sql for sql, _ in connection.operations)
     assert "throttled" in repr(result)
+
+
+def test_welcome_resend_remains_bootstrap_owner_only_for_managed_accounts():
+    connection = Connection(account_kind="managed_user")
+
+    result = _service(connection).queue_welcome(
+        actor_account_id=7,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        request_ref="managed-welcome-ineligible",
+    )
+
+    assert result.accepted is True
+    assert result.welcome_outbox_id is None
+    authority_sql = next(
+        sql for sql, _ in connection.operations if "with locked_accounts" in sql
+    )
+    assert "account_kind" in authority_sql
+    assert not any(
+        "insert into app.mail_outbox" in sql
+        for sql, _ in connection.operations
+    )
 
 
 def test_admin_password_reset_returns_only_a_redacted_internal_delivery():

@@ -320,6 +320,25 @@ def test_success_returns_only_safe_account_identity_and_verifies_once(login):
     assert len(identity_locks) == len(credential_locks) == 1
 
 
+def test_invitation_created_credential_logs_in_as_recipient_set(login):
+    connection = RecordingConnection(
+        credential_rows=({
+            "account_id": 41,
+            "encoded_hash": ENCODED_HASH,
+            "hash_policy_version": 4,
+            "credential_version": 1,
+            "administrator_set": False,
+        },)
+    )
+    service, _ = _service(login, connection)
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.SUCCESS
+    assert result.account_id == 41
+    assert result.administrator_set is False
+
+
 def test_administrator_set_is_absent_on_invalid_result(login):
     connection = RecordingConnection(account_rows=())
     service, _ = _service(

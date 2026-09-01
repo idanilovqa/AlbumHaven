@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 from http.cookies import SimpleCookie
 from importlib import import_module, util
@@ -18,6 +19,12 @@ from music_app.services.auth_password_reset_lifecycle_postgres import (
     IssuedResetTransaction,
     ResetCompletionOutcome,
 )
+from music_app.services.auth_invitation_csrf import issue_invitation_csrf
+from music_app.services.auth_invitation_models import (
+    InvitationCompletionOutcome,
+    IssuedInvitationTransaction,
+)
+from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_reset_csrf import issue_reset_csrf
 from music_app.services.auth_preauth_postgres import IssuedPreAuthToken
 from music_app.services.auth_session_csrf import matches_session_csrf
@@ -32,6 +39,11 @@ CSRF = "c" * 43
 NEXT_CSRF = "n" * 43
 SESSION = "s" * 43
 RESET_TRANSACTION = "s" * 43
+INVITATION_COOKIE = "__Host-album_haven_invitation"
+INVITATION_RAW = base64.urlsafe_b64encode(bytes([0x11]) * 32).decode("ascii").rstrip("=")
+NEXT_INVITATION_RAW = base64.urlsafe_b64encode(bytes([0x12]) * 32).decode("ascii").rstrip("=")
+INVITATION_TRANSACTION = base64.urlsafe_b64encode(bytes([0x22]) * 32).decode("ascii").rstrip("=")
+WRONG_INVITATION_CSRF = base64.urlsafe_b64encode(bytes([0x44]) * 32).decode("ascii").rstrip("=")
 
 
 def test_auth_asgi_contract_is_present_and_registered_in_factory():
@@ -128,6 +140,34 @@ class FakeResetLifecycle:
 
     def complete_reset(self, raw, *, new_password, request_ref):
         self.completions.append((raw, new_password, request_ref))
+        return self.outcome
+
+
+class FakeInvitationLifecycle:
+    def __init__(self):
+        self.exchanges = []
+        self.valid = True
+        self.completions = []
+        self.outcome = InvitationCompletionOutcome.SUCCESS
+        self.password_policy_error = False
+
+    def exchange_invitation_token(self, raw, *, request_ref):
+        self.exchanges.append((raw, request_ref))
+        if not self.valid:
+            return None
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        return IssuedInvitationTransaction(
+            INVITATION_TRANSACTION, 71, now + timedelta(minutes=15)
+        )
+
+    def validate_transaction(self, raw):
+        return self.valid and raw == INVITATION_TRANSACTION
+
+    def complete_invitation(self, raw, *, new_password, request_ref):
+        self.completions.append((raw, new_password, request_ref))
+        if self.password_policy_error:
+            raise PasswordPolicyError("private password policy detail")
         return self.outcome
 
 
@@ -436,6 +476,253 @@ def test_reset_completion_accepts_matching_unicode_password_without_compare_erro
 
     assert status == 200
     assert lifecycle.completions[0][1] == password
+
+
+def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
+    auth_asgi, caplog
+):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    raw_invite = INVITATION_RAW
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query="purpose=account-invitation&token=" + raw_invite,
+    )
+
+    response_headers = dict(headers)
+    assert status == 303 and body == b""
+    assert response_headers["location"] == "/accept-invitation"
+    assert response_headers["cache-control"] == "no-store, max-age=0"
+    assert response_headers["referrer-policy"] == "no-referrer"
+    cookie = next(
+        value for value in _set_cookies(headers)
+        if value.startswith(INVITATION_COOKIE + "=")
+    )
+    assert INVITATION_TRANSACTION in cookie
+    assert raw_invite not in cookie
+    assert all(
+        flag in cookie
+        for flag in ("HttpOnly", "Secure", "SameSite=strict", "Path=/")
+    )
+    assert raw_invite.encode() not in body
+    assert raw_invite not in caplog.text
+    assert lifecycle.exchanges[0][0] == raw_invite
+
+
+def test_invalid_or_duplicate_invitation_query_redirects_clean_without_cookie(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query=(
+            "purpose=account-invitation&token="
+            + INVITATION_RAW
+            + "&token="
+            + NEXT_INVITATION_RAW
+        ),
+    )
+
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/accept-invitation"
+    assert not any(
+        value.startswith(INVITATION_COOKIE + "=")
+        for value in _set_cookies(headers)
+    )
+    assert INVITATION_RAW.encode() not in body
+    assert NEXT_INVITATION_RAW.encode() not in body
+    assert lifecycle.exchanges == []
+
+
+def test_clean_invitation_page_uses_transaction_bound_csrf_and_no_referrer(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+    rendered = body.decode()
+    assert status == 200
+    assert 'action="/accept-invitation"' in rendered
+    assert f'value="{csrf}"' in rendered
+    assert INVITATION_TRANSACTION not in rendered
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert '<meta name="referrer" content="no-referrer">' in rendered
+
+
+def test_invitation_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+    form = {
+        "new_password": "Phase Seven Recipient Passphrase 2026!",
+        "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+        "csrf_token": csrf,
+    }
+
+    status, headers, body = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form=form,
+    )
+
+    assert status == 200
+    assert b"password has been created" in body
+    assert len(lifecycle.completions) == 1
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+    for origin, confirmation, supplied_csrf in (
+        ("https://evil.test", form["confirm_password"], csrf),
+        (
+            "https://music.test",
+            "Different Recipient Passphrase 2026!",
+            csrf,
+        ),
+        (
+            "https://music.test",
+            form["confirm_password"],
+            WRONG_INVITATION_CSRF,
+        ),
+    ):
+        invalid_status, _, _ = _request(
+            app,
+            "POST",
+            path="/accept-invitation",
+            headers={
+                "origin": origin,
+                "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+            },
+            form=dict(
+                form,
+                confirm_password=confirmation,
+                csrf_token=supplied_csrf,
+            ),
+        )
+        assert invalid_status == 400
+    assert len(lifecycle.completions) == 1
+
+
+def test_invalid_invitation_completion_clears_transaction_cookie(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    lifecycle.outcome = InvitationCompletionOutcome.INVALID
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+
+    status, headers, _ = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form={
+            "new_password": "Phase Seven Recipient Passphrase 2026!",
+            "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+            "csrf_token": csrf,
+        },
+    )
+
+    assert status == 400
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+def test_invitation_password_policy_error_preserves_transaction_and_generic_detail(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    lifecycle.password_policy_error = True
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+
+    status, headers, body = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form={
+            "new_password": "Phase Seven Recipient Passphrase 2026!",
+            "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+            "csrf_token": csrf,
+        },
+    )
+
+    assert status == 400
+    assert b"private password policy detail" not in body
+    assert not any("Max-Age=0" in value for value in _set_cookies(headers))
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+
+
+def test_invitation_completion_accepts_direct_loopback_http_same_origin(auth_asgi):
+    app, _, _ = _app(auth_asgi, origins=("https://music.test",))
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+
+    status, headers, _ = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        scheme="http",
+        client="127.0.0.1",
+        host="localhost",
+        headers={
+            "origin": "http://localhost",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form={
+            "new_password": "Phase Seven Recipient Passphrase 2026!",
+            "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+            "csrf_token": csrf,
+        },
+    )
+
+    assert status == 200
+    assert len(lifecycle.completions) == 1
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=")
+        and "Max-Age=0" in value
+        and "Secure" in value
+        for value in _set_cookies(headers)
+    )
 
 
 def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):

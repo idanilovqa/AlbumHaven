@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/login",
                 "/forgot-password",
                 "/reset-password",
+                "/accept-invitation",
                 "/favicon.ico",
                 "/static",
             }:
@@ -129,6 +131,14 @@ def _app(actor):
     async def reset_password():
         return {"reset": True}
 
+    @app.get("/accept-invitation")
+    async def accept_invitation():
+        return {"invitation": True}
+
+    @app.post("/accept-invitation")
+    async def complete_invitation():
+        return {"invitation": True}
+
     @app.get("/favicon.ico")
     async def favicon():
         return {"icon": True}
@@ -208,6 +218,8 @@ def _request(*args, **kwargs):
         ("POST", "/forgot-password"),
         ("GET", "/reset-password"),
         ("POST", "/reset-password"),
+        ("GET", "/accept-invitation"),
+        ("POST", "/accept-invitation"),
         ("GET", "/favicon.ico"),
         ("GET", "/static/app.js"),
         ("GET", "/health"),
@@ -254,6 +266,41 @@ def test_reset_link_query_is_removed_from_downstream_scope_before_dispatch():
     assert status == 200
     assert raw.encode() not in body
     assert body == b'{"query":"","captured":true}'
+
+
+def test_invitation_link_query_is_removed_from_downstream_scope_before_dispatch():
+    app = FastAPI()
+    observed = {}
+
+    @app.get("/accept-invitation")
+    async def accept_invitation(request: Request):
+        observed.update(
+            query_valid=getattr(
+                request.state, "account_invitation_link_query_valid", None
+            ),
+            purpose=getattr(
+                request.state, "account_invitation_link_purpose", None
+            ),
+            token=getattr(request.state, "account_invitation_link_token", None),
+        )
+        return {"query": request.scope.get("query_string", b"").decode("ascii")}
+
+    install_private_route_boundary(app)
+    raw = base64.urlsafe_b64encode(bytes([0x11]) * 32).decode("ascii").rstrip("=")
+    status, body = _request(
+        app,
+        "/accept-invitation",
+        query=f"purpose=account-invitation&token={raw}",
+    )
+
+    assert status == 200
+    assert raw.encode() not in body
+    assert body == b'{"query":""}'
+    assert observed == {
+        "query_valid": True,
+        "purpose": "account-invitation",
+        "token": raw,
+    }
 
 
 def test_status_and_every_nonpublic_path_require_authentication():

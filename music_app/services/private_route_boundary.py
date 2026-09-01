@@ -16,7 +16,9 @@ from music_app.services.policy import ResourceScope
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
 
 
-_PUBLIC_AUTH_PATHS = frozenset({"/login", "/forgot-password", "/reset-password"})
+_PUBLIC_AUTH_PATHS = frozenset(
+    {"/login", "/forgot-password", "/reset-password", "/accept-invitation"}
+)
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
@@ -156,7 +158,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
-        _redact_reset_link_query(request)
+        _redact_lifecycle_link_query(request)
         if _is_public(request.method, request.url.path):
             return await call_next(request)
         route_path = _matched_route_path(app, request)
@@ -203,19 +205,28 @@ def _refresh_session_csrf_cookie(request: Request, response: Response) -> None:
     )
 
 
-def _redact_reset_link_query(request: Request) -> None:
-    if request.method.upper() != "GET" or request.url.path != "/reset-password":
+def _redact_lifecycle_link_query(request: Request) -> None:
+    prefixes = {
+        "/reset-password": "password_reset_link",
+        "/accept-invitation": "account_invitation_link",
+    }
+    prefix = prefixes.get(request.url.path)
+    if request.method.upper() != "GET" or prefix is None:
         return
     pairs = list(request.query_params.multi_items())
     if not pairs:
         return
-    request.state.password_reset_link_query_valid = (
-        len(pairs) == 2
-        and sum(key == "purpose" for key, _value in pairs) == 1
-        and sum(key == "token" for key, _value in pairs) == 1
+    setattr(
+        request.state,
+        f"{prefix}_query_valid",
+        (
+            len(pairs) == 2
+            and sum(key == "purpose" for key, _value in pairs) == 1
+            and sum(key == "token" for key, _value in pairs) == 1
+        ),
     )
-    request.state.password_reset_link_purpose = request.query_params.get("purpose")
-    request.state.password_reset_link_token = request.query_params.get("token")
+    setattr(request.state, f"{prefix}_purpose", request.query_params.get("purpose"))
+    setattr(request.state, f"{prefix}_token", request.query_params.get("token"))
     request.scope["query_string"] = b""
 
 

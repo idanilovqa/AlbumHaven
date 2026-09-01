@@ -25,6 +25,18 @@ from music_app.services.auth_password_reset_lifecycle_postgres import (
     PostgresPasswordResetLifecycleService,
     ResetCompletionOutcome,
 )
+from music_app.services.auth_invitation_csrf import (
+    issue_invitation_csrf,
+    matches_invitation_csrf,
+)
+from music_app.services.auth_invitation_lifecycle_postgres import (
+    PostgresInvitationLifecycleService,
+)
+from music_app.services.auth_invitation_models import (
+    INVITATION_TRANSACTION_SECONDS,
+    INVITATION_URL_PURPOSE,
+    InvitationCompletionOutcome,
+)
 from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
 from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
@@ -42,6 +54,11 @@ router = APIRouter()
 _PREAUTH_COOKIE = "__Host-album_haven_login_csrf"
 _FORGOT_PREAUTH_COOKIE = "__Host-album_haven_forgot_csrf"
 _RESET_TRANSACTION_COOKIE = "__Host-album_haven_reset"
+INVITATION_COOKIE = "__Host-album_haven_invitation"
+INVITATION_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Referrer-Policy": "no-referrer",
+}
 _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
@@ -118,6 +135,31 @@ def _render_reset(
     )
     response.headers["Referrer-Policy"] = "same-origin"
     return response
+
+
+def _render_invitation(
+    request: Request,
+    *,
+    valid: bool = False,
+    csrf_token: str | None = None,
+    completed: bool = False,
+    password_invalid: bool = False,
+    status_code: int = 200,
+) -> Response:
+    templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    response = templates.TemplateResponse(
+        request,
+        "account-invitation.html",
+        {
+            "request": request,
+            "valid": valid,
+            "csrf_token": csrf_token,
+            "completed": completed,
+            "password_invalid": password_invalid,
+        },
+        status_code=status_code,
+    )
+    return _invitation_headers(response)
 
 
 def _cookie_secure(request: Request, config: Mapping[str, object]) -> bool | None:
@@ -228,6 +270,37 @@ def _reset_lifecycle_service(request: Request):
                 audit_repository=PostgresSecurityAuditRepository(),
             )
             request.app.state.password_reset_lifecycle_service = existing
+    return existing
+
+
+def _invitation_lifecycle(request: Request):
+    existing = getattr(request.app.state, "invitation_lifecycle_service", None)
+    if existing is not None:
+        return existing
+    config = _policy_config(request)
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(request.app.state, "invitation_lifecycle_service", None)
+        if existing is None:
+            checker = getattr(request.app.state, "breached_password_checker", None)
+            if checker is None:
+                from music_app.services.auth_breached_passwords import (
+                    HibpRangePasswordChecker,
+                )
+
+                checker = HibpRangePasswordChecker()
+                request.app.state.breached_password_checker = checker
+            if not callable(checker):
+                raise RuntimeError("Password screening is unavailable.")
+            existing = PostgresInvitationLifecycleService(
+                config,
+                breached_checker=checker,
+                audit_repository=PostgresSecurityAuditRepository(),
+            )
+            request.app.state.invitation_lifecycle_service = existing
     return existing
 
 
@@ -636,6 +709,158 @@ def _generic_reset_unavailable() -> HTMLResponse:
     response = HTMLResponse("Password reset is temporarily unavailable.", status_code=503)
     response.headers["Referrer-Policy"] = "no-referrer"
     return _no_store(response)
+
+
+@router.get("/accept-invitation", response_class=HTMLResponse)
+async def accept_invitation_get(request: Request) -> Response:
+    stored_query = hasattr(
+        request.state, "account_invitation_link_query_valid"
+    )
+    if stored_query:
+        query_present = True
+        query_valid = (
+            request.state.account_invitation_link_query_valid is True
+        )
+        purpose = getattr(
+            request.state, "account_invitation_link_purpose", None
+        )
+        raw_token = getattr(request.state, "account_invitation_link_token", None)
+    else:
+        pairs = list(request.query_params.multi_items())
+        query_present = bool(pairs)
+        query_valid = (
+            len(pairs) == 2
+            and sum(key == "purpose" for key, _value in pairs) == 1
+            and sum(key == "token" for key, _value in pairs) == 1
+        )
+        purpose = request.query_params.get("purpose")
+        raw_token = request.query_params.get("token")
+
+    if query_present:
+        issued = None
+        if (
+            query_valid
+            and purpose == INVITATION_URL_PURPOSE
+            and isinstance(raw_token, str)
+            and raw_token
+        ):
+            try:
+                issued = await run_in_threadpool(
+                    _invitation_lifecycle(request).exchange_invitation_token,
+                    raw_token,
+                    request_ref=uuid4().hex,
+                )
+            except Exception:
+                return _generic_invitation_unavailable()
+        response = RedirectResponse(
+            "/accept-invitation",
+            status_code=303,
+            headers=INVITATION_HEADERS,
+        )
+        if issued is not None:
+            response.set_cookie(
+                INVITATION_COOKIE,
+                issued.raw_token,
+                max_age=INVITATION_TRANSACTION_SECONDS,
+                secure=True,
+                httponly=True,
+                samesite="strict",
+                path="/",
+            )
+        return response
+
+    transaction = request.cookies.get(INVITATION_COOKIE)
+    try:
+        config = _policy_config(request)
+        valid = await run_in_threadpool(
+            _invitation_lifecycle(request).validate_transaction,
+            transaction,
+        )
+        csrf_token = (
+            issue_invitation_csrf(transaction, config) if valid else None
+        )
+    except Exception:
+        return _generic_invitation_unavailable()
+    return _render_invitation(
+        request,
+        valid=valid,
+        csrf_token=csrf_token,
+        status_code=200 if valid else 400,
+    )
+
+
+@router.post("/accept-invitation", response_class=HTMLResponse)
+async def accept_invitation_post(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+        secure = _cookie_secure(request, config)
+    except Exception:
+        return _generic_invitation_unavailable()
+    if secure is None or not _same_origin(request, config):
+        return _generic_invitation_invalid()
+    payload = await _form_payload(
+        request,
+        allowed=frozenset({"new_password", "confirm_password", "csrf_token"}),
+        required=frozenset({"new_password", "confirm_password", "csrf_token"}),
+    )
+    transaction = request.cookies.get(INVITATION_COOKIE)
+    if (
+        payload is None
+        or payload["new_password"] != payload["confirm_password"]
+        or not matches_invitation_csrf(
+            transaction,
+            payload["csrf_token"],
+            config,
+        )
+    ):
+        return _generic_invitation_invalid()
+    try:
+        outcome = await run_in_threadpool(
+            _invitation_lifecycle(request).complete_invitation,
+            transaction,
+            new_password=payload["new_password"],
+            request_ref=uuid4().hex,
+        )
+    except PasswordPolicyError:
+        return _render_invitation(
+            request,
+            valid=True,
+            csrf_token=payload["csrf_token"],
+            password_invalid=True,
+            status_code=400,
+        )
+    except Exception:
+        return _generic_invitation_unavailable()
+    response = (
+        _render_invitation(request, completed=True)
+        if outcome is InvitationCompletionOutcome.SUCCESS
+        else _generic_invitation_invalid()
+    )
+    response.delete_cookie(
+        INVITATION_COOKIE,
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="strict",
+    )
+    return response
+
+
+def _invitation_headers(response: Response) -> Response:
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return _no_store(response)
+
+
+def _generic_invitation_invalid() -> HTMLResponse:
+    return _invitation_headers(
+        HTMLResponse("Invitation link is invalid or expired.", status_code=400)
+    )
+
+
+def _generic_invitation_unavailable() -> HTMLResponse:
+    return _invitation_headers(
+        HTMLResponse("Invitation is temporarily unavailable.", status_code=503)
+    )
 
 
 def _session_service(request: Request):

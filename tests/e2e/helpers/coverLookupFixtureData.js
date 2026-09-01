@@ -7,10 +7,15 @@ const manifestPath = path.join(repoRoot, 'tests', 'e2e', 'fixtures', 'approvedCo
 const defaultProviderPort = 4175;
 
 export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
-  canonicalPersistence: Object.freeze({
+  manualProviderCover: Object.freeze({
     artist: 'Synthetic Cover Artist',
     album: 'Canonical Cover Fixture',
     year: '2026',
+  }),
+  canonicalPersistence: Object.freeze({
+    artist: 'Mastodon',
+    album: 'Crack The Skye',
+    year: '2009',
   }),
   partialSave: Object.freeze({
     artist: 'Mastodon',
@@ -58,9 +63,9 @@ export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
     year: '2009',
   }),
   notificationNoResult: Object.freeze({
-    artist: 'Synthetic Cover Artist',
-    album: 'Secondary Cover Fixture',
-    year: '2026',
+    artist: 'Agents Of Mercy',
+    album: 'Functional Fixture Album 329',
+    year: '1999',
   }),
 });
 

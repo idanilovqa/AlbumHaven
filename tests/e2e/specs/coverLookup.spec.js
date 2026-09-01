@@ -9,6 +9,7 @@ import {
 const {
   cancelClear: CANCEL_CLEAR_TARGET,
   canonicalPersistence: COVER_LOOKUP_TARGET,
+  manualProviderCover: MANUAL_PROVIDER_COVER,
   notificationActioned: NOTIFICATION_ACTIONED_TARGET,
   notificationActive: ACTIVE_COVER_LOOKUP_TARGET,
   notificationFailed: NOTIFICATION_FAILED_TARGET,
@@ -157,7 +158,7 @@ test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', as
     taskTitle = await coverLookupActions.readModalSubtitle();
     expect(taskTitle).not.toEqual('');
     const expectedCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(expectedCover).not.toBeNull();
     await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover));
@@ -223,7 +224,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', a
     await coverLookupActions.waitForModalReady();
     actionedTaskTitle = await coverLookupActions.readModalSubtitle();
     const expectedCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(expectedCover).not.toBeNull();
     await coverLookupActions.setProviderFixtureMode('normal');
@@ -940,7 +941,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();
     const fixtureCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(fixtureCover).not.toBeNull();
     await coverLookupActions.setProviderFixtureMode('normal');
@@ -1058,7 +1059,7 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const fixtureCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(fixtureCover).not.toBeNull();
     await coverLookupActions.enterManualUrls(buildFixtureManualUrls(fixtureCover));

@@ -790,7 +790,10 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(albumCard, /cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)/);
   assert.doesNotMatch(coverLookup, /clickFirstAlbumDetails\(/);
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
-  assert.match(coverLookupFixtureData, /canonicalPersistence[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
+  assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
+  assert.match(coverLookupFixtureData, /canonicalPersistence[\s\S]*artist: 'Mastodon'[\s\S]*album: 'Crack The Skye'[\s\S]*year: '2009'/);
+  assert.match(coverLookupFixtureData, /notificationNoResult[\s\S]*artist: 'Agents Of Mercy'[\s\S]*album: 'Functional Fixture Album 329'[\s\S]*year: '1999'/);
+  assert.match(coverLookup, /manualProviderCover: MANUAL_PROVIDER_COVER[\s\S]*Object\.values\(MANUAL_PROVIDER_COVER\)\.join\(' - '\)/);
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,

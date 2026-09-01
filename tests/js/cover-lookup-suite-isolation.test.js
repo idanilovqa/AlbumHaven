@@ -20,6 +20,7 @@ test('cover lookup scenarios own distinct mutable album identities', async () =>
     COVER_LOOKUP_TEST_TARGETS.notificationActioned,
     COVER_LOOKUP_TEST_TARGETS.notificationFailed,
     COVER_LOOKUP_TEST_TARGETS.notificationActive,
+    COVER_LOOKUP_TEST_TARGETS.notificationNoResult,
     COVER_LOOKUP_TEST_TARGETS.partialSave,
     COVER_LOOKUP_TEST_TARGETS.canonicalPersistence,
   ];

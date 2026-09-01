@@ -814,6 +814,10 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.doesNotMatch(coverLookup, /modal\.firstRemoteMatch\.sha256/);
   assert.match(coverLookupActions, /readRemoteCandidateEvidence\(candidateId/);
+  assert.match(
+    coverLookupActions,
+    /async startSearch\(options = \{\}\)[\s\S]*waitForResponse\([\s\S]*\/utilities\/cover-lookup\/start[\s\S]*Promise\.all\([\s\S]*findBetterButton\.click\(\)[\s\S]*response\.json\(\)[\s\S]*response\.ok\(\)[\s\S]*payload\?\.ok/,
+  );
   assert.match(coverLookupActions, /readCoverLookupProviderEvidence[\s\S]*isCoverLookupCancellationSettledBeforeArchiveWork/);
   assert.match(coverLookupProviderHelpers, /musicbrainzStarted <= 2[\s\S]*cover_art_archive_requests === 0/);
   assert.match(coverLookupProviderHelpers, /Refusing to control a non-loopback cover provider fixture/);

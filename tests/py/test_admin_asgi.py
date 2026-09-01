@@ -271,6 +271,23 @@ def test_send_invitation_route_rejects_disabled_mail_before_service():
     assert deliveries == []
 
 
+def test_send_invitation_route_maps_unavailable_mail_config_without_leaking_details():
+    invitation_service = InvitationService()
+    app, _service, deliveries = _app(invitation_service=invitation_service)
+    app.state.mail_config = object()
+
+    status, body = _request(
+        app,
+        {},
+        path="/admin/accounts/41/invitation/send",
+    )
+
+    assert status == 503
+    assert body == b'{"detail":"Invitation email is temporarily unavailable."}'
+    assert invitation_service.send_calls == []
+    assert deliveries == []
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_detail"),
     [

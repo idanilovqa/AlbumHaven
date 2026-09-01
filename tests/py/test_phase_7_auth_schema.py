@@ -150,8 +150,12 @@ def test_invitation_transactions_are_hash_only_expiring_single_use_exchanges(
         invitation_schema_sql, "app.account_invitation_transactions"
     )
     assert table
-    assert "invitation_token_id bigint not null unique" in table
+    assert "invitation_token_id bigint not null" in table
     assert "references app.account_invitation_tokens(id) on delete cascade" in table
+    assert (
+        "constraint account_invitation_transactions_invitation_token_id_key "
+        "unique (invitation_token_id)"
+    ) in table
     assert "transaction_hash bytea not null unique" in table
     assert "octet_length(transaction_hash) = 32" in table
     assert "expires_at > created_at" in table
@@ -159,11 +163,6 @@ def test_invitation_transactions_are_hash_only_expiring_single_use_exchanges(
     assert not re.search(r"\braw_token\b|\btoken_value\b|\binvitation_url\b", table)
 
     indexes = _index_statements(invitation_schema_sql)
-    assert any(
-        "account_invitation_transactions_token_idx" in statement
-        and "invitation_token_id" in statement
-        for statement in indexes
-    )
     assert any(
         "account_invitation_transactions_active_expiry_idx" in statement
         and "expires_at" in statement
@@ -210,7 +209,7 @@ def test_invitation_tables_have_secret_bounded_runtime_grants(
         invitation_schema_sql,
         "album_haven_app",
         "app.account_invitation_transactions",
-    ) == {"select", "insert", "update", "delete"}
+    ) == {"select", "insert", "update"}
     assert _granted_privileges(
         invitation_schema_sql,
         "album_haven_migrator",

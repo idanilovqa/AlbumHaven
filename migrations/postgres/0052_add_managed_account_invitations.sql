@@ -25,20 +25,19 @@ create unique index if not exists account_invitation_tokens_active_account_idx
 
 create table if not exists app.account_invitation_transactions (
   id bigint generated always as identity primary key,
-  invitation_token_id bigint not null unique
+  invitation_token_id bigint not null
     references app.account_invitation_tokens(id) on delete cascade,
   transaction_hash bytea not null unique,
   created_at timestamptz not null,
   expires_at timestamptz not null,
   consumed_at timestamptz,
+  constraint account_invitation_transactions_invitation_token_id_key
+    unique (invitation_token_id),
   constraint account_invitation_transactions_hash_check
     check (octet_length(transaction_hash) = 32),
   constraint account_invitation_transactions_expiry_check
     check (expires_at > created_at)
 );
-
-create index if not exists account_invitation_transactions_token_idx
-  on app.account_invitation_transactions (invitation_token_id);
 
 create index if not exists account_invitation_transactions_active_expiry_idx
   on app.account_invitation_transactions (expires_at)
@@ -72,7 +71,7 @@ begin
     revoke all on table app.account_invitation_tokens from album_haven_app;
     revoke all on table app.account_invitation_transactions from album_haven_app;
     grant select, insert, update on table app.account_invitation_tokens to album_haven_app;
-    grant select, insert, update, delete on table app.account_invitation_transactions to album_haven_app;
+    grant select, insert, update on table app.account_invitation_transactions to album_haven_app;
     grant usage, select on sequence app.account_invitation_tokens_id_seq to album_haven_app;
     grant usage, select on sequence app.account_invitation_transactions_id_seq to album_haven_app;
   end if;

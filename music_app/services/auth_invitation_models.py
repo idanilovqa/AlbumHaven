@@ -76,6 +76,8 @@ def validated_issued_invitation_token(provider) -> IssuedOpaqueToken:
         expected = hash_opaque_token(value.raw)
     except (TypeError, ValueError):
         raise RuntimeError("Account invitation token issuance failed.") from None
+    if not isinstance(value.digest, bytes) or len(value.digest) != 32:
+        raise RuntimeError("Account invitation token issuance failed.")
     if not hmac.compare_digest(expected, value.digest):
         raise RuntimeError("Account invitation token issuance failed.")
     return value

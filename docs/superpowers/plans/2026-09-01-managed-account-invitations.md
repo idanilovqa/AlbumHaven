@@ -140,6 +140,10 @@ assert "create table if not exists app.account_invitation_tokens" in migration
 assert "create unique index if not exists account_invitation_tokens_active_account_idx" in migration
 assert "create table if not exists app.account_invitation_transactions" in migration
 assert "invitation_token_id bigint" in migration
+assert "constraint account_invitation_transactions_invitation_token_id_key" in migration
+assert "account_invitation_transactions_token_idx" not in migration
+assert "grant select, insert, update on table app.account_invitation_transactions" in migration
+assert "grant select, insert, update, delete on table app.account_invitation_transactions" not in migration
 ```
 
 Add `tests/py/test_auth_invitation_models.py` with the exact shared-contract test:
@@ -191,6 +195,16 @@ def test_invitation_models_are_purpose_bound_and_redact_bearer_values():
     issued = IssuedOpaqueToken(raw="A" * 43, digest=b"x" * 32)
     with pytest.raises(RuntimeError, match="Account invitation token issuance failed"):
         validated_issued_invitation_token(lambda: issued)
+
+
+@pytest.mark.parametrize("digest", [None, b"short", bytearray(b"x" * 32)])
+def test_invitation_token_validator_rejects_invalid_digest_before_compare(digest):
+    issued = IssuedOpaqueToken(raw="A" * 43, digest=digest)
+    with pytest.raises(
+        RuntimeError, match="^Account invitation token issuance failed\\.$"
+    ) as raised:
+        validated_issued_invitation_token(lambda: issued)
+    assert raised.value.__cause__ is None
 ```
 
 - [ ] **Step 2: Run focused tests and verify RED**
@@ -279,6 +293,8 @@ def validated_issued_invitation_token(provider) -> IssuedOpaqueToken:
         expected = hash_opaque_token(value.raw)
     except (TypeError, ValueError):
         raise RuntimeError("Account invitation token issuance failed.") from None
+    if not isinstance(value.digest, bytes) or len(value.digest) != 32:
+        raise RuntimeError("Account invitation token issuance failed.") from None
     if not hmac.compare_digest(expected, value.digest):
         raise RuntimeError("Account invitation token issuance failed.")
     return value
@@ -311,19 +327,19 @@ create unique index if not exists account_invitation_tokens_active_account_idx
 
 create table if not exists app.account_invitation_transactions (
   id bigint generated always as identity primary key,
-  invitation_token_id bigint not null unique
+  invitation_token_id bigint not null
     references app.account_invitation_tokens(id) on delete cascade,
   transaction_hash bytea not null unique,
   created_at timestamptz not null,
   expires_at timestamptz not null,
   consumed_at timestamptz,
+  constraint account_invitation_transactions_invitation_token_id_key
+    unique (invitation_token_id),
   constraint account_invitation_transactions_hash_check
     check (octet_length(transaction_hash) = 32),
   constraint account_invitation_transactions_expiry_check
     check (expires_at > created_at)
 );
-create index if not exists account_invitation_transactions_token_idx
-  on app.account_invitation_transactions(invitation_token_id);
 create index if not exists account_invitation_transactions_active_expiry_idx
   on app.account_invitation_transactions(expires_at)
   where consumed_at is null;
@@ -350,7 +366,7 @@ do $$ begin
     revoke all on table app.account_invitation_tokens from album_haven_app;
     revoke all on table app.account_invitation_transactions from album_haven_app;
     grant select, insert, update on table app.account_invitation_tokens to album_haven_app;
-    grant select, insert, update, delete on table app.account_invitation_transactions to album_haven_app;
+    grant select, insert, update on table app.account_invitation_transactions to album_haven_app;
     grant usage, select on sequence app.account_invitation_tokens_id_seq to album_haven_app;
     grant usage, select on sequence app.account_invitation_transactions_id_seq to album_haven_app;
   end if;

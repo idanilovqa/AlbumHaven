@@ -63,9 +63,9 @@ export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
     year: '2009',
   }),
   notificationNoResult: Object.freeze({
-    artist: 'Agents Of Mercy',
-    album: 'Functional Fixture Album 329',
-    year: '1999',
+    artist: '!!!',
+    album: 'Three Bangs',
+    year: '2009',
   }),
 });
 

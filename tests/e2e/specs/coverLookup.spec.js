@@ -1338,6 +1338,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
   });
 
   await stepLogger.step('Keep different automatic artwork suggestion-only and show its indicator', async () => {
+    await appBarActions.waitForScanAndCoverRefreshIdle();
     await coverLookupActions.setProviderFixtureMode('automatic-scan');
     await coverLookupActions.resetProviderFixtureEvidence();
     await appBarActions.triggerIncrementalScanAndWait();

@@ -792,7 +792,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
   assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
   assert.match(coverLookupFixtureData, /canonicalPersistence[\s\S]*artist: 'Mastodon'[\s\S]*album: 'Crack The Skye'[\s\S]*year: '2009'/);
-  assert.match(coverLookupFixtureData, /notificationNoResult[\s\S]*artist: 'Agents Of Mercy'[\s\S]*album: 'Functional Fixture Album 329'[\s\S]*year: '1999'/);
+  assert.match(coverLookupFixtureData, /notificationNoResult[\s\S]*artist: '!!!'[\s\S]*album: 'Three Bangs'[\s\S]*year: '2009'/);
   assert.match(coverLookup, /manualProviderCover: MANUAL_PROVIDER_COVER[\s\S]*Object\.values\(MANUAL_PROVIDER_COVER\)\.join\(' - '\)/);
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
@@ -1196,7 +1196,14 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   const improvementMode = differentArtScenario.indexOf(
     "setProviderFixtureMode('automatic-scan')",
   );
+  const coverRefreshIdleBoundary = differentArtScenario.indexOf(
+    'waitForScanAndCoverRefreshIdle()',
+  );
   const improvementScan = differentArtScenario.indexOf('triggerIncrementalScanAndWait()');
+  assert.ok(
+    coverRefreshIdleBoundary >= 0 && coverRefreshIdleBoundary < improvementMode,
+    'FTC-COVERS-019 must wait for its prior automatic cover refresh before changing provider mode.',
+  );
   assert.ok(
     improvementMode >= 0 && improvementMode < improvementScan,
     'FTC-COVERS-019 must retain automatic-scan for its later Fixture09 different-art phase.',

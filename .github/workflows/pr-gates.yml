@@ -402,6 +402,7 @@ jobs:
 
       - name: Run Phase 7 auth lifecycle suite
         env:
+          PLAYWRIGHT_BROWSER: chrome
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_auth_chrome.outputs.chrome-path }}
         run: |
           $env:PGPASSWORD = $null
@@ -487,6 +488,7 @@ jobs:
 
       - name: Run Phase 7 admin-management suite
         env:
+          PLAYWRIGHT_BROWSER: chrome
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_admin_chrome.outputs.chrome-path }}
         run: |
           $env:PGPASSWORD = $null
@@ -729,6 +731,7 @@ jobs:
         include:
           - shard: synthetic-large-library
             fixtureProfile: synthetic-large-library
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: preloaded-release
             harness: managed-app
             basePort: 4173
@@ -745,6 +748,7 @@ jobs:
             target10: rules-focused
           - shard: utility-problematic-files
             fixtureProfile: utility-problematic-files
+            fixtureDownloadProfile: utility-problematic-files
             fixtureMode: preloaded-release
             harness: managed-app
             basePort: 4253
@@ -761,6 +765,7 @@ jobs:
             target10: none
           - shard: playback-media
             fixtureProfile: playback-media
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: generated-isolated
             harness: managed-app
             basePort: 4213
@@ -777,6 +782,7 @@ jobs:
             target10: none
           - shard: scan-library
             fixtureProfile: scan-library
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: generated-isolated
             harness: scan
             basePort: 4293
@@ -816,21 +822,19 @@ jobs:
           }
 
       - name: Checkout trusted fixture downloader
-        if: ${{ matrix.fixtureMode == 'preloaded-release' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .trusted-ci
           persist-credentials: false
 
-      - name: Fetch preloaded performance fixture
-        if: ${{ matrix.fixtureMode == 'preloaded-release' }}
+      - name: Fetch immutable performance fixture
         env:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
             -Release fixtures-v1.0.19 `
-            -Profile ${{ matrix.fixtureProfile }} `
+            -Profile ${{ matrix.fixtureDownloadProfile }} `
             -ManifestSha256 cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51
 
       - name: Set up Node.js
@@ -866,10 +870,15 @@ jobs:
       - name: Prepare generated performance profile
         if: ${{ matrix.fixtureMode == 'generated-isolated' }}
         run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:ALBUM_HAVEN_FIXTURE_ROOT) -or
-              -not [string]::IsNullOrWhiteSpace($env:ALBUM_HAVEN_MEDIA_ROOT)) {
-            throw "Generated performance targets reject inherited release fixture roots."
+          $releasedRoot = [IO.Path]::GetFullPath($env:ALBUM_HAVEN_FIXTURE_ROOT)
+          $approvedCoverRoot = Join-Path $releasedRoot "media\covers\approved"
+          if (-not (Test-Path -LiteralPath $approvedCoverRoot -PathType Container)) {
+            throw "Generated performance targets require the verified released approved-cover seed."
           }
+          "ALBUM_HAVEN_APPROVED_COVER_ROOT=$approvedCoverRoot" | Out-File `
+            -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FIXTURE_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_MEDIA_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FIXTURE_PROFILE=${{ matrix.fixtureProfile }}" | Out-File `
             -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 

@@ -1,14 +1,15 @@
 const STATUS_PATH = '/status';
 const SIDEBAR_VIEW_PATH = '/view-data?surface=albums&payload_tier=sidebar';
 
-async function readJsonResponse(page, path, requestTimeoutMs) {
+async function readJsonResponse(probePage, path, requestTimeoutMs) {
   const startedAt = Date.now();
-  const response = await page.request.get(path, {
-    headers: { accept: 'application/json' },
+  const response = await probePage.goto(path, {
+    waitUntil: 'commit',
     timeout: requestTimeoutMs,
   });
-  if (!response.ok()) {
-    throw new Error(`Production liveness request ${path} returned HTTP ${response.status()}.`);
+  if (!response || !response.ok()) {
+    const status = response ? response.status() : 0;
+    throw new Error(`Production liveness request ${path} returned HTTP ${status}.`);
   }
   const text = await response.text();
   let payload = null;
@@ -56,23 +57,28 @@ export async function observeProductionAppLiveness(page, options = {}) {
   }
   const startedAt = Date.now();
   const samples = [];
+  const probePage = await page.context().newPage();
 
-  for (let index = 0; index < sampleCount; index += 1) {
-    if (index > 0 && intervalMs > 0) {
-      await page.waitForTimeout(intervalMs);
+  try {
+    for (let index = 0; index < sampleCount; index += 1) {
+      if (index > 0 && intervalMs > 0) {
+        await page.waitForTimeout(intervalMs);
+      }
+      const status = await readJsonResponse(probePage, STATUS_PATH, requestTimeoutMs);
+      assertStatusPayload(status.payload);
+      const view = await readJsonResponse(probePage, SIDEBAR_VIEW_PATH, requestTimeoutMs);
+      assertSidebarViewPayload(view.payload);
+      samples.push({
+        index,
+        statusElapsedMs: status.elapsedMs,
+        viewElapsedMs: view.elapsedMs,
+        scanInProgress: status.payload.scan_in_progress,
+        albumCount: Number(view.payload.album_count || 0),
+        artistCount: Number(view.payload.artist_count || 0),
+      });
     }
-    const status = await readJsonResponse(page, STATUS_PATH, requestTimeoutMs);
-    assertStatusPayload(status.payload);
-    const view = await readJsonResponse(page, SIDEBAR_VIEW_PATH, requestTimeoutMs);
-    assertSidebarViewPayload(view.payload);
-    samples.push({
-      index,
-      statusElapsedMs: status.elapsedMs,
-      viewElapsedMs: view.elapsedMs,
-      scanInProgress: status.payload.scan_in_progress,
-      albumCount: Number(view.payload.album_count || 0),
-      artistCount: Number(view.payload.artist_count || 0),
-    });
+  } finally {
+    await probePage.close();
   }
 
   return {

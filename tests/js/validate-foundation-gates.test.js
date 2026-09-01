@@ -60,6 +60,21 @@ test('foundation workflow uses a published Linux Chrome pin and clears inherited
   assert.doesNotMatch(performanceJob, /name:\s*Write performance foundation version manifest/);
 });
 
+test('dedicated Phase 7 jobs select their pinned Chrome executable', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const jobName of ['e2e_phase7_auth', 'e2e_phase7_admin']) {
+    const start = workflow.indexOf(`  ${jobName}:`);
+    const next = workflow.slice(start + 1).match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
+    const job = workflow.slice(start, next ? start + 1 + next.index : workflow.length);
+    assert.match(job, /PLAYWRIGHT_BROWSER:\s*chrome/);
+    assert.match(job, /PLAYWRIGHT_CHROME_EXECUTABLE/);
+  }
+  for (const configName of ['playwright.phase7-auth.config.js', 'playwright.phase7-admin.config.js']) {
+    const config = fs.readFileSync(path.join(repoRoot, configName), 'utf8');
+    assert.match(config, /resolveBrowserProjectUse\(process\.env\.PLAYWRIGHT_BROWSER \|\| 'chromium'\)/);
+  }
+});
+
 test('foundation validator enforces the approved portable and Windows gate contract', () => {
   assert.equal(
     fs.existsSync(validatorPath),

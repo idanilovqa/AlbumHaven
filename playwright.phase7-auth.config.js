@@ -9,7 +9,7 @@ const controlPort = Number(process.env.PHASE7_AUTH_CONTROL_PORT || 6182);
 const workerPort = Number(process.env.PHASE7_AUTH_WORKER_PORT || 6183);
 const pythonExe = resolvePlaywrightPython(process.env);
 const launcher = path.join(__dirname, 'tests', 'e2e', 'support', 'phase7AuthApp.py');
-const browserUse = resolveBrowserProjectUse('chromium');
+const browserUse = resolveBrowserProjectUse(process.env.PLAYWRIGHT_BROWSER || 'chromium');
 const setupDatabaseURL = process.env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL
   || 'postgresql://album_haven_migrator@localhost:5432/album_haven_fake_e2e';
 const runtimeDatabaseURL = process.env.ALBUM_HAVEN_FAKE_E2E_DATABASE_URL

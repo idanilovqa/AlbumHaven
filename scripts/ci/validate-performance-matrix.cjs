@@ -26,6 +26,12 @@ const SHARD_DEFINITIONS = Object.freeze([
   { shard: 'playback-media', fixtureProfile: 'playback-media', fixtureMode: 'generated-isolated', harness: 'managed-app', basePort: '4213', targets: 'playback-start,gapless-playback' },
   { shard: 'scan-library', fixtureProfile: 'scan-library', fixtureMode: 'generated-isolated', harness: 'scan', basePort: '4293', targets: 'scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page' },
 ]);
+const FIXTURE_DOWNLOAD_PROFILES = Object.freeze({
+  'synthetic-large-library': 'synthetic-large-library',
+  'utility-problematic-files': 'utility-problematic-files',
+  'playback-media': 'synthetic-large-library',
+  'scan-library': 'synthetic-large-library',
+});
 
 function normalizeTestPath(value) {
   return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '');
@@ -116,6 +122,9 @@ function validateShardRows(errors, rawRows, contract) {
   const targetsByName = new Map((contract.targets || []).map((target) => [target.name, target]));
   const owned = [];
   for (const row of rawRows) {
+    if (row.fixtureDownloadProfile !== FIXTURE_DOWNLOAD_PROFILES[row.shard]) {
+      errors.push(`performance shard ${row.shard} has the wrong immutable fixture download profile`);
+    }
     const names = String(row.targets || '').split(',').filter(Boolean);
     owned.push(...names);
     for (const [index, name] of names.entries()) {
@@ -167,11 +176,14 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
   ];
   for (const [pattern, label] of patterns) if (!pattern.test(job)) errors.push(`performance workflow is missing ${label}`);
   if (/continue-on-error:/.test(job)) errors.push('performance process failures must not be hidden');
-  if (!/matrix\.fixtureMode\s*==\s*['"]preloaded-release['"]/.test(job)) errors.push('trusted fixture steps must be limited to preloaded shards');
-  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*\.trusted-ci/.test(job)) errors.push('preloaded shards must use a trusted base checkout');
-  if (!/generated-isolated[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must reject inherited release roots');
-  if (job.indexOf('Fetch preloaded performance fixture') > job.indexOf('Install Node dependencies')
-    || job.indexOf('Fetch preloaded performance fixture') > job.indexOf('Validate performance matrix ownership')) {
+  const trustedCheckout = namedWorkflowStep(job, 'Checkout trusted fixture downloader');
+  const fixtureFetch = namedWorkflowStep(job, 'Fetch immutable performance fixture');
+  if (/\n\s+if:/.test(trustedCheckout) || /\n\s+if:/.test(fixtureFetch)) errors.push('trusted fixture seed must be fetched for every performance shard');
+  if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*\.trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
+  if (!/-Profile\s+\$\{\{\s*matrix\.fixtureDownloadProfile\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the reviewed download profile');
+  if (!/generated-isolated[\s\S]*ALBUM_HAVEN_APPROVED_COVER_ROOT[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must isolate a verified released cover seed from runtime fixture roots');
+  if (job.indexOf('Fetch immutable performance fixture') > job.indexOf('Install Node dependencies')
+    || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Validate performance matrix ownership')) {
     errors.push('secret-bearing fixture fetch must precede pull-request executable code');
   }
   for (let slot = 1; slot <= 10; slot += 1) {

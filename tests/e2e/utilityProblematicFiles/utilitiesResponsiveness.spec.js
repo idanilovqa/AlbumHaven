@@ -39,9 +39,10 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       problematicResponseBytes,
     } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
       const coldRequestStartedAt = performance.now();
-      const coldResponse = await page.request.get(PROBLEMATIC_FILES_PATHNAME, {
-        headers: { accept: 'application/json' },
+      const coldResponse = await page.goto(PROBLEMATIC_FILES_PATHNAME, {
+        waitUntil: 'commit',
       });
+      expect(coldResponse, 'Expected the cold Problematic Files navigation to return a response.').toBeTruthy();
       const coldResponseBody = await coldResponse.text();
       const requestDurationMs = performance.now() - coldRequestStartedAt;
       const responseBytes = new TextEncoder().encode(coldResponseBody).byteLength;

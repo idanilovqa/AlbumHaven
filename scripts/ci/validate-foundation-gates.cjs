@@ -225,6 +225,8 @@ function validateWorkflowContract(workflow) {
       [/node-version:\s*["']22["']/, 'Node.js 22'],
       [/python-version:\s*["']3\.11["']/, 'Python 3.11'],
       [/chrome-version:\s*["']151\.0\.7922\.138["']/, 'pinned Chrome'],
+      [/PLAYWRIGHT_BROWSER:\s*chrome/, 'pinned Chrome selection'],
+      [/PLAYWRIGHT_CHROME_EXECUTABLE/, 'pinned Chrome executable handoff'],
       [/-Mode\s+Provision/, 'isolated PostgreSQL provision'],
       [/-Mode\s+Teardown/, 'isolated PostgreSQL teardown'],
       [new RegExp(command.replaceAll(':', '\\:')), 'dedicated Playwright command'],

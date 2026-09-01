@@ -1340,6 +1340,8 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.ok(retainedMetrics > evaluation);
   assert.ok(hardAssertion > retainedMetrics, 'hard failure must retain the benchmark payload before throwing');
   assert.match(spec, /problematicReadyPerformanceStatus: problematicReadyOutcome\.status/);
+  assert.match(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
+  assert.doesNotMatch(spec, /page\.request\.get/);
 });
 
 test('replacement evidence follows the promoted open when an earlier same-track stream was superseded', async () => {

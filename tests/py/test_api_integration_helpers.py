@@ -55,3 +55,17 @@ def test_public_foobar_assets_are_complete_and_free_of_private_machine_identity(
         "/C:/Repositories/MusicApp",
     ):
         assert forbidden not in combined_text
+
+
+def test_public_foobar_task_helper_does_not_replace_tasks_or_bypass_policy_by_default():
+    from music_app.routes import api_integration_helpers
+
+    _definition, helper_path = api_integration_helpers.resolve_foobar_asset(
+        "register-foobar-db-task-script"
+    )
+    helper_source = helper_path.read_text(encoding="utf-8")
+
+    assert "[switch]$ReplaceExisting" in helper_source
+    assert "if ($existingTask -and -not $ReplaceExisting)" in helper_source
+    assert "if ($ReplaceExisting) { $registerArguments.Force = $true }" in helper_source
+    assert "ExecutionPolicy" not in helper_source

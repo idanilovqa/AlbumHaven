@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
   isCoverLookupCancellationSettledBeforeArchiveWork,
   readCoverLookupProviderEvidence,
@@ -1016,7 +1017,7 @@ export class CoverLookupActions {
       throw new Error(`Full-size ${label} evidence cannot use a resized cover variant.`);
     }
 
-    const response = await this.coverLookup.page.request.get(src, {
+    const response = await authenticatedPageGet(this.coverLookup.page, src, {
       headers: { Accept: 'image/*' },
     });
     if (!response.ok()) {

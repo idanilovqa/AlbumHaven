@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export function isRetryableStatusProbeError(error) {
   const message = String(error?.message || error || '');
@@ -133,7 +134,7 @@ export class AppBarActions {
     await expect.poll(async () => {
       let response;
       try {
-        response = await this.appBar.page.request.get('/status');
+        response = await authenticatedPageGet(this.appBar.page, '/status');
       } catch (error) {
         if (!isRetryableStatusProbeError(error)) throw error;
         lastStatus = { transport_error: String(error?.message || error) };
@@ -192,7 +193,7 @@ export class AppBarActions {
     await expect.poll(async () => {
       let response;
       try {
-        response = await this.appBar.page.request.get('/status');
+        response = await authenticatedPageGet(this.appBar.page, '/status');
       } catch (error) {
         if (!isRetryableStatusProbeError(error)) throw error;
         lastStatus = { transport_error: String(error?.message || error) };

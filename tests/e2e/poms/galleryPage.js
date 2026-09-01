@@ -1,5 +1,6 @@
 import { AlbumCard } from './albumCard.js';
 import { BasePage } from './basePage.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
   ProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
@@ -447,7 +448,7 @@ export class GalleryPage extends BasePage {
   }
 
   async readStatusPayload() {
-    const response = await this.page.request.get('/status');
+    const response = await authenticatedPageGet(this.page, '/status');
     if (!response.ok()) {
       throw new Error(`Expected production status telemetry, received HTTP ${response.status()}.`);
     }

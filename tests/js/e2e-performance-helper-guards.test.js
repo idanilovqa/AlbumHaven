@@ -295,7 +295,7 @@ test('Utility Loops proves the exact media source decodes to finite non-silent s
   assert.match(actions, /async readDecodedLoopSampleEvidence\(loopId/);
   assert.doesNotMatch(actions, /\.evaluate\s*\(/);
   assert.doesNotMatch(pom, /decodeAudioData/);
-  assert.match(actions, /page\.request\.get\(snapshot\.src\)/);
+  assert.match(actions, /authenticatedPageGet\(this\.utilityLoopsTab\.page, snapshot\.src\)/);
   assert.match(actions, /decodeAudioSampleEvidence/);
   assert.match(helper, /resolvePlaywrightPython/);
   assert.match(helper, /windowsHide:\s*true/);

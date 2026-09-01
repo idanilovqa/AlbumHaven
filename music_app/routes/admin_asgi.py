@@ -115,6 +115,7 @@ async def members_roster(request: Request) -> Response:
         created=request.query_params.get("created") == "1",
         listener_defaults=_LISTENER_DEFAULTS,
         allowed_actions=_allowed_actions(request),
+        invitation_email_enabled=_invitation_email_enabled(request.app),
     )
 
 
@@ -131,6 +132,7 @@ async def new_managed_account(request: Request) -> Response:
         capability_groups=_CAPABILITY_GROUPS,
         listener_defaults=_LISTENER_DEFAULTS,
         allowed_actions=_allowed_actions(request),
+        invitation_email_enabled=_invitation_email_enabled(request.app),
     )
 
 
@@ -150,6 +152,7 @@ async def edit_managed_account(request: Request, account_id: int) -> Response:
         capability_groups=_CAPABILITY_GROUPS,
         listener_defaults=_LISTENER_DEFAULTS,
         allowed_actions=_allowed_actions(request, target_account_id=account_id),
+        invitation_email_enabled=_invitation_email_enabled(request.app),
     )
 
 
@@ -715,6 +718,13 @@ def _mail_config(app):
         raise RuntimeError("Mail configuration is unavailable.")
     app.state.mail_config = existing
     return existing
+
+
+def _invitation_email_enabled(app) -> bool:
+    try:
+        return _mail_config(app).get("invitation_enabled") is True
+    except Exception:
+        return False
 
 
 def _service(request: Request):

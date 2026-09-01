@@ -41,13 +41,52 @@ class Service:
             library_name="Rendref's Library",
             members=(
                 AdminMemberSummary(
-                    7, "Rendref", "rendref@example.test", True, True, "owner",
-                    (), None, 1, NOW,
+                    account_id=7,
+                    username="Rendref",
+                    contact_email="rendref@example.test",
+                    is_active=True,
+                    is_bootstrap_owner=True,
+                    membership_role="owner",
+                    capability_keys=(),
+                    welcome_status=None,
+                    active_session_count=1,
+                    last_active_at=NOW,
+                    has_credential=True,
+                    account_status="Enabled",
+                    invitation_delivery_status=None,
                 ),
                 AdminMemberSummary(
-                    41, "test.user+1", "test.user+1@example.test", True, False,
-                    "member", ("library.browse.read", "library.playlists.create"),
-                    "sent", 2, NOW,
+                    account_id=41,
+                    username="test.user+1",
+                    contact_email="test.user+1@example.test",
+                    is_active=True,
+                    is_bootstrap_owner=False,
+                    membership_role="member",
+                    capability_keys=(
+                        "library.browse.read",
+                        "library.playlists.create",
+                    ),
+                    welcome_status=None,
+                    active_session_count=0,
+                    last_active_at=None,
+                    has_credential=False,
+                    account_status="Pending invitation",
+                    invitation_delivery_status="sent",
+                ),
+                AdminMemberSummary(
+                    account_id=42,
+                    username="disabled.user",
+                    contact_email="disabled.user@example.test",
+                    is_active=False,
+                    is_bootstrap_owner=False,
+                    membership_role="member",
+                    capability_keys=("library.browse.read",),
+                    welcome_status=None,
+                    active_session_count=0,
+                    last_active_at=None,
+                    has_credential=False,
+                    account_status="Disabled",
+                    invitation_delivery_status="failed",
                 ),
             ),
         )
@@ -78,7 +117,7 @@ class Service:
         )
 
 
-def _app(actor_override=None):
+def _app(actor_override=None, *, invitation_enabled=True):
     from music_app.routes.admin_asgi import router
 
     app = FastAPI()
@@ -89,6 +128,7 @@ def _app(actor_override=None):
     app.state.admin_mail_action_service = service
     app.state.welcome_delivery = lambda _outbox_id: None
     app.state.password_reset_delivery = lambda _delivery: None
+    app.state.mail_config = {"invitation_enabled": invitation_enabled}
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},
         "trusted_origins": ["https://music.test"],
@@ -220,8 +260,9 @@ def test_members_roster_renders_operational_state_without_credentials_or_paths()
     assert headers["cache-control"] == "no-store, max-age=0"
     assert "Users &amp; access" in body
     assert "test.user+1@example.test" in body
-    assert "2 active sessions" in body
-    assert "Welcome sent" in body
+    assert "Pending invitation" in body
+    assert "Invitation sent" in body
+    assert "Disabled" in body
     assert "encoded_hash" not in body
     assert "root_path" not in body
     assert service.calls == [{"actor_account_id": 7, "library_id": 9}]
@@ -235,7 +276,9 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
 
     assert new_status == 200
     assert "Add user" in new_body
-    assert "The account can sign in as soon as you create it." in new_body
+    assert "one-time invitation link" in new_body
+    assert 'name="send_invitation"' in new_body
+    assert 'name="password"' not in new_body
     assert "Back to users" in new_body
     assert "Plus-addressing remains intact." in new_body
     assert edit_status == 200
@@ -243,13 +286,44 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert "test.user+1" in edit_body
     assert "Listener · Customized" in edit_body
     assert "Send password reset email" in edit_body
-    assert "Resend welcome email" in edit_body
-    assert "never a password" in edit_body
+    assert "Resend welcome email" not in edit_body
     assert "Back to users" in edit_body
     assert "modal" not in edit_body.casefold()
     assert '"accounts.manage": true' in edit_body
     assert '"accounts.membership.manage": true' in edit_body
     assert '"accounts.capabilities.manage": true' in edit_body
+
+
+def test_roster_renders_invitation_menu_only_for_server_eligible_pending_account():
+    app, _service = _app()
+
+    status, _headers, body = _get(app, "/admin/members")
+
+    assert status == 200
+    assert 'data-admin-roster' in body
+    assert 'data-member-menu-trigger="41"' in body
+    assert 'aria-haspopup="menu"' in body
+    assert 'aria-expanded="false"' in body
+    assert 'role="menu"' in body
+    assert 'data-copy-invitation="41"' in body
+    assert 'data-send-invitation="41"' in body
+    assert 'data-copy-invitation="7"' not in body
+    assert 'data-copy-invitation="42"' not in body
+    assert 'data-send-invitation="7"' not in body
+    assert 'data-send-invitation="42"' not in body
+    assert 'data-invitation-copy-fallback' in body
+    assert 'data-roster-reauth-panel' in body
+    assert '/static/js/admin-members.js' in body
+
+
+def test_roster_hides_send_invitation_when_email_is_disabled_but_keeps_copy():
+    app, _service = _app(invitation_enabled=False)
+
+    status, _headers, body = _get(app, "/admin/members")
+
+    assert status == 200
+    assert 'data-copy-invitation="41"' in body
+    assert 'data-send-invitation="41"' not in body
 
 
 def test_members_controls_follow_server_derived_allowed_actions():
@@ -267,13 +341,17 @@ def test_members_controls_follow_server_derived_allowed_actions():
     app, _service = _app(limited)
 
     status, _headers, body = _get(app, "/admin/accounts/41")
+    roster_status, _headers, roster_body = _get(app, "/admin/members")
 
     assert status == 200
+    assert roster_status == 200
     assert '"accounts.read": true' in body
     assert 'data-admin-action="reset"' not in body
     assert 'data-admin-action="welcome"' not in body
     assert 'data-admin-action="revoke"' not in body
     assert "Save changes" not in body
+    assert 'data-copy-invitation="41"' not in roster_body
+    assert 'data-send-invitation="41"' not in roster_body
 
     update_status, update_body = _json_request(
         app,

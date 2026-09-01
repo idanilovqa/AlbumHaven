@@ -13,6 +13,186 @@
     });
   });
 
+  const roster = document.querySelector('[data-admin-roster]');
+  const rosterStatus = roster?.querySelector('[data-admin-roster-status]');
+  const rosterError = roster?.querySelector('[data-admin-roster-error]');
+  const fallback = roster?.querySelector('[data-invitation-copy-fallback]');
+  const fallbackValue = roster?.querySelector('[data-invitation-copy-value]');
+  const rosterReauthPanel = roster?.querySelector('[data-roster-reauth-panel]');
+  const rosterReauthPassword = roster?.querySelector('[data-roster-reauth-password]');
+  let rosterRetry = null;
+
+  const announceRoster = (message) => {
+    if (!rosterStatus) return;
+    rosterStatus.textContent = message;
+    rosterStatus.hidden = false;
+  };
+
+  const showRosterError = (message) => {
+    if (!rosterError) return;
+    rosterError.textContent = message;
+    rosterError.hidden = false;
+  };
+
+  const clearInvitationFallback = () => {
+    if (fallbackValue) fallbackValue.value = '';
+    if (fallback) fallback.hidden = true;
+  };
+
+  const showInvitationFallback = (url) => {
+    if (!fallback || !fallbackValue) return;
+    fallbackValue.value = url;
+    fallback.hidden = false;
+    fallbackValue.focus();
+    fallbackValue.select();
+  };
+
+  const rosterRequest = (url, payload = {}) => fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Album-Haven-CSRF': roster?.dataset.csrfToken || '',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const reauthenticateRosterThen = (retry) => {
+    rosterRetry = retry;
+    if (rosterReauthPanel) rosterReauthPanel.hidden = false;
+    if (rosterReauthPassword) {
+      rosterReauthPassword.value = '';
+      rosterReauthPassword.focus();
+    }
+  };
+
+  const closeMenu = (trigger, menu) => {
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+  };
+
+  for (const trigger of document.querySelectorAll('[data-member-menu-trigger]')) {
+    const accountId = trigger.dataset.memberMenuTrigger;
+    if (!accountId) continue;
+    const menu = document.querySelector(`[data-member-menu="${accountId}"]`);
+    if (!menu) continue;
+    trigger.addEventListener('click', () => {
+      const opening = menu.hidden;
+      menu.hidden = !opening;
+      trigger.setAttribute('aria-expanded', String(opening));
+      if (opening) menu.querySelector('[role="menuitem"]')?.focus();
+    });
+    menu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeMenu(trigger, menu);
+        trigger.focus();
+      }
+    });
+    menu.addEventListener('focusout', (event) => {
+      if (!menu.contains(event.relatedTarget) && event.relatedTarget !== trigger) {
+        closeMenu(trigger, menu);
+      }
+    });
+  }
+
+  document.addEventListener?.('pointerdown', (event) => {
+    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
+      const accountId = menu.dataset.memberMenu;
+      const trigger = document.querySelector(
+        `[data-member-menu-trigger="${accountId}"]`,
+      );
+      if (
+        trigger
+        && !menu.contains(event.target)
+        && !trigger.contains(event.target)
+      ) closeMenu(trigger, menu);
+    }
+  });
+
+  const copyInvitation = async (accountId, allowReauthentication = true) => {
+    const response = await rosterRequest(
+      `/admin/accounts/${encodeURIComponent(accountId)}/invitation/copy`,
+    );
+    if (response.status === 409 && allowReauthentication) {
+      reauthenticateRosterThen(() => copyInvitation(accountId, false));
+      return;
+    }
+    if (!response.ok) throw new Error('Invitation link could not be created.');
+    const result = await response.json();
+    clearInvitationFallback();
+    try {
+      await navigator.clipboard.writeText(result.invitation_url);
+      announceRoster('Invitation link copied. Older links no longer work.');
+    } catch {
+      showInvitationFallback(result.invitation_url);
+    }
+  };
+
+  const sendInvitation = async (accountId, allowReauthentication = true) => {
+    const response = await rosterRequest(
+      `/admin/accounts/${encodeURIComponent(accountId)}/invitation/send`,
+    );
+    if (response.status === 409 && allowReauthentication) {
+      reauthenticateRosterThen(() => sendInvitation(accountId, false));
+      return;
+    }
+    if (!response.ok) throw new Error('Invitation email could not be queued.');
+    announceRoster('Invitation email queued. Older invitation links no longer work.');
+  };
+
+  for (const button of document.querySelectorAll('[data-copy-invitation]')) {
+    const accountId = button.dataset.copyInvitation;
+    if (!accountId) continue;
+    button.addEventListener('click', () => copyInvitation(accountId).catch(
+      (error) => showRosterError(error.message),
+    ));
+  }
+  for (const button of document.querySelectorAll('[data-send-invitation]')) {
+    const accountId = button.dataset.sendInvitation;
+    if (!accountId) continue;
+    button.addEventListener('click', () => sendInvitation(accountId).catch(
+      (error) => showRosterError(error.message),
+    ));
+  }
+
+  roster?.querySelector('[data-invitation-copy-dismiss]')?.addEventListener(
+    'click', clearInvitationFallback,
+  );
+  roster?.querySelector('[data-invitation-copy-manual]')?.addEventListener(
+    'click', async () => {
+      if (!fallbackValue) return;
+      try {
+        await navigator.clipboard.writeText(fallbackValue.value);
+        announceRoster('Invitation link copied.');
+      } catch {
+        fallbackValue.focus();
+        fallbackValue.select();
+      }
+    },
+  );
+  roster?.querySelector('[data-roster-reauth-cancel]')?.addEventListener(
+    'click', () => {
+      rosterRetry = null;
+      if (rosterReauthPanel) rosterReauthPanel.hidden = true;
+    },
+  );
+  roster?.querySelector('[data-roster-reauth-submit]')?.addEventListener(
+    'click', async () => {
+      try {
+        const response = await rosterRequest('/admin/reauthenticate', {
+          password: rosterReauthPassword?.value || '',
+        });
+        if (!response.ok) throw new Error('Reauthentication failed.');
+        if (rosterReauthPanel) rosterReauthPanel.hidden = true;
+        const retry = rosterRetry;
+        rosterRetry = null;
+        await retry?.();
+      } catch (error) {
+        showRosterError(error.message);
+      }
+    },
+  );
+
   const form = document.querySelector('[data-admin-account-form]');
   if (!form) return;
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
@@ -75,10 +255,10 @@
       const csrfToken = String(data.get('csrf_token') || '');
       if (form.dataset.mode === 'create') {
         await requestJson('/admin/accounts', 'POST', {
-          username: String(data.get('username') || ''),
-          contact_email: String(data.get('contact_email') || ''),
-          password: String(data.get('password') || ''),
+          username: form.elements.username.value,
+          contact_email: form.elements.contact_email.value,
           capability_keys: data.getAll('capability_keys').map(String),
+          send_invitation: form.elements.send_invitation.checked,
         }, csrfToken);
         window.location.assign('/admin/members?created=1');
         return;

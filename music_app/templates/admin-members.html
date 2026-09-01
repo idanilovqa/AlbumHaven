@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Users &amp; access — Album Haven</title>
   <link rel="stylesheet" href="/static/css/admin-members.css">
+  <script src="/static/js/admin-members.js" defer></script>
 </head>
 <body>
   <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
   <main class="settings-shell">
     {% include "partials/admin-settings-nav.html" %}
-    <section class="settings-main">
+    <section class="settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
       <header class="members-heading">
         <div>
           <h1>Users &amp; access</h1>
@@ -19,7 +20,9 @@
         {% if allowed_actions.allows('accounts.create') %}<a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>{% endif %}
       </header>
 
-      {% if created %}<p class="admin-notice" role="status">The account was created and can sign in now.</p>{% endif %}
+      {% if created %}<p class="admin-notice" role="status">The account was created and is waiting for its invitation to be accepted.</p>{% endif %}
+      <p data-admin-roster-status role="status" aria-live="polite" hidden></p>
+      <p data-admin-roster-error role="alert" hidden></p>
 
       <div class="members-table" role="table" aria-label="Managed users">
         <div class="members-row members-table-head" role="row">
@@ -27,7 +30,7 @@
           <span role="columnheader">Role / access</span>
           <span role="columnheader">Status</span>
           <span role="columnheader">Sessions</span>
-          <span role="columnheader">Welcome</span>
+          <span role="columnheader">Invitation</span>
           <span role="columnheader">Actions</span>
         </div>
         {% for member in roster.members %}
@@ -40,13 +43,43 @@
             <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | list != listener_defaults | list %} · Customized{% endif %}{% endif %}</strong>
             <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} explicit capabilities{% else %}No current-library access{% endif %}</small>
           </div>
-          <div role="cell" data-label="Status"><span class="status-dot {% if not member.is_active %}is-disabled{% endif %}"></span>{{ "Enabled" if member.is_active else "Disabled" }}</div>
+          <div role="cell" data-label="Status"><span class="status-dot {% if member.account_status == 'Disabled' %}is-disabled{% elif member.account_status == 'Pending invitation' %}is-pending{% endif %}"></span>{{ member.account_status }}</div>
           <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
-          <div role="cell" data-label="Welcome">{% if member.welcome_status %}Welcome {{ member.welcome_status }}{% else %}—{% endif %}</div>
-          <div role="cell" data-label="Actions"><a class="member-edit" href="/admin/accounts/{{ member.account_id }}">Edit</a></div>
+          <div role="cell" data-label="Invitation">{% if member.invitation_delivery_status %}Invitation {{ member.invitation_delivery_status }}{% else %}—{% endif %}</div>
+          <div role="cell" data-label="Actions">
+            <div class="member-actions">
+              <button type="button" class="member-actions-trigger"
+                      aria-label="Actions for {{ member.username }}"
+                      aria-haspopup="menu" aria-expanded="false"
+                      data-member-menu-trigger="{{ member.account_id }}">⋯</button>
+              <div class="member-actions-menu" role="menu" hidden data-member-menu="{{ member.account_id }}">
+                {% if member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
+                <button type="button" role="menuitem" data-copy-invitation="{{ member.account_id }}">Copy invite link</button>
+                {% if invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}<button type="button" role="menuitem" data-send-invitation="{{ member.account_id }}">Send invitation email</button>{% endif %}
+                {% endif %}
+                <a class="member-edit" role="menuitem" href="/admin/accounts/{{ member.account_id }}">Edit</a>
+              </div>
+            </div>
+          </div>
         </article>
         {% endfor %}
       </div>
+      <section class="invitation-copy-fallback" data-invitation-copy-fallback hidden
+               aria-labelledby="invitation-copy-title">
+        <h2 id="invitation-copy-title">Copy invitation link</h2>
+        <label for="invitation-copy-value">Invitation link</label>
+        <input id="invitation-copy-value" data-invitation-copy-value type="text" readonly>
+        <button type="button" data-invitation-copy-manual>Copy</button>
+        <button type="button" data-invitation-copy-dismiss>Dismiss</button>
+      </section>
+      <section data-roster-reauth-panel hidden aria-labelledby="roster-reauth-title">
+        <h2 id="roster-reauth-title">Confirm your administrator password</h2>
+        <label for="roster-reauth-password">Password</label>
+        <input id="roster-reauth-password" data-roster-reauth-password
+               type="password" autocomplete="current-password">
+        <button type="button" data-roster-reauth-submit>Continue</button>
+        <button type="button" data-roster-reauth-cancel>Cancel</button>
+      </section>
     </section>
   </main>
 </body>

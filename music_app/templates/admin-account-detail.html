@@ -21,7 +21,7 @@
           <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
         </div>
         {% else %}
-        <p>The account can sign in as soon as you create it.</p>
+        <p>The user will choose their password after opening a one-time invitation link.</p>
         {% endif %}
       </header>
 
@@ -34,7 +34,6 @@
         {% if not member %}
         <label class="detail-field"><span>Username</span><input name="username" type="text" autocomplete="off" required></label>
         <label class="detail-field"><span>Email address</span><input name="contact_email" type="email" autocomplete="off" required><small>Plus-addressing remains intact.</small></label>
-        <label class="detail-field"><span>Password</span><span class="password-control"><input id="admin-new-password" name="password" type="password" autocomplete="new-password" required><button type="button" data-password-toggle="admin-new-password" aria-pressed="false">Show</button></span><small>Use a strong, unique password.</small></label>
         {% elif allowed_actions.allows('accounts.manage') %}
         <div class="detail-setting"><span><strong>Account enabled</strong><small>When disabled, the user cannot sign in.</small></span><input class="switch" name="is_active" type="checkbox" {% if member.is_active %}checked{% endif %} aria-label="Account enabled"></div>
         {% else %}
@@ -67,13 +66,12 @@
           <h2 id="account-settings-title">Account settings</h2>
           {% if allowed_actions.allows('accounts.membership.manage') %}<div class="detail-setting"><span><strong>Library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" {% if member.membership_role %}checked{% endif %} aria-label="Current library access"></div>{% endif %}
           {% if allowed_actions.allows('accounts.password_reset.send') %}<div class="detail-setting"><span><strong>Send password reset email</strong><small>Email a link to reset the user's password.</small></span><button class="admin-button" type="button" data-admin-action="reset">Send email</button></div>{% endif %}
-          {% if allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>{% endif %}
+          {% if member.is_bootstrap_owner and allowed_actions.allows('accounts.welcome.send') %}<div class="detail-setting"><span><strong>Resend welcome email</strong><small>Email the username and sign-in URL, never a password.</small></span><button class="admin-button" type="button" data-admin-action="welcome">Resend email</button></div>{% endif %}
           {% if allowed_actions.allows('accounts.sessions.revoke') %}<div class="detail-setting"><span><strong>Revoke all sessions</strong><small>Sign the user out from all active sessions.</small></span><button class="admin-button" type="button" data-admin-action="revoke">Revoke sessions</button></div>{% endif %}
           {% if allowed_actions.allows('accounts.manage') and not member.is_bootstrap_owner %}<div class="detail-setting is-danger"><span><strong>{{ "Disable" if member.is_active else "Enable" }} account</strong><small>{{ "Prevent the user from signing in." if member.is_active else "Allow the user to sign in with their existing password." }}</small></span><button class="admin-button is-danger" type="button" data-admin-action="toggle-active">{{ "Disable" if member.is_active else "Enable" }} account</button></div>{% endif %}
         </section>
         {% else %}
-        <div class="detail-setting"><span><strong>Current library access</strong><small>Allow this user to access {{ roster.library_name }}.</small></span><input class="switch" type="checkbox" name="current_library_access" checked></div>
-        <div class="detail-setting"><span><strong>Send welcome email</strong><small>Contains username and sign-in URL, never the password.<br>Delivery does not gate access.</small></span><input class="switch" type="checkbox" name="send_welcome" checked></div>
+        <div class="detail-setting"><span><strong>Send invitation email</strong><small>The user can also receive or copy a one-time invitation link later.</small></span><input class="switch" type="checkbox" name="send_invitation" {% if invitation_email_enabled %}checked{% endif %}></div>
         {% endif %}
 
         {% if member %}

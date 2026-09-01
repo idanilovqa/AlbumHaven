@@ -28,6 +28,9 @@ class AdminMemberSummary:
     welcome_status: str | None
     active_session_count: int
     last_active_at: datetime | None
+    has_credential: bool
+    account_status: str
+    invitation_delivery_status: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +92,9 @@ class PostgresAdminMembersService:
                            coalesce(capability.capability_keys, array[]::text[])
                              as capability_keys,
                            welcome.delivery_status as welcome_status,
+                           (credential.account_id is not null) as has_credential,
+                           invitation_delivery.delivery_status
+                             as invitation_delivery_status,
                            coalesce(session.active_session_count, 0)
                              as active_session_count,
                            session.last_active_at
@@ -98,6 +104,8 @@ class PostgresAdminMembersService:
                     left join app.bootstrap_owners owner
                       on owner.account_id = account.id
                      and owner.owner_key = 'local-bootstrap-owner'
+                    left join app.account_credentials credential
+                      on credential.account_id = account.id
                     left join library.library_memberships membership
                       on membership.account_id = account.id
                      and membership.library_id = authority.library_id
@@ -115,6 +123,13 @@ class PostgresAdminMembersService:
                       where account_id = account.id and message_category = 'welcome'
                       order by created_at desc, id desc limit 1
                     ) welcome on true
+                    left join lateral (
+                      select delivery_status
+                      from app.mail_outbox
+                      where account_id = account.id
+                        and message_category = 'account_invitation'
+                      order by created_at desc, id desc limit 1
+                    ) invitation_delivery on true
                     left join lateral (
                       select count(*)::integer as active_session_count,
                              max(last_seen_at) as last_active_at
@@ -164,18 +179,33 @@ def _member(value: object) -> AdminMemberSummary:
     active_count = row.get("active_session_count")
     if isinstance(active_count, bool) or not isinstance(active_count, int) or active_count < 0:
         raise RuntimeError
+    is_active = row.get("is_active") is True and row.get("disabled_at") is None
+    has_credential = row.get("has_credential") is True
     return AdminMemberSummary(
         account_id=_positive_id(row.get("account_id")),
         username=_required_text(row.get("username_display"), "username"),
         contact_email=_required_text(row.get("contact_email"), "contact email"),
-        is_active=row.get("is_active") is True and row.get("disabled_at") is None,
+        is_active=is_active,
         is_bootstrap_owner=row.get("is_bootstrap_owner") is True,
         membership_role=_optional_text(row.get("membership_role")),
         capability_keys=tuple(sorted(set(capabilities))),
         welcome_status=_optional_text(row.get("welcome_status")),
         active_session_count=active_count,
         last_active_at=_optional_datetime(row.get("last_active_at")),
+        has_credential=has_credential,
+        account_status=_account_status(
+            is_active=is_active, has_credential=has_credential
+        ),
+        invitation_delivery_status=_optional_text(
+            row.get("invitation_delivery_status")
+        ),
     )
+
+
+def _account_status(*, is_active: bool, has_credential: bool) -> str:
+    if not is_active:
+        return "Disabled"
+    return "Enabled" if has_credential else "Pending invitation"
 
 
 def _row(value: object) -> Mapping[str, object]:

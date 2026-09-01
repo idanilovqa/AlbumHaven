@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from inspect import isawaitable
 from pathlib import Path
@@ -17,6 +18,9 @@ from music_app.services.admin_account_creation import AdminAccountCreationServic
 from music_app.services.admin_account_creation_postgres import (
     ManagedAccountIdentityConflict,
     PostgresAdminAccountRepository,
+)
+from music_app.services.admin_account_invitations_postgres import (
+    PostgresAdminAccountInvitationService,
 )
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
@@ -93,6 +97,8 @@ _ADMIN_ACTIONS = (
     "accounts.sessions.revoke",
     "accounts.welcome.send",
     "accounts.password_reset.send",
+    "accounts.invitation.copy",
+    "accounts.invitation.send",
     "accounts.reauthenticate",
 )
 
@@ -256,6 +262,89 @@ async def send_managed_account_password_reset(
             request.app,
             outcome.password_reset_delivery,
         )
+    return JSONResponse(
+        {"accepted": True}, status_code=202, background=background_tasks
+    )
+
+
+@router.post("/admin/accounts/{account_id}/invitation/copy")
+async def copy_managed_account_invitation(
+    request: Request, account_id: int
+) -> Response:
+    try:
+        copied = await run_in_threadpool(
+            _invitation_service(request).issue_copy,
+            actor_account_id=request.state.current_actor.account_id,
+            actor_authenticated_at=request.state.current_actor.authenticated_at,
+            library_id=request.state.current_actor.current_library_id,
+            target_account_id=account_id,
+            request_ref=uuid4().hex,
+        )
+    except RecentAuthenticationRequired:
+        return JSONResponse(
+            {"detail": "Recent authentication is required."}, status_code=409
+        )
+    except PermissionError:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Invitation link is temporarily unavailable."},
+            status_code=503,
+        )
+    return JSONResponse(
+        {
+            "invitation_url": copied.invitation_url,
+            "expires_at": copied.expires_at.isoformat(),
+        },
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@router.post("/admin/accounts/{account_id}/invitation/send", status_code=202)
+async def send_managed_account_invitation(
+    request: Request,
+    account_id: int,
+    background_tasks: BackgroundTasks,
+) -> Response:
+    try:
+        invitation_enabled = _mail_config(request.app).get("invitation_enabled")
+    except Exception:
+        return JSONResponse(
+            {"detail": "Invitation email is temporarily unavailable."},
+            status_code=503,
+        )
+    if invitation_enabled is not True:
+        return JSONResponse(
+            {"detail": "Invitation email is not configured."}, status_code=409
+        )
+    try:
+        delivery = await run_in_threadpool(
+            _invitation_service(request).queue_email,
+            actor_account_id=request.state.current_actor.account_id,
+            actor_authenticated_at=request.state.current_actor.authenticated_at,
+            library_id=request.state.current_actor.current_library_id,
+            target_account_id=account_id,
+            request_ref=uuid4().hex,
+        )
+    except RecentAuthenticationRequired:
+        return JSONResponse(
+            {"detail": "Recent authentication is required."}, status_code=409
+        )
+    except PermissionError:
+        return JSONResponse({"detail": "Action not permitted."}, status_code=403)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Invitation email is temporarily unavailable."},
+            status_code=503,
+        )
+    background_tasks.add_task(
+        _deliver_pending_invitation,
+        request.app,
+        delivery,
+    )
     return JSONResponse(
         {"accepted": True}, status_code=202, background=background_tasks
     )
@@ -569,6 +658,62 @@ def _mail_action_service(request: Request):
                 request.app.state.auth_policy_config
             )
             request.app.state.admin_mail_action_service = existing
+    return existing
+
+
+def _invitation_service(request: Request):
+    existing = getattr(
+        request.app.state, "admin_account_invitation_service", None
+    )
+    if existing is not None:
+        return existing
+    auth_config = request.app.state.auth_policy_config
+    if not isinstance(auth_config, Mapping):
+        raise RuntimeError("Invitation configuration is unavailable.")
+    mail_config = _mail_config(request.app)
+    lock = getattr(request.app.state, "auth_service_lock", None)
+    if lock is None:
+        lock = threading.Lock()
+        request.app.state.auth_service_lock = lock
+    with lock:
+        existing = getattr(
+            request.app.state, "admin_account_invitation_service", None
+        )
+        if existing is None:
+            service_config = dict(auth_config)
+            repository_config = getattr(
+                request.app.state, "repository_config", None
+            )
+            if isinstance(repository_config, Mapping):
+                database_url = repository_config.get(
+                    "ALBUM_HAVEN_APP_DATABASE_URL"
+                )
+                if database_url:
+                    service_config["ALBUM_HAVEN_APP_DATABASE_URL"] = database_url
+            service_config["public_base_url"] = (
+                mail_config.get("public_base_url")
+                or auth_config.get("public_base_url")
+            )
+            existing = PostgresAdminAccountInvitationService(
+                service_config,
+                audit_repository=PostgresSecurityAuditRepository(),
+            )
+            request.app.state.admin_account_invitation_service = existing
+    return existing
+
+
+def _mail_config(app):
+    existing = getattr(app.state, "mail_config", None)
+    if existing is not None:
+        if not isinstance(existing, Mapping):
+            raise RuntimeError("Mail configuration is unavailable.")
+        return existing
+    from config import build_mail_config
+
+    existing = build_mail_config()
+    if not isinstance(existing, Mapping):
+        raise RuntimeError("Mail configuration is unavailable.")
+    app.state.mail_config = existing
     return existing
 
 

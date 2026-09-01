@@ -25,7 +25,7 @@ def audit():
     module = import_module(MODULE)
     assert callable(module.PostgresSecurityAuditRepository)
     assert set(module.SecurityAuditCategory.__members__) == {
-        "LOGIN", "PASSWORD_RECOVERY", "CREDENTIAL",
+        "LOGIN", "PASSWORD_RECOVERY", "CREDENTIAL", "ACCOUNT_INVITATION",
     }
     assert set(module.SecurityAuditOutcome.__members__) == {
         "SUCCESS", "INVALID", "THROTTLED"
@@ -44,6 +44,12 @@ def audit():
         "ADMINISTRATOR_REAUTHENTICATED",
         "ADMINISTRATOR_REAUTHENTICATION_INVALID",
         "BREAK_GLASS_RESET",
+    }
+    assert set(module.InvitationAuditReason.__members__) == {
+        "INVITATION_COPIED",
+        "INVITATION_QUEUED",
+        "INVITATION_ACCEPTED",
+        "INVITATION_INVALID",
     }
     return module
 
@@ -73,6 +79,96 @@ def test_break_glass_success_reason_is_accepted(audit):
         actor_account_id=None,
         metadata={"argon2_policy_version": 3},
     ) == 91
+
+
+def test_invitation_audit_values_are_stable(audit):
+    assert audit.SecurityAuditCategory.ACCOUNT_INVITATION.value == "account_invitation"
+    assert audit.InvitationAuditReason.INVITATION_COPIED.value == "invitation_copied"
+    assert audit.InvitationAuditReason.INVITATION_QUEUED.value == "invitation_queued"
+    assert audit.InvitationAuditReason.INVITATION_ACCEPTED.value == "invitation_accepted"
+    assert audit.InvitationAuditReason.INVITATION_INVALID.value == "invitation_invalid"
+
+
+@pytest.mark.parametrize(
+    ("outcome_name", "reason_name"),
+    [
+        ("SUCCESS", "INVITATION_COPIED"),
+        ("SUCCESS", "INVITATION_QUEUED"),
+        ("SUCCESS", "INVITATION_ACCEPTED"),
+        ("INVALID", "INVITATION_INVALID"),
+    ],
+)
+def test_invitation_reason_matrix_accepts_only_documented_pairs(
+    audit, outcome_name, reason_name
+):
+    connection = RecordingConnection()
+
+    assert _append(
+        audit,
+        connection,
+        category=audit.SecurityAuditCategory.ACCOUNT_INVITATION,
+        outcome=getattr(audit.SecurityAuditOutcome, outcome_name),
+        reason=getattr(audit.InvitationAuditReason, reason_name),
+        metadata=None,
+    ) == 91
+
+
+@pytest.mark.parametrize(
+    ("outcome_name", "reason_name"),
+    [
+        ("INVALID", "INVITATION_COPIED"),
+        ("SUCCESS", "INVITATION_INVALID"),
+        ("THROTTLED", "INVITATION_QUEUED"),
+    ],
+)
+def test_invitation_reason_matrix_rejects_incompatible_pairs_before_sql(
+    audit, outcome_name, reason_name
+):
+    connection = RecordingConnection()
+
+    with pytest.raises(ValueError):
+        _append(
+            audit,
+            connection,
+            category=audit.SecurityAuditCategory.ACCOUNT_INVITATION,
+            outcome=getattr(audit.SecurityAuditOutcome, outcome_name),
+            reason=getattr(audit.InvitationAuditReason, reason_name),
+            metadata=None,
+        )
+
+    assert connection.operations == []
+
+
+def test_invitation_category_rejects_a_reason_from_another_category_before_sql(audit):
+    connection = RecordingConnection()
+
+    with pytest.raises(TypeError):
+        _append(
+            audit,
+            connection,
+            category=audit.SecurityAuditCategory.ACCOUNT_INVITATION,
+            outcome=audit.SecurityAuditOutcome.SUCCESS,
+            reason=audit.LoginAuditReason.VERIFIED,
+            metadata=None,
+        )
+
+    assert connection.operations == []
+
+
+def test_invitation_audit_rejects_raw_link_metadata_before_sql(audit):
+    connection = RecordingConnection()
+
+    with pytest.raises(ValueError):
+        _append(
+            audit,
+            connection,
+            category=audit.SecurityAuditCategory.ACCOUNT_INVITATION,
+            outcome=audit.SecurityAuditOutcome.SUCCESS,
+            reason=audit.InvitationAuditReason.INVITATION_COPIED,
+            metadata={"invitation_url": "https://example.test/accept-invitation?token=secret"},
+        )
+
+    assert connection.operations == []
 
 
 class Cursor:

@@ -93,7 +93,27 @@ def test_admin_update_replaces_membership_and_capabilities_and_revokes_on_disabl
     assert any("update app.capabilities" in sql and "revoked_at" in sql for sql in statements)
     assert not any("insert into app.capabilities" in sql for sql in statements)
     assert any("update app.account_sessions" in sql and "administrator_disabled" in sql for sql in statements)
+    invitation_tokens = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if sql.startswith("update app.account_invitation_tokens")
+    )
+    assert "consumed_at is null" in invitation_tokens[0]
+    assert "revoked_at is null" in invitation_tokens[0]
+    assert invitation_tokens[1] == (NOW, 41)
+    invitation_transactions = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if sql.startswith("update app.account_invitation_transactions")
+    )
+    assert "consumed_at is null" in invitation_transactions[0]
+    assert "select id from app.account_invitation_tokens" in invitation_transactions[0]
+    assert invitation_transactions[1] == (NOW, 41)
     assert any("account_updated" in sql for sql in statements)
+    account_lock = next(i for i, sql in enumerate(statements) if "with locked_accounts" in sql)
+    audit = next(i for i, sql in enumerate(statements) if "account_updated" in sql)
+    assert account_lock < statements.index(invitation_tokens[0])
+    assert statements.index(invitation_tokens[0]) < statements.index(invitation_transactions[0]) < audit
     assert connection.events == ["begin", "commit"]
 
 

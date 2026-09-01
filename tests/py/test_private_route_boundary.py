@@ -77,6 +77,16 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/account/password", "account.self.password.change"),
         ("POST", "/admin/accounts/{account_id}/welcome", "accounts.welcome.send"),
         ("POST", "/admin/accounts/{account_id}/password-reset", "accounts.password_reset.send"),
+        (
+            "POST",
+            "/admin/accounts/{account_id}/invitation/copy",
+            "accounts.invitation.copy",
+        ),
+        (
+            "POST",
+            "/admin/accounts/{account_id}/invitation/send",
+            "accounts.invitation.send",
+        ),
     ],
 )
 def test_representative_routes_use_specific_action_keys(method, path, action):
@@ -134,6 +144,10 @@ def _app(actor):
     @app.post("/mutation")
     async def mutation():
         return {"changed": True}
+
+    @app.post("/admin/accounts/{account_id}/invitation/copy")
+    async def copy_invitation(account_id: int):
+        return {"account_id": account_id}
 
     install_private_route_boundary(app)
     return app, resolver
@@ -334,6 +348,50 @@ def test_private_write_requires_same_origin_session_bound_double_submit_csrf():
     assert missing_status == 403
     assert valid_status == 200
     assert valid_body == b'{"changed":true}'
+
+
+def test_invitation_admin_action_uses_session_header_csrf_and_same_origin():
+    from music_app.services.auth_session_csrf import issue_session_csrf
+    from music_app.services.current_actor import ActorState
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Rendref",
+        is_bootstrap_owner=True,
+    )
+    app, _ = _app(actor)
+    session = "s" * 43
+    csrf = issue_session_csrf(session, app.state.auth_policy_config)
+    path = "/admin/accounts/41/invitation/copy"
+
+    missing_status, _ = _request(app, path, method="POST")
+    cross_origin_status, _ = _request(
+        app,
+        path,
+        method="POST",
+        cookie=(
+            f"__Host-album_haven_session={session}; "
+            f"__Host-album_haven_csrf={csrf}"
+        ),
+        headers={"origin": "https://attacker.test", "x-album-haven-csrf": csrf},
+    )
+    valid_status, valid_body = _request(
+        app,
+        path,
+        method="POST",
+        cookie=(
+            f"__Host-album_haven_session={session}; "
+            f"__Host-album_haven_csrf={csrf}"
+        ),
+        headers={"origin": "https://music.test", "x-album-haven-csrf": csrf},
+    )
+
+    assert missing_status == 403
+    assert cross_origin_status == 403
+    assert valid_status == 200
+    assert valid_body == b'{"account_id":41}'
 
 
 def test_authenticated_get_refreshes_stale_session_csrf_cookie_after_key_rotation():

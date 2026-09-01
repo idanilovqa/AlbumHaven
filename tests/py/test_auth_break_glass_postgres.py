@@ -212,6 +212,22 @@ def test_break_glass_replaces_credential_and_revokes_lifecycle_state(break_glass
         if item[0].startswith("update app.password_reset_transactions")
     )
     assert "consumed_at" in transaction[0]
+    invitation_tokens = next(
+        item
+        for item in connection.operations
+        if item[0].startswith("update app.account_invitation_tokens")
+    )
+    assert "consumed_at is null" in invitation_tokens[0]
+    assert "revoked_at is null" in invitation_tokens[0]
+    assert invitation_tokens[1] == (NOW, 41)
+    invitation_transactions = next(
+        item
+        for item in connection.operations
+        if item[0].startswith("update app.account_invitation_transactions")
+    )
+    assert "consumed_at is null" in invitation_transactions[0]
+    assert "select id from app.account_invitation_tokens" in invitation_transactions[0]
+    assert invitation_transactions[1] == (NOW, 41)
     sessions = next(
         item
         for item in connection.operations

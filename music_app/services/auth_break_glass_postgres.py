@@ -217,6 +217,28 @@ class PostgresAuthBreakGlassService:
                         """,
                         (now, account_id),
                     ).fetchall()
+                    connection.execute(
+                        """
+                        update app.account_invitation_tokens
+                        set revoked_at = %s
+                        where account_id = %s
+                          and consumed_at is null
+                          and revoked_at is null
+                        """,
+                        (now, account_id),
+                    )
+                    connection.execute(
+                        """
+                        update app.account_invitation_transactions
+                        set consumed_at = %s
+                        where consumed_at is null
+                          and invitation_token_id in (
+                            select id from app.account_invitation_tokens
+                            where account_id = %s
+                          )
+                        """,
+                        (now, account_id),
+                    )
                     revoked_sessions = len(
                         connection.execute(
                             """

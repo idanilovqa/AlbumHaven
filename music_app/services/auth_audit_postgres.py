@@ -18,6 +18,7 @@ class SecurityAuditCategory(str, Enum):
     LOGIN = "login"
     PASSWORD_RECOVERY = "password_recovery"
     CREDENTIAL = "credential"
+    ACCOUNT_INVITATION = "account_invitation"
 
 
 class SecurityAuditOutcome(str, Enum):
@@ -51,6 +52,13 @@ class CredentialAuditReason(str, Enum):
     ADMINISTRATOR_REAUTHENTICATED = "administrator_reauthenticated"
     ADMINISTRATOR_REAUTHENTICATION_INVALID = "administrator_reauthentication_invalid"
     BREAK_GLASS_RESET = "break_glass_reset"
+
+
+class InvitationAuditReason(str, Enum):
+    INVITATION_COPIED = "invitation_copied"
+    INVITATION_QUEUED = "invitation_queued"
+    INVITATION_ACCEPTED = "invitation_accepted"
+    INVITATION_INVALID = "invitation_invalid"
 
 
 _LOGIN_REASON_MATRIX = {
@@ -96,6 +104,19 @@ _CREDENTIAL_REASON_MATRIX = {
     ),
     SecurityAuditOutcome.THROTTLED: frozenset(),
 }
+_INVITATION_REASON_MATRIX = {
+    SecurityAuditOutcome.SUCCESS: frozenset(
+        {
+            InvitationAuditReason.INVITATION_COPIED,
+            InvitationAuditReason.INVITATION_QUEUED,
+            InvitationAuditReason.INVITATION_ACCEPTED,
+        }
+    ),
+    SecurityAuditOutcome.INVALID: frozenset(
+        {InvitationAuditReason.INVITATION_INVALID}
+    ),
+    SecurityAuditOutcome.THROTTLED: frozenset(),
+}
 _SOURCE_CLASSES = frozenset({"loopback", "private", "public", "trusted_proxy"})
 _REQUEST_REFERENCE = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 _METADATA_KEYS = frozenset(
@@ -118,7 +139,12 @@ class PostgresSecurityAuditRepository:
         *,
         category: SecurityAuditCategory,
         outcome: SecurityAuditOutcome,
-        reason: LoginAuditReason | RecoveryAuditReason | CredentialAuditReason,
+        reason: (
+            LoginAuditReason
+            | RecoveryAuditReason
+            | CredentialAuditReason
+            | InvitationAuditReason
+        ),
         actor_account_id: int | None,
         target_account_id: int | None,
         request_ref: str | None,
@@ -183,16 +209,28 @@ def _reason(
     category: SecurityAuditCategory,
     value: object,
     outcome: SecurityAuditOutcome,
-) -> LoginAuditReason | RecoveryAuditReason | CredentialAuditReason:
-    if category is SecurityAuditCategory.LOGIN:
-        valid_type = LoginAuditReason
-        matrix = _LOGIN_REASON_MATRIX
-    elif category is SecurityAuditCategory.PASSWORD_RECOVERY:
-        valid_type = RecoveryAuditReason
-        matrix = _RECOVERY_REASON_MATRIX
-    else:
-        valid_type = CredentialAuditReason
-        matrix = _CREDENTIAL_REASON_MATRIX
+) -> (
+    LoginAuditReason
+    | RecoveryAuditReason
+    | CredentialAuditReason
+    | InvitationAuditReason
+):
+    contracts = {
+        SecurityAuditCategory.LOGIN: (LoginAuditReason, _LOGIN_REASON_MATRIX),
+        SecurityAuditCategory.PASSWORD_RECOVERY: (
+            RecoveryAuditReason,
+            _RECOVERY_REASON_MATRIX,
+        ),
+        SecurityAuditCategory.CREDENTIAL: (
+            CredentialAuditReason,
+            _CREDENTIAL_REASON_MATRIX,
+        ),
+        SecurityAuditCategory.ACCOUNT_INVITATION: (
+            InvitationAuditReason,
+            _INVITATION_REASON_MATRIX,
+        ),
+    }
+    valid_type, matrix = contracts[category]
     if not isinstance(value, valid_type):
         raise TypeError("Security audit reason is invalid.")
     if value not in matrix[outcome]:

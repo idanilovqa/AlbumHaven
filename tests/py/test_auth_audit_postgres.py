@@ -43,6 +43,7 @@ def audit():
         "PASSWORD_CHANGED", "CURRENT_PASSWORD_INVALID", "SUGGESTION_DISMISSED",
         "ADMINISTRATOR_REAUTHENTICATED",
         "ADMINISTRATOR_REAUTHENTICATION_INVALID",
+        "BREAK_GLASS_RESET",
     }
     return module
 
@@ -54,6 +55,24 @@ def test_password_recovery_audit_values_are_stable(audit):
     assert audit.RecoveryAuditReason.RESET_INVALID.value == "reset_invalid"
     assert audit.RecoveryAuditReason.ACCOUNT_INELIGIBLE.value == "account_ineligible"
     assert audit.RecoveryAuditReason.BUCKET_BLOCKED.value == "bucket_blocked"
+
+
+def test_break_glass_audit_value_is_stable(audit):
+    assert audit.CredentialAuditReason.BREAK_GLASS_RESET.value == "break_glass_reset"
+
+
+def test_break_glass_success_reason_is_accepted(audit):
+    connection = RecordingConnection()
+
+    assert _append(
+        audit,
+        connection,
+        category=audit.SecurityAuditCategory.CREDENTIAL,
+        outcome=audit.SecurityAuditOutcome.SUCCESS,
+        reason=audit.CredentialAuditReason.BREAK_GLASS_RESET,
+        actor_account_id=None,
+        metadata={"argon2_policy_version": 3},
+    ) == 91
 
 
 class Cursor:

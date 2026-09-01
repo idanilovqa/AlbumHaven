@@ -72,8 +72,8 @@ MUSIC_DIR=/path/to/your/music
 ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app@localhost:5432/album_haven_core
 ```
 
-Use `ALBUM_HAVEN_DATABASE_URL` with the migration role when applying database
-migrations. Keep credentials outside the repository.
+Use `ALBUM_HAVEN_MIGRATOR_DATABASE_URL` with the migration role when applying
+database migrations. Keep credentials outside the repository.
 
 ### Provision the initial owner
 
@@ -98,6 +98,19 @@ replaces an existing credential. If a credential already exists, the command
 states that the supplied password was not installed and exits with status `3`.
 This provisioning command is not a password reset or emergency recovery
 mechanism.
+
+If normal email recovery is unavailable, an operator with local terminal and
+database access can reset the bootstrap owner with:
+
+```text
+python scripts/break_glass_auth_owner.py
+```
+
+The command accepts no arguments or password environment variable. It reads a
+new password twice through the protected terminal prompt, replaces the Rendref
+credential, revokes active sessions and reset state, and records the emergency
+action in the security audit transaction. Use it only for owner lockout, not as
+the routine password-change path.
 
 When `ALBUM_HAVEN_WELCOME_EMAIL_ENABLED=true`, provisioning also commits one
 password-free welcome message to the Postgres mail outbox. Only after the owner
@@ -146,6 +159,9 @@ python app.py
 
 The application listens on the local address configured by the runtime. Album
 Haven does not upload your local music library by default.
+
+For Phase 7 environment values, owner and managed-user setup, and a manual
+acceptance checklist, see [Local authentication setup and testing](docs/local-auth-setup-and-manual-tests.md).
 
 ## Tests
 

@@ -432,6 +432,22 @@ test('functional fixtures authenticate every production browser context through 
   );
 });
 
+test('phase 7 fixtures retain ownership of their authentication lifecycle', () => {
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'tests/e2e/phase7/support/baseFixtures.js'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /functionalAuthentication:\s*\[async\s*\(\{\},\s*use\)\s*=>\s*use\(\),\s*\{\s*auto:\s*true\s*\}\]/,
+  );
+  assert.match(
+    source,
+    /authenticateFreshBrowserSession:\s*false/,
+  );
+});
+
 validatorTest('metadata shard uses one fixture setup with three effect-compatible waves', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);

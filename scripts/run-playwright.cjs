@@ -950,7 +950,15 @@ function fetchHttpResponseComplete(url, options = {}) {
       settled = true;
       resolve(value);
     };
-    const request = http.get(url, (response) => {
+    const requestBody = options.body === undefined ? null : String(options.body);
+    const headers = { ...(options.headers || {}) };
+    if (requestBody !== null && headers['Content-Length'] === undefined) {
+      headers['Content-Length'] = Buffer.byteLength(requestBody);
+    }
+    const request = http.request(url, {
+      method: String(options.method || 'GET').toUpperCase(),
+      headers,
+    }, (response) => {
       const successful = Number(response.statusCode || 0) >= 200
         && Number(response.statusCode || 0) < 300;
       const chunks = [];
@@ -968,6 +976,9 @@ function fetchHttpResponseComplete(url, options = {}) {
         ok: successful,
         statusCode: Number(response.statusCode || 0),
         body: Buffer.concat(chunks).toString('utf8'),
+        setCookieHeaders: Array.isArray(response.headers['set-cookie'])
+          ? response.headers['set-cookie']
+          : [],
       }));
       response.once('error', () => finish({
         ok: false,
@@ -980,7 +991,68 @@ function fetchHttpResponseComplete(url, options = {}) {
       request.destroy();
       finish({ ok: false, statusCode: 0, body: '' });
     });
+    request.end(requestBody);
   });
+}
+
+function cookiePair(setCookieHeaders, name) {
+  const prefix = `${name}=`;
+  const matching = (setCookieHeaders || []).find((header) => String(header).startsWith(prefix));
+  return matching ? String(matching).split(';', 1)[0] : '';
+}
+
+function hiddenFormValue(body, name) {
+  const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(body || '').match(
+    new RegExp(`<input[^>]*name=["']${escapedName}["'][^>]*value=["']([^"']+)["']`, 'i'),
+  );
+  return match ? match[1] : '';
+}
+
+async function authenticateFunctionalFixture(port, options = {}) {
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
+    || fetchHttpResponseComplete;
+  const loginPage = await fetchHttpResponseCompleteFn(
+    `${baseUrl}/login?return_to=%2Fhealth`,
+    {
+      method: 'GET',
+      requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    },
+  );
+  const csrfToken = hiddenFormValue(loginPage?.body, 'csrf_token');
+  const preauthCookie = cookiePair(
+    loginPage?.setCookieHeaders,
+    '__Host-album_haven_login_csrf',
+  );
+  if (!loginPage?.ok || !csrfToken || !preauthCookie) {
+    throw new Error('Managed functional fixture could not start a login session.');
+  }
+
+  const body = new URLSearchParams({
+    username: 'rendref',
+    password: 'Phase Seven Performance Passphrase 2026!',
+    csrf_token: csrfToken,
+    return_to: '/health',
+  }).toString();
+  const loginResponse = await fetchHttpResponseCompleteFn(`${baseUrl}/login`, {
+    method: 'POST',
+    requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: preauthCookie,
+      Origin: baseUrl,
+    },
+    body,
+  });
+  const sessionCookie = cookiePair(
+    loginResponse?.setCookieHeaders,
+    '__Host-album_haven_session',
+  );
+  if (Number(loginResponse?.statusCode || 0) !== 303 || !sessionCookie) {
+    throw new Error('Managed functional fixture login was not accepted.');
+  }
+  return { Cookie: sessionCookie };
 }
 
 function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set(), options = {}) {
@@ -1032,12 +1104,15 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const requestHeaders = { ...(options.requestHeaders || {}) };
   const indexResponse = await fetchHttpResponseCompleteFn(indexUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: requestHeaders,
   });
   if (!indexResponse?.ok) return false;
   const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: requestHeaders,
   });
   if (!viewResponse?.ok) return false;
 
@@ -1055,7 +1130,10 @@ async function prewarmFunctionalFixture(port, options = {}) {
     const responses = await Promise.all(
       coverUrls.slice(offset, offset + 4).map((coverUrl) => fetchHttpResponseCompleteFn(
         coverUrl,
-        { requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS },
+        {
+          requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+          headers: requestHeaders,
+        },
       )),
     );
     if (responses.some((response) => !response?.ok)) return false;
@@ -1063,6 +1141,7 @@ async function prewarmFunctionalFixture(port, options = {}) {
   for (const pathname of ['/utilities/problematic-files', '/utilities/rules']) {
     const response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
       requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+      headers: requestHeaders,
     });
     if (!response?.ok) return false;
   }
@@ -1090,6 +1169,7 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
     }
     const response = await fetchHttpResponseCompleteFn(statusUrl, {
       requestTimeoutMs: Math.min(timeoutMs, 5000),
+      headers: { ...(options.requestHeaders || {}) },
     });
     try {
       lastStatus = response?.ok ? JSON.parse(String(response.body || '')) : null;
@@ -1230,11 +1310,17 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
       getLaunchErrorFn: () => launchError,
     });
     if (String(childEnv.ALBUM_HAVEN_FIXTURE_PROFILE || '').trim() === 'functional-core') {
+      const authenticateFunctionalFixtureFn = options.authenticateFunctionalFixtureFn
+        || authenticateFunctionalFixture;
+      const requestHeaders = await authenticateFunctionalFixtureFn(port, {
+        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+      });
       const prewarmFunctionalFixtureFn = options.prewarmFunctionalFixtureFn
         || prewarmFunctionalFixture;
       const warmed = await prewarmFunctionalFixtureFn(port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         mediaRoot: childEnv.ALBUM_HAVEN_MEDIA_ROOT,
+        requestHeaders,
       });
       if (!warmed) {
         throw new Error(
@@ -1247,6 +1333,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
       );
       await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        requestHeaders,
       });
     }
     return child;
@@ -3305,6 +3392,7 @@ module.exports = {
     probeHttpStatusReady,
     probeHttpResponseComplete,
     fetchHttpResponseComplete,
+    authenticateFunctionalFixture,
     collectLocalCoverPreviewUrls,
     prewarmFunctionalFixture,
     waitForFunctionalFixtureBackgroundIdle,

@@ -1438,7 +1438,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{ browser, testArtifacts \}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*if \(authenticateFreshBrowserSession\)[\s\S]*authenticateProductionContext\(page\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,

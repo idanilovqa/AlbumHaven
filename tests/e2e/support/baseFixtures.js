@@ -311,11 +311,17 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  authenticateFreshBrowserSession: [true, { option: true }],
+
   managedAppLifecycle: [async ({}, use) => {
     await use(createManagedAppLifecycle());
   }, { scope: 'worker' }],
 
-  freshBrowserSession: async ({ browser, testArtifacts }, use, testInfo) => {
+  freshBrowserSession: async ({
+    browser,
+    testArtifacts,
+    authenticateFreshBrowserSession,
+  }, use, testInfo) => {
     let session = null;
     try {
       await use({
@@ -331,7 +337,9 @@ export const test = base.extend({
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           try {
             const page = await context.newPage();
-            await authenticateProductionContext(page);
+            if (authenticateFreshBrowserSession) {
+              await authenticateProductionContext(page);
+            }
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
             session = {

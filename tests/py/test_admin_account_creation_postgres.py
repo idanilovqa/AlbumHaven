@@ -32,8 +32,9 @@ class Transaction:
 
 
 class Connection:
-    def __init__(self, *, conflict=False):
+    def __init__(self, *, conflict=False, fail_audit=False):
         self.conflict = conflict
+        self.fail_audit = fail_audit
         self.operations = []
         self.events = []
 
@@ -61,6 +62,8 @@ class Connection:
             return Cursor(({"id": 61},))
         if "insert into app.mail_outbox" in normalized:
             return Cursor(({"id": 51},))
+        if "insert into app.security_audit_events" in normalized and self.fail_audit:
+            raise RuntimeError("audit insert failed")
         return Cursor()
 
 
@@ -167,4 +170,29 @@ def test_unique_identity_conflict_is_stable_and_rolls_back():
     with pytest.raises(ManagedAccountIdentityConflict):
         _create(repository)
 
+    assert connection.events == ["begin", "rollback"]
+
+
+def test_repository_rolls_back_when_audit_insert_fails_after_invitation_outbox():
+    from music_app.services.admin_account_creation_postgres import (
+        PostgresAdminAccountRepository,
+    )
+
+    connection = Connection(fail_audit=True)
+    repository = PostgresAdminAccountRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"},
+        connect=lambda _url: connection,
+    )
+
+    with pytest.raises(RuntimeError, match="audit insert failed"):
+        _create(
+            repository,
+            invitation=ISSUED,
+            invitation_expires_at=EXPIRES_AT,
+        )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert any("insert into app.accounts" in sql for sql in statements)
+    assert any("insert into app.account_invitation_tokens" in sql for sql in statements)
+    assert any("insert into app.mail_outbox" in sql for sql in statements)
     assert connection.events == ["begin", "rollback"]

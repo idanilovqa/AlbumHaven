@@ -39,29 +39,20 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       problematicResponseBytes,
     } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
       const coldRequestStartedAt = performance.now();
-      const coldResponse = await page.evaluate(async (requestPath) => {
-        const response = await fetch(requestPath, {
-          credentials: 'same-origin',
-          headers: { accept: 'application/json' },
-        });
-        const body = await response.text();
-        return {
-          body,
-          ok: response.ok,
-          status: response.status,
-          responseBytes: new TextEncoder().encode(body).byteLength,
-        };
-      }, PROBLEMATIC_FILES_PATHNAME);
+      const coldResponse = await page.request.get(PROBLEMATIC_FILES_PATHNAME, {
+        headers: { accept: 'application/json' },
+      });
+      const coldResponseBody = await coldResponse.text();
       const requestDurationMs = performance.now() - coldRequestStartedAt;
-      const responseBytes = coldResponse.responseBytes;
+      const responseBytes = new TextEncoder().encode(coldResponseBody).byteLength;
 
       expect(
-        coldResponse.ok,
-        `Expected the cold Problematic Files API request to succeed; received HTTP ${coldResponse.status}.`,
+        coldResponse.ok(),
+        `Expected the cold Problematic Files API request to succeed; received HTTP ${coldResponse.status()}.`,
       ).toBe(true);
       let coldPayload = null;
       expect(() => {
-        coldPayload = JSON.parse(coldResponse.body);
+        coldPayload = JSON.parse(coldResponseBody);
       }, 'Expected the cold Problematic Files API response body to contain valid JSON.').not.toThrow();
       expectPostgresLibraryBrowseTelemetry(coldPayload);
       expect(Array.isArray(coldPayload.items), 'Expected the cold Problematic Files payload to expose summary items.').toBe(true);

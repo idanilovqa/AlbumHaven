@@ -3,39 +3,25 @@ const SIDEBAR_VIEW_PATH = '/view-data?surface=albums&payload_tier=sidebar';
 
 async function readJsonResponse(page, path, requestTimeoutMs) {
   const startedAt = Date.now();
-  const response = await page.evaluate(async ({ requestPath, timeoutMs }) => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const result = await fetch(requestPath, {
-        credentials: 'same-origin',
-        headers: { accept: 'application/json' },
-        signal: controller.signal,
-      });
-      const text = await result.text();
-      let payload = null;
-      let parseError = '';
-      try {
-        payload = JSON.parse(text);
-      } catch (error) {
-        parseError = String(error?.message || error);
-      }
-      return { ok: result.ok, status: result.status, payload, parseError };
-    } finally {
-      clearTimeout(timer);
-    }
-  }, { requestPath: path, timeoutMs: requestTimeoutMs });
-  if (!response.ok) {
-    throw new Error(`Production liveness request ${path} returned HTTP ${response.status}.`);
+  const response = await page.request.get(path, {
+    headers: { accept: 'application/json' },
+    timeout: requestTimeoutMs,
+  });
+  if (!response.ok()) {
+    throw new Error(`Production liveness request ${path} returned HTTP ${response.status()}.`);
   }
-  if (response.parseError) {
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
     throw new Error(
-      `Production liveness request ${path} did not return JSON: ${response.parseError}`,
+      `Production liveness request ${path} did not return JSON: ${String(error?.message || error)}`,
     );
   }
   return {
     elapsedMs: Date.now() - startedAt,
-    payload: response.payload,
+    payload,
   };
 }
 

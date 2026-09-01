@@ -13,10 +13,11 @@ const helperUrl = pathToFileURL(path.join(
 
 function jsonResponse(payload, options = {}) {
   return {
-    ok: options.ok !== false,
-    status: Number(options.status || 200),
-    payload,
-    parseError: '',
+    ok: () => options.ok !== false,
+    status: () => Number(options.status || 200),
+    async text() {
+      return JSON.stringify(payload);
+    },
   };
 }
 
@@ -24,11 +25,13 @@ function createPage(responses) {
   const calls = [];
   return {
     calls,
-    async evaluate(_callback, options) {
-      calls.push(['fetch', options.requestPath, options.timeoutMs]);
-      const response = responses.shift();
-      if (response instanceof Error) throw response;
-      return response;
+    request: {
+      async get(pathname, options) {
+        calls.push(['request', pathname, options.timeout]);
+        const response = responses.shift();
+        if (response instanceof Error) throw response;
+        return response;
+      },
     },
     async waitForTimeout(intervalMs) {
       calls.push(['wait', intervalMs]);
@@ -78,14 +81,14 @@ test('production liveness observer repeatedly probes normal status and Postgres 
     [false, true, false],
   );
   assert.deepEqual(page.calls, [
-    ['fetch', '/status', 700],
-    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
+    ['request', '/status', 700],
+    ['request', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['fetch', '/status', 700],
-    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
+    ['request', '/status', 700],
+    ['request', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['fetch', '/status', 700],
-    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
+    ['request', '/status', 700],
+    ['request', '/view-data?surface=albums&payload_tier=sidebar', 700],
   ]);
 });
 

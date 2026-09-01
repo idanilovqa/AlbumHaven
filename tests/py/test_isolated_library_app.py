@@ -35,6 +35,33 @@ from music_app.services.playback_pcm import PcmDecoderProcess, PcmOpenCommand
 LAUNCHER_PATH = Path("tests/e2e/support/isolatedLibraryApp.py")
 
 
+def _stub_joseph_cover(monkeypatch) -> None:
+    from PIL import Image
+
+    def stage(library_root: Path) -> dict[str, object]:
+        destination = (
+            library_root
+            / "_e2e_cover_pool"
+            / isolatedLibraryApp.JOSEPH_COVER_FILENAME
+        )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (1200, 1200), color=(28, 64, 96)).save(
+            destination,
+            format="PNG",
+        )
+        return {
+            "cover_id": "synthetic-player-artwork",
+            "artist": isolatedLibraryApp.JOSEPH_ARTIST,
+            "album": isolatedLibraryApp.JOSEPH_ALBUM,
+            "year": isolatedLibraryApp.JOSEPH_YEAR,
+            "width": 1200,
+            "height": 1200,
+            "staged_path": str(destination.resolve(strict=False)),
+        }
+
+    monkeypatch.setattr(isolatedLibraryApp, "stage_joseph_cover", stage)
+
+
 def test_preloaded_synthetic_provider_uses_fixture_owned_covers(tmp_path):
     media_root = tmp_path / "media"
     cover_root = media_root / "covers" / "approved"
@@ -1946,6 +1973,7 @@ def test_isolated_fixture_generation_builds_40_artists_400_albums_and_7200_track
         "ensure_playable_loop_source",
         lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
     )
+    _stub_joseph_cover(monkeypatch)
 
     file_cache, loop_source, artist_count, album_count = isolatedLibraryApp.build_file_cache(
         isolatedLibraryApp.load_fixture_config(),
@@ -2691,6 +2719,7 @@ def test_problematic_encoding_fixture_offers_two_independent_text_repairs(tmp_pa
         "ensure_playable_loop_source",
         lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
     )
+    _stub_joseph_cover(monkeypatch)
     file_cache, _loop_source, _artist_count, _album_count = (
         isolatedLibraryApp.build_file_cache(
             isolatedLibraryApp.load_fixture_config(),
@@ -2752,6 +2781,7 @@ def test_isolated_fixture_postgres_inventory_is_current_and_needs_no_metadata_re
         lambda path: path.parent.mkdir(parents=True, exist_ok=True)
         or path.write_bytes(b"loop"),
     )
+    _stub_joseph_cover(monkeypatch)
     file_cache, _loop_source, artist_count, album_count = (
         isolatedLibraryApp.build_file_cache(
             isolatedLibraryApp.load_fixture_config(),
@@ -2946,6 +2976,7 @@ def test_isolated_fixture_seeds_alias_parity_rows_and_nested_family_paths(tmp_pa
         "ensure_playable_loop_source",
         lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
     )
+    _stub_joseph_cover(monkeypatch)
     file_cache, _loop_source, _artist_count, _album_count = isolatedLibraryApp.build_file_cache(
         isolatedLibraryApp.load_fixture_config(),
         tmp_path / "media",
@@ -3881,6 +3912,7 @@ def test_isolated_fixture_lastfm_target_survives_alias_fixture_reordering(tmp_pa
         "ensure_playable_loop_source",
         lambda path: path.parent.mkdir(parents=True, exist_ok=True) or path.write_bytes(b"loop"),
     )
+    _stub_joseph_cover(monkeypatch)
 
     file_cache, loop_source, _artist_count, _album_count = isolatedLibraryApp.build_file_cache(
         isolatedLibraryApp.load_fixture_config(),

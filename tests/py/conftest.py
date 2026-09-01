@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import urllib.request
 import uuid
 from collections.abc import Mapping
@@ -48,6 +49,7 @@ _PYTEST_BASETEMP_OWNER_FILE = ".album-haven-pytest-owner.json"
 _PYTEST_ROOT_ENV = "ALBUM_HAVEN_PYTEST_ROOT"
 _MAX_PYTEST_ROOTS_INSPECTED_PER_SESSION = 64
 _MAX_STALE_PYTEST_ROOTS_PER_SESSION = 16
+_PYTEST_ROOT_REMOVAL_ATTEMPTS = 4
 
 for key, value in _SAFE_PYTEST_ENV.items():
     os.environ[key] = value
@@ -148,11 +150,16 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
             return False
     elif _process_is_running(owner_identity[0]):
         return False
-    try:
-        shutil.rmtree(path)
-    except OSError:
-        return False
-    return not path.exists()
+    for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
+                return False
+        if not path.exists():
+            return True
+        time.sleep(0.05 * (2**attempt))
+    return False
 
 
 def _cleanup_stale_generated_pytest_roots() -> None:

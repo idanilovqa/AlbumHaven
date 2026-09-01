@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   PERFORMANCE_AUTH_PASSWORD,
   PERFORMANCE_AUTH_USERNAME,
+  authenticateProductionContext,
   authenticatePerformanceContext,
 } from '../e2e/support/performanceAuthentication.js';
 
@@ -52,6 +53,20 @@ test('performance authentication submits the production browser login form', asy
     ['click', 'button', { name: 'Sign in' }],
   ]);
   assert.equal(fixture.calls[0][1].includes(PERFORMANCE_AUTH_PASSWORD), false);
+});
+
+test('production E2E authentication submits the same real login form', async () => {
+  const fixture = loginPage();
+
+  await authenticateProductionContext(fixture.page);
+
+  assert.deepEqual(fixture.calls, [
+    ['goto', '/login?return_to=%2Fhealth'],
+    ['fill', 'Username', null, PERFORMANCE_AUTH_USERNAME],
+    ['fill', 'Password', { exact: true }, PERFORMANCE_AUTH_PASSWORD],
+    ['waitForURL'],
+    ['click', 'button', { name: 'Sign in' }],
+  ]);
 });
 
 test('performance authentication fails closed when login stays on the form', async () => {

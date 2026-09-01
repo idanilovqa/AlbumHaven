@@ -4,7 +4,6 @@ import path from 'node:path';
 import { expect, test as base } from './baseFixtures.js';
 import { selectedPerformanceContractName } from '../helpers/timingBudget.js';
 import { buildPerformanceAttemptTerminalEvidence } from '../helpers/performanceAttemptTerminalEvidence.js';
-import { authenticatePerformanceContext } from './performanceAuthentication.js';
 
 import {
   createPerformanceCheckpointRecorder,
@@ -669,11 +668,6 @@ export const test = base.extend({
     async ({}, use) => use(null),
     { scope: 'worker', auto: true },
   ],
-
-  performanceAuthentication: [async ({ page }, use) => {
-    await authenticatePerformanceContext(page);
-    await use();
-  }, { auto: true }],
 
   gaplessPlaybackFixture: async ({}, use) => {
     const tempRoot = String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();

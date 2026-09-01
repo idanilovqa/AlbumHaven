@@ -63,9 +63,9 @@ export const COVER_LOOKUP_TEST_TARGETS = Object.freeze({
     year: '2009',
   }),
   notificationNoResult: Object.freeze({
-    artist: '!!!',
-    album: 'Three Bangs',
-    year: '2009',
+    artist: 'Flaming Row',
+    album: 'The Pure Shine',
+    year: '2019',
   }),
 });
 

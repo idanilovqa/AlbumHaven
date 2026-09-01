@@ -491,6 +491,7 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
         "GET",
         path="/accept-invitation",
         query="purpose=account-invitation&token=" + raw_invite,
+        headers={"cookie": f"{INVITATION_COOKIE}={NEXT_INVITATION_RAW}"},
     )
 
     response_headers = dict(headers)
@@ -498,12 +499,24 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
     assert response_headers["location"] == "/accept-invitation"
     assert response_headers["cache-control"] == "no-store, max-age=0"
     assert response_headers["referrer-policy"] == "no-referrer"
-    cookie = next(
+    invitation_cookies = [
         value for value in _set_cookies(headers)
         if value.startswith(INVITATION_COOKIE + "=")
+    ]
+    deletion = next(
+        value for value in invitation_cookies if "Max-Age=0" in value
+    )
+    cookie = next(
+        value for value in invitation_cookies if "Max-Age=0" not in value
+    )
+    assert invitation_cookies.index(deletion) < invitation_cookies.index(cookie)
+    assert all(
+        flag in deletion
+        for flag in ("HttpOnly", "Secure", "SameSite=strict", "Path=/")
     )
     assert INVITATION_TRANSACTION in cookie
     assert raw_invite not in cookie
+    assert NEXT_INVITATION_RAW not in cookie
     assert all(
         flag in cookie
         for flag in ("HttpOnly", "Secure", "SameSite=strict", "Path=/")
@@ -513,7 +526,22 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
     assert lifecycle.exchanges[0][0] == raw_invite
 
 
-def test_invalid_or_duplicate_invitation_query_redirects_clean_without_cookie(auth_asgi):
+@pytest.mark.parametrize(
+    "query",
+    (
+        "purpose=wrong-purpose&token=" + INVITATION_RAW,
+        (
+            "purpose=account-invitation&token="
+            + INVITATION_RAW
+            + "&token="
+            + NEXT_INVITATION_RAW
+        ),
+    ),
+    ids=("invalid", "duplicate"),
+)
+def test_invalid_or_duplicate_invitation_query_redirects_clean_and_clears_stale_cookie(
+    auth_asgi, query
+):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeInvitationLifecycle()
     app.state.invitation_lifecycle_service = lifecycle
@@ -522,23 +550,75 @@ def test_invalid_or_duplicate_invitation_query_redirects_clean_without_cookie(au
         app,
         "GET",
         path="/accept-invitation",
-        query=(
-            "purpose=account-invitation&token="
-            + INVITATION_RAW
-            + "&token="
-            + NEXT_INVITATION_RAW
-        ),
+        query=query,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
     )
 
     assert status == 303 and body == b""
     assert dict(headers)["location"] == "/accept-invitation"
-    assert not any(
-        value.startswith(INVITATION_COOKIE + "=")
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
         for value in _set_cookies(headers)
     )
     assert INVITATION_RAW.encode() not in body
     assert NEXT_INVITATION_RAW.encode() not in body
     assert lifecycle.exchanges == []
+
+
+def test_expired_invitation_query_redirects_clean_and_clears_stale_cookie(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    lifecycle.valid = False
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query="purpose=account-invitation&token=" + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/accept-invitation"
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+    assert lifecycle.exchanges[0][0] == INVITATION_RAW
+
+
+def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
+    auth_asgi,
+):
+    class FailingInvitationLifecycle(FakeInvitationLifecycle):
+        def exchange_invitation_token(self, raw, *, request_ref):
+            self.exchanges.append((raw, request_ref))
+            raise RuntimeError(f"provider leaked {raw}")
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FailingInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query="purpose=account-invitation&token=" + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/accept-invitation"
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+    assert INVITATION_RAW.encode() not in body
+    assert all(
+        INVITATION_RAW not in key and INVITATION_RAW not in value
+        for key, value in headers
+    )
 
 
 def test_clean_invitation_page_uses_transaction_bound_csrf_and_no_referrer(auth_asgi):

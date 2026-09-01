@@ -751,11 +751,18 @@ async def accept_invitation_get(request: Request) -> Response:
                     request_ref=uuid4().hex,
                 )
             except Exception:
-                return _generic_invitation_unavailable()
+                issued = None
         response = RedirectResponse(
             "/accept-invitation",
             status_code=303,
             headers=INVITATION_HEADERS,
+        )
+        response.delete_cookie(
+            INVITATION_COOKIE,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="strict",
         )
         if issued is not None:
             response.set_cookie(

@@ -93,50 +93,86 @@ class PostgresInvitationLifecycleService:
         *,
         request_ref: object,
     ) -> IssuedInvitationTransaction | None:
-        reference = _request_ref(request_ref)
+        _request_ref(request_ref)
         digest = _digest(raw_invitation_token)
         if digest is None:
             return None
         now = _aware_utc(self._clock())
         try:
             with self._operation() as connection:
-                rows = connection.execute(
+                candidates = connection.execute(
                     """
                     select invitation.id as invitation_token_id,
-                           account.id as account_id,
-                           account.username_display,
-                           account.contact_email
+                           invitation.account_id
                     from app.account_invitation_tokens invitation
-                    join app.accounts account on account.id = invitation.account_id
-                    left join app.account_credentials credential
-                      on credential.account_id = account.id
                     where invitation.purpose = %s
                       and invitation.token_hash = %s
-                      and invitation.consumed_at is null
-                      and invitation.revoked_at is null
-                      and invitation.expires_at > %s
-                      and account.account_kind = 'managed_user'
-                      and account.is_active is true
-                      and account.disabled_at is null
-                      and credential.account_id is null
-                    for update of account, invitation
                     """,
-                    (INVITATION_DB_PURPOSE, digest, now),
+                    (INVITATION_DB_PURPOSE, digest),
                 ).fetchall()
-                if len(rows) != 1:
+                if len(candidates) != 1:
                     return None
                 context = _row(
-                    rows[0],
+                    candidates[0],
                     (
                         "invitation_token_id",
                         "account_id",
-                        "username_display",
-                        "contact_email",
                     ),
                 )
                 invitation_token_id = _positive_integer(
                     context.get("invitation_token_id"), "invitation token id"
                 )
+                account_id = _positive_integer(
+                    context.get("account_id"), "account id"
+                )
+                accounts = connection.execute(
+                    """
+                    select account.id
+                    from app.accounts account
+                    where account.id = %s
+                      and account.account_kind = 'managed_user'
+                      and account.is_active is true
+                      and account.disabled_at is null
+                    for update of account
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if len(accounts) != 1:
+                    return None
+                credentials = connection.execute(
+                    """
+                    select account_id
+                    from app.account_credentials
+                    where account_id = %s
+                    for update
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if credentials:
+                    return None
+                invitations = connection.execute(
+                    """
+                    select invitation.id
+                    from app.account_invitation_tokens invitation
+                    where invitation.id = %s
+                      and invitation.account_id = %s
+                      and invitation.purpose = %s
+                      and invitation.token_hash = %s
+                      and invitation.consumed_at is null
+                      and invitation.revoked_at is null
+                      and invitation.expires_at > %s
+                    for update of invitation
+                    """,
+                    (
+                        invitation_token_id,
+                        account_id,
+                        INVITATION_DB_PURPOSE,
+                        digest,
+                        now,
+                    ),
+                ).fetchall()
+                if len(invitations) != 1:
+                    return None
                 issued = validated_issued_invitation_token(self._token_issuer)
                 expires_at = now + timedelta(
                     seconds=INVITATION_TRANSACTION_SECONDS

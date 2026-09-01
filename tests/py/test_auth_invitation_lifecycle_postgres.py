@@ -200,6 +200,43 @@ def test_exchange_is_single_use_and_returns_shared_redacted_clean_url_state():
     assert INVITATION_RAW not in repr(connection.operations)
 
 
+def test_exchange_resolves_context_then_locks_account_before_revalidating_invitation():
+    connection = Connection()
+
+    issued = _service(connection).exchange_invitation_token(
+        INVITATION_RAW, request_ref="account-first-lock-order"
+    )
+
+    assert issued is not None
+    statements = _statements(connection)
+    context_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.account_invitation_tokens invitation" in sql
+        and "token_hash" in sql
+        and "for update" not in sql
+    )
+    account_lock_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.accounts" in sql and "for update" in sql
+    )
+    invitation_lock_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "from app.account_invitation_tokens" in sql
+        and "for update" in sql
+        and "token_hash" in sql
+    )
+    insert_index = next(
+        index
+        for index, sql in enumerate(statements)
+        if "insert into app.account_invitation_transactions" in sql
+    )
+
+    assert context_index < account_lock_index < invitation_lock_index < insert_index
+
+
 def test_exchange_on_conflict_loser_is_one_safe_committed_invalid_result():
     connection = Connection(exchange_inserted=False)
 

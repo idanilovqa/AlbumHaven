@@ -8,6 +8,7 @@ import hmac
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import QueryParams
 from starlette.responses import Response
 from starlette.routing import Match
 
@@ -210,12 +211,15 @@ def _redact_lifecycle_link_query(request: Request) -> None:
         "/reset-password": "password_reset_link",
         "/accept-invitation": "account_invitation_link",
     }
-    prefix = prefixes.get(request.url.path)
-    if request.method.upper() != "GET" or prefix is None:
+    scope = request.scope
+    prefix = prefixes.get(scope.get("path"))
+    if str(scope.get("method") or "").upper() != "GET" or prefix is None:
         return
-    pairs = list(request.query_params.multi_items())
-    if not pairs:
+    raw_query = scope.get("query_string", b"")
+    if not raw_query:
         return
+    query_params = QueryParams(raw_query.decode("latin-1"))
+    pairs = list(query_params.multi_items())
     setattr(
         request.state,
         f"{prefix}_query_valid",
@@ -225,9 +229,11 @@ def _redact_lifecycle_link_query(request: Request) -> None:
             and sum(key == "token" for key, _value in pairs) == 1
         ),
     )
-    setattr(request.state, f"{prefix}_purpose", request.query_params.get("purpose"))
-    setattr(request.state, f"{prefix}_token", request.query_params.get("token"))
-    request.scope["query_string"] = b""
+    setattr(request.state, f"{prefix}_purpose", query_params.get("purpose"))
+    setattr(request.state, f"{prefix}_token", query_params.get("token"))
+    scope["query_string"] = b""
+    request.__dict__.pop("_url", None)
+    request.__dict__.pop("_query_params", None)
 
 
 def _is_public(method: str, path: str) -> bool:

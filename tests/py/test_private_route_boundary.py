@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 
 from music_app.services.current_actor import CurrentActor
 from music_app.services.private_route_boundary import (
+    _redact_lifecycle_link_query,
     csrf_mode_for_route,
     install_private_route_boundary,
     private_action_for_route,
@@ -275,6 +276,9 @@ def test_invitation_link_query_is_removed_from_downstream_scope_before_dispatch(
     @app.get("/accept-invitation")
     async def accept_invitation(request: Request):
         observed.update(
+            scope_query=request.scope.get("query_string", b""),
+            url_query=request.url.query,
+            query_params=tuple(request.query_params.multi_items()),
             query_valid=getattr(
                 request.state, "account_invitation_link_query_valid", None
             ),
@@ -297,10 +301,45 @@ def test_invitation_link_query_is_removed_from_downstream_scope_before_dispatch(
     assert raw.encode() not in body
     assert body == b'{"query":""}'
     assert observed == {
+        "scope_query": b"",
+        "url_query": "",
+        "query_params": (),
         "query_valid": True,
         "purpose": "account-invitation",
         "token": raw,
     }
+
+
+def test_invitation_redaction_clears_cached_query_views_on_the_same_request():
+    raw = base64.urlsafe_b64encode(bytes([0x74]) * 32).decode("ascii").rstrip("=")
+    query = f"purpose=account-invitation&token={raw}"
+    request = Request({
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "https",
+        "path": "/accept-invitation",
+        "raw_path": b"/accept-invitation",
+        "query_string": query.encode("ascii"),
+        "headers": [(b"host", b"music.test")],
+        "client": ("127.0.0.1", 50000),
+        "server": ("music.test", 443),
+    })
+
+    assert request.url.query == query
+    assert tuple(request.query_params.multi_items()) == (
+        ("purpose", "account-invitation"),
+        ("token", raw),
+    )
+
+    _redact_lifecycle_link_query(request)
+
+    assert request.scope["query_string"] == b""
+    assert request.url.query == ""
+    assert tuple(request.query_params.multi_items()) == ()
+    assert request.state.account_invitation_link_query_valid is True
+    assert request.state.account_invitation_link_purpose == "account-invitation"
+    assert request.state.account_invitation_link_token == raw
 
 
 def test_status_and_every_nonpublic_path_require_authentication():

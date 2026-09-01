@@ -1,23 +1,41 @@
 const STATUS_PATH = '/status';
 const SIDEBAR_VIEW_PATH = '/view-data?surface=albums&payload_tier=sidebar';
 
-async function readJsonResponse(requestContext, path, requestTimeoutMs) {
+async function readJsonResponse(page, path, requestTimeoutMs) {
   const startedAt = Date.now();
-  const response = await requestContext.get(path, { timeout: requestTimeoutMs });
-  if (!response.ok()) {
-    throw new Error(`Production liveness request ${path} returned HTTP ${response.status()}.`);
+  const response = await page.evaluate(async ({ requestPath, timeoutMs }) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const result = await fetch(requestPath, {
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+        signal: controller.signal,
+      });
+      const text = await result.text();
+      let payload = null;
+      let parseError = '';
+      try {
+        payload = JSON.parse(text);
+      } catch (error) {
+        parseError = String(error?.message || error);
+      }
+      return { ok: result.ok, status: result.status, payload, parseError };
+    } finally {
+      clearTimeout(timer);
+    }
+  }, { requestPath: path, timeoutMs: requestTimeoutMs });
+  if (!response.ok) {
+    throw new Error(`Production liveness request ${path} returned HTTP ${response.status}.`);
   }
-  let payload;
-  try {
-    payload = await response.json();
-  } catch (error) {
+  if (response.parseError) {
     throw new Error(
-      `Production liveness request ${path} did not return JSON: ${String(error?.message || error)}`,
+      `Production liveness request ${path} did not return JSON: ${response.parseError}`,
     );
   }
   return {
     elapsedMs: Date.now() - startedAt,
-    payload,
+    payload: response.payload,
   };
 }
 
@@ -57,9 +75,9 @@ export async function observeProductionAppLiveness(page, options = {}) {
     if (index > 0 && intervalMs > 0) {
       await page.waitForTimeout(intervalMs);
     }
-    const status = await readJsonResponse(page.request, STATUS_PATH, requestTimeoutMs);
+    const status = await readJsonResponse(page, STATUS_PATH, requestTimeoutMs);
     assertStatusPayload(status.payload);
-    const view = await readJsonResponse(page.request, SIDEBAR_VIEW_PATH, requestTimeoutMs);
+    const view = await readJsonResponse(page, SIDEBAR_VIEW_PATH, requestTimeoutMs);
     assertSidebarViewPayload(view.payload);
     samples.push({
       index,

@@ -1133,6 +1133,10 @@ def test_loader_projection_order_resolves_refs_into_normal_product_tables() -> N
         "covers",
     )
     sql = "\n".join(loader.product_projection_statements("functional-core"))
+    assert "username_display" in sql
+    assert "username_normalized" in sql
+    assert "contact_email_normalized" in sql
+    assert "ci-fixture-owner@example.test" in sql
     assert "artistRef" in sql and "artist_key" in sql
     assert "s.record->>'productArtistKey'" in sql
     assert "jsonb_build_object('fixture_artist_key',s.record->>'artistKey'" in sql

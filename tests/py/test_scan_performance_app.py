@@ -35,6 +35,28 @@ def test_support_is_a_prestart_preparer_without_asgi_runtime_augmentation():
     assert all(term not in source for term in forbidden)
 
 
+def test_bootstrap_seed_uses_the_current_required_account_identity_shape():
+    module = _load_module()
+    sql = module._seed_bootstrap_local_library_sql()
+
+    assert "username_display" in sql
+    assert "username_normalized" in sql
+    assert "contact_email_normalized" in sql
+    assert "scan-performance-owner@example.test" in sql
+
+
+def test_performance_auth_environment_is_loopback_scoped(monkeypatch):
+    module = _load_module()
+    monkeypatch.delenv("ALBUM_HAVEN_BOOTSTRAP_USERNAME", raising=False)
+
+    module.configure_performance_auth_environment(4293)
+
+    assert os.environ["ALBUM_HAVEN_BOOTSTRAP_USERNAME"] == "Rendref"
+    assert os.environ["ALBUM_HAVEN_BOOTSTRAP_EMAIL"] == "rendref@example.test"
+    assert os.environ["ALBUM_HAVEN_PUBLIC_BASE_URL"] == "https://127.0.0.1:4293"
+    assert len(os.environ["ALBUM_HAVEN_AUTH_HMAC_SECRET"]) >= 32
+
+
 def test_scan_ffmpeg_helper_hides_its_windows_process(tmp_path, monkeypatch):
     module = _load_module()
     recorded = {}
@@ -413,6 +435,16 @@ def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, mo
         'persist_scan_performance_library_root',
         lambda database_url, music_dir: calls.append(('persist', database_url, music_dir)),
     )
+    monkeypatch.setattr(
+        module,
+        'configure_performance_auth_environment',
+        lambda app_port: calls.append(('auth-environment', app_port)),
+    )
+    monkeypatch.setattr(
+        module,
+        'provision_performance_auth_owner',
+        lambda database_url: calls.append(('auth-owner', database_url)),
+    )
 
     try:
         music_dir = module.configure_environment('add-album')
@@ -422,6 +454,8 @@ def test_configure_environment_uses_explicit_runner_owned_temp_root(tmp_path, mo
         assert calls == [
             ('initialize', 'setup-url'),
             ('persist', 'setup-url', expected_music_dir),
+            ('auth-environment', 4174),
+            ('auth-owner', 'runtime-url'),
         ]
     finally:
         module.cleanup_temp_root()
@@ -708,9 +742,10 @@ def test_launch_sampler_records_only_production_status_responses(tmp_path, monke
         def read(self):
             return b'{"scan_in_progress":true,"scan_phase":"discovering"}'
 
-    def fake_urlopen(url, timeout):
+    def fake_urlopen(request, timeout):
         nonlocal calls
-        assert url == "http://127.0.0.1:4174/status"
+        assert request.full_url == "http://127.0.0.1:4174/status"
+        assert request.get_header("Cookie") == "test-session"
         assert timeout == 2.0
         calls += 1
         if calls == 1:
@@ -724,6 +759,7 @@ def test_launch_sampler_records_only_production_status_responses(tmp_path, monke
         samples_path=samples_path,
         interval_seconds=0.005,
     )
+    sampler._session_cookie = "test-session"
     sampler.start()
     deadline = time.monotonic() + 1
     while time.monotonic() < deadline:
@@ -748,6 +784,7 @@ def test_launch_sampler_defaults_to_low_overhead_bounded_polling(tmp_path):
         status_url="http://127.0.0.1:4174/status",
         samples_path=tmp_path / "status.jsonl",
     )
+    sampler._session_cookie = "test-session"
     assert sampler.interval_seconds == 0.05
     assert sampler.request_timeout_seconds == 2.0
 
@@ -787,6 +824,7 @@ def test_launch_sampler_persists_error_event_after_successful_prefix(tmp_path, m
         samples_path=samples_path,
         interval_seconds=0.005,
     )
+    sampler._session_cookie = "test-session"
     sampler.start()
     deadline = time.time() + 1
     while time.time() < deadline and sampler.error is None:

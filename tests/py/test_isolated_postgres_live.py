@@ -1008,18 +1008,22 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
     )
     cleanup_complete = False
 
-    def runtime_delete_privileges() -> tuple[bool, bool]:
-        with isolatedPostgres._connect(runtime_url) as connection:
+    def production_runtime_delete_privileges() -> tuple[bool, bool]:
+        with isolatedPostgres._connect(setup_url) as connection:
             isolatedPostgres._assert_connected_role(
                 connection,
-                isolatedPostgres.RUNTIME_ROLE,
+                isolatedPostgres.SETUP_ROLE,
             )
             row = connection.execute(
                 """
                 select
-                  has_table_privilege(current_user, 'library.ignored_versions', 'DELETE')
+                  has_table_privilege(
+                    'album_haven_app', 'library.ignored_versions', 'DELETE'
+                  )
                     as ignored_versions_delete,
-                  has_table_privilege(current_user, 'library.manual_versions', 'DELETE')
+                  has_table_privilege(
+                    'album_haven_app', 'library.manual_versions', 'DELETE'
+                  )
                     as manual_versions_delete
                 """
             ).fetchone()
@@ -1037,18 +1041,16 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
                 connection,
                 isolatedPostgres.SETUP_ROLE,
             )
-            runtime_role = str(urlparse(runtime_url).username or "")
-            from psycopg import sql as psycopg_sql
             connection.execute(
-                psycopg_sql.SQL("""
+                """
                 revoke delete on table
                   library.ignored_versions,
                   library.manual_versions
-                from album_haven_app, {}
-                """).format(psycopg_sql.Identifier(runtime_role))
+                from album_haven_app
+                """
             )
 
-        assert runtime_delete_privileges() == (False, False)
+        assert production_runtime_delete_privileges() == (False, False)
 
         migration_sql = migration_path.read_text(encoding="utf-8")
         with isolatedPostgres._connect(setup_url) as connection:
@@ -1058,7 +1060,7 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
             )
             connection.execute(migration_sql)
 
-        assert runtime_delete_privileges() == (True, True)
+        assert production_runtime_delete_privileges() == (True, True)
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True
@@ -3675,7 +3677,17 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
 
             second_account_id = int(
                 connection.execute(
-                    "insert into app.accounts (display_name, account_kind) values ('Other Owner', 'local') returning id"
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Other Owner', 'managed', 'other-owner',
+                      'other-owner', 'other-owner@example.test',
+                      'other-owner@example.test'
+                    ) returning id
+                    """
                 ).fetchone()["id"]
             )
             second_library_id = int(

@@ -836,7 +836,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
   const sleepFn = options.sleepFn || sleep;
   const nowFn = options.nowFn || Date.now;
   const getLaunchErrorFn = options.getLaunchErrorFn || (() => null);
-  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const healthUrl = `http://127.0.0.1:${port}/health`;
   const deadline = nowFn() + timeoutMs;
 
   while (nowFn() <= deadline) {
@@ -847,7 +847,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
     if (child.exitCode !== null && child.exitCode !== undefined) {
       throw new Error(`Managed scan app exited before readiness with code ${String(child.exitCode)}.`);
     }
-    if (await probeHttpStatusReadyFn(statusUrl, options)) {
+    if (await probeHttpStatusReadyFn(healthUrl, options)) {
       return;
     }
     await sleepFn(pollIntervalMs);
@@ -1120,7 +1120,7 @@ async function waitForManagedIsolatedAppReady(child, port, options = {}) {
   const sleepFn = options.sleepFn || sleep;
   const nowFn = options.nowFn || Date.now;
   const getLaunchErrorFn = options.getLaunchErrorFn || (() => null);
-  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const healthUrl = `http://127.0.0.1:${port}/health`;
   const deadline = nowFn() + timeoutMs;
   while (nowFn() <= deadline) {
     const launchError = getLaunchErrorFn();
@@ -1130,12 +1130,12 @@ async function waitForManagedIsolatedAppReady(child, port, options = {}) {
     if (child.exitCode !== null && child.exitCode !== undefined) {
       throw new Error(`Managed isolated app exited before readiness with code ${String(child.exitCode)}.`);
     }
-    if (await probeHttpStatusReadyFn(statusUrl, options)) {
+    if (await probeHttpStatusReadyFn(healthUrl, options)) {
       return;
     }
     await sleepFn(pollIntervalMs);
   }
-  throw new Error(`Timed out after ${timeoutMs} ms waiting for managed isolated app at ${statusUrl}.`);
+  throw new Error(`Timed out after ${timeoutMs} ms waiting for managed isolated app at ${healthUrl}.`);
 }
 
 function waitForDirectChildExit(child, options = {}) {

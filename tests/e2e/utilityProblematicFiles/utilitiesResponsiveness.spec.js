@@ -25,10 +25,8 @@ const PROBLEMATIC_READY_EXPECTATION = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.
 test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`, () => {
 
   test(`${PROBLEMATIC_CASE_ID} immediate Problematic Files stays responsive while search and problem filters update the detail view`, async ({
-    baseURL,
     galleryActions,
     page,
-    request,
     settingsModalAppBarActions,
     stepLogger,
     utilityProblematicFilesActions,
@@ -40,20 +38,30 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       coldProblematicApiMs,
       problematicResponseBytes,
     } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
-      expect(baseURL, 'Expected the real-app Playwright project to provide a base URL.').toBeTruthy();
       const coldRequestStartedAt = performance.now();
-      const coldResponse = await request.get(new URL(PROBLEMATIC_FILES_PATHNAME, baseURL).toString());
-      const coldResponseBody = await coldResponse.body();
+      const coldResponse = await page.evaluate(async (requestPath) => {
+        const response = await fetch(requestPath, {
+          credentials: 'same-origin',
+          headers: { accept: 'application/json' },
+        });
+        const body = await response.text();
+        return {
+          body,
+          ok: response.ok,
+          status: response.status,
+          responseBytes: new TextEncoder().encode(body).byteLength,
+        };
+      }, PROBLEMATIC_FILES_PATHNAME);
       const requestDurationMs = performance.now() - coldRequestStartedAt;
-      const responseBytes = coldResponseBody.byteLength;
+      const responseBytes = coldResponse.responseBytes;
 
       expect(
-        coldResponse.ok(),
-        `Expected the cold Problematic Files API request to succeed; received HTTP ${coldResponse.status()}.`,
+        coldResponse.ok,
+        `Expected the cold Problematic Files API request to succeed; received HTTP ${coldResponse.status}.`,
       ).toBe(true);
       let coldPayload = null;
       expect(() => {
-        coldPayload = JSON.parse(coldResponseBody.toString('utf8'));
+        coldPayload = JSON.parse(coldResponse.body);
       }, 'Expected the cold Problematic Files API response body to contain valid JSON.').not.toThrow();
       expectPostgresLibraryBrowseTelemetry(coldPayload);
       expect(Array.isArray(coldPayload.items), 'Expected the cold Problematic Files payload to expose summary items.').toBe(true);

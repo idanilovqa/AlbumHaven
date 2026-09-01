@@ -109,8 +109,16 @@ def test_live_cover_lookup_conflict_identity_repair_upgrades_legacy_index_and_pe
             second_account_id = int(
                 connection.execute(
                     """
-                    insert into app.accounts (display_name, account_kind)
-                    values ('Second Cover Lookup Owner', 'local')
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Second Cover Lookup Owner', 'managed',
+                      'second-cover-owner', 'second-cover-owner',
+                      'second-cover-owner@example.test',
+                      'second-cover-owner@example.test'
+                    )
                     returning id
                     """
                 ).fetchone()["id"]

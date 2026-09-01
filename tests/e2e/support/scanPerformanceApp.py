@@ -15,7 +15,8 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import unquote, urlparse
+from http.cookies import SimpleCookie
+from urllib.parse import unquote, urlencode, urlparse
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +25,13 @@ APPROVED_COVER_METADATA_PATH = ROOT / "tests" / "e2e" / "fixtures" / "approvedCo
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tests.e2e.support.isolatedPostgres import IsolatedDatabaseOwnershipLock  # noqa: E402
+from tests.e2e.support.isolatedPostgres import (  # noqa: E402
+    IsolatedDatabaseOwnershipLock,
+    PERFORMANCE_AUTH_PASSWORD,
+    PERFORMANCE_AUTH_USERNAME,
+    configure_performance_auth_environment,
+    provision_performance_auth_owner,
+)
 from tests.e2e.support.privateFixtureData import (  # noqa: E402
     resolve_approved_cover_by_sha256,
 )
@@ -368,10 +375,18 @@ def _reset_scan_performance_database_sql() -> str:
 def _seed_bootstrap_local_library_sql() -> str:
     return """
         with owner_account as (
-          insert into app.accounts (display_name, account_kind, metadata)
+          insert into app.accounts (
+            display_name, account_kind, username_display,
+            username_normalized, contact_email,
+            contact_email_normalized, metadata
+          )
           values (
             'Scan Performance Owner',
             'bootstrap_owner',
+            'scan-performance-owner',
+            'scan-performance-owner',
+            'scan-performance-owner@example.test',
+            'scan-performance-owner@example.test',
             '{"source":"scan_performance_harness"}'::jsonb
           )
           returning id
@@ -589,6 +604,9 @@ def configure_environment(scenario: str = "cold") -> Path:
     os.environ["ALBUM_HAVEN_PERSISTENCE_SCAN_CACHE"] = "postgres"
     initialize_scan_performance_database(setup_database_url)
     persist_scan_performance_library_root(setup_database_url, music_dir)
+    app_port = int(str(os.environ.get("PLAYWRIGHT_PORT") or "4174").strip())
+    configure_performance_auth_environment(app_port)
+    provision_performance_auth_owner(runtime_database_url)
     return music_dir
 
 
@@ -844,6 +862,82 @@ class ProductionStatusFileSampler:
         self._thread: threading.Thread | None = None
         self.error: Exception | None = None
         self._observed_response = False
+        self._session_cookie: str | None = None
+
+    @staticmethod
+    def _read_set_cookie(headers: Any, cookie_name: str) -> str:
+        for header_value in headers.get_all("Set-Cookie", []):
+            parsed = SimpleCookie()
+            parsed.load(header_value)
+            if cookie_name in parsed:
+                return str(parsed[cookie_name].value)
+        raise RuntimeError(f"Performance login did not issue {cookie_name}.")
+
+    def _authenticate_session(self) -> str:
+        parsed_status_url = urlparse(self.status_url)
+        origin = f"{parsed_status_url.scheme}://{parsed_status_url.netloc}"
+        login_url = f"{origin}/login?return_to=%2Fhealth"
+        with urllib.request.urlopen(
+            login_url,
+            timeout=self.request_timeout_seconds,
+        ) as response:
+            preauth_token = self._read_set_cookie(
+                response.headers,
+                "__Host-album_haven_login_csrf",
+            )
+
+        form_body = urlencode({
+            "username": PERFORMANCE_AUTH_USERNAME,
+            "password": PERFORMANCE_AUTH_PASSWORD,
+            "csrf_token": preauth_token,
+            "return_to": "/health",
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            f"{origin}/login",
+            data=form_body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Cookie": f"__Host-album_haven_login_csrf={preauth_token}",
+                "Origin": origin,
+            },
+            method="POST",
+        )
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+                return None
+
+        try:
+            urllib.request.build_opener(NoRedirect()).open(
+                request,
+                timeout=self.request_timeout_seconds,
+            )
+        except urllib.error.HTTPError as response:
+            if response.code != 303:
+                raise
+            session_token = self._read_set_cookie(
+                response.headers,
+                "__Host-album_haven_session",
+            )
+        else:
+            raise RuntimeError("Performance login did not return the expected redirect.")
+        return f"__Host-album_haven_session={session_token}"
+
+    def _read_status(self) -> dict[str, Any]:
+        if self._session_cookie is None:
+            self._session_cookie = self._authenticate_session()
+        request = urllib.request.Request(
+            self.status_url,
+            headers={
+                "Accept": "application/json",
+                "Cookie": self._session_cookie,
+            },
+        )
+        with urllib.request.urlopen(
+            request,
+            timeout=self.request_timeout_seconds,
+        ) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     def start(self) -> None:
         self.samples_path.parent.mkdir(parents=True, exist_ok=True)
@@ -856,11 +950,7 @@ class ProductionStatusFileSampler:
             with self.samples_path.open("a", encoding="utf-8", buffering=1) as stream:
                 while not self._stop.is_set():
                     try:
-                        with urllib.request.urlopen(
-                            self.status_url,
-                            timeout=self.request_timeout_seconds,
-                        ) as response:
-                            payload = json.loads(response.read().decode("utf-8"))
+                        payload = self._read_status()
                         self._observed_response = True
                         stream.write(json.dumps({
                             "recordedAtEpochMs": int(time.time() * 1000),

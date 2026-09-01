@@ -403,6 +403,26 @@ def test_fixture_profile_mode_preserves_released_and_generated_boundaries(
     assert isolatedLibraryApp.classify_fixture_profile_mode(fixture_profile) == expected_mode
 
 
+@pytest.mark.parametrize(
+    ("fixture_profile", "expected"),
+    [
+        ("", True),
+        ("functional-core", True),
+        ("playback-media", False),
+        ("scan-library", False),
+    ],
+)
+def test_generated_performance_profiles_skip_unrelated_provider_storage_policy_seed(
+    fixture_profile, expected
+):
+    assert (
+        isolatedLibraryApp.fixture_profile_requires_provider_storage_policy_fixture(
+            fixture_profile
+        )
+        is expected
+    )
+
+
 def test_preloaded_fixture_profiles_use_normal_postgres_rows_and_bypass_runtime_shaping():
     source = LAUNCHER_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
@@ -1448,6 +1468,16 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
         lambda *_args, **_kwargs: temp_root / "media",
     )
     monkeypatch.setattr(isolatedLibraryApp, "load_fixture_config", lambda: {})
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "configure_performance_auth_environment",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "provision_performance_auth_owner",
+        lambda *_args: None,
+    )
     monkeypatch.setattr(isolatedLibraryApp, "stage_real_cover_pool", lambda *_args: [])
     monkeypatch.setattr(
         isolatedLibraryApp,
@@ -1638,6 +1668,16 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
         lambda *_args, **_kwargs: temp_root / "media",
     )
     monkeypatch.setattr(isolatedLibraryApp, "load_fixture_config", lambda: {})
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "configure_performance_auth_environment",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        isolatedLibraryApp,
+        "provision_performance_auth_owner",
+        lambda *_args: None,
+    )
     monkeypatch.setattr(
         isolatedLibraryApp,
         "stage_real_cover_pool",

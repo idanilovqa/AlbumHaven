@@ -2886,7 +2886,7 @@ test('startManagedScanApp launches Python directly and waits for injected readin
     },
     probeHttpStatusReadyFn: async (url) => {
       probes += 1;
-      assert.equal(url, 'http://127.0.0.1:4317/status');
+      assert.equal(url, 'http://127.0.0.1:4317/health');
       return probes === 2;
     },
     sleepFn: async () => {},
@@ -2931,7 +2931,7 @@ test('startManagedScanApp preserves an explicit performance-runner samples path'
       return child;
     },
     probeHttpStatusReadyFn: async (url) => {
-      assert.equal(url, 'http://127.0.0.1:4318/status');
+      assert.equal(url, 'http://127.0.0.1:4318/health');
       return true;
     },
     stdout: { write() {} },
@@ -2956,7 +2956,7 @@ test('waitForManagedScanAppReady rejects an app that exits before binding', asyn
   );
 });
 
-test('waitForManagedScanAppReady ignores a listening port until the status endpoint is ready', async () => {
+test('waitForManagedScanAppReady ignores a listening port until the public health endpoint is ready', async () => {
   const child = createFakeChildProcess(5253);
   let portProbes = 0;
   let statusProbes = 0;
@@ -2968,7 +2968,7 @@ test('waitForManagedScanAppReady ignores a listening port until the status endpo
     },
     probeHttpStatusReadyFn: async (url) => {
       statusProbes += 1;
-      assert.equal(url, 'http://127.0.0.1:4318/status');
+      assert.equal(url, 'http://127.0.0.1:4318/health');
       return statusProbes === 2;
     },
     sleepFn: async () => {},
@@ -3004,7 +3004,7 @@ test('stopManagedScanApp uses injected process-tree teardown and waits for port 
   assert.equal(waited[0].options.timeoutMs, _private.MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS);
 });
 
-test('startManagedIsolatedApp launches Python directly with safe managed env and waits for status', async () => {
+test('startManagedIsolatedApp launches Python directly with safe managed env and waits for public health', async () => {
   const child = createFakeChildProcess(5454);
   const calls = [];
   const probes = [];
@@ -3050,7 +3050,7 @@ test('startManagedIsolatedApp launches Python directly with safe managed env and
     calls[0].options.env.ALBUM_HAVEN_FAKE_E2E_PROVIDER_BASE_URL,
     'http://127.0.0.1:4322',
   );
-  assert.deepEqual(probes, ['http://127.0.0.1:4320/status']);
+  assert.deepEqual(probes, ['http://127.0.0.1:4320/health']);
 });
 
 test('non-album rescans and sparse metadata scans seed all unrelated functional cover misses', () => {

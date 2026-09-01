@@ -13,9 +13,10 @@ const helperUrl = pathToFileURL(path.join(
 
 function jsonResponse(payload, options = {}) {
   return {
-    ok: () => options.ok !== false,
-    status: () => Number(options.status || 200),
-    json: async () => payload,
+    ok: options.ok !== false,
+    status: Number(options.status || 200),
+    payload,
+    parseError: '',
   };
 }
 
@@ -23,13 +24,11 @@ function createPage(responses) {
   const calls = [];
   return {
     calls,
-    request: {
-      async get(requestPath, options) {
-        calls.push(['get', requestPath, options]);
-        const response = responses.shift();
-        if (response instanceof Error) throw response;
-        return response;
-      },
+    async evaluate(_callback, options) {
+      calls.push(['fetch', options.requestPath, options.timeoutMs]);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
     },
     async waitForTimeout(intervalMs) {
       calls.push(['wait', intervalMs]);
@@ -79,14 +78,14 @@ test('production liveness observer repeatedly probes normal status and Postgres 
     [false, true, false],
   );
   assert.deepEqual(page.calls, [
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['fetch', '/status', 700],
+    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['fetch', '/status', 700],
+    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['fetch', '/status', 700],
+    ['fetch', '/view-data?surface=albums&payload_tier=sidebar', 700],
   ]);
 });
 

@@ -1,10 +1,8 @@
-import { LoginPage, MembersPage } from '../poms/authPages.js';
-import { OWNER, signIn } from '../actions/authActions.js';
+import { InvitationPage, MembersPage } from '../poms/authPages.js';
+import { invitationPathFrom, OWNER, signIn } from '../actions/authActions.js';
 import {
   databaseState,
   expect,
-  holdMail,
-  releaseMail,
   test,
   waitForMessage,
 } from '../support/baseFixtures.js';
@@ -12,19 +10,24 @@ import {
 const LISTENER = Object.freeze({
   username: 'listener.plus',
   email: 'listener+phase7@example.test',
-  password: 'Phase Seven Listener Passphrase 2026!',
+  password: 'Cobalt Tundra 47! Glass Harbor',
 });
 
-async function createListener(page, { holdDelivery = false } = {}) {
+const SMTP_LISTENER = Object.freeze({
+  username: 'smtp.listener',
+  email: 'smtp.listener+phase7@example.test',
+  password: 'Amber Quasar 82! Frosted Pine',
+});
+
+async function createListener(page) {
   const members = new MembersPage(page);
   await members.open();
   await members.openAddUser();
   await members.fillCreateUser({
     username: LISTENER.username,
     email: LISTENER.email,
-    password: LISTENER.password,
+    sendInvitation: true,
   });
-  if (holdDelivery) await holdMail();
   const requestSeen = page.waitForRequest(
     (request) => request.method() === 'POST'
       && new URL(request.url()).pathname === '/admin/accounts',
@@ -39,33 +42,65 @@ async function createListener(page, { holdDelivery = false } = {}) {
   return { completion: creation };
 }
 
-test('FTC-PERMISSIONS-005 creates an active plus-addressed user before password-free welcome delivery', async ({ page, freshBrowserSession }) => {
+test('creates, rotates, accepts, and signs in through a copied invitation', async ({ page, freshBrowserSession }) => {
   await signIn(page);
-  const { completion } = await createListener(page, { holdDelivery: true });
+  const members = new MembersPage(page);
+  await members.open();
+  await members.openAddUser();
+  await members.fillCreateUser({ ...LISTENER, sendInvitation: false });
+  await members.submitCreateUser();
 
-  const listenerSession = await freshBrowserSession.create();
-  const listenerPage = listenerSession.page;
-  await signIn(listenerPage, {
-    username: LISTENER.username,
-    password: LISTENER.password,
-  }, '/account');
-  await expect(listenerPage.getByRole('heading', { name: 'Password & security' })).toBeVisible();
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const firstUrl = await members.copyInviteLink(LISTENER.username);
+  const secondUrl = await members.copyInviteLink(LISTENER.username);
 
-  await releaseMail();
-  await completion;
-  await expect(page.getByText(LISTENER.email)).toBeVisible();
-  const message = await waitForMessage(LISTENER.email);
-  expect(message.body).toContain(LISTENER.username);
-  expect(message.body).toContain('/login');
-  expect(message.body).not.toContain(LISTENER.password);
-  expect(message.body).not.toMatch(/activat(e|ion)/i);
+  const recipient = await freshBrowserSession.create();
+  await recipient.page.goto(invitationPathFrom(firstUrl));
+  await expect(
+    recipient.page.getByText('Invitation link is invalid or expired.'),
+  ).toBeVisible();
+
+  await recipient.page.goto(invitationPathFrom(secondUrl));
+  await new InvitationPage(recipient.page).complete(LISTENER.password);
+  await signIn(recipient.page, LISTENER, '/account');
+  await expect(
+    recipient.page.getByRole('heading', { name: 'Password & security' }),
+  ).toBeVisible();
+
+  await recipient.page.goto(invitationPathFrom(secondUrl));
+  await expect(
+    recipient.page.getByText('Invitation link is invalid or expired.'),
+  ).toBeVisible();
+});
+
+test('delivers a usable invitation through the local SMTP capture server', async ({ page, freshBrowserSession }) => {
+  await signIn(page);
+  const members = new MembersPage(page);
+  await members.open();
+  await members.openAddUser();
+  await members.fillCreateUser({ ...SMTP_LISTENER, sendInvitation: true });
+  await members.submitCreateUser();
+
+  const message = await waitForMessage(SMTP_LISTENER.email);
+  expect(message.body).not.toContain(SMTP_LISTENER.password);
+
+  const recipient = await freshBrowserSession.create();
+  await recipient.page.goto(invitationPathFrom(message.body));
+  await new InvitationPage(recipient.page).complete(SMTP_LISTENER.password);
+  await signIn(recipient.page, SMTP_LISTENER, '/account');
+  await expect(
+    recipient.page.getByRole('heading', { name: 'Password & security' }),
+  ).toBeVisible();
 });
 
 test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority', async ({ page, freshBrowserSession }) => {
   await signIn(page);
   const { completion } = await createListener(page);
   await completion;
-  await waitForMessage(LISTENER.email);
+  const invitationMessage = await waitForMessage(
+    LISTENER.email,
+    (message) => /invitation/i.test(message.subject),
+  );
 
   const ownerState = await databaseState();
   const ownerId = ownerState.owner.id;
@@ -74,6 +109,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
 
   const listenerSession = await freshBrowserSession.create();
   const listenerPage = listenerSession.page;
+  await listenerPage.goto(invitationPathFrom(invitationMessage));
+  await new InvitationPage(listenerPage).complete(LISTENER.password);
   await signIn(listenerPage, {
     username: LISTENER.username,
     password: LISTENER.password,
@@ -121,9 +158,13 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
 
   await page.goto('/admin/members');
   const listenerRow = page.getByRole('row').filter({ hasText: LISTENER.username });
-  await listenerRow.getByRole('link', { name: 'Edit' }).click();
-  await page.getByRole('button', { name: 'Resend email', exact: true }).click();
-  await expect(page.getByRole('status')).toContainText('If delivery is available');
+  await listenerRow.getByRole('button', {
+    name: `Actions for ${LISTENER.username}`,
+  }).click();
+  await listenerRow.getByRole('menuitem', { name: 'Edit' }).click();
+  await expect(
+    page.getByRole('button', { name: 'Resend email', exact: true }),
+  ).toHaveCount(0);
   await page.getByRole('button', { name: 'Send email', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('If delivery is available');
   const resetMessage = await waitForMessage(

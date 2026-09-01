@@ -27,6 +27,8 @@ ALBUM_HAVEN_PUBLIC_BASE_URL=http://127.0.0.1:5000
 ALBUM_HAVEN_AUTH_HMAC_SECRET=YOUR_PRIVATE_RANDOM_VALUE_OF_AT_LEAST_32_BYTES
 ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION=1
 ALBUM_HAVEN_WELCOME_EMAIL_ENABLED=false
+ALBUM_HAVEN_INVITATION_EMAIL_ENABLED=false
+ALBUM_HAVEN_INVITATION_TOKEN_SECONDS=259200
 ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED=false
 ```
 
@@ -94,6 +96,39 @@ set `ALBUM_HAVEN_PUBLIC_BASE_URL` to its exact external origin, and list any
 additional exact HTTPS origins in `ALBUM_HAVEN_TRUSTED_ORIGINS`. Do not expose
 the development HTTP listener directly to the internet.
 
+## Configure SMTP
+
+Album Haven works with a transactional email provider that exposes SMTP. Obtain
+an SMTP host, port, security mode, username, password, and verified sender from
+the provider. Use a provider-generated SMTP credential instead of your account
+password.
+
+For STARTTLS on port 587, add these values to `.env`:
+
+```text
+ALBUM_HAVEN_PUBLIC_BASE_URL=https://music.example.com
+ALBUM_HAVEN_INVITATION_EMAIL_ENABLED=true
+ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED=true
+ALBUM_HAVEN_SMTP_HOST=smtp.provider.example
+ALBUM_HAVEN_SMTP_PORT=587
+ALBUM_HAVEN_SMTP_SECURITY=starttls
+ALBUM_HAVEN_SMTP_FROM_ADDRESS=album-haven@music.example.com
+ALBUM_HAVEN_SMTP_FROM_NAME=Album Haven
+ALBUM_HAVEN_SMTP_USERNAME=YOUR_PROVIDER_SMTP_USERNAME
+ALBUM_HAVEN_SMTP_PASSWORD=YOUR_PROVIDER_SMTP_PASSWORD
+```
+
+Use `ALBUM_HAVEN_SMTP_SECURITY=tls` for a provider's implicit-TLS port, such as
+465. Production delivery rejects plaintext SMTP. Plaintext works only with an
+explicit loopback test server and
+`ALBUM_HAVEN_SMTP_ALLOW_PLAINTEXT_LOOPBACK=true`.
+
+Verify the sender address or domain with the provider before testing. Restart
+Album Haven after changing `.env`, create a pending test user with **Send
+invitation email** selected, and confirm the message arrives. Check the spam
+folder and the provider's delivery log if it does not. Keep SMTP credentials
+out of Git, terminal transcripts, screenshots, and support bundles.
+
 ## Create managed users
 
 Sign in as `Rendref`, open **Settings**, then **Users & access**, and choose
@@ -101,13 +136,13 @@ Sign in as `Rendref`, open **Settings**, then **Users & access**, and choose
 
 - A unique username.
 - A unique contact email.
-- A temporary password that meets the same password policy.
 - A role preset and any explicitly required capabilities.
 
-The account becomes active as soon as creation succeeds. The welcome email
-contains no password. Give the temporary password to the user through a
-separate trusted channel and have the user replace it from Profile after the
-first login.
+The new account appears as **Pending invitation** and has no credential. Use the
+row's three-dot menu to copy an invitation link or send it through configured
+SMTP. Each copy or send rotates the prior link. The current link expires after
+72 hours, works once, and lets the recipient choose a password that Album Haven
+never shows to the administrator.
 
 For local testing, use unique data such as
 `phase7_listener_20260831_01` and `phase7_listener_20260831_01@example.test`.
@@ -137,11 +172,16 @@ Use a private browser window for each identity so sessions do not overlap.
 
 ### 3. Managed-user creation and authorization
 
-1. As Rendref, create a listener with unique username, email, and password.
-2. Sign in as that listener in another private window.
-3. Confirm permitted library browsing works.
-4. Open `/admin/members` directly and confirm access is denied.
-5. Confirm the listener cannot see or invoke account-management controls.
+1. As Rendref, create a listener with a unique username and email.
+2. Confirm the roster shows **Pending invitation** and no password-reset action.
+3. Copy the invitation link twice. Confirm the first link shows the same generic
+   invalid-or-expired result used for expired, consumed, revoked, disabled, and
+   malformed invitations.
+4. Open the second link in another private window, choose a compliant password,
+   and sign in as the listener.
+5. Confirm the second link now shows the generic invalid-or-expired result.
+6. Confirm permitted library browsing works, `/admin/members` returns a denial,
+   and the listener cannot invoke account-management controls.
 
 ### 4. Administrator account lifecycle
 
@@ -163,7 +203,18 @@ Use a private browser window for each identity so sessions do not overlap.
 4. Confirm the link cannot be reused and every earlier session is revoked.
 5. Confirm no password, token, or reset link appears in application logs.
 
-### 6. Break-glass owner recovery
+### 6. Invitation delivery
+
+1. Configure SMTP as described above and set
+   `ALBUM_HAVEN_INVITATION_EMAIL_ENABLED=true`.
+2. Create a unique listener with **Send invitation email** selected.
+3. Confirm the captured or delivered message contains an invitation URL and no
+   password.
+4. Open the link in a private window, choose a password, and sign in.
+5. Resend an invitation for another pending test account. Confirm the older link
+   fails with the generic invalid-or-expired result and the new link works once.
+
+### 7. Break-glass owner recovery
 
 Perform this case last because it invalidates all Rendref sessions.
 
@@ -177,7 +228,7 @@ Perform this case last because it invalidates all Rendref sessions.
 7. Inspect the protected security audit and confirm one successful credential
    event with reason `break_glass_reset`, without password or token material.
 
-### 7. Responsive pages
+### 8. Responsive pages
 
 1. Check Login, Forgot password, Profile, Users & access, Add user, and Edit
    user at a desktop width.
@@ -197,3 +248,8 @@ npm run test:e2e:phase7:admin
 
 The pull-request workflow runs these commands in separate Windows jobs so each
 suite receives a fresh runner and independent process tree.
+
+The E2E launcher forces invitation mail to its loopback capture server and
+ignores inherited SMTP credentials. Running either suite cannot send mail to a
+real address. The admin-management suite remains a separate command and GitHub
+job from the auth-lifecycle suite.

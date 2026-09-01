@@ -621,7 +621,7 @@ def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
     )
 
 
-def test_clean_invitation_page_uses_transaction_bound_csrf_and_no_referrer(auth_asgi):
+def test_clean_invitation_page_uses_transaction_bound_csrf_and_same_origin_referrer(auth_asgi):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeInvitationLifecycle()
     app.state.invitation_lifecycle_service = lifecycle
@@ -641,8 +641,8 @@ def test_clean_invitation_page_uses_transaction_bound_csrf_and_no_referrer(auth_
     assert 'action="/accept-invitation"' in rendered
     assert f'value="{csrf}"' in rendered
     assert INVITATION_TRANSACTION not in rendered
-    assert dict(headers)["referrer-policy"] == "no-referrer"
-    assert '<meta name="referrer" content="no-referrer">' in rendered
+    assert dict(headers)["referrer-policy"] == "same-origin"
+    assert '<meta name="referrer" content="same-origin">' in rendered
 
 
 def test_invitation_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):

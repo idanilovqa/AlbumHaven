@@ -159,7 +159,8 @@ def _render_invitation(
         },
         status_code=status_code,
     )
-    return _invitation_headers(response)
+    response.headers["Referrer-Policy"] = "same-origin"
+    return _no_store(response)
 
 
 def _cookie_secure(request: Request, config: Mapping[str, object]) -> bool | None:

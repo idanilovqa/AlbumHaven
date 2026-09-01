@@ -53,6 +53,33 @@ export class RecoveryPage {
   }
 }
 
+export class InvitationPage {
+  constructor(page) {
+    this.page = page;
+    this.newPassword = page.getByLabel('New password', { exact: true });
+    this.confirmPassword = page.getByLabel('Confirm new password');
+    this.submit = page.getByRole('button', { name: 'Set password' });
+  }
+
+  async complete(password) {
+    await expect(
+      this.page.getByRole('heading', { name: 'Accept invitation' }),
+    ).toBeVisible();
+    await this.newPassword.fill(password);
+    await this.confirmPassword.fill(password);
+    const responsePromise = this.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/accept-invitation'
+    ));
+    await this.submit.click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    await expect(
+      this.page.getByRole('heading', { name: 'Your password has been created.' }),
+    ).toBeVisible();
+  }
+}
+
 export class MembersPage {
   constructor(page) {
     this.page = page;
@@ -70,10 +97,11 @@ export class MembersPage {
     await expect(this.page.getByRole('heading', { name: 'Add user' })).toBeVisible();
   }
 
-  async fillCreateUser({ username, email, password }) {
+  async fillCreateUser({ username, email, sendInvitation = false }) {
     await this.page.getByLabel('Username').fill(username);
     await this.page.getByLabel('Email address').fill(email);
-    await this.page.locator('input[name="password"]').fill(password);
+    await this.page.locator('input[name="send_invitation"]')
+      .setChecked(sendInvitation);
   }
 
   async submitCreateUser() {
@@ -84,6 +112,36 @@ export class MembersPage {
   async createUser(values) {
     await this.fillCreateUser(values);
     await this.submitCreateUser();
+  }
+
+  async copyInviteLink(username) {
+    const row = this.page.getByRole('row').filter({ hasText: username });
+    const actions = row.getByRole('button', { name: `Actions for ${username}` });
+    if (await actions.getAttribute('aria-expanded') !== 'true') {
+      await actions.click();
+    }
+    const responsePromise = this.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname.endsWith('/invitation/copy')
+    ));
+    await row.getByRole('menuitem', { name: 'Copy invite link' }).click();
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    const expectedUrl = String((await response.json()).invitation_url || '');
+    expect(expectedUrl).toMatch(/^https:\/\/[^/]+\/accept-invitation\?/);
+
+    const fallback = this.page.getByLabel('Invitation link', { exact: true });
+    let copiedUrl = '';
+    await expect.poll(async () => {
+      if (await fallback.isVisible()) {
+        copiedUrl = await fallback.inputValue();
+        return copiedUrl;
+      }
+      // parity-check: allow-read-only-measurement-evaluate -- read the clipboard result of the real menu action
+      copiedUrl = await this.page.evaluate(() => navigator.clipboard.readText());
+      return copiedUrl;
+    }).toBe(expectedUrl);
+    return copiedUrl;
   }
 
   async readAllowedActions() {

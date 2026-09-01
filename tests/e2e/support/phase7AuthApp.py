@@ -187,6 +187,11 @@ def _configure_environment(
     control_port: int,
 ) -> None:
     configure_isolated_environment(temp_root, runtime_database_url, smtp_port)
+    for inherited_credential in (
+        "ALBUM_HAVEN_SMTP_USERNAME",
+        "ALBUM_HAVEN_SMTP_PASSWORD",
+    ):
+        os.environ.pop(inherited_credential, None)
     os.environ.update(
         {
             "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
@@ -194,8 +199,10 @@ def _configure_environment(
             "ALBUM_HAVEN_PUBLIC_BASE_URL": f"https://127.0.0.1:{app_port}",
             "ALBUM_HAVEN_AUTH_HMAC_SECRET": "phase7-e2e-hmac-secret-0123456789abcdef0123456789abcdef",
             "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION": "1",
+            "ALBUM_HAVEN_INVITATION_TOKEN_SECONDS": "259200",
             "ALBUM_HAVEN_WELCOME_EMAIL_ENABLED": "true",
             "ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED": "true",
+            "ALBUM_HAVEN_INVITATION_EMAIL_ENABLED": "true",
             "ALBUM_HAVEN_SMTP_HOST": "127.0.0.1",
             "ALBUM_HAVEN_SMTP_PORT": str(smtp_port),
             "ALBUM_HAVEN_SMTP_SECURITY": "plaintext",
@@ -302,9 +309,33 @@ def _database_state(setup_database_url: str) -> dict[str, object]:
             from app.password_reset_tokens order by id
             """
         ).fetchall()
+        invitation_tokens = connection.execute(
+            """
+            select id, account_id, purpose, expires_at::text as expires_at,
+                   consumed_at is not null as consumed,
+                   revoked_at is not null as revoked
+            from app.account_invitation_tokens order by id
+            """
+        ).fetchall()
+        invitation_transactions = connection.execute(
+            """
+            select id, invitation_token_id, expires_at::text as expires_at,
+                   consumed_at is not null as consumed
+            from app.account_invitation_transactions order by id
+            """
+        ).fetchall()
+        credentials = connection.execute(
+            """
+            select account_id, hash_algorithm, hash_policy_version,
+                   credential_version, administrator_set,
+                   password_set_at::text as password_set_at
+            from app.account_credentials order by account_id
+            """
+        ).fetchall()
         outbox = connection.execute(
             """
-            select message_category, delivery_status, attempt_count
+            select account_id, reset_token_id, invitation_token_id,
+                   message_category, delivery_status, attempt_count
             from app.mail_outbox order by id
             """
         ).fetchall()
@@ -314,6 +345,9 @@ def _database_state(setup_database_url: str) -> dict[str, object]:
         "throttles": [dict(row) for row in throttles],
         "preauth": [dict(row) for row in preauth],
         "reset_tokens": [dict(row) for row in reset_tokens],
+        "invitation_tokens": [dict(row) for row in invitation_tokens],
+        "invitation_transactions": [dict(row) for row in invitation_transactions],
+        "credentials": [dict(row) for row in credentials],
         "outbox": [dict(row) for row in outbox],
     }
 

@@ -86,7 +86,8 @@ def build_mail_config(env: Mapping[str, str]) -> MailConfig:
 
     welcome_enabled = _boolean(env, "ALBUM_HAVEN_WELCOME_EMAIL_ENABLED")
     reset_enabled = _boolean(env, "ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED")
-    delivery_enabled = welcome_enabled or reset_enabled
+    invitation_enabled = _boolean(env, "ALBUM_HAVEN_INVITATION_EMAIL_ENABLED")
+    delivery_enabled = welcome_enabled or reset_enabled or invitation_enabled
 
     base_raw = env.get("ALBUM_HAVEN_PUBLIC_BASE_URL", "").strip()
     if delivery_enabled and not base_raw:
@@ -142,6 +143,7 @@ def build_mail_config(env: Mapping[str, str]) -> MailConfig:
         public_base_url=public_base_url,
         welcome_enabled=welcome_enabled,
         password_reset_enabled=reset_enabled,
+        invitation_enabled=invitation_enabled,
         host=host,
         port=_integer(env, "ALBUM_HAVEN_SMTP_PORT", 587, maximum=65_535),
         security=security,

@@ -110,6 +110,7 @@ def test_auth_defaults_normalize_bootstrap_identity_and_lock_security_policy(con
         "activity_write_seconds": 5 * 60,
     }
     assert config["reset_token_seconds"] == 30 * 60
+    assert config["invitation_token_seconds"] == 72 * 60 * 60
     assert config["audit_retention_seconds"] == 90 * 24 * 60 * 60
 
 
@@ -425,6 +426,8 @@ def test_auth_cookie_defaults_are_host_only_secure_and_http_only(contracts):
         ("ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS", str(8 * 24 * 60 * 60)),
         ("ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS", str(4 * 60)),
         ("ALBUM_HAVEN_RESET_TOKEN_SECONDS", str(31 * 60)),
+        ("ALBUM_HAVEN_INVITATION_TOKEN_SECONDS", str(60 * 60 - 1)),
+        ("ALBUM_HAVEN_INVITATION_TOKEN_SECONDS", str(7 * 24 * 60 * 60 + 1)),
         ("ALBUM_HAVEN_AUTH_AUDIT_RETENTION_DAYS", "89"),
     ],
 )
@@ -447,6 +450,7 @@ def test_auth_config_rejects_values_weaker_than_the_locked_policy(
             "ALBUM_HAVEN_SESSION_IDLE_SECONDS",
             "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
             "ALBUM_HAVEN_RESET_TOKEN_SECONDS",
+            "ALBUM_HAVEN_INVITATION_TOKEN_SECONDS",
         )
         for value in ("0", "-1")
     ],
@@ -629,6 +633,34 @@ def test_mail_config_accepts_encrypted_smtp_with_optional_credentials(
     assert config["command_timeout_seconds"] == 10
 
 
+def test_mail_config_exposes_disabled_invitation_delivery_by_default(contracts):
+    _, mail_config = contracts
+
+    config = mail_config.build_mail_config(_mail_env())
+
+    assert config["invitation_enabled"] is False
+
+
+def test_mail_config_enables_invitation_delivery_with_complete_smtp_config(contracts):
+    _, mail_config = contracts
+
+    config = mail_config.build_mail_config(
+        _mail_env(ALBUM_HAVEN_INVITATION_EMAIL_ENABLED="true")
+    )
+
+    assert config["invitation_enabled"] is True
+
+
+@pytest.mark.parametrize("value", ["enabled", "truthy", "2", ""])
+def test_mail_config_rejects_invalid_invitation_delivery_boolean(contracts, value):
+    _, mail_config = contracts
+
+    with pytest.raises(ValueError, match="ALBUM_HAVEN_INVITATION_EMAIL_ENABLED"):
+        mail_config.build_mail_config(
+            _mail_env(ALBUM_HAVEN_INVITATION_EMAIL_ENABLED=value)
+        )
+
+
 @pytest.mark.parametrize(
     "host",
     [
@@ -777,6 +809,25 @@ def test_enabled_delivery_requires_complete_public_smtp_configuration(
         ALBUM_HAVEN_WELCOME_EMAIL_ENABLED="true",
         ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED="true",
     )
+    env.pop(missing_key)
+
+    with pytest.raises(ValueError, match=missing_key):
+        mail_config.build_mail_config(env)
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    [
+        "ALBUM_HAVEN_PUBLIC_BASE_URL",
+        "ALBUM_HAVEN_SMTP_HOST",
+        "ALBUM_HAVEN_SMTP_FROM_ADDRESS",
+    ],
+)
+def test_enabled_invitation_delivery_requires_complete_public_smtp_configuration(
+    contracts, missing_key
+):
+    _, mail_config = contracts
+    env = _mail_env(ALBUM_HAVEN_INVITATION_EMAIL_ENABLED="true")
     env.pop(missing_key)
 
     with pytest.raises(ValueError, match=missing_key):

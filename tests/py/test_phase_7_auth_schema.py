@@ -13,6 +13,12 @@ BASELINE_PATH = (
 MIGRATION_PATH = (
     REPO_ROOT / "migrations" / "postgres" / "0046_add_local_auth_lifecycle.sql"
 )
+INVITATION_MIGRATION_PATH = (
+    REPO_ROOT
+    / "migrations"
+    / "postgres"
+    / "0052_add_managed_account_invitations.sql"
+)
 
 
 def _normalized_sql(sql: str) -> str:
@@ -72,11 +78,161 @@ def auth_schema_sql() -> str:
     return MIGRATION_PATH.read_text(encoding="utf-8")
 
 
+@pytest.fixture
+def invitation_schema_sql() -> str:
+    if not INVITATION_MIGRATION_PATH.exists():
+        pytest.skip(
+            "managed-account invitation migration is not present yet; the presence "
+            "test captures the TDD red state"
+        )
+    return INVITATION_MIGRATION_PATH.read_text(encoding="utf-8")
+
+
 def test_phase_7_auth_schema_migration_exists() -> None:
     assert MIGRATION_PATH.exists(), (
         "missing Phase 7 auth migration: "
         "migrations/postgres/0046_add_local_auth_lifecycle.sql"
     )
+
+
+def test_managed_account_invitation_schema_migration_exists() -> None:
+    assert INVITATION_MIGRATION_PATH.exists(), (
+        "missing managed-account invitation migration: "
+        "migrations/postgres/0052_add_managed_account_invitations.sql"
+    )
+
+
+def test_invitation_tokens_store_only_purpose_bound_hashes_and_one_active_token(
+    invitation_schema_sql: str,
+) -> None:
+    table = _table_definition(
+        invitation_schema_sql, "app.account_invitation_tokens"
+    )
+    assert table
+    assert {
+        "account_id",
+        "token_hash",
+        "purpose",
+        "created_at",
+        "expires_at",
+        "consumed_at",
+        "revoked_at",
+        "request_ref",
+    }.issubset(set(table.split()))
+    assert "references app.accounts(id) on delete cascade" in table
+    assert "octet_length(token_hash) = 32" in table
+    assert "purpose = 'account_invitation'" in table
+    assert "expires_at > created_at" in table
+    assert not re.search(r"\braw_token\b|\btoken_value\b|\binvitation_url\b", table)
+
+    indexes = _index_statements(invitation_schema_sql)
+    assert any(
+        "unique index" in statement
+        and " on app.account_invitation_tokens " in statement
+        and "purpose" in statement
+        and "token_hash" in statement
+        for statement in indexes
+    )
+    assert any(
+        "unique index" in statement
+        and "account_invitation_tokens_active_account_idx" in statement
+        and "account_id" in statement
+        and "consumed_at is null" in statement
+        and "revoked_at is null" in statement
+        for statement in indexes
+    )
+
+
+def test_invitation_transactions_are_hash_only_expiring_single_use_exchanges(
+    invitation_schema_sql: str,
+) -> None:
+    table = _table_definition(
+        invitation_schema_sql, "app.account_invitation_transactions"
+    )
+    assert table
+    assert "invitation_token_id bigint not null unique" in table
+    assert "references app.account_invitation_tokens(id) on delete cascade" in table
+    assert "transaction_hash bytea not null unique" in table
+    assert "octet_length(transaction_hash) = 32" in table
+    assert "expires_at > created_at" in table
+    assert "consumed_at" in table
+    assert not re.search(r"\braw_token\b|\btoken_value\b|\binvitation_url\b", table)
+
+    indexes = _index_statements(invitation_schema_sql)
+    assert any(
+        "account_invitation_transactions_token_idx" in statement
+        and "invitation_token_id" in statement
+        for statement in indexes
+    )
+    assert any(
+        "account_invitation_transactions_active_expiry_idx" in statement
+        and "expires_at" in statement
+        and "consumed_at is null" in statement
+        for statement in indexes
+    )
+
+
+def test_invitation_migration_links_outbox_and_preserves_bounded_categories(
+    invitation_schema_sql: str,
+) -> None:
+    sql = _normalized_sql(invitation_schema_sql)
+    assert "alter table app.mail_outbox" in sql
+    assert "invitation_token_id bigint" in sql
+    assert "references app.account_invitation_tokens(id) on delete set null" in sql
+    assert any(
+        "mail_outbox_invitation_token_idx" in statement
+        and " on app.mail_outbox " in statement
+        and "invitation_token_id" in statement
+        and "where invitation_token_id is not null" in statement
+        for statement in _index_statements(invitation_schema_sql)
+    )
+    assert (
+        "message_category in ('welcome', 'password_reset', 'account_invitation')"
+        in sql
+    )
+
+
+def test_invitation_tables_have_secret_bounded_runtime_grants(
+    invitation_schema_sql: str,
+) -> None:
+    for table in (
+        "app.account_invitation_tokens",
+        "app.account_invitation_transactions",
+    ):
+        assert _granted_privileges(
+            invitation_schema_sql, "album_haven_readonly", table
+        ) == set()
+
+    assert _granted_privileges(
+        invitation_schema_sql, "album_haven_app", "app.account_invitation_tokens"
+    ) == {"select", "insert", "update"}
+    assert _granted_privileges(
+        invitation_schema_sql,
+        "album_haven_app",
+        "app.account_invitation_transactions",
+    ) == {"select", "insert", "update", "delete"}
+    assert _granted_privileges(
+        invitation_schema_sql,
+        "album_haven_migrator",
+        "app.account_invitation_tokens",
+    ) == {"all privileges"}
+    assert _granted_privileges(
+        invitation_schema_sql,
+        "album_haven_migrator",
+        "app.account_invitation_transactions",
+    ) == {"all privileges"}
+
+    sql = _normalized_sql(invitation_schema_sql)
+    for sequence in (
+        "app.account_invitation_tokens_id_seq",
+        "app.account_invitation_transactions_id_seq",
+    ):
+        assert f"revoke all on sequence {sequence} from album_haven_readonly" in sql
+        assert f"grant usage, select on sequence {sequence} to album_haven_app" in sql
+        assert (
+            f"grant all privileges on sequence {sequence} to album_haven_migrator"
+            in sql
+        )
 
 
 def test_accounts_gain_normalized_identity_contact_and_disabled_fields(

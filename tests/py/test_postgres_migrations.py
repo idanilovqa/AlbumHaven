@@ -408,7 +408,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-13:] == [
+    assert migration_names[-14:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -422,6 +422,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0049_enforce_single_use_password_reset_exchange.sql",
         "0050_add_security_audit_cleanup_index.sql",
         "0051_add_auth_throttle_cleanup_index.sql",
+        "0052_add_managed_account_invitations.sql",
     ]
 
 

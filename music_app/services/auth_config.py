@@ -331,6 +331,14 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         maximum=1_800,
     )
 
+    invitation_token_seconds = _integer(
+        env,
+        "ALBUM_HAVEN_INVITATION_TOKEN_SECONDS",
+        259_200,
+        minimum=3_600,
+        maximum=604_800,
+    )
+
     return AuthConfig({
         "bootstrap_username_display": username,
         "bootstrap_username_normalized": "rendref",
@@ -356,6 +364,7 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
         "password": password,
         "session": session,
         "reset_token_seconds": reset_token_seconds,
+        "invitation_token_seconds": invitation_token_seconds,
         "audit_retention_seconds": _integer(
             env,
             "ALBUM_HAVEN_AUTH_AUDIT_RETENTION_DAYS",

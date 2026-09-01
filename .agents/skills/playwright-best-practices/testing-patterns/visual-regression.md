@@ -119,7 +119,7 @@ test('page with JS animations', async ({ page }) => {
 
   const heroBanner = page.getByTestId('hero-banner');
   await heroBanner.waitFor({ state: 'visible' });
-  
+
   // Wait for animation to complete by checking for stable state
   await expect(heroBanner).not.toHaveClass(/animating/);
 

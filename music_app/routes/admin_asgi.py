@@ -18,7 +18,6 @@ from music_app.services.admin_account_creation_postgres import (
     ManagedAccountIdentityConflict,
     PostgresAdminAccountRepository,
 )
-from music_app.services.auth_passwords import PasswordPolicyError
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
 from music_app.services.admin_members_postgres import PostgresAdminMembersService
@@ -44,7 +43,7 @@ _FALLBACK_TEMPLATES = Jinja2Templates(
 )
 _MAX_BODY_BYTES = 16_384
 _FIELDS = frozenset(
-    {"username", "contact_email", "password", "capability_keys"}
+    {"username", "contact_email", "capability_keys", "send_invitation"}
 )
 
 _CAPABILITY_GROUPS = (
@@ -299,8 +298,9 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             actor=request.state.current_actor,
             username=payload["username"],
             contact_email=payload["contact_email"],
-            password=payload["password"],
             capability_keys=payload["capability_keys"],
+            send_invitation=payload["send_invitation"],
+            request_ref=uuid4().hex,
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -309,23 +309,24 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             {"detail": "Username or contact email is already in use."},
             status_code=409,
         )
-    except (PasswordPolicyError, ValueError):
+    except ValueError:
         return _invalid()
     except Exception:
         return JSONResponse(
             {"detail": "Account creation is temporarily unavailable."},
             status_code=503,
         )
-    background_tasks.add_task(
-        _deliver_pending_welcome,
-        request.app,
-        result.welcome_outbox_id,
-    )
+    if result.invitation_delivery is not None:
+        background_tasks.add_task(
+            _deliver_pending_invitation,
+            request.app,
+            result.invitation_delivery,
+        )
     return JSONResponse(
         {
             "account_id": result.account_id,
-            "welcome_outbox_id": result.welcome_outbox_id,
-            "active": True,
+            "pending": True,
+            "invitation_queued": result.invitation_delivery is not None,
         },
         status_code=201,
         background=background_tasks,
@@ -350,7 +351,9 @@ async def _json_payload(request: Request) -> dict[str, object] | None:
         return None
     if not isinstance(payload, dict) or set(payload) != _FIELDS:
         return None
-    if not all(isinstance(payload[key], str) for key in ("username", "contact_email", "password")):
+    if not all(isinstance(payload[key], str) for key in ("username", "contact_email")):
+        return None
+    if not isinstance(payload["send_invitation"], bool):
         return None
     capabilities = payload["capability_keys"]
     if not isinstance(capabilities, list) or any(
@@ -570,6 +573,9 @@ def _mail_action_service(request: Request):
 
 
 def _service(request: Request):
+    injected = getattr(request.app.state, "admin_account_creation", None)
+    if injected is not None:
+        return injected
     existing = getattr(request.app.state, "admin_account_creation_service", None)
     if existing is not None:
         return existing
@@ -582,21 +588,12 @@ def _service(request: Request):
         if existing is not None:
             return existing
         config = request.app.state.auth_policy_config
-        checker = getattr(request.app.state, "breached_password_checker", None)
-        if checker is None:
-            from music_app.services.auth_breached_passwords import (
-                HibpRangePasswordChecker,
-            )
-
-            checker = HibpRangePasswordChecker()
-            request.app.state.breached_password_checker = checker
-        if not callable(checker):
-            raise RuntimeError("Password screening is unavailable.")
+        repository_config = getattr(
+            request.app.state, "repository_config", config
+        )
         service = AdminAccountCreationService(
-            repository=PostgresAdminAccountRepository(config),
-            breached_checker=checker,
-            argon2=config["argon2"],
-            policy_version=config["argon2_policy_version"],
+            repository=PostgresAdminAccountRepository(repository_config),
+            invitation_token_seconds=config["invitation_token_seconds"],
         )
         request.app.state.admin_account_creation_service = service
         return service
@@ -634,6 +631,20 @@ async def _deliver_pending_welcome(app, outbox_id: int) -> None:
         )
     except Exception:
         # Account activation and the committed retryable outbox row are non-gating.
+        return
+
+
+async def _deliver_pending_invitation(app, delivery) -> None:
+    try:
+        callback = getattr(app.state, "invitation_delivery", None)
+        if not callable(callback):
+            return
+        result = callback(delivery)
+        if isawaitable(result):
+            await result
+    except Exception:
+        # The committed token and outbox row remain authoritative; delivery is
+        # deliberately non-gating and can be retried through the admin flow.
         return
 
 

@@ -1,4 +1,8 @@
-from music_app.services.auth_passwords import PasswordCredential
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
 
@@ -23,37 +27,35 @@ class Repository:
         return __import__(
             "music_app.services.admin_account_creation",
             fromlist=["CreatedAccount"],
-        ).CreatedAccount(account_id=41, welcome_outbox_id=51)
+        ).CreatedAccount(account_id=41, invitation_delivery=None)
 
 
-def test_admin_create_normalizes_identity_hashes_before_repository_and_preserves_plus_tag():
+def test_admin_create_normalizes_identity_and_creates_pending_account_without_credential():
     from music_app.services.admin_account_creation import AdminAccountCreationService
 
     repository = Repository()
-    hashes = []
-
-    def password_hasher(raw, **kwargs):
-        hashes.append((raw, kwargs))
-        return PasswordCredential("$argon2id$redacted", 3)
-
+    issued = issue_opaque_token(random_bytes=lambda count: b"x" * count)
+    issued_calls = []
+    now = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
     service = AdminAccountCreationService(
         repository=repository,
-        password_hasher=password_hasher,
-        breached_checker=lambda _password: False,
-        argon2={"memory_cost": 65536, "time_cost": 3, "parallelism": 1, "salt_len": 16, "hash_len": 32},
-        policy_version=3,
+        invitation_token_seconds=259_200,
+        token_issuer=lambda: issued_calls.append(True) or issued,
+        clock=lambda: now,
     )
 
     result = service.create_account(
         actor=_owner(),
         username="  Test.User-1  ",
         contact_email="  Test.User+1@EXAMPLE.COM  ",
-        password="a reusable private passphrase",
         capability_keys=("library.browse.read", "library.media.read"),
+        send_invitation=False,
+        request_ref="a" * 32,
     )
 
     assert result.account_id == 41
-    assert hashes[0][0] == "a reusable private passphrase"
+    assert result.invitation_delivery is None
+    assert issued_calls == []
     call = repository.calls[0]
     assert call["actor_account_id"] == 7
     assert call["library_id"] == 23
@@ -61,30 +63,57 @@ def test_admin_create_normalizes_identity_hashes_before_repository_and_preserves
     assert call["username_normalized"] == "test.user-1"
     assert call["contact_email"] == "Test.User+1@EXAMPLE.COM"
     assert call["contact_email_normalized"] == "Test.User+1@example.com"
-    assert call["credential"].encoded_hash == "$argon2id$redacted"
     assert call["capability_keys"] == ("library.browse.read", "library.media.read")
-    assert "reusable private" not in repr(call)
+    assert call["invitation"] is None
+    assert call["invitation_expires_at"] is None
+    assert call["created_at"] == now
+    assert call["request_ref"] == "a" * 32
+    assert "password" not in call
+    assert "credential" not in call
+
+
+def test_admin_create_issues_invitation_with_caller_owned_timestamp_and_request_ref():
+    from music_app.services.admin_account_creation import AdminAccountCreationService
+
+    repository = Repository()
+    issued = issue_opaque_token(random_bytes=lambda count: b"x" * count)
+    now = datetime(2026, 9, 1, 12, 30, tzinfo=timezone.utc)
+    service = AdminAccountCreationService(
+        repository=repository,
+        invitation_token_seconds=259_200,
+        token_issuer=lambda: issued,
+        clock=lambda: now,
+    )
+    service.create_account(
+        actor=_owner(), username="member.one",
+        contact_email="member+one@example.test",
+        capability_keys=("library.browse.read",), send_invitation=True,
+        request_ref="b" * 32,
+    )
+    call = repository.calls[0]
+    assert call["invitation"] is issued
+    assert call["created_at"] == now
+    assert call["invitation_expires_at"] == now + timedelta(seconds=259_200)
+    assert call["request_ref"] == "b" * 32
 
 
 def test_account_creation_requires_bootstrap_owner_current_library_and_allowlisted_grants():
-    import pytest
-
     from music_app.services.admin_account_creation import AdminAccountCreationService
 
     repository = Repository()
     service = AdminAccountCreationService(
         repository=repository,
-        password_hasher=lambda *_args, **_kwargs: PasswordCredential("hash", 1),
-        breached_checker=lambda _password: False,
-        argon2={},
-        policy_version=1,
+        invitation_token_seconds=259_200,
+        token_issuer=lambda: issue_opaque_token(random_bytes=lambda count: b"x" * count),
+        clock=lambda: datetime(2026, 9, 1, tzinfo=timezone.utc),
     )
     ordinary = CurrentActor(state=ActorState.ACTIVE, account_id=9, session_id=12)
     base = {
         "username": "member.one",
         "contact_email": "member+one@example.test",
-        "password": "long enough private password",
         "capability_keys": ("library.browse.read",),
+        "send_invitation": False,
+        "request_ref": "c" * 32,
     }
 
     with pytest.raises(PermissionError):
@@ -93,4 +122,6 @@ def test_account_creation_requires_bootstrap_owner_current_library_and_allowlist
         service.create_account(
             actor=_owner(), **{**base, "capability_keys": ("system.admin",)}
         )
+    with pytest.raises(ValueError, match="invitation choice"):
+        service.create_account(actor=_owner(), **{**base, "send_invitation": "false"})
     assert repository.calls == []

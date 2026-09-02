@@ -105,8 +105,10 @@
 
 - [x] Record the component, action visibility, clients, approved artifact, and verification evidence in the private registries.
 - [x] Run focused verification and `git diff --check`.
-- [ ] Review the scoped diff, commit public and private repository changes separately, and push the existing PR branch.
+- [x] Review the scoped diff, commit public and private repository changes separately, and push the existing PR branch.
 - [ ] Monitor PR checks and review output without merging.
+
+Public implementation commit `c104670b15654f79bbbfe7fdb84930eb298f8cbb` is on [PR #1](https://github.com/idanilovqa/AlbumHaven/pull/1). Private artifact and test-case commit `42f5908873402c1972e7acb1118c4bae5a996d58` remains local. The `album-haven-pr-1-checks` thread heartbeat checks hosted E2E and review results every ten minutes and pauses after terminal results. The PR remains unmerged for owner testing; monitoring stays open until those results arrive.
 
 ## E2E-discovered policy regression
 

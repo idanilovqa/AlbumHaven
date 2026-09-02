@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from fastapi import FastAPI
 
 from music_app.services.current_actor import (
@@ -178,3 +180,20 @@ def test_account_management_grants_are_scoped_to_the_current_library():
 
     assert status == 200
     assert body == b'{"ok":true,"reason":"explicit_grant"}'
+
+
+@pytest.mark.parametrize("action", ["app.shell.read", "app.bootstrap.read", "app.status.read"])
+def test_shell_read_aliases_resolve_the_current_library_scope(action):
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=9,
+        session_id=12,
+        current_library_id=23,
+        library_relationships=(LibraryRelationship(23, "member", False),),
+        capability_grants=(CapabilityGrant("library.browse.read", "library", 23),),
+    )
+    app, _ = _app(actor, action=action)
+
+    status, _body = _request(app)
+
+    assert status == 200

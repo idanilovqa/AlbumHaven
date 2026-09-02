@@ -9,6 +9,9 @@ from music_app.services.current_actor import ActorState, CapabilityGrant
 from music_app.services.policy import PolicyContext
 
 
+LIBRARY_SHELL_ACTIONS = frozenset({"app.shell.read", "app.bootstrap.read", "app.status.read"})
+
+
 @dataclass(frozen=True, slots=True)
 class PolicyEvaluationConstraints:
     deployment_allowed: bool = True
@@ -94,6 +97,8 @@ class PolicyEvaluator:
             return False, "request_origin_denied"
         if actor.is_bootstrap_owner:
             return True, "bootstrap_owner"
+        if context.action == "auth.session.logout" and actor.session_id is not None:
+            return True, "session_self_service"
         if (
             context.action.startswith("account.self.")
             and actor.account_id is not None
@@ -111,7 +116,12 @@ class PolicyEvaluator:
 
 
 def _grant_matches(grant: CapabilityGrant, context: PolicyContext) -> bool:
-    if not isinstance(grant, CapabilityGrant) or grant.capability_key != context.action:
+    required_capability = (
+        "library.browse.read" if context.action in LIBRARY_SHELL_ACTIONS else context.action
+    )
+    if not isinstance(grant, CapabilityGrant) or grant.capability_key not in {
+        context.action, required_capability
+    }:
         return False
     if grant.scope_kind == "global":
         return grant.scope_id is None

@@ -24,6 +24,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/core-state-and-helpers.js',
   'js/runtime/player-streaming-engine.js',
   'js/runtime/shell-navigation-drawer.js',
+  'js/runtime/account-menu.js',
   'js/runtime/bootstrap-refocus-helpers.js',
   'js/runtime/client-preferences-helpers.js',
   'js/runtime/gallery-display-preference-helpers.js',

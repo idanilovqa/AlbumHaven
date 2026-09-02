@@ -34,15 +34,14 @@ select,
 .account-brand img { width: 62px; height: 58px; object-fit: contain; }
 .account-nav h2 { margin: 8px 0 25px; font-size: 18px; }
 .account-nav nav { display: grid; gap: 7px; }
-.account-logout { margin-top: 18px; }
-.account-logout button { width: 100%; min-height: 40px; padding: 0 13px; border: 1px solid #30475e; border-radius: 9px; color: #a4b1c2; background: transparent; font-weight: 700; cursor: pointer; }
-.account-logout button:hover, .account-logout button:focus-visible { color: #fff; border-color: #4b6885; outline: none; }
+.account-logout { margin: 0; }
+.account-logout button { width: 100%; border: 0; background: transparent; font-family: inherit; text-align: left; cursor: pointer; }
 .account-nav-item {
   min-height: 44px; padding: 0 13px; display: flex; align-items: center;
   border-radius: 10px; color: #8796aa; font-size: 14px; text-decoration: none;
 }
 .account-nav-item.is-active { color: #fff; background: #17283c; box-shadow: inset 3px 0 var(--green); }
-.account-nav-item[href]:hover, .account-nav-item[href]:focus-visible { color: #fff; background: #132438; outline: none; }
+.account-nav-item[href]:hover, .account-nav-item[href]:focus-visible, button.account-nav-item:hover, button.account-nav-item:focus-visible { color: #fff; background: #132438; outline: none; }
 
 .account-main { width: min(910px, 100%); padding: 45px 64px; }
 .account-header { display: flex; align-items: center; gap: 16px; padding-bottom: 26px; border-bottom: 1px solid var(--line); }

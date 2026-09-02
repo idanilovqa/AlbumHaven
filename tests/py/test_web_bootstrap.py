@@ -201,7 +201,12 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
             return context
 
     asgi_app.state.templates = CapturingTemplates()
-    request = SimpleNamespace(app=asgi_app)
+    request = SimpleNamespace(
+        app=asgi_app,
+        cookies={"__Host-album_haven_session": "s" * 43},
+        state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
+        client=SimpleNamespace(host="testserver"),
+    )
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 

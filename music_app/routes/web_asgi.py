@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from starlette.background import BackgroundTask
 
 from music_app.services.app_logging import log_app_event
+from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
@@ -37,6 +38,7 @@ from music_app.services.library_roots import (
 )
 from music_app.services.loops import resolve_loop_media_path, resolve_loop_preview_path
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
+from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
@@ -199,6 +201,11 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             "request": request,
             "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
             "runtime_asset_version": request.app.state.runtime_asset_version,
+            "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+            "account_menu_csrf_token": issue_session_csrf(
+                request.cookies.get("__Host-album_haven_session"),
+                request.app.state.auth_policy_config,
+            ),
             **context,
         },
     )

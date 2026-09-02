@@ -36,7 +36,11 @@ The dedicated Phase 7 Admin Management suite adds two production-path cases:
 1. An owner opens the Settings menu, opens Settings, returns to the shell, opens Admin Panel, and lands on Users & access with Users active. The test checks the three menu actions, rounded hover styling, and absence of an extra Admin top-bar control.
 2. A limited member opens the same menu, sees Settings and Sign Out but no Admin Panel, then signs out and reaches Login. A direct `/admin/members` request remains denied.
 
-The suite uses isolated Postgres and the existing production ASGI application. Existing functional suites continue to use their Settings helpers, updated to select Settings after opening the dropdown. Proposed case IDs are `FTC-PERMISSIONS-010` and `FTC-PERMISSIONS-011`.
+The suite uses isolated Postgres and the existing production ASGI application. Existing functional suites continue to use their Settings helpers, updated to select Settings after opening the dropdown. Case IDs are `FTC-PERMISSIONS-011` and `FTC-PERMISSIONS-012`; `010` was already allocated to a post-migration capability case.
+
+## E2E-discovered policy correction
+
+The limited-member case exposed missing shell and logout mappings: the normal Listener browse grant could not satisfy `app.shell.read`, and logout required a grant absent from the UI. The shell, bootstrap, and status read actions now accept the existing `library.browse.read` grant in the current library. Logout is an active-session self-service action; its same-origin and session-bound CSRF validation is unchanged. Wrong-library, missing-grant, inactive, anonymous, constrained, and administrative-denial tests remain in force.
 
 ## Client support
 
@@ -45,4 +49,3 @@ The suite uses isolated Postgres and the existing production ASGI application. E
 - Android: unsupported for this DOM component.
 - TV: unsupported for this DOM component.
 - Apple: unsupported for this DOM component.
-

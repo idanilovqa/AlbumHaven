@@ -76,6 +76,31 @@ def test_system_admin_is_never_available_as_an_ordinary_grant():
     assert result.decision.reason_code == "bootstrap_only"
 
 
+@pytest.mark.parametrize("action", ["app.shell.read", "app.bootstrap.read", "app.status.read"])
+def test_library_browse_grant_allows_only_same_library_shell_reads(action):
+    actor = _actor(grants=(CapabilityGrant("library.browse.read", "library", 23),))
+    evaluator = PolicyEvaluator()
+
+    assert evaluator.evaluate(_context(actor, action, library_id=23)).decision.allowed
+    assert not evaluator.evaluate(_context(actor, action, library_id=24)).decision.allowed
+    assert not evaluator.evaluate(_context(actor, action, library_id=None)).decision.allowed
+    assert not evaluator.evaluate(_context(actor, "accounts.read")).decision.allowed
+
+
+def test_active_session_can_log_itself_out_without_an_administrator_grant():
+    evaluator = PolicyEvaluator()
+    result = evaluator.evaluate(_context(_actor(), "auth.session.logout"))
+    assert result.decision.allowed
+    assert result.decision.reason_code == "session_self_service"
+    assert not evaluator.evaluate(_context(_actor(), "accounts.sessions.revoke")).decision.allowed
+    assert not evaluator.evaluate(_context(CurrentActor.anonymous(), "auth.session.logout")).decision.allowed
+    assert not evaluator.evaluate(_context(_actor(state=ActorState.INACTIVE), "auth.session.logout")).decision.allowed
+    assert not evaluator.evaluate(
+        _context(_actor(), "auth.session.logout"),
+        constraints=PolicyEvaluationConstraints(request_origin_allowed=False),
+    ).decision.allowed
+
+
 def test_active_actor_has_only_their_own_inherent_profile_actions():
     actor = _actor()
     own = PolicyContext.build(

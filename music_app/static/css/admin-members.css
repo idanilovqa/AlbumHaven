@@ -36,8 +36,7 @@ select,
 .settings-nav-item span { width: 22px; color: #8498b0; font-size: 20px; text-align: center; }
 .settings-nav-item.is-active { color: #fff; background: #172d43; box-shadow: inset 3px 0 var(--green); }
 .settings-nav-item.is-future { color: #718399; }
-.settings-back { margin: 30px 6px 0; padding: 25px 7px 0; display: flex; gap: 13px; border-top: 1px solid var(--line); color: #a4b1c2; font-size: 14px; text-decoration: none; }
-.settings-back:hover, .settings-back:focus-visible, .detail-back:hover, .detail-back:focus-visible, .member-edit:hover, .member-edit:focus-visible { color: #fff; outline: none; }
+.detail-back:hover, .detail-back:focus-visible, .member-edit:hover, .member-edit:focus-visible { color: #fff; outline: none; }
 
 .settings-main { min-width: 0; padding: 34px 45px 60px; }
 .members-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
@@ -134,7 +133,6 @@ select,
   .settings-brand img { width: 48px; height: 44px; }
   .settings-nav h2 { display: inline; vertical-align: 14px; }
   .settings-nav nav { margin-top: 14px; grid-template-columns: 1fr 1fr; }
-  .settings-back { margin-top: 14px; padding-top: 14px; }
   .settings-main { padding: 28px 21px 45px; }
   .members-table { overflow-x: visible; border: 0; }
   .members-row { min-width: 0; padding: 14px 0; grid-template-columns: 1fr 1fr; align-items: start; gap: 12px 18px; }

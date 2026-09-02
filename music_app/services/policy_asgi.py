@@ -12,6 +12,7 @@ from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.allowed_actions import AllowedActions
 from music_app.services.policy import PolicyContext, RequestOrigin, ResourceScope
 from music_app.services.policy_evaluator import (
+    LIBRARY_SHELL_ACTIONS,
     PolicyEvaluationConstraints,
     PolicyEvaluationResult,
     PolicyEvaluator,
@@ -121,6 +122,7 @@ def _library_scope(actor, action: str, explicit_library_id: int | None) -> int |
         return explicit_library_id
     if not (
         action.startswith("library.")
+        or action in LIBRARY_SHELL_ACTIONS
         or action.startswith("integration.")
         or action.startswith("accounts.")
     ):

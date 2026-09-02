@@ -1,0 +1,50 @@
+.account-menu-component { position: relative; }
+.account-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 120;
+  width: 224px;
+  max-width: calc(100vw - 24px);
+  padding: 8px;
+  border: 1px solid #2b4157;
+  border-radius: 13px;
+  background: #0d1b2b;
+  box-shadow: 0 14px 36px #0008;
+  caret-color: transparent;
+}
+.account-menu[hidden] { display: none; }
+.account-menu-form { margin: 0; }
+.account-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  color: #e7edf5;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.account-menu-icon { width: 22px; color: #a4b6ca; font-size: 20px; text-align: center; }
+.account-menu-item:not(:disabled):not([aria-disabled="true"]):hover,
+.account-menu-item:not(:disabled):not([aria-disabled="true"]):focus-visible {
+  color: #fff;
+  background: #172d43;
+  outline: none;
+}
+.account-menu-item:focus-visible { box-shadow: inset 0 0 0 2px #72b8ed; }
+.account-menu-item:disabled,
+.account-menu-item[aria-disabled="true"] {
+  color: #657588;
+  background: transparent;
+  cursor: not-allowed;
+}
+.account-menu-item:disabled .account-menu-icon,
+.account-menu-item[aria-disabled="true"] .account-menu-icon { color: #536276; }

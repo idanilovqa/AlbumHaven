@@ -55,6 +55,7 @@ const expectedRuntimeOrder = [
   'core-state-and-helpers.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
+  'account-menu.js',
   'bootstrap-refocus-helpers.js',
   'client-preferences-helpers.js',
   'gallery-display-preference-helpers.js',

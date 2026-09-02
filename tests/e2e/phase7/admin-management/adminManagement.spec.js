@@ -1,4 +1,6 @@
 import { InvitationPage, MembersPage } from '../poms/authPages.js';
+import { SettingsModalAppBar } from '../../poms/settingsModalAppBar.js';
+import { SettingsModalAppBarActions } from '../../actions/settingsModalAppBarActions.js';
 import { invitationPathFrom, OWNER, signIn } from '../actions/authActions.js';
 import {
   databaseState,
@@ -17,6 +19,69 @@ const SMTP_LISTENER = Object.freeze({
   username: 'smtp.listener',
   email: 'smtp.listener+phase7@example.test',
   password: 'Amber Quasar 82! Frosted Pine',
+});
+
+const MENU_LISTENER = Object.freeze({
+  username: 'menu.listener',
+  email: 'menu.listener+phase7@example.test',
+  password: 'Copper Orchard 68! Silent Moon',
+});
+
+test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu', async ({ page }) => {
+  await signIn(page);
+  const menu = new SettingsModalAppBar(page);
+  const actions = new SettingsModalAppBarActions(menu);
+  await expect(menu.toolbarAdminLink).toBeHidden();
+  await menu.settingsButton.click();
+  await expect(menu.accountMenu).toBeVisible();
+  await expect(menu.accountMenu.getByRole('menuitem')).toHaveCount(3);
+  await expect(menu.accountMenu.getByRole('menuitem').nth(0)).toHaveAccessibleName('Settings');
+  await expect(menu.accountMenu.getByRole('menuitem').nth(1)).toHaveAccessibleName('Admin Panel');
+  await expect(menu.accountMenu.getByRole('menuitem').nth(2)).toHaveAccessibleName('Sign Out');
+  await expect(menu.settingsButton).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu.settingsMenuItem).toBeFocused();
+  await menu.adminPanelMenuItem.hover();
+  await expect(menu.adminPanelMenuItem).toHaveCSS('border-radius', '9px');
+  await expect(menu.adminPanelMenuItem).toHaveCSS('background-color', 'rgb(23, 45, 67)');
+  await menu.settingsMenuItem.press('Escape');
+  await expect(menu.accountMenu).toBeHidden();
+  await expect(menu.settingsButton).toBeFocused();
+  await actions.openSettings();
+  await expect(menu.modal).toBeVisible();
+  await expect(menu.accountMenu).toBeHidden();
+  await expect(menu.modal.getByRole('link', { name: 'Users & access' })).toHaveCount(0);
+  await actions.closeSettings();
+  await menu.settingsButton.click();
+  await menu.adminPanelMenuItem.click();
+  await expect(page).toHaveURL(/\/admin\/members$/);
+  await expect(page.getByRole('link', { name: 'Users', exact: true })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('link', { name: 'Back to library' })).toHaveCount(0);
+});
+
+test('FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu', async ({ page, freshBrowserSession }) => {
+  await signIn(page);
+  const members = new MembersPage(page);
+  await members.open();
+  await members.openAddUser();
+  await members.fillCreateUser({ ...MENU_LISTENER, sendInvitation: false });
+  await members.submitCreateUser();
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const invite = await members.copyInviteLink(MENU_LISTENER.username);
+  const recipient = await freshBrowserSession.create();
+  await recipient.page.goto(invitationPathFrom(invite));
+  await new InvitationPage(recipient.page).complete(MENU_LISTENER.password);
+  await signIn(recipient.page, MENU_LISTENER);
+  const menu = new SettingsModalAppBar(recipient.page);
+  await menu.settingsButton.click();
+  await expect(menu.accountMenu).toBeVisible();
+  await expect(menu.settingsMenuItem).toBeVisible();
+  await expect(menu.adminPanelMenuItem).toHaveCount(0);
+  await expect(menu.signOutMenuItem).toBeVisible();
+  await menu.signOutMenuItem.click();
+  await expect(recipient.page).toHaveURL(/\/login$/);
+  const protectedAccount = await recipient.page.goto('/account');
+  expect(protectedAccount.status()).toBe(401);
+  await expect(recipient.page.getByText('Authentication required.')).toBeVisible();
 });
 
 async function createListener(page) {

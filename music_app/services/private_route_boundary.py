@@ -7,7 +7,7 @@ import hashlib
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import QueryParams
 from starlette.responses import Response
 from starlette.routing import Match
@@ -168,6 +168,12 @@ def install_private_route_boundary(app: FastAPI) -> None:
         try:
             await require_action(action, resource=resource)(request)
         except HTTPException as exc:
+            if (
+                exc.status_code == 401
+                and request.method.upper() in _READ_METHODS
+                and request.url.path == "/"
+            ):
+                return RedirectResponse("/login", status_code=303)
             return JSONResponse(
                 {"detail": exc.detail},
                 status_code=exc.status_code,

@@ -187,6 +187,10 @@ def _configure_environment(
     control_port: int,
 ) -> None:
     configure_isolated_environment(temp_root, runtime_database_url, smtp_port)
+    # Importing config may load repository-local .env credentials. Do it before
+    # scrubbing SMTP authentication so the fake server remains fully isolated.
+    import config  # noqa: F401
+
     for inherited_credential in (
         "ALBUM_HAVEN_SMTP_USERNAME",
         "ALBUM_HAVEN_SMTP_PASSWORD",

@@ -20,6 +20,17 @@ async function loginResponse(page, username, password) {
   return responsePromise;
 }
 
+test('anonymous root redirects to the login page', async ({ page }) => {
+  const response = await page.request.get('/', { maxRedirects: 0 });
+
+  expect(response.status()).toBe(303);
+  expect(response.headers().location).toBe('/login');
+
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('form', { name: 'Album Haven sign in' })).toBeVisible();
+});
+
 test('FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free safe return', async ({ page }) => {
   const before = await databaseState();
   expect(before.owner.id).toBe(before.owner.owner_account_id);

@@ -156,8 +156,8 @@ Use a private browser window for each identity so sessions do not overlap.
 ### 1. Owner sign-in and private-route boundary
 
 1. Open `/` while signed out.
-2. Confirm the server returns an authentication-required response.
-3. Open `/login` and sign in as `Rendref` with the bootstrap password.
+2. Confirm the browser redirects to `/login`.
+3. Sign in as `Rendref` with the bootstrap password.
 4. Confirm the gallery loads and the Settings entry is available.
 5. Try the wrong password in a fresh private window and confirm the response
    does not reveal whether the username or password was wrong.

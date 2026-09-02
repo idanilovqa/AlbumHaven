@@ -354,6 +354,18 @@ def test_status_and_every_nonpublic_path_require_authentication():
     assert resolver.calls == [None, None]
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_anonymous_root_redirects_to_login(method):
+    app, resolver = _app(CurrentActor.anonymous())
+
+    status, body, headers = _request(app, "/", method=method, include_headers=True)
+
+    assert status == 303
+    assert body == b""
+    assert dict(headers)[b"location"] == b"/login"
+    assert resolver.calls == [None]
+
+
 def test_authenticated_bootstrap_owner_reaches_private_route():
     actor = CurrentActor(
         state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,

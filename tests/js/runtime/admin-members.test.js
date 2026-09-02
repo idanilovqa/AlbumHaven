@@ -26,14 +26,15 @@ function element(initial = {}) {
   };
 }
 
-function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = {}) {
+function loadRuntime({ mode = 'create', active = true, libraryAccess = true, navigate } = {}) {
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
-  const submit = element({ disabled: false });
+  const submit = element({ disabled: false, textContent: mode === 'create' ? 'Create user' : 'Save changes' });
   const error = element({ hidden: true, textContent: '' });
   const status = element({ hidden: true, textContent: '' });
   const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
   const welcome = element({ dataset: { adminAction: 'welcome' }, disabled: false });
+  const revoke = element({ dataset: { adminAction: 'revoke' }, disabled: false, textContent: 'Revoke sessions' });
   const form = element({
     dataset: {
       mode,
@@ -53,7 +54,7 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
       return null;
     },
     querySelectorAll: (selector) => (
-      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome] : []
+      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke] : []
     ),
     parentElement: {
       querySelector: (selector) => (
@@ -71,6 +72,7 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
     ['current_library_access', libraryAccess ? 'on' : ''],
   ]);
   const fetches = [];
+  const confirmations = [];
   let assigned = '';
   class FakeFormData {
     get(key) { return values.get(key) || null; }
@@ -89,18 +91,23 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true } = 
       return { ok: true, json: async () => ({ account_id: 42 }) };
     },
     window: {
-      confirm: () => true,
+      confirm: (message) => { confirmations.push(message); return true; },
       location: { assign: (value) => { assigned = value; } },
     },
     document: {
       querySelectorAll: () => [toggle],
       getElementById: (id) => (id === 'admin-new-password' ? password : null),
-      querySelector: (selector) => (selector === '[data-admin-account-form]' ? form : null),
+      querySelector: (selector) => {
+        if (selector === '[data-admin-account-form]') return form;
+        if (selector === '[data-settings-host]' && navigate) return {};
+        return null;
+      },
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
-    password, toggle, submit, error, status, reset, welcome, form, fetches,
+    password, toggle, submit, error, status, reset, welcome, revoke, form, fetches, confirmations,
     assigned: () => assigned,
   };
 }
@@ -268,6 +275,62 @@ test('admin edit form confirms destructive state and sends the bounded patch con
     confirm_remove_access: false,
   });
   assert.equal(runtime.assigned(), '/admin/members');
+});
+
+for (const mode of ['create', 'edit']) {
+  test(`completed ${mode} mutation retries failed navigation without repeating the mutation`, async () => {
+    const destinations = [];
+    const runtime = loadRuntime({
+      mode,
+      navigate: async (url) => {
+        destinations.push(url);
+        return destinations.length > 1;
+      },
+    });
+    const submit = () => runtime.form.listeners.get('submit')({ preventDefault() {} });
+
+    await submit();
+
+    assert.equal(runtime.fetches.length, 1);
+    assert.equal(runtime.fetches[0][1].method, mode === 'create' ? 'POST' : 'PATCH');
+    assert.equal(runtime.submit.disabled, false);
+    assert.equal(runtime.submit.textContent, 'Retry navigation');
+    assert.equal(runtime.submit.formNoValidate, true);
+    assert.equal(runtime.status.hidden, false);
+    assert.match(runtime.status.textContent, /Changes saved/);
+    assert.match(runtime.status.textContent, /could not be loaded/);
+
+    // A completed mutation is no longer a form submission: retry is GET-only
+    // even if the stale form's values would now fail validation.
+    runtime.form.checkValidity = () => false;
+    await submit();
+
+    const expected = mode === 'create' ? '/admin/members?created=1' : '/admin/members';
+    assert.deepEqual(destinations, [expected, expected]);
+    assert.equal(runtime.fetches.length, 1, 'the saved mutation must not be posted again');
+    assert.equal(runtime.assigned(), '', 'persistent navigation must not fall back to document reload');
+  });
+}
+
+test('completed session revocation retries navigation without revoking sessions again', async () => {
+  const destinations = [];
+  const runtime = loadRuntime({
+    mode: 'edit',
+    navigate: async (url) => { destinations.push(url); return destinations.length > 1; },
+  });
+  await runtime.revoke.click();
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.fetches[0][0], '/admin/accounts/41/sessions/revoke');
+  assert.equal(runtime.revoke.disabled, false);
+  assert.equal(runtime.revoke.textContent, 'Retry navigation');
+  assert.equal(runtime.status.hidden, false);
+  assert.match(runtime.status.textContent, /could not be loaded/);
+
+  await runtime.revoke.click();
+
+  assert.deepEqual(destinations, ['/admin/accounts/41', '/admin/accounts/41']);
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.confirmations.length, 1);
 });
 
 test('admin mail actions use distinct endpoints and show ambiguous delivery status', async () => {

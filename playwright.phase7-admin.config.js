@@ -34,7 +34,7 @@ module.exports = defineConfig({
   },
   projects: [{ name: 'phase7-admin-management' }],
   webServer: {
-    command: `"${pythonExe}" "${launcher}" --port ${port} --smtp-port ${smtpPort} --control-port ${controlPort}`,
+    command: `"${pythonExe}" "${launcher}" --port ${port} --smtp-port ${smtpPort} --control-port ${controlPort} --playback-media`,
     url: `http://127.0.0.1:${port}/health`,
     reuseExistingServer: false,
     stdout: 'pipe',

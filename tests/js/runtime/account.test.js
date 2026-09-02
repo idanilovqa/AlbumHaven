@@ -34,6 +34,7 @@ function loadRuntime() {
   ]);
   const form = element({ querySelector: (selector) => controls.get(selector) || null });
   const context = vm.createContext({
+    window: {},
     document: {
       querySelectorAll: () => [toggle],
       getElementById: (id) => (id === 'current-password' ? current : null),

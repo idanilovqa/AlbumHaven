@@ -21,6 +21,10 @@ from isolatedPostgres import (
     resolve_isolated_database_urls,
     seed_bootstrap_owner_and_library,
 )
+from phase7PlaybackFixture import (
+    persist_settings_playback_inventory,
+    prepare_settings_playback_media,
+)
 
 
 OWNER_PASSWORD = "Phase Seven Owner Passphrase 2026!"
@@ -393,6 +397,7 @@ def main() -> None:
     parser.add_argument("--smtp-port", type=int, required=True)
     parser.add_argument("--control-port", type=int, required=True)
     parser.add_argument("--worker-port", type=int)
+    parser.add_argument("--playback-media", action="store_true")
     args = parser.parse_args()
 
     setup_database_url, runtime_database_url = resolve_isolated_database_urls()
@@ -414,13 +419,24 @@ def main() -> None:
             control_port=args.control_port,
         )
         (temp_root / "media").mkdir(parents=True, exist_ok=True)
+        # Every suite owns its current normal Postgres root and inventory, even
+        # when the auth-only suite intentionally has no playable media.
+        playback_inventory = {}
+        if args.playback_media:
+            playback_inventory = prepare_settings_playback_media(temp_root / "media")
         prepare_isolated_database(setup_database_url, runtime_database_url)
         _bootstrap_owner(runtime_database_url)
+        persist_settings_playback_inventory(
+            setup_database_url, temp_root / "media", playback_inventory
+        )
 
         def reset_fixture() -> None:
             reset_application_tables(setup_database_url)
             seed_bootstrap_owner_and_library(setup_database_url)
             _bootstrap_owner(runtime_database_url)
+            persist_settings_playback_inventory(
+                setup_database_url, temp_root / "media", playback_inventory
+            )
 
         state.reset_fixture = reset_fixture
         state.database_action = lambda action: _database_action(

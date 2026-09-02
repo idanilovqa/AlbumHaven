@@ -16,18 +16,20 @@ const adminNavigation = readProjectFile('music_app', 'templates', 'partials', 'a
 
 test('Account and Admin navigation keep Users discoverable and omit redundant links', () => {
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
-  assert.match(accountTemplate, /<button class="account-nav-item" type="submit">Sign Out<\/button>/);
-  assert.match(adminNavigation, /href="\/admin\/members" aria-current="page"[^>]*>.*Users/);
+  assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
+  assert.match(adminNavigation, /<button class="settings-nav-item" type="submit">.*Sign Out<\/button>/);
+  assert.match(adminNavigation, /href="\/admin\/members"[^\n]*aria-current="page"[^\n]*Users/);
   assert.doesNotMatch(adminNavigation, /settings-back|Back to library/);
 });
 
 test('Admin navigation offers My account instead of unavailable placeholders', () => {
-  assert.match(adminNavigation, /<a class="settings-nav-item" href="\/account"[^>]*>.*My account<\/a>/);
+  assert.match(adminNavigation, /href="\/account"[^\n]*My account<\/a>/);
   assert.doesNotMatch(adminNavigation, /is-future|aria-disabled|Email delivery|Security|Audit log/);
 });
 
 test('Account navigation identifies the current user settings as My account', () => {
-  assert.match(accountTemplate, /href="\/account" aria-current="page">My account<\/a>/);
+  assert.match(accountTemplate, /set settings_section = 'account'/);
+  assert.match(adminNavigation, /settings_section == 'account'[^\n]*aria-current="page"[^\n]*My account/);
 });
 
 test('Account navigation omits the unavailable Profile placeholder', () => {
@@ -41,10 +43,19 @@ test('Account session list has no divider above its first session', () => {
 
 for (const [surface, css] of [['Account', accountCss], ['Admin', adminCss]]) {
   test(`${surface} hides carets on static text but retains them in editable controls`, () => {
-    assert.match(css, /body\s*\{[^}]*caret-color:\s*transparent/s);
+    assert.match(adminCss, /\.settings-host\s*\{[^}]*caret-color:\s*transparent/s);
     assert.match(
       css,
-      /input,\s*textarea,\s*select,\s*\[contenteditable="true"\]\s*\{[^}]*caret-color:\s*auto/s,
+      /input,\s*\.settings-host(?: \.account-main)? textarea,\s*\.settings-host(?: \.account-main)? select,\s*\.settings-host(?: \.account-main)? \[contenteditable="true"\]\s*\{[^}]*caret-color:\s*auto/s,
     );
   });
 }
+
+test('library and direct Settings pages own one shared host and navigation entry point', () => {
+  for (const templateName of ['index.html', 'account.html', 'admin-members.html', 'admin-account-detail.html']) {
+    const template = readProjectFile('music_app', 'templates', templateName);
+    assert.equal((template.match(/data-settings-host/g) || []).length, 1, templateName);
+    assert.equal((template.match(/include ["']partials\/admin-settings-nav.html["']/g) || []).length, 1, templateName);
+    assert.equal((template.match(/\/static\/js\/settings-navigation.js/g) || []).length, 1, templateName);
+  }
+});

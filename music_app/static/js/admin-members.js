@@ -1,9 +1,24 @@
 (() => {
   'use strict';
 
+  function mount(root, options = {}) {
+  const document = root;
+  let active = true;
+  let removePointerListener = () => {};
+  const requests = typeof AbortController === 'undefined' ? null : new AbortController();
+  const nativeFetch = globalThis.fetch;
+  const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
+  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); };
+  const navigate = (url) => {
+    if (!active) return Promise.resolve(false);
+    return options.navigate ? options.navigate(url) : window.location.assign(url);
+  };
+
   document.querySelectorAll('[data-password-toggle]').forEach((button) => {
     button.addEventListener('click', () => {
-      const input = document.getElementById(button.dataset.passwordToggle || '');
+      const input = document.getElementById
+        ? document.getElementById(button.dataset.passwordToggle || '')
+        : document.querySelector(`[id="${button.dataset.passwordToggle || ''}"]`);
       if (!input) return;
       const reveal = input.type === 'password';
       input.type = reveal ? 'text' : 'password';
@@ -140,7 +155,7 @@
     });
   }
 
-  document.addEventListener?.('pointerdown', (event) => {
+  const onPointerDown = (event) => {
     for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
       const accountId = menu.dataset.memberMenu;
       const trigger = document.querySelector(
@@ -152,7 +167,9 @@
         && !trigger.contains(event.target)
       ) closeMenu(trigger, menu);
     }
-  });
+  };
+  document.addEventListener?.('pointerdown', onPointerDown);
+  removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
 
   const copyInvitation = async (accountId, allowReauthentication = true) => {
     const response = await rosterRequest(
@@ -253,13 +270,14 @@
   );
 
   const form = document.querySelector('[data-admin-account-form]');
-  if (!form) return;
+  if (!form) return cleanup;
   const error = form.parentElement?.querySelector('[data-admin-form-error]');
   const status = form.parentElement?.querySelector('[data-admin-form-status]');
   const submit = form.querySelector('button[type="submit"]');
   const reauthPanel = form.querySelector('[data-reauth-panel]');
   const reauthPassword = form.querySelector('[data-reauth-password]');
   let pendingRetry = null;
+  let completedDestination = null;
 
   const showError = (message) => {
     if (!error) return;
@@ -271,6 +289,22 @@
     if (!status) return;
     status.hidden = false;
     status.textContent = message;
+  };
+
+  const navigateAfterMutation = async (destination, button) => {
+    if (button) button.disabled = true;
+    try {
+      if (await navigate(destination) !== false) return;
+    } catch {
+      // The mutation succeeded. Only the destination read may be retried.
+    }
+    if (!active) return;
+    showStatus('Changes saved. The next page could not be loaded. Retry navigation to continue.');
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Retry navigation';
+      button.formNoValidate = true;
+    }
   };
 
   const requestJson = async (url, method, payload, csrfToken) => {
@@ -303,6 +337,11 @@
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (submit?.disabled) return;
+    if (completedDestination) {
+      await navigateAfterMutation(completedDestination, submit);
+      return;
+    }
     if (!form.checkValidity()) {
       form.reportValidity();
       return;
@@ -319,7 +358,8 @@
           capability_keys: data.getAll('capability_keys').map(String),
           send_invitation: form.elements.send_invitation.checked,
         }, csrfToken);
-        window.location.assign('/admin/members?created=1');
+        completedDestination = '/admin/members?created=1';
+        await navigateAfterMutation(completedDestination, submit);
         return;
       }
       const accountId = String(data.get('account_id') || '');
@@ -342,7 +382,8 @@
         confirm_disable: confirmDisable,
         confirm_remove_access: confirmRemoveAccess,
       }, csrfToken);
-      window.location.assign('/admin/members');
+      completedDestination = '/admin/members';
+      await navigateAfterMutation(completedDestination, submit);
     } catch (requestError) {
       if (requestError.message === 'Recent authentication is required.') {
         requireReauthentication(() => form.requestSubmit());
@@ -355,7 +396,12 @@
   });
 
   form.querySelectorAll?.('[data-admin-action]')?.forEach((button) => {
+    let completedActionDestination = null;
     button.addEventListener('click', async () => {
+      if (completedActionDestination) {
+        await navigateAfterMutation(completedActionDestination, button);
+        return;
+      }
       const action = button.dataset.adminAction;
       if (action === 'toggle-active') {
         const checkbox = form.querySelector('[name="is_active"]');
@@ -402,7 +448,8 @@
           { confirmed: true },
           String(data.get('csrf_token') || ''),
         );
-        window.location.assign(`/admin/accounts/${encodeURIComponent(accountId)}`);
+        completedActionDestination = `/admin/accounts/${encodeURIComponent(accountId)}`;
+        await navigateAfterMutation(completedActionDestination, button);
       } catch (requestError) {
         if (requestError.message === 'Recent authentication is required.') {
           requireReauthentication(() => button.click());
@@ -448,4 +495,9 @@
       button.disabled = false;
     }
   });
+  return cleanup;
+  }
+  window.AlbumHavenMountAdmin = mount;
+  // Existing standalone consumers still work; the Settings controller owns mounting in the shared host.
+  if (!document.querySelector('[data-settings-host]')) mount(document);
 })();

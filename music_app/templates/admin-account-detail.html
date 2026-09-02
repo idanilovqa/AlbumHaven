@@ -5,12 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ "Edit user" if member else "Add user" }} — Album Haven</title>
   <link rel="stylesheet" href="/static/css/admin-members.css">
+  <link rel="stylesheet" href="/static/css/account.css">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <script src="/static/js/admin-members.js" defer></script>
+  <script src="/static/js/account.js" defer></script>
+  <script src="/static/js/settings-navigation.js" defer></script>
 </head>
 <body>
-  <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
-  <main class="settings-shell">
+  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  <main class="settings-host settings-shell" data-settings-host>
     {% include "partials/admin-settings-nav.html" %}
+    <div class="settings-outlet" data-settings-outlet>
+    <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
     <section class="settings-main detail-main">
       <a class="detail-back" href="/admin/members">←&nbsp; Back to users</a>
       <header class="detail-heading">
@@ -98,6 +104,7 @@
         </footer>
       </form>
     </section>
+    </div>
   </main>
 </body>
 </html>

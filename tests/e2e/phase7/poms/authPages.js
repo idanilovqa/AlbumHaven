@@ -195,7 +195,7 @@ export class MembersPage {
 export class AccountPage {
   constructor(page) {
     this.page = page;
-    this.navigation = page.getByRole('complementary', { name: 'Account navigation' });
+    this.navigation = page.getByRole('complementary', { name: 'Settings navigation' });
     this.myAccountLink = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.usersLink = this.navigation.getByRole('link', { name: 'Users', exact: true });
     this.heading = page.getByRole('heading', { name: 'Password & security', exact: true });

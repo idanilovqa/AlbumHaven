@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timezone
+import re
 from urllib.parse import urlencode
 
 from fastapi import FastAPI
@@ -151,7 +152,10 @@ def test_my_account_navigation_keeps_personal_password_and_connected_devices():
     status, _headers, body = _request(app, "GET", "/account", session=_session())
 
     assert status == 200
-    assert 'href="/account" aria-current="page">My account</a>' in body
+    assert re.search(r'href="/account"[^>]*aria-current="page"[^>]*>.*My account</a>', body)
+    assert body.count('data-settings-nav>') == 1
+    assert body.count('data-settings-host') == 1
+    assert body.count('src="/static/js/settings-navigation.js"') == 1
     assert "member.one" in body
     assert 'action="/account/password"' in body
     assert "Active sessions" in body
@@ -167,7 +171,7 @@ def test_my_account_navigation_offers_users_to_authorized_owner():
     status, _headers, body = _request(app, "GET", "/account", session=_session())
 
     assert status == 200
-    assert 'href="/admin/members">Users</a>' in body
+    assert re.search(r'href="/admin/members"[^>]*>.*Users</a>', body)
     assert service.profile_calls == [{"account_id": 41, "current_session_id": 11}]
 
 

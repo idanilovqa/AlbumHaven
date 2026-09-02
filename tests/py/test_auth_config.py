@@ -100,7 +100,7 @@ def test_auth_defaults_normalize_bootstrap_identity_and_lock_security_policy(con
         "hash_len": 32,
     }
     assert config["password"] == {
-        "min_codepoints": 15,
+        "min_codepoints": 8,
         "max_codepoints": 256,
         "max_utf8_bytes": 1_024,
     }
@@ -419,7 +419,7 @@ def test_auth_cookie_defaults_are_host_only_secure_and_http_only(contracts):
         ("ALBUM_HAVEN_ARGON2_PARALLELISM", "0"),
         ("ALBUM_HAVEN_ARGON2_SALT_LEN", "15"),
         ("ALBUM_HAVEN_ARGON2_HASH_LEN", "31"),
-        ("ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", "14"),
+        ("ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", "7"),
         ("ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS", "257"),
         ("ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES", "1025"),
         ("ALBUM_HAVEN_SESSION_IDLE_SECONDS", str(13 * 60 * 60)),
@@ -438,6 +438,16 @@ def test_auth_config_rejects_values_weaker_than_the_locked_policy(
 
     with pytest.raises(ValueError, match=env_key):
         auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+def test_auth_config_accepts_eight_character_password_floor(contracts):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(
+        _auth_env(ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS="8")
+    )
+
+    assert config["password"]["min_codepoints"] == 8
 
 
 @pytest.mark.parametrize(
@@ -475,7 +485,7 @@ def test_auth_config_rejects_non_positive_bounded_lifetimes_and_password_maxima(
             "ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS",
         ),
         (
-            {"ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES": "14"},
+            {"ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES": "7"},
             "ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES",
         ),
         (

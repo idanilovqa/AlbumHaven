@@ -107,7 +107,7 @@ def test_hashing_uses_the_same_nfc_value_that_validation_returns(passwords):
 @pytest.mark.parametrize(
     "candidate",
     [
-        "x" * 14,
+        "x" * 7,
         "x" * 257,
         "\U0001f642" * 257,
         ("\U0001f642" * 256) + "x",
@@ -118,6 +118,12 @@ def test_validation_rejects_passwords_outside_codepoint_or_utf8_bounds(
 ):
     with pytest.raises(passwords.PasswordPolicyError):
         _validate(passwords, candidate)
+
+
+def test_validation_accepts_eight_codepoints(passwords):
+    candidate = "u7!Qz2#v"
+
+    assert _validate(passwords, candidate) == candidate
 
 
 @pytest.mark.parametrize(

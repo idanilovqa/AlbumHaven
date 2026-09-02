@@ -11,7 +11,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 from argon2.low_level import ARGON2_VERSION, Type
 
 
-_MIN_CODEPOINTS = 15
+_MIN_CODEPOINTS = 8
 _MAX_CODEPOINTS = 256
 _MAX_UTF8_BYTES = 1_024
 

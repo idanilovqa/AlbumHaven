@@ -262,7 +262,7 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
 
     password = {
         "min_codepoints": _integer(
-            env, "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", 15, minimum=15
+            env, "ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", 8, minimum=8
         ),
         "max_codepoints": _integer(
             env,

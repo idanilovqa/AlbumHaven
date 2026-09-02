@@ -128,7 +128,9 @@ function validateWorkflowContract(workflow) {
     components: jobSource(workflow, 'test_components', 'test_node_windows'),
     windowsNode: jobSource(workflow, 'test_node_windows', 'test_python'),
     python: jobSource(workflow, 'test_python', 'e2e_production_parity'),
-    parity: jobSource(workflow, 'e2e_production_parity', 'e2e_functional'),
+    parity: jobSource(workflow, 'e2e_production_parity', 'e2e_phase7_auth'),
+    phase7Auth: jobSource(workflow, 'e2e_phase7_auth', 'e2e_phase7_admin'),
+    phase7Admin: jobSource(workflow, 'e2e_phase7_admin', 'e2e_functional'),
     functional: jobSource(workflow, 'e2e_functional', 'e2e_performance_ci'),
     performance: jobSource(workflow, 'e2e_performance_ci', 'pr_agent_review'),
   };
@@ -204,6 +206,32 @@ function validateWorkflowContract(workflow) {
   requirePatterns(jobs.parity, [
     [/npm run check:e2e-production-parity/, 'production parity command'],
   ], 'production parity job', errors);
+
+  for (const [name, source, command] of [
+    ['Phase 7 auth', jobs.phase7Auth, 'npm run test:e2e:phase7:auth'],
+    ['Phase 7 admin', jobs.phase7Admin, 'npm run test:e2e:phase7:admin'],
+  ]) {
+    if (!source) continue;
+    if (!/runs-on:\s*windows-2025/.test(source)) errors.push(`${name} job must run on windows-2025`);
+    if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
+      errors.push(`${name} job must be limited to a same-repository pull request`);
+    }
+    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+      if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
+        errors.push(`${name} job is missing foundation dependency ${dependency}`);
+      }
+    }
+    requirePatterns(source, [
+      [/node-version:\s*["']22["']/, 'Node.js 22'],
+      [/python-version:\s*["']3\.11["']/, 'Python 3.11'],
+      [/chrome-version:\s*["']151\.0\.7922\.138["']/, 'pinned Chrome'],
+      [/PLAYWRIGHT_BROWSER:\s*chrome/, 'pinned Chrome selection'],
+      [/PLAYWRIGHT_CHROME_EXECUTABLE/, 'pinned Chrome executable handoff'],
+      [/-Mode\s+Provision/, 'isolated PostgreSQL provision'],
+      [/-Mode\s+Teardown/, 'isolated PostgreSQL teardown'],
+      [new RegExp(command.replaceAll(':', '\\:')), 'dedicated Playwright command'],
+    ], name, errors);
+  }
 
   for (const source of [jobs.functional, jobs.performance]) {
     if (!source) continue;

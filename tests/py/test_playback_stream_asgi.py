@@ -163,6 +163,23 @@ def open_command(media_path: Path, **changes) -> dict[str, object]:
     return command
 
 
+def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app):
+    from music_app.services.current_actor import CurrentActor
+
+    class AnonymousResolver:
+        def resolve(self, _token):
+            return CurrentActor.anonymous()
+
+    playback_app.state.current_actor_resolver = AnonymousResolver()
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is False
+            assert socket.close_code == 4401
+
+    asyncio.run(scenario())
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,

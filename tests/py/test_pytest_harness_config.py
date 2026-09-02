@@ -219,6 +219,34 @@ def test_stale_cleanup_removes_only_owned_dead_process_roots(tmp_path, monkeypat
     assert unowned_root.is_dir()
 
 
+def test_owned_root_cleanup_retries_a_transient_filesystem_lock(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / "workspace-temp"
+    owned_root = workspace_temp / "pytest-444444-deadbeef"
+    _write_owner_marker(owned_root, pid=444444, token="deadbeef")
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def transient_rmtree(path):
+        attempts.append(Path(path))
+        if len(attempts) < 3:
+            raise PermissionError("transient Windows file lock")
+        real_rmtree(path)
+
+    monkeypatch.setattr(
+        pytest_harness,
+        "_workspace_pytest_temp_root",
+        lambda: workspace_temp.resolve(),
+    )
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", transient_rmtree)
+    monkeypatch.setattr(pytest_harness.time, "sleep", lambda _seconds: None)
+
+    assert pytest_harness._remove_owned_generated_pytest_root(
+        owned_root,
+        expected_owner=(444444, "deadbeef"),
+    )
+    assert attempts == [owned_root, owned_root, owned_root]
+
+
 def test_unrelated_workspace_entries_do_not_starve_owned_stale_root_cleanup(tmp_path, monkeypatch):
     workspace_temp = tmp_path / "workspace-temp"
     unrelated_roots = [workspace_temp / f"unrelated-{index:03d}" for index in range(65)]

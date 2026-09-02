@@ -1,5 +1,8 @@
 import { expect, test as base } from '@playwright/test';
-import { warmFunctionalBrowser } from '../../../scripts/playwright-functional-browser-warmup.mjs';
+import {
+  readAuthenticatedStartupRelationProjectionReadiness,
+  warmFunctionalBrowser,
+} from '../../../scripts/playwright-functional-browser-warmup.mjs';
 import {
   ArtistFamilyActions,
   ArtistPageSettingsActions,
@@ -46,9 +49,9 @@ import {
 } from '../poms/index.js';
 import { installContextRequestInterceptionGuard } from './requestInterceptionGuard.js';
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
-import { readStartupRelationProjectionReadiness } from '../helpers/startupRelationProjectionReadiness.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
+import { authenticateProductionContext } from './performanceAuthentication.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -308,11 +311,17 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  authenticateFreshBrowserSession: [true, { option: true }],
+
   managedAppLifecycle: [async ({}, use) => {
     await use(createManagedAppLifecycle());
   }, { scope: 'worker' }],
 
-  freshBrowserSession: async ({ browser, testArtifacts }, use, testInfo) => {
+  freshBrowserSession: async ({
+    browser,
+    testArtifacts,
+    authenticateFreshBrowserSession,
+  }, use, testInfo) => {
     let session = null;
     try {
       await use({
@@ -328,6 +337,9 @@ export const test = base.extend({
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           try {
             const page = await context.newPage();
+            if (authenticateFreshBrowserSession) {
+              await authenticateProductionContext(page);
+            }
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
             session = {
@@ -383,12 +395,21 @@ export const test = base.extend({
     }
   },
 
-  startupRelationProjectionReadiness: [async ({}, use, workerInfo) => {
+  startupRelationProjectionReadiness: [async ({ browser }, use, workerInfo) => {
     const baseURL = String(workerInfo.project.use?.baseURL || '');
-    await use(await readStartupRelationProjectionReadiness({ baseURL }));
+    await use(await readAuthenticatedStartupRelationProjectionReadiness({
+      browser,
+      baseURL,
+      viewport: workerInfo.project.use?.viewport,
+    }));
   }, { scope: 'worker', auto: true }],
 
   ...functionalBrowserWarmupFixtures,
+
+  functionalAuthentication: [async ({ page }, use) => {
+    await authenticateProductionContext(page);
+    await use();
+  }, { auto: true }],
 
   requestInterceptionGuard: [async ({ page, context }, use) => {
     const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);

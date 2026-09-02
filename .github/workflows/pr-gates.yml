@@ -346,6 +346,178 @@ jobs:
       - name: Reject E2E production-path drift
         run: npm run check:e2e-production-parity
 
+  e2e_phase7_auth:
+    name: "E2E: Phase 7 Auth Lifecycle"
+    needs:
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Set up pinned Chrome
+        id: setup_phase7_auth_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Provision isolated PostgreSQL
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-phase7-auth.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Run Phase 7 auth lifecycle suite
+        env:
+          PLAYWRIGHT_BROWSER: chrome
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_auth_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          npm run test:e2e:phase7:auth
+
+      - name: Teardown isolated PostgreSQL
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-phase7-auth.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "p7a_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath
+          }
+
+      - name: Upload Phase 7 auth diagnostics
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-auth-debug-${{ github.run_attempt }}
+          path: test-results/playwright-artifacts/phase7-auth
+          if-no-files-found: warn
+          retention-days: 7
+
+  e2e_phase7_admin:
+    name: "E2E: Phase 7 Admin Management"
+    needs:
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Set up pinned Chrome
+        id: setup_phase7_admin_chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: "151.0.7922.138"
+
+      - name: Provision isolated PostgreSQL
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-phase7-admin.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
+      - name: Run Phase 7 admin-management suite
+        env:
+          PLAYWRIGHT_BROWSER: chrome
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_admin_chrome.outputs.chrome-path }}
+        run: |
+          $env:PGPASSWORD = $null
+          $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          npm run test:e2e:phase7:admin
+
+      - name: Teardown isolated PostgreSQL
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-phase7-admin.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "p7m_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath
+          }
+
+      - name: Upload Phase 7 admin diagnostics
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-admin-debug-${{ github.run_attempt }}
+          path: test-results/playwright-artifacts/phase7-admin
+          if-no-files-found: warn
+          retention-days: 7
+
   e2e_functional:
     name: "E2E: ${{ matrix.displayName }}"
     needs:
@@ -559,6 +731,7 @@ jobs:
         include:
           - shard: synthetic-large-library
             fixtureProfile: synthetic-large-library
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: preloaded-release
             harness: managed-app
             basePort: 4173
@@ -575,6 +748,7 @@ jobs:
             target10: rules-focused
           - shard: utility-problematic-files
             fixtureProfile: utility-problematic-files
+            fixtureDownloadProfile: utility-problematic-files
             fixtureMode: preloaded-release
             harness: managed-app
             basePort: 4253
@@ -591,6 +765,7 @@ jobs:
             target10: none
           - shard: playback-media
             fixtureProfile: playback-media
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: generated-isolated
             harness: managed-app
             basePort: 4213
@@ -607,6 +782,7 @@ jobs:
             target10: none
           - shard: scan-library
             fixtureProfile: scan-library
+            fixtureDownloadProfile: synthetic-large-library
             fixtureMode: generated-isolated
             harness: scan
             basePort: 4293
@@ -646,21 +822,19 @@ jobs:
           }
 
       - name: Checkout trusted fixture downloader
-        if: ${{ matrix.fixtureMode == 'preloaded-release' }}
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .trusted-ci
           persist-credentials: false
 
-      - name: Fetch preloaded performance fixture
-        if: ${{ matrix.fixtureMode == 'preloaded-release' }}
+      - name: Fetch immutable performance fixture
         env:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
             -Release fixtures-v1.0.19 `
-            -Profile ${{ matrix.fixtureProfile }} `
+            -Profile ${{ matrix.fixtureDownloadProfile }} `
             -ManifestSha256 cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51
 
       - name: Set up Node.js
@@ -696,10 +870,15 @@ jobs:
       - name: Prepare generated performance profile
         if: ${{ matrix.fixtureMode == 'generated-isolated' }}
         run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:ALBUM_HAVEN_FIXTURE_ROOT) -or
-              -not [string]::IsNullOrWhiteSpace($env:ALBUM_HAVEN_MEDIA_ROOT)) {
-            throw "Generated performance targets reject inherited release fixture roots."
+          $releasedRoot = [IO.Path]::GetFullPath($env:ALBUM_HAVEN_FIXTURE_ROOT)
+          $approvedCoverRoot = Join-Path $releasedRoot "media\covers\approved"
+          if (-not (Test-Path -LiteralPath $approvedCoverRoot -PathType Container)) {
+            throw "Generated performance targets require the verified released approved-cover seed."
           }
+          "ALBUM_HAVEN_APPROVED_COVER_ROOT=$approvedCoverRoot" | Out-File `
+            -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FIXTURE_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_MEDIA_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FIXTURE_PROFILE=${{ matrix.fixtureProfile }}" | Out-File `
             -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
@@ -989,6 +1168,81 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  review_scope:
+    name: PR Review Scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+    outputs:
+      mode: ${{ steps.classify.outputs.mode }}
+      base_sha: ${{ steps.classify.outputs.base_sha }}
+      head_sha: ${{ steps.classify.outputs.head_sha }}
+      functional_change: ${{ steps.classify.outputs.functional_change }}
+      functional_lines: ${{ steps.classify.outputs.functional_lines }}
+      binary_functional_change: ${{ steps.classify.outputs.binary_functional_change }}
+    steps:
+      - name: Find last successfully reviewed head
+        id: baseline
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            for (const comment of comments.reverse()) {
+              if (comment.user?.login !== 'github-actions[bot]') continue;
+              const match = comment.body?.match(/<!-- album-haven-reviewed-head:([0-9a-f]{40}) -->/i);
+              if (!match) continue;
+              const candidate = match[1].toLowerCase();
+              const commentUpdatedAt = Date.parse(comment.updated_at);
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: candidate,
+                event: 'pull_request',
+                status: 'completed',
+                per_page: 100,
+              });
+              const authenticated = runs.some((run) => {
+                const startedAt = Date.parse(run.run_started_at || run.created_at);
+                const completedAt = Date.parse(run.updated_at);
+                return run.name === context.workflow
+                  && run.conclusion === 'success'
+                  && run.pull_requests?.some((pr) => pr.number === context.payload.pull_request.number)
+                  && startedAt <= commentUpdatedAt
+                  && commentUpdatedAt <= completedAt;
+              });
+              if (authenticated) return candidate;
+            }
+            return '';
+
+      - name: Checkout pull request history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Classify PR review scope
+        id: classify
+        env:
+          PR_EVENT_ACTION: ${{ github.event.action }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LAST_REVIEWED_SHA: ${{ steps.baseline.outputs.result }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/ci/classify-pr-review-scope.cjs
+
   pr_agent_review:
     name: PR Agent Review
     needs:
@@ -997,9 +1251,12 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' }}
+      - review_scope
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode != 'none' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1033,10 +1290,14 @@ jobs:
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          github_action_config.auto_review: "true"
+          github_action_config.auto_review: "${{ github.event.action != 'synchronize' }}"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
-          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "synchronize"]'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+          github_action_config.handle_push_trigger: "${{ github.event.action == 'synchronize' }}"
+          github_action_config.push_trigger_ignore_bot_commits: "false"
+          github_action_config.push_trigger_ignore_merge_commits: "false"
+          github_action_config.push_commands: ${{ needs.review_scope.outputs.mode == 'incremental' && '["/review -i"]' || '["/review"]' }}
           github_action_config.enable_output: "true"
 
       - name: Require PR Agent review output
@@ -1052,9 +1313,12 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' }}
+      - review_scope
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode != 'none' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1083,9 +1347,10 @@ jobs:
         id: run_codex
         uses: openai/codex-action@v1
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ":read-only"
@@ -1118,6 +1383,50 @@ jobs:
               body,
             });
 
+  ai_code_review:
+    name: AI Code Review // VERY POWERFULL
+    needs:
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
+      - e2e_functional
+      - e2e_performance_ci
+      - review_scope
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode == 'full' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Require OpenAI credential for AI Code Review
+        shell: bash
+        env:
+          AI_CODE_REVIEW_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [[ -z "${AI_CODE_REVIEW_OPENAI_API_KEY:-}" ]]; then
+            echo "::error::AI Code Review requires the OPENAI_API_KEY Actions secret. Publishing is blocked until the credential is configured."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run AI Code Review
+        uses: zxcloli666/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ENABLE_LINTERS: "false"
+
   cloud_verification_gate:
     name: Cloud Verification Gate
     needs:
@@ -1126,16 +1435,21 @@ jobs:
       - test_node_windows
       - test_python
       - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
+      - review_scope
       - pr_agent_review
       - codex_review
+      - ai_code_review
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: read
       contents: read
+      issues: write
     steps:
       - name: Non-authoritative fork conclusion
         if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
@@ -1144,17 +1458,24 @@ jobs:
           TEST_JS_RESULT: ${{ needs.test_js.result }}
           TEST_COMPONENTS_RESULT: ${{ needs.test_components.result }}
           PRODUCTION_PARITY_RESULT: ${{ needs.e2e_production_parity.result }}
+          PHASE7_AUTH_RESULT: ${{ needs.e2e_phase7_auth.result }}
+          PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
           WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
           PYTHON_RESULT: ${{ needs.test_python.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
+          REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
+          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
         run: |
           test "$TEST_JS_RESULT" = success
           test "$TEST_COMPONENTS_RESULT" = success
           test "$PRODUCTION_PARITY_RESULT" = success
-          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT"; do
+          test "$REVIEW_SCOPE_RESULT" = success
+          case "$REVIEW_MODE" in none|incremental|full) ;; *) exit 1 ;; esac
+          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT" "$AI_CODE_REVIEW_RESULT"; do
             test "$result" = skipped
           done
           {
@@ -1180,26 +1501,68 @@ jobs:
           WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
           PYTHON_RESULT: ${{ needs.test_python.result }}
           PRODUCTION_PARITY_RESULT: ${{ needs.e2e_production_parity.result }}
+          PHASE7_AUTH_RESULT: ${{ needs.e2e_phase7_auth.result }}
+          PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
+          REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
+          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
         run: |
           $input = @{
             mode = "trusted"
+            reviewMode = $env:REVIEW_MODE
             jobResults = @{
               test_js = $env:TEST_JS_RESULT
               test_components = $env:TEST_COMPONENTS_RESULT
               test_node_windows = $env:WINDOWS_RESULT
               test_python = $env:PYTHON_RESULT
               e2e_production_parity = $env:PRODUCTION_PARITY_RESULT
+              e2e_phase7_auth = $env:PHASE7_AUTH_RESULT
+              e2e_phase7_admin = $env:PHASE7_ADMIN_RESULT
               e2e_functional = $env:FUNCTIONAL_RESULT
               e2e_performance_ci = $env:PERFORMANCE_RESULT
+              review_scope = $env:REVIEW_SCOPE_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
+              ai_code_review = $env:AI_CODE_REVIEW_RESULT
             }
           }
           $inputPath = Join-Path "${{ runner.temp }}" "cloud-verification-gate-input.json"
           $input | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $inputPath -Encoding utf8
           node scripts/ci/validate-cloud-verification-gate.cjs $inputPath
           "## Cloud Verification Gate`nAuthoritative same-repository conclusion: success." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Record successfully reviewed head
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const markerPattern = /<!-- album-haven-reviewed-head:([0-9a-f]{40}) -->/i;
+            const body = `<!-- album-haven-reviewed-head:${context.payload.pull_request.head.sha} -->\nAutomated review coverage is current through this commit.`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' && markerPattern.test(comment.body || '')
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            }

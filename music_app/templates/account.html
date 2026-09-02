@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Password &amp; security — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/account.css">
+  <script src="/static/js/account.js" defer></script>
+</head>
+<body>
+  <main class="account-shell">
+    <aside class="account-nav" aria-label="Account navigation">
+      <a class="account-brand" href="/" aria-label="Album Haven library">
+        <img src="/static/images/album-haven-cloud-vinyl.png" alt="">
+      </a>
+      <h2>Account</h2>
+      <nav>
+        <a class="account-nav-item is-active" href="/account" aria-current="page">Password &amp; security</a>
+        <form class="account-logout" method="post" action="/logout">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="account-nav-item" type="submit">Sign Out</button>
+        </form>
+      </nav>
+    </aside>
+
+    <section class="account-main">
+      <header class="account-header">
+        <div class="account-avatar" aria-hidden="true">{{ profile.username[:2] | upper }}</div>
+        <div>
+          <h1>Password &amp; security</h1>
+          <p>Signed in as <strong>{{ profile.username }}</strong> · Album Haven member</p>
+        </div>
+      </header>
+
+      {% if changed %}
+      <p class="account-notice is-success" role="status">Your password was changed. Other sessions have been signed out.</p>
+      {% endif %}
+
+      {% if error %}
+      <p class="account-notice is-error" role="alert">
+        {% if error == "current_password" %}The current password was not accepted.
+        {% elif error == "password_policy" %}Choose a long, unique password that is not breached or based on your account details.
+        {% elif error == "stale" %}Your account changed during this request. Refresh and try again.
+        {% elif error == "unavailable" %}Account settings are temporarily unavailable. Try again shortly.
+        {% else %}The request could not be completed. Refresh and try again.{% endif %}
+      </p>
+      {% endif %}
+
+      {% if profile.administrator_set_suggestion %}
+      <aside class="security-callout" aria-label="Password suggestion">
+        <div>
+          <strong>Make this password your own when it’s convenient.</strong>
+          <span>An administrator created the current password. You can keep using it.</span>
+        </div>
+        <form method="post" action="/account/password-suggestion/dismiss">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button class="button is-small is-ghost" type="submit">Dismiss</button>
+        </form>
+      </aside>
+      {% endif %}
+
+      <section class="account-section" aria-labelledby="change-password-title">
+        <h2 id="change-password-title">Change password</h2>
+        <p>Your new password takes effect on every device.</p>
+        <form class="password-form" method="post" action="/account/password" data-password-form>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="form-grid">
+            <label class="field field-current" for="current-password">
+              <span>Current password</span>
+              <span class="password-control">
+                <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
+                <button type="button" data-password-toggle="current-password" aria-pressed="false">Show</button>
+              </span>
+            </label>
+            <span class="form-spacer" aria-hidden="true"></span>
+            <label class="field" for="new-password">
+              <span>New password</span>
+              <span class="password-control">
+                <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
+                <button type="button" data-password-toggle="new-password" aria-pressed="false">Show</button>
+              </span>
+              <small>Use a long, unique password.</small>
+            </label>
+            <label class="field" for="confirm-password">
+              <span>Confirm new password</span>
+              <span class="password-control">
+                <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required>
+                <button type="button" data-password-toggle="confirm-password" aria-pressed="false">Show</button>
+              </span>
+              <small class="field-error" data-password-match-error aria-live="polite"></small>
+            </label>
+          </div>
+          <button class="button is-primary" type="submit">Change password</button>
+        </form>
+      </section>
+
+      <section class="account-section" id="active-sessions" aria-labelledby="sessions-title">
+        <h2 id="sessions-title">Active sessions</h2>
+        <p>Devices currently signed in to your account.</p>
+        <div class="sessions">
+          {% for session in profile.sessions %}
+          <article class="session">
+            <div>
+              <strong>{{ session.device_label }}{% if session.current %} · This device{% endif %}</strong>
+              <span>{% if session.current %}Active now{% else %}Last active {{ session.last_seen_at.strftime("%b %d, %Y at %I:%M %p") }}{% endif %}</span>
+            </div>
+            {% if session.current %}<span class="session-pill">Current</span>{% else %}<span class="session-status">Active</span>{% endif %}
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

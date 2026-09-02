@@ -664,6 +664,11 @@ async function useSyntheticPerformanceReportFixture({ page, performanceReport },
 }
 
 export const test = base.extend({
+  startupRelationProjectionReadiness: [
+    async ({}, use) => use(null),
+    { scope: 'worker', auto: true },
+  ],
+
   gaplessPlaybackFixture: async ({}, use) => {
     const tempRoot = String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
     if (!tempRoot) {

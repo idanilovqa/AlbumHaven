@@ -295,7 +295,7 @@ test('Utility Loops proves the exact media source decodes to finite non-silent s
   assert.match(actions, /async readDecodedLoopSampleEvidence\(loopId/);
   assert.doesNotMatch(actions, /\.evaluate\s*\(/);
   assert.doesNotMatch(pom, /decodeAudioData/);
-  assert.match(actions, /page\.request\.get\(snapshot\.src\)/);
+  assert.match(actions, /authenticatedPageGet\(this\.utilityLoopsTab\.page, snapshot\.src\)/);
   assert.match(actions, /decodeAudioSampleEvidence/);
   assert.match(helper, /resolvePlaywrightPython/);
   assert.match(helper, /windowsHide:\s*true/);
@@ -1340,6 +1340,8 @@ test('broad Problematic Files benchmark retains timing classification before its
   assert.ok(retainedMetrics > evaluation);
   assert.ok(hardAssertion > retainedMetrics, 'hard failure must retain the benchmark payload before throwing');
   assert.match(spec, /problematicReadyPerformanceStatus: problematicReadyOutcome\.status/);
+  assert.match(spec, /page\.goto\(PROBLEMATIC_FILES_PATHNAME/);
+  assert.doesNotMatch(spec, /page\.request\.get/);
 });
 
 test('replacement evidence follows the promoted open when an earlier same-track stream was superseded', async () => {

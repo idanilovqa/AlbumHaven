@@ -25,10 +25,8 @@ const PROBLEMATIC_READY_EXPECTATION = UTILITY_PROBLEMATIC_FILES_LOCAL_BENCHMARK.
 test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`, () => {
 
   test(`${PROBLEMATIC_CASE_ID} immediate Problematic Files stays responsive while search and problem filters update the detail view`, async ({
-    baseURL,
     galleryActions,
     page,
-    request,
     settingsModalAppBarActions,
     stepLogger,
     utilityProblematicFilesActions,
@@ -40,12 +38,14 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       coldProblematicApiMs,
       problematicResponseBytes,
     } = await stepLogger.step('Measure the cold Problematic Files API response before app navigation', async () => {
-      expect(baseURL, 'Expected the real-app Playwright project to provide a base URL.').toBeTruthy();
       const coldRequestStartedAt = performance.now();
-      const coldResponse = await request.get(new URL(PROBLEMATIC_FILES_PATHNAME, baseURL).toString());
-      const coldResponseBody = await coldResponse.body();
+      const coldResponse = await page.goto(PROBLEMATIC_FILES_PATHNAME, {
+        waitUntil: 'commit',
+      });
+      expect(coldResponse, 'Expected the cold Problematic Files navigation to return a response.').toBeTruthy();
+      const coldResponseBody = await coldResponse.text();
       const requestDurationMs = performance.now() - coldRequestStartedAt;
-      const responseBytes = coldResponseBody.byteLength;
+      const responseBytes = new TextEncoder().encode(coldResponseBody).byteLength;
 
       expect(
         coldResponse.ok(),
@@ -53,7 +53,7 @@ test.describe(`${PROBLEMATIC_CASE_ID} utility-problematic-files responsiveness`,
       ).toBe(true);
       let coldPayload = null;
       expect(() => {
-        coldPayload = JSON.parse(coldResponseBody.toString('utf8'));
+        coldPayload = JSON.parse(coldResponseBody);
       }, 'Expected the cold Problematic Files API response body to contain valid JSON.').not.toThrow();
       expectPostgresLibraryBrowseTelemetry(coldPayload);
       expect(Array.isArray(coldPayload.items), 'Expected the cold Problematic Files payload to expose summary items.').toBe(true);

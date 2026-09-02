@@ -58,6 +58,7 @@
   cursor: pointer;
   position: relative;
   bottom: -1px;
+  text-decoration: none;
 }
 .utility-tab.is-active {
   color: var(--text);

@@ -15,21 +15,34 @@ function jsonResponse(payload, options = {}) {
   return {
     ok: () => options.ok !== false,
     status: () => Number(options.status || 200),
-    json: async () => payload,
+    async text() {
+      return JSON.stringify(payload);
+    },
   };
 }
 
 function createPage(responses) {
   const calls = [];
+  const probePage = {
+    async goto(pathname, options) {
+      calls.push(['goto', pathname, options.timeout]);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
+    },
+    async close() {
+      calls.push(['close']);
+    },
+  };
   return {
     calls,
-    request: {
-      async get(requestPath, options) {
-        calls.push(['get', requestPath, options]);
-        const response = responses.shift();
-        if (response instanceof Error) throw response;
-        return response;
-      },
+    context() {
+      return {
+        async newPage() {
+          calls.push(['new-page']);
+          return probePage;
+        },
+      };
     },
     async waitForTimeout(intervalMs) {
       calls.push(['wait', intervalMs]);
@@ -79,14 +92,16 @@ test('production liveness observer repeatedly probes normal status and Postgres 
     [false, true, false],
   );
   assert.deepEqual(page.calls, [
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['new-page'],
+    ['goto', '/status', 700],
+    ['goto', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['goto', '/status', 700],
+    ['goto', '/view-data?surface=albums&payload_tier=sidebar', 700],
     ['wait', 250],
-    ['get', '/status', { timeout: 700 }],
-    ['get', '/view-data?surface=albums&payload_tier=sidebar', { timeout: 700 }],
+    ['goto', '/status', 700],
+    ['goto', '/view-data?surface=albums&payload_tier=sidebar', 700],
+    ['close'],
   ]);
 });
 

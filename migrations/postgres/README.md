@@ -49,6 +49,9 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0042_track_distinct_cover_improvement_alerts.sql
 0043_create_local_track_waveform_peaks.sql
 0044_create_tag_edit_intents.sql
+0045_add_non_album_candidate_index.sql
+0046_add_local_auth_lifecycle.sql
+0047_add_auth_preauth_tokens.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -74,5 +77,19 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0043_create_local_track_waveform_peaks.sql` adds a compact, track-file-scoped cache for generated stereo waveform peaks. File stat and scan-owned content validators plus the analyzer version invalidate stale results; the table never exposes or duplicates raw media.
 
 `0044_create_tag_edit_intents.sql` adds the durable cross-boundary journal for Edit Tags. Each row records old and requested per-path values before media I/O; unfinished rows are reconciled against real files before startup hydration, and terminal completion is committed with the canonical inventory mutation. The application and migrator retain their bounded journal privileges, while the migration explicitly revokes readonly `SELECT` because the rows contain private paths and tag snapshots.
+
+`0045_add_non_album_candidate_index.sql` adds a narrow partial index for active track files whose generated album marker identifies a non-album candidate, keeping that cold discovery path off the full active-file set.
+
+`0046_add_local_auth_lifecycle.sql` adds normalized managed-account identity and contact fields, focused credentials, hashed reset tokens, durable throttles, bounded revocable sessions, append-only security audit events, and a durable mail outbox. Existing accounts receive unique transitional `pending-account-*` identities with non-routable `.invalid` contact addresses for later owner reconciliation, and all legacy sessions are hashed and explicitly revoked rather than promoted into Phase 7 authentication. Named foreign-key and runtime lookup indexes support the lifecycle queries; explicit application and migrator grants preserve role separation, while readonly access is revoked from secret-adjacent auth and delivery tables.
+
+`0047_add_auth_preauth_tokens.sql` adds short-lived, purpose-bound login preflight state for one-time CSRF enforcement. Only SHA-256 token hashes are stored; consumed and expired rows are queryable for bounded cleanup, and the runtime role receives only the privileges needed to issue, consume, and clean up this state.
+
+`0048_add_password_reset_transactions.sql` adds short-lived, hashed clean-URL reset transactions so raw emailed reset tokens leave the browser address bar before a password is submitted.
+
+`0049_enforce_single_use_password_reset_exchange.sql` makes each emailed password-reset token exchangeable only once. It retains the earliest transaction if a pre-release database contains duplicate exchanges, then enforces the invariant with a unique index.
+
+`0050_add_security_audit_cleanup_index.sql` adds the global UTC timestamp and ID index used by the migrator-owned bounded audit-retention command. It grants no runtime deletion privilege; `album_haven_app` remains append-only for security audit events.
+
+`0051_add_auth_throttle_cleanup_index.sql` adds the expiry and ID index used by the bounded throttle cleanup command. It does not expand privileges; the runtime role already owns the narrow delete permission required to remove expired HMAC-keyed buckets.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

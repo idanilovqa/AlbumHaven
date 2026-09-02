@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { decodeAudioSampleEvidence } from '../helpers/loopPlaybackEvidence.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 function parseLoopTimeLabel(label) {
   const match = /^(?:(\d+):)?(\d+):([0-5]\d)\.(\d{3})$/.exec(String(label).trim());
@@ -189,7 +190,7 @@ export class UtilityLoopsActions {
   async readDecodedLoopSampleEvidence(loopId) {
     const snapshot = await this.readLoopPlaybackSnapshot(loopId);
     if (!snapshot.src) throw new Error(`Loop ${loopId} has no exact current source.`);
-    const response = await this.utilityLoopsTab.page.request.get(snapshot.src);
+    const response = await authenticatedPageGet(this.utilityLoopsTab.page, snapshot.src);
     if (!response.ok()) {
       throw new Error(`Loop media returned HTTP ${response.status()} for ${snapshot.src}.`);
     }

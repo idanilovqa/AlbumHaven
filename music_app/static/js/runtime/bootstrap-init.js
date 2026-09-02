@@ -1,5 +1,6 @@
 ﻿restorePlayerAppearance();
 attachModalEvents();
+document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
 attachUtilityModalEvents();

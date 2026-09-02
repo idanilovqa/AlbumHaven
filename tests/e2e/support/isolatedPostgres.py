@@ -54,6 +54,47 @@ _DATABASE_LOCK_PATH = Path(tempfile.gettempdir()) / f"{DATABASE_NAME}.lock"
 _DATABASE_LOCK_WAIT_SECONDS = 120.0
 _DATABASE_LOCK_POLL_SECONDS = 0.2
 _DATABASE_LOCK_INCOMPLETE_GRACE_SECONDS = 5.0
+PERFORMANCE_AUTH_USERNAME = "Rendref"
+PERFORMANCE_AUTH_EMAIL = "rendref@example.test"
+PERFORMANCE_AUTH_PASSWORD = "Phase Seven Performance Passphrase 2026!"
+PERFORMANCE_AUTH_HMAC_SECRET = (
+    "phase7-performance-hmac-secret-0123456789abcdef0123456789abcdef"
+)
+
+
+def configure_performance_auth_environment(app_port: int) -> None:
+    os.environ.update(
+        {
+            "ALBUM_HAVEN_BOOTSTRAP_USERNAME": PERFORMANCE_AUTH_USERNAME,
+            "ALBUM_HAVEN_BOOTSTRAP_EMAIL": PERFORMANCE_AUTH_EMAIL,
+            "ALBUM_HAVEN_PUBLIC_BASE_URL": f"https://127.0.0.1:{int(app_port)}",
+            "ALBUM_HAVEN_AUTH_HMAC_SECRET": PERFORMANCE_AUTH_HMAC_SECRET,
+            "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION": "1",
+            "ALBUM_HAVEN_WELCOME_EMAIL_ENABLED": "false",
+            "ALBUM_HAVEN_PASSWORD_RESET_EMAIL_ENABLED": "false",
+        }
+    )
+
+
+def provision_performance_auth_owner(runtime_database_url: str) -> None:
+    from config import build_auth_config
+    from music_app.services.auth_bootstrap_postgres import PostgresAuthBootstrapService
+    from music_app.services.auth_passwords import hash_password
+
+    config = build_auth_config()
+    config["ALBUM_HAVEN_APP_DATABASE_URL"] = runtime_database_url
+    credential = hash_password(
+        PERFORMANCE_AUTH_PASSWORD,
+        username=PERFORMANCE_AUTH_USERNAME,
+        email=PERFORMANCE_AUTH_EMAIL,
+        breached_checker=lambda _password: False,
+        argon2=config["argon2"],
+        policy_version=config["argon2_policy_version"],
+    )
+    PostgresAuthBootstrapService(config).reconcile_owner(
+        encoded_hash=credential.encoded_hash,
+        hash_policy_version=credential.policy_version,
+    )
 
 
 class _ProcessIdentityState(Enum):
@@ -575,9 +616,40 @@ def reset_application_tables(setup_database_url: str) -> None:
 def seed_bootstrap_owner_and_library(setup_database_url: str) -> None:
     with _connect(setup_database_url) as connection:
         _assert_connected_role(connection, SETUP_ROLE)
-        connection.execute(
+        identity_columns_exist = bool(
+            connection.execute(
+                """
+                select count(*) = 4 as present
+                from information_schema.columns
+                where table_schema = 'app'
+                  and table_name = 'accounts'
+                  and column_name in (
+                    'username_display', 'username_normalized',
+                    'contact_email', 'contact_email_normalized'
+                  )
+                """
+            ).fetchone()["present"]
+        )
+        owner_account_sql = (
             """
-            with owner_account as (
+              insert into app.accounts (
+                display_name, account_kind, username_display,
+                username_normalized, contact_email,
+                contact_email_normalized, metadata
+              )
+              values (
+                'Isolated E2E Owner',
+                'bootstrap_owner',
+                'isolated-e2e-owner',
+                'isolated-e2e-owner',
+                'isolated-e2e-owner@example.test',
+                'isolated-e2e-owner@example.test',
+                '{"source":"isolated_e2e_launcher"}'::jsonb
+              )
+              returning id
+            """
+            if identity_columns_exist
+            else """
               insert into app.accounts (display_name, account_kind, metadata)
               values (
                 'Isolated E2E Owner',
@@ -585,20 +657,26 @@ def seed_bootstrap_owner_and_library(setup_database_url: str) -> None:
                 '{"source":"isolated_e2e_launcher"}'::jsonb
               )
               returning id
-            ),
-            bootstrap_owner as (
-              insert into app.bootstrap_owners (account_id, owner_key, metadata)
-              select id, 'local-bootstrap-owner', '{"source":"isolated_e2e_launcher"}'::jsonb
-              from owner_account
-              returning account_id
-            )
-            insert into library.libraries (owner_account_id, name, library_kind, metadata)
-            select
-              account_id,
-              'Local Library',
-              'local',
-              '{"source":"isolated_e2e_launcher"}'::jsonb
-            from bootstrap_owner
+            """
+        )
+        connection.execute(
+            "with owner_account as ("
+            + owner_account_sql
+            + """
+              ),
+              bootstrap_owner as (
+                insert into app.bootstrap_owners (account_id, owner_key, metadata)
+                select id, 'local-bootstrap-owner', '{"source":"isolated_e2e_launcher"}'::jsonb
+                from owner_account
+                returning account_id
+              )
+              insert into library.libraries (owner_account_id, name, library_kind, metadata)
+              select
+                account_id,
+                'Local Library',
+                'local',
+                '{"source":"isolated_e2e_launcher"}'::jsonb
+              from bootstrap_owner
             """
         )
 

@@ -201,7 +201,12 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
             return context
 
     asgi_app.state.templates = CapturingTemplates()
-    request = SimpleNamespace(app=asgi_app)
+    request = SimpleNamespace(
+        app=asgi_app,
+        cookies={"__Host-album_haven_session": "s" * 43},
+        state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
+        client=SimpleNamespace(host="testserver"),
+    )
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 
@@ -1545,4 +1550,10 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
     assert "window.MUSIC_APP_INITIAL_VIEW" not in bootstrap_state_js
     assert "window.MUSIC_APP_BOOTSTRAP" not in bootstrap_state_js
     assert "runtime_boot_complete" in startup_metrics_js
-    assert {path.name for path in legacy_js_dir.glob("*.js")} == {"runtime-bundle.js"}
+    assert {path.name for path in legacy_js_dir.glob("*.js")} == {
+        "runtime-bundle.js",
+        "login.js",
+        "password-recovery.js",
+        "account.js",
+        "admin-members.js",
+    }

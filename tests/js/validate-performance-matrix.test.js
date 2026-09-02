@@ -27,7 +27,7 @@ const EXPECTED_SHARDS = [
 
 function performanceJobSource(source = workflow) {
   const start = source.indexOf('  e2e_performance_ci:');
-  const end = source.indexOf('\n  pr_agent_review:', start);
+  const end = source.indexOf('\n  review_scope:', start);
   assert.notEqual(start, -1, 'pr-gates.yml must define e2e_performance_ci');
   assert.notEqual(end, -1, 'e2e_performance_ci must remain independently bounded');
   return source.slice(start, end);
@@ -99,7 +99,7 @@ test('validator accepts shards and rejects ownership, compatibility, and case dr
     assert.match(validator.validateWorkflowContract(mixedProfile, contract, runnerModule, testDataMatrix).join('\n'), /fixture|compatible/i);
 
     const mixedHarness = workflowSource.replace(
-      /(shard: utility-problematic-files\r?\n(?:\s+[^\r\n]+\r?\n){2}\s+harness:)\s+[^\r\n]+/,
+      /(shard: utility-problematic-files\r?\n(?:\s+[^\r\n]+\r?\n){3}\s+harness:)\s+[^\r\n]+/,
       '$1 scan',
     );
     assert.notEqual(mixedHarness, workflowSource, 'harness-family mutation must apply on LF and CRLF checkouts');
@@ -182,18 +182,21 @@ test('Windows jobs and foundation manifests provision one exact cross-platform C
   }
 });
 
-test('each shard fetches an immutable profile once before pull-request executable code', () => {
+test('each shard fetches an immutable profile or cover seed before pull-request executable code', () => {
   const job = performanceJobSource();
   const trustedCheckout = stepContaining(job, 'github.event.pull_request.base.sha');
   const fixtureFetch = stepContaining(job, 'fetch-test-fixtures.ps1');
-  for (const step of [trustedCheckout, fixtureFetch]) {
-    assert.match(step, /matrix\.fixtureMode\s*==\s*['"]preloaded-release['"]/);
-  }
+  assert.doesNotMatch(trustedCheckout, /\n\s+if:/);
+  assert.doesNotMatch(fixtureFetch, /\n\s+if:/);
   assert.match(trustedCheckout, /persist-credentials:\s*false/);
+  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*matrix\.fixtureDownloadProfile\s*\}\}/);
   assert.match(fixtureFetch, new RegExp(`-Release\\s+${FIXTURE_RELEASE.replaceAll('.', '\\.')}`));
   assert.match(fixtureFetch, new RegExp(`-ManifestSha256\\s+${FIXTURE_MANIFEST_SHA256}`));
-  assert.ok(job.indexOf('Fetch preloaded performance fixture') < job.indexOf('Install Node dependencies'));
-  assert.ok(job.indexOf('Fetch preloaded performance fixture') < job.indexOf('Validate performance matrix ownership'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Install Node dependencies'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Validate performance matrix ownership'));
+  assert.match(job, /ALBUM_HAVEN_APPROVED_COVER_ROOT=\$approvedCoverRoot/);
+  assert.match(job, /ALBUM_HAVEN_FIXTURE_ROOT= /);
+  assert.match(job, /ALBUM_HAVEN_MEDIA_ROOT= /);
 });
 
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {

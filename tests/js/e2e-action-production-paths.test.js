@@ -457,9 +457,23 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   };
   const actions = new AppBarActions({
     page: {
+      url: () => 'http://127.0.0.1:4173/',
+      context: () => ({
+        async cookies() {
+          return [{
+            name: '__Host-album_haven_session',
+            value: 'scan-session',
+            domain: '127.0.0.1',
+            path: '/',
+          }];
+        },
+      }),
       request: {
-        async get(pathname) {
-          assert.equal(pathname, '/status');
+        async get(pathname, options) {
+          assert.equal(pathname, 'http://127.0.0.1:4173/status');
+          assert.deepEqual(options, {
+            headers: { Cookie: '__Host-album_haven_session=scan-session' },
+          });
           interactions.push('status-probe');
           return {
             ok: () => true,
@@ -497,6 +511,61 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   assert.deepEqual(interactions[2].options, { timeout: 10000 });
   assert.equal(interactions[3], 'status-probe');
   assert.equal(interactions[2].selector, '#scan-indicator');
+});
+
+test('functional browser requests explicitly carry secure loopback session cookies', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/authenticatedPageRequest.js'),
+  ).href;
+  const { authenticatedPageGet } = await import(moduleUrl);
+  const observed = [];
+  const page = {
+    url: () => 'http://127.0.0.1:4173/library',
+    context: () => ({
+      async cookies() {
+        return [
+          {
+            name: '__Host-album_haven_session',
+            value: 'opaque-session',
+            domain: '127.0.0.1',
+            path: '/',
+          },
+          {
+            name: 'album_haven_session_csrf',
+            value: 'csrf-token',
+            domain: '127.0.0.1',
+            path: '/',
+          },
+        ];
+      },
+    }),
+    request: {
+      async get(url, options) {
+        observed.push({ url, options });
+        return { ok: () => true };
+      },
+    },
+  };
+
+  await authenticatedPageGet(page, '/status', {
+    headers: { Accept: 'application/json' },
+    timeout: 1234,
+  });
+
+  assert.deepEqual(observed, [{
+    url: 'http://127.0.0.1:4173/status',
+    options: {
+      headers: {
+        Accept: 'application/json',
+        Cookie: '__Host-album_haven_session=opaque-session; album_haven_session_csrf=csrf-token',
+      },
+      timeout: 1234,
+    },
+  }]);
+  await assert.rejects(
+    authenticatedPageGet(page, 'https://example.com/status'),
+    /same-origin production route/u,
+  );
 });
 
 test('rating authority E2E action observes the real view-data response without interception', async () => {
@@ -721,7 +790,10 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   assert.match(albumCard, /cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)/);
   assert.doesNotMatch(coverLookup, /clickFirstAlbumDetails\(/);
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
+  assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
   assert.match(coverLookupFixtureData, /canonicalPersistence[\s\S]*artist: 'Mastodon'[\s\S]*album: 'Crack The Skye'[\s\S]*year: '2009'/);
+  assert.match(coverLookupFixtureData, /notificationNoResult[\s\S]*artist: 'Flaming Row'[\s\S]*album: 'The Pure Shine'[\s\S]*year: '2019'/);
+  assert.match(coverLookup, /manualProviderCover: MANUAL_PROVIDER_COVER[\s\S]*Object\.values\(MANUAL_PROVIDER_COVER\)\.join\(' - '\)/);
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
@@ -742,6 +814,10 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.doesNotMatch(coverLookup, /modal\.firstRemoteMatch\.sha256/);
   assert.match(coverLookupActions, /readRemoteCandidateEvidence\(candidateId/);
+  assert.match(
+    coverLookupActions,
+    /async startSearch\(options = \{\}\)[\s\S]*waitForResponse\([\s\S]*\/utilities\/cover-lookup\/start[\s\S]*Promise\.all\([\s\S]*findBetterButton\.click\(\)[\s\S]*response\.json\(\)[\s\S]*response\.ok\(\)[\s\S]*payload\?\.ok/,
+  );
   assert.match(coverLookupActions, /readCoverLookupProviderEvidence[\s\S]*isCoverLookupCancellationSettledBeforeArchiveWork/);
   assert.match(coverLookupProviderHelpers, /musicbrainzStarted <= 2[\s\S]*cover_art_archive_requests === 0/);
   assert.match(coverLookupProviderHelpers, /Refusing to control a non-loopback cover provider fixture/);
@@ -1120,7 +1196,14 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   const improvementMode = differentArtScenario.indexOf(
     "setProviderFixtureMode('automatic-scan')",
   );
+  const coverRefreshIdleBoundary = differentArtScenario.indexOf(
+    'waitForScanAndCoverRefreshIdle()',
+  );
   const improvementScan = differentArtScenario.indexOf('triggerIncrementalScanAndWait()');
+  assert.ok(
+    coverRefreshIdleBoundary >= 0 && coverRefreshIdleBoundary < improvementMode,
+    'FTC-COVERS-019 must wait for its prior automatic cover refresh before changing provider mode.',
+  );
   assert.ok(
     improvementMode >= 0 && improvementMode < improvementScan,
     'FTC-COVERS-019 must retain automatic-scan for its later Fixture09 different-art phase.',
@@ -1438,7 +1521,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{ browser, testArtifacts \}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*if \(authenticateFreshBrowserSession\)[\s\S]*authenticateProductionContext\(page\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,
@@ -2524,7 +2607,7 @@ test('album-details selection supports production prewarming without a click-tim
   assert.match(method, /clickDetailsByIdentity/u);
   assert.match(method, /waitForOpenDetailsIdentity/u);
   assert.match(method, /page\.on\('response'/u);
-  assert.match(method, /page\.request\.get/u);
+  assert.match(method, /authenticatedPageGet/u);
   assert.match(method, /\/album-details\?album_key=/u);
   assert.match(method, /Album details identity mismatch/u);
   assert.match(
@@ -2816,6 +2899,18 @@ test('FTC-COVERS-014 ends visible-cover timing at decode before collecting visua
     /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse\);/,
   );
   assert.doesNotMatch(spec, /page\.(?:route|evaluate|addInitScript|setContent)\s*\(/);
+});
+
+test('FTC-COVERS-015 keeps an exact committed Windows zoom-detail visual digest', () => {
+  const helper = read('tests/e2e/helpers/galleryCoverStabilityHelpers.js');
+  assert.match(
+    helper,
+    /JOSEPH_ZOOMED_DETAIL_HASH = '12efccbc8b10d830762730e24dfe35d8c9738abbbefb0027f8a55592cdd3059c'/u,
+  );
+  assert.match(
+    helper,
+    /createHash\('sha256'\)\.update\(screenshot\)\.digest\('hex'\)/u,
+  );
 });
 
 test('gallery placeholder readiness requires a named intentional no-art scenario', async () => {
@@ -4274,6 +4369,16 @@ test('cover lookup measures exact no-size production cover bytes through the act
   const body = Buffer.from('exact full-size selected cover bytes');
   const requested = [];
   page.url = () => 'http://127.0.0.1:4173/?surface=albums';
+  page.context = () => ({
+    async cookies() {
+      return [{
+        name: '__Host-album_haven_session',
+        value: 'cover-session',
+        domain: '127.0.0.1',
+        path: '/',
+      }];
+    },
+  });
   page.request = {
     async get(url, options) {
       requested.push({ url, options });
@@ -4298,7 +4403,12 @@ test('cover lookup measures exact no-size production cover bytes through the act
   assert.equal(requestedUrl.searchParams.get('path'), 'Mastodon/Crack The Skye/cover.jpg');
   assert.equal(requestedUrl.searchParams.get('v'), 'A'.repeat(64));
   assert.equal(requestedUrl.searchParams.has('size'), false);
-  assert.deepEqual(requested[0].options, { headers: { Accept: 'image/*' } });
+  assert.deepEqual(requested[0].options, {
+    headers: {
+      Accept: 'image/*',
+      Cookie: '__Host-album_haven_session=cover-session',
+    },
+  });
   assert.deepEqual(evidence, {
     src: requestedUrl.toString(),
     coverPath: 'Mastodon/Crack The Skye/cover.jpg',

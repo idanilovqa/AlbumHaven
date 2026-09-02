@@ -10,3 +10,5 @@ ytmusicapi
 pytest
 psycopg[binary]
 zstandard
+argon2-cffi
+aiosmtplib

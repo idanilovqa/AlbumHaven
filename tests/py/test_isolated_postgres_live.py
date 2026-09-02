@@ -4,11 +4,14 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
+from argon2 import PasswordHasher
 
 from tests.e2e.support import isolatedPostgres
 
@@ -77,6 +80,62 @@ def _lifecycle_counts(setup_url: str) -> tuple[int, int]:
             """
         ).fetchone()
     return int(row["seed_count"]), int(row["launcher_account_count"])
+
+
+def _account_foreign_key_integrity(connection) -> tuple[dict[str, int], int, set[int]]:
+    from psycopg import sql
+
+    references = connection.execute(
+        """
+        select constraint_table.oid::regclass::text as table_name,
+               source_column.attname as column_name
+        from pg_constraint constraint_record
+        join pg_class constraint_table
+          on constraint_table.oid = constraint_record.conrelid
+        join lateral unnest(constraint_record.conkey, constraint_record.confkey)
+          as key_columns(source_attnum, target_attnum) on true
+        join pg_attribute source_column
+          on source_column.attrelid = constraint_record.conrelid
+         and source_column.attnum = key_columns.source_attnum
+        join pg_attribute target_column
+          on target_column.attrelid = constraint_record.confrelid
+         and target_column.attnum = key_columns.target_attnum
+        where constraint_record.contype = 'f'
+          and constraint_record.confrelid = 'app.accounts'::regclass
+          and target_column.attname = 'id'
+        order by table_name, column_name
+        """
+    ).fetchall()
+    counts: dict[str, int] = {}
+    account_ids: set[int] = set()
+    orphan_count = 0
+    for reference in references:
+        table_name = str(reference["table_name"])
+        schema_name, relation_name = table_name.split(".", 1)
+        column_name = str(reference["column_name"])
+        row = connection.execute(
+            sql.SQL(
+                """
+                select count(*) filter (where source.{column} is not null) as row_count,
+                       count(*) filter (
+                         where source.{column} is not null and target.id is null
+                       ) as orphan_count,
+                       array_agg(distinct source.{column}) filter (
+                         where source.{column} is not null
+                       ) as account_ids
+                from {schema}.{table} source
+                left join app.accounts target on target.id = source.{column}
+                """
+            ).format(
+                column=sql.Identifier(column_name),
+                schema=sql.Identifier(schema_name),
+                table=sql.Identifier(relation_name),
+            )
+        ).fetchone()
+        counts[f"{table_name}.{column_name}"] = int(row["row_count"])
+        orphan_count += int(row["orphan_count"])
+        account_ids.update(int(value) for value in (row["account_ids"] or ()))
+    return counts, orphan_count, account_ids
 
 
 def _explain_index_names(plan_document: object) -> set[str]:
@@ -161,6 +220,445 @@ def test_phase6_plan_evidence_uses_cumulative_root_buffer_counters_once():
         "shared_read_blocks": 2,
         "shared_hit_blocks": 10,
     }
+
+
+def test_live_auth_preauth_migration_reapply_privileges_and_concurrent_consume(
+    monkeypatch,
+):
+    from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    migration_sql = (
+        Path(__file__).resolve().parents[2]
+        / "migrations"
+        / "postgres"
+        / "0047_add_auth_preauth_tokens.sql"
+    ).read_text(encoding="utf-8")
+    cleanup_complete = False
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(migration_sql)
+            connection.execute(migration_sql)
+            privileges = connection.execute(
+                """
+                select
+                  has_table_privilege('album_haven_app',
+                    'app.auth_preflight_tokens', 'SELECT, INSERT, UPDATE, DELETE')
+                    as app_table_access,
+                  has_sequence_privilege('album_haven_app',
+                    'app.auth_preflight_tokens_id_seq', 'USAGE, SELECT')
+                    as app_sequence_access,
+                  has_table_privilege('album_haven_readonly',
+                    'app.auth_preflight_tokens', 'SELECT') as readonly_select,
+                  has_sequence_privilege('album_haven_readonly',
+                    'app.auth_preflight_tokens_id_seq', 'USAGE') as readonly_usage
+                """
+            ).fetchone()
+
+        assert privileges == {
+            "app_table_access": True,
+            "app_sequence_access": True,
+            "readonly_select": False,
+            "readonly_usage": False,
+        }
+
+        service = PostgresPreAuthCsrfService(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=isolatedPostgres._connect,
+        )
+        issued = service.issue_login_token()
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda _attempt: service.consume_login_token(issued.raw_token),
+                    range(2),
+                )
+            )
+        assert sorted(results) == [False, True]
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
+
+
+def test_live_auth_bootstrap_concurrent_reruns_preserve_owner_and_one_credential(
+    monkeypatch,
+):
+    from music_app.services.auth_bootstrap_postgres import (
+        PostgresAuthBootstrapService,
+    )
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    passwords = (
+        "first isolated owner credential value",
+        "second isolated owner credential value",
+    )
+    encoded_hashes = tuple(PasswordHasher().hash(value) for value in passwords)
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            initial = connection.execute(
+                """
+                select app.bootstrap_owners.account_id,
+                       library.libraries.id as library_id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id =
+                     app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                """
+            ).fetchone()
+            initial_fk_counts, initial_orphans, initial_fk_account_ids = (
+                _account_foreign_key_integrity(connection)
+            )
+        assert initial is not None
+        assert initial_orphans == 0
+        assert initial_fk_account_ids == {int(initial["account_id"])}
+
+        def reconcile(encoded_hash):
+            service = PostgresAuthBootstrapService(
+                {
+                    "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+                    "bootstrap_email_normalized": "Rendref+owner@example.test",
+                    "welcome_enabled": True,
+                    "argon2": {
+                        "memory_cost": 65_536,
+                        "time_cost": 3,
+                        "parallelism": 1,
+                        "salt_len": 16,
+                        "hash_len": 32,
+                    },
+                    "argon2_policy_version": 1,
+                },
+                connect=isolatedPostgres._connect,
+            )
+            return service.reconcile_owner(
+                encoded_hash=encoded_hash,
+                hash_policy_version=1,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(reconcile, encoded_hashes))
+
+        assert sorted(result.credential_created for result in results) == [False, True]
+        assert {result.account_id for result in results} == {int(initial["account_id"])}
+        assert {result.library_id for result in results} == {int(initial["library_id"])}
+        assert sorted(result.welcome_queued for result in results) == [False, True]
+        assert len({result.welcome_outbox_id for result in results}) == 1
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = connection.execute(
+                """
+                select app.accounts.id,
+                       app.accounts.username_display,
+                       app.accounts.username_normalized,
+                       app.accounts.contact_email_normalized,
+                       app.account_credentials.encoded_hash,
+                       library.libraries.id as library_id,
+                       library.library_memberships.membership_role,
+                       (select count(*) from app.accounts) as account_count,
+                       (select count(*) from library.libraries) as library_count,
+                       (select count(*) from app.account_credentials)
+                         as credential_count,
+                       (select count(*)
+                          from app.mail_outbox
+                         where message_category = 'welcome') as welcome_count,
+                       (select min(delivery_status)
+                          from app.mail_outbox
+                         where message_category = 'welcome') as welcome_status
+                from app.accounts
+                join app.account_credentials
+                  on app.account_credentials.account_id = app.accounts.id
+                join library.libraries
+                  on library.libraries.owner_account_id = app.accounts.id
+                join library.library_memberships
+                  on library.library_memberships.library_id = library.libraries.id
+                 and library.library_memberships.account_id = app.accounts.id
+                where app.accounts.id = %s
+                """,
+                (int(initial["account_id"]),),
+            ).fetchone()
+            final_fk_counts, final_orphans, final_fk_account_ids = (
+                _account_foreign_key_integrity(connection)
+            )
+
+        assert persisted is not None
+        assert persisted["username_display"] == "Rendref"
+        assert persisted["username_normalized"] == "rendref"
+        assert persisted["contact_email_normalized"] == "Rendref+owner@example.test"
+        assert persisted["membership_role"] == "owner"
+        assert int(persisted["library_id"]) == int(initial["library_id"])
+        assert int(persisted["account_count"]) == 1
+        assert int(persisted["library_count"]) == 1
+        assert int(persisted["credential_count"]) == 1
+        assert int(persisted["welcome_count"]) == 1
+        assert persisted["welcome_status"] == "pending"
+        assert final_orphans == 0
+        assert final_fk_account_ids == {int(initial["account_id"])}
+        assert all(
+            final_fk_counts[reference] >= row_count
+            for reference, row_count in initial_fk_counts.items()
+        )
+        persisted_hash = persisted["encoded_hash"]
+        assert persisted_hash in encoded_hashes
+        assert PasswordHasher().verify(
+            persisted_hash,
+            passwords[encoded_hashes.index(persisted_hash)],
+        )
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_admin_account_updates_serialize_on_the_same_target(monkeypatch):
+    from music_app.services.admin_member_mutation_postgres import (
+        PostgresAdminMemberMutationService,
+    )
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    now = datetime.now(timezone.utc)
+    first_locked = Event()
+    second_attempting_lock = Event()
+    connection_counter_lock = Lock()
+    connection_count = 0
+
+    class CoordinatedConnection:
+        def __init__(self, connection, sequence):
+            self._connection = connection
+            self._sequence = sequence
+
+        def __enter__(self):
+            self._connection.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return self._connection.__exit__(exc_type, exc, traceback)
+
+        def transaction(self):
+            return self._connection.transaction()
+
+        def execute(self, sql, params=()):
+            statement = " ".join(sql.casefold().split())
+            if "with locked_accounts as" not in statement:
+                return self._connection.execute(sql, params)
+            if self._sequence == 0:
+                cursor = self._connection.execute(sql, params)
+                first_locked.set()
+                assert second_attempting_lock.wait(timeout=10)
+                return cursor
+            assert first_locked.wait(timeout=10)
+            second_attempting_lock.set()
+            return self._connection.execute(sql, params)
+
+    def connect(database_url):
+        nonlocal connection_count
+        connection = isolatedPostgres._connect(database_url)
+        with connection_counter_lock:
+            sequence = connection_count
+            connection_count += 1
+        return CoordinatedConnection(connection, sequence)
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            authority = connection.execute(
+                """
+                select app.bootstrap_owners.account_id,
+                       library.libraries.id as library_id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id =
+                     app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                """
+            ).fetchone()
+            assert authority is not None
+            target_id = int(connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, account_kind, username_display,
+                  username_normalized, contact_email,
+                  contact_email_normalized
+                ) values (
+                  'Concurrent administrator target', 'managed',
+                  'Concurrent target', 'concurrent-target',
+                  'concurrent-target@example.test',
+                  'concurrent-target@example.test'
+                )
+                returning id
+                """
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.library_memberships (
+                  library_id, account_id, membership_role
+                ) values (%s, %s, 'member')
+                """,
+                (int(authority["library_id"]), target_id),
+            )
+
+        service = PostgresAdminMemberMutationService(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=connect,
+            clock=lambda: now,
+        )
+
+        def update(capability_key):
+            service.update_account(
+                actor_account_id=int(authority["account_id"]),
+                actor_authenticated_at=now,
+                library_id=int(authority["library_id"]),
+                target_account_id=target_id,
+                is_active=True,
+                current_library_access=True,
+                capability_keys=(capability_key,),
+                confirm_disable=False,
+                confirm_remove_access=False,
+                request_ref=f"concurrent-admin-{capability_key}",
+            )
+
+        requested_capabilities = (
+            "library.browse.read",
+            "library.media.read",
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            list(executor.map(update, requested_capabilities))
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = connection.execute(
+                """
+                select
+                  array_agg(capability_key order by capability_key)
+                    filter (where revoked_at is null) as active_capabilities,
+                  count(*) filter (
+                    where revoked_at is not null
+                  ) as revoked_capability_count
+                from app.capabilities
+                where account_id = %s
+                  and scope_kind = 'library'
+                  and scope_id = %s
+                """,
+                (target_id, int(authority["library_id"])),
+            ).fetchone()
+            audit_count = int(connection.execute(
+                """
+                select count(*) as count
+                from app.security_audit_events
+                where target_account_id = %s
+                  and event_category = 'account_management'
+                  and outcome = 'success'
+                  and reason_code = 'account_updated'
+                """,
+                (target_id,),
+            ).fetchone()["count"])
+
+        assert tuple(persisted["active_capabilities"]) in {
+            (requested_capabilities[0],),
+            (requested_capabilities[1],),
+        }
+        assert int(persisted["revoked_capability_count"]) == 1
+        assert audit_count == 2
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_phase_7_partial_indexes_match_representative_runtime_predicates(
+    monkeypatch,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    now = datetime.now(timezone.utc)
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            account_id = int(connection.execute(
+                """
+                select account_id
+                from app.bootstrap_owners
+                where owner_key = 'local-bootstrap-owner'
+                """
+            ).fetchone()["account_id"])
+            probes = (
+                (
+                    "password_reset_tokens_active_account_purpose_idx",
+                    """
+                    select id from app.password_reset_tokens
+                    where account_id = %s and purpose = 'password_reset'
+                      and consumed_at is null and revoked_at is null
+                    """,
+                    (account_id,),
+                ),
+                (
+                    "account_sessions_active_account_idx",
+                    """
+                    select id from app.account_sessions
+                    where account_id = %s and revoked_at is null
+                      and idle_expires_at > %s and absolute_expires_at > %s
+                    order by idle_expires_at
+                    """,
+                    (account_id, now, now),
+                ),
+                (
+                    "mail_outbox_pending_claim_idx",
+                    """
+                    select id from app.mail_outbox
+                    where delivery_status in ('pending', 'failed')
+                      and (next_attempt_at is null or next_attempt_at <= %s)
+                    order by next_attempt_at nulls first, id
+                    """,
+                    (now,),
+                ),
+                (
+                    "mail_outbox_unknown_reconciliation_idx",
+                    """
+                    select id from app.mail_outbox
+                    where delivery_status = 'unknown'
+                    order by claimed_at, id
+                    """,
+                    (),
+                ),
+                (
+                    "password_reset_transactions_active_expiry_idx",
+                    """
+                    select id from app.password_reset_transactions
+                    where consumed_at is null and expires_at > %s
+                    order by expires_at, id
+                    """,
+                    (now,),
+                ),
+            )
+            with connection.transaction():
+                connection.execute("set local enable_seqscan = off")
+                for expected_index, query, params in probes:
+                    plan = connection.execute(
+                        "explain (analyze, buffers, format json) " + query,
+                        params,
+                    ).fetchone()["QUERY PLAN"]
+                    assert expected_index in _explain_index_names(plan)
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
 
 
 def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
@@ -510,18 +1008,22 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
     )
     cleanup_complete = False
 
-    def runtime_delete_privileges() -> tuple[bool, bool]:
-        with isolatedPostgres._connect(runtime_url) as connection:
+    def production_runtime_delete_privileges() -> tuple[bool, bool]:
+        with isolatedPostgres._connect(setup_url) as connection:
             isolatedPostgres._assert_connected_role(
                 connection,
-                isolatedPostgres.RUNTIME_ROLE,
+                isolatedPostgres.SETUP_ROLE,
             )
             row = connection.execute(
                 """
                 select
-                  has_table_privilege(current_user, 'library.ignored_versions', 'DELETE')
+                  has_table_privilege(
+                    'album_haven_app', 'library.ignored_versions', 'DELETE'
+                  )
                     as ignored_versions_delete,
-                  has_table_privilege(current_user, 'library.manual_versions', 'DELETE')
+                  has_table_privilege(
+                    'album_haven_app', 'library.manual_versions', 'DELETE'
+                  )
                     as manual_versions_delete
                 """
             ).fetchone()
@@ -539,18 +1041,16 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
                 connection,
                 isolatedPostgres.SETUP_ROLE,
             )
-            runtime_role = str(urlparse(runtime_url).username or "")
-            from psycopg import sql as psycopg_sql
             connection.execute(
-                psycopg_sql.SQL("""
+                """
                 revoke delete on table
                   library.ignored_versions,
                   library.manual_versions
-                from album_haven_app, {}
-                """).format(psycopg_sql.Identifier(runtime_role))
+                from album_haven_app
+                """
             )
 
-        assert runtime_delete_privileges() == (False, False)
+        assert production_runtime_delete_privileges() == (False, False)
 
         migration_sql = migration_path.read_text(encoding="utf-8")
         with isolatedPostgres._connect(setup_url) as connection:
@@ -560,7 +1060,7 @@ def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypat
             )
             connection.execute(migration_sql)
 
-        assert runtime_delete_privileges() == (True, True)
+        assert production_runtime_delete_privileges() == (True, True)
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True
@@ -3177,7 +3677,17 @@ def test_live_root_linkage_resolution_and_production_scan_writer(monkeypatch, tm
 
             second_account_id = int(
                 connection.execute(
-                    "insert into app.accounts (display_name, account_kind) values ('Other Owner', 'local') returning id"
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Other Owner', 'managed', 'other-owner',
+                      'other-owner', 'other-owner@example.test',
+                      'other-owner@example.test'
+                    ) returning id
+                    """
                 ).fetchone()["id"]
             )
             second_library_id = int(

@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export function evaluateMountedAlbumWindowTransition({
   editedAlbumNames,
@@ -1137,7 +1138,8 @@ export class GalleryActions {
         { timeout },
       );
       if (!response) {
-        response = await this.galleryPage.page.request.get(
+        response = await authenticatedPageGet(
+          this.galleryPage.page,
           `/album-details?album_key=${encodeURIComponent(requestKey)}`,
           { timeout },
         );

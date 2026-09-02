@@ -144,7 +144,7 @@ test('scan database configuration preflight fails before launch when dedicated U
       assert.match(error.message, /ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL/);
       assert.match(error.message, /ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL/);
       assert.match(error.message, /album_haven_scan_e2e/);
-      assert.match(error.message, /docs\/postgres-migration-runbook\.md/);
+      assert.match(error.message, /\.env\.example/);
       return true;
     },
   );
@@ -2622,6 +2622,10 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(exitCode, 0);
   assert.equal(calls.length, 19);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
+  assert.equal(
+    calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
+    true,
+  );
   assert.equal(
     calls.every((call) => call.options.env.PLAYWRIGHT_OPEN_PERFORMANCE_REPORT === '0'),
     true,

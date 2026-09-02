@@ -405,9 +405,47 @@ test('functional cold-browser warmup is one read-only worker setup rather than p
   assert.match(source, /process\.env\.ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP\s*===\s*['"]1['"]/);
   assert.match(source, /warmFunctionalBrowser\(/);
   assert.match(helperSource, /browser\.newContext\(/);
+  assert.match(helperSource, /authenticateProductionContext\(page\)/);
   assert.match(helperSource, /#artist-groups \.album-card/);
   assert.match(helperSource, /__ALBUM_HAVEN_STARTUP_METRICS__/);
   assert.match(source, /\{\s*scope:\s*['"]worker['"],\s*auto:\s*true\s*\}/);
+});
+
+test('functional fixtures authenticate every production browser context through the login form', () => {
+  const source = fs.readFileSync(baseFixturesPath, 'utf8');
+
+  assert.match(
+    source,
+    /import \{ authenticateProductionContext \} from '\.\/performanceAuthentication\.js';/,
+  );
+  assert.match(
+    source,
+    /functionalAuthentication:\s*\[async\s*\(\{\s*page\s*\},\s*use\)\s*=>\s*\{[\s\S]*authenticateProductionContext\(page\)[\s\S]*\{\s*auto:\s*true\s*\}/,
+  );
+  assert.match(
+    source,
+    /freshBrowserSession:[\s\S]*authenticateProductionContext\(page\)/,
+  );
+  assert.match(
+    source,
+    /startupRelationProjectionReadiness:[\s\S]*readAuthenticatedStartupRelationProjectionReadiness/,
+  );
+});
+
+test('phase 7 fixtures retain ownership of their authentication lifecycle', () => {
+  const source = fs.readFileSync(
+    path.join(repoRoot, 'tests/e2e/phase7/support/baseFixtures.js'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /functionalAuthentication:\s*\[async\s*\(\{\},\s*use\)\s*=>\s*use\(\),\s*\{\s*auto:\s*true\s*\}\]/,
+  );
+  assert.match(
+    source,
+    /authenticateFreshBrowserSession:\s*false/,
+  );
 });
 
 validatorTest('metadata shard uses one fixture setup with three effect-compatible waves', () => {

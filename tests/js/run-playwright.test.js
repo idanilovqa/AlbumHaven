@@ -2886,7 +2886,7 @@ test('startManagedScanApp launches Python directly and waits for injected readin
     },
     probeHttpStatusReadyFn: async (url) => {
       probes += 1;
-      assert.equal(url, 'http://127.0.0.1:4317/status');
+      assert.equal(url, 'http://127.0.0.1:4317/health');
       return probes === 2;
     },
     sleepFn: async () => {},
@@ -2931,7 +2931,7 @@ test('startManagedScanApp preserves an explicit performance-runner samples path'
       return child;
     },
     probeHttpStatusReadyFn: async (url) => {
-      assert.equal(url, 'http://127.0.0.1:4318/status');
+      assert.equal(url, 'http://127.0.0.1:4318/health');
       return true;
     },
     stdout: { write() {} },
@@ -2956,7 +2956,7 @@ test('waitForManagedScanAppReady rejects an app that exits before binding', asyn
   );
 });
 
-test('waitForManagedScanAppReady ignores a listening port until the status endpoint is ready', async () => {
+test('waitForManagedScanAppReady ignores a listening port until the public health endpoint is ready', async () => {
   const child = createFakeChildProcess(5253);
   let portProbes = 0;
   let statusProbes = 0;
@@ -2968,7 +2968,7 @@ test('waitForManagedScanAppReady ignores a listening port until the status endpo
     },
     probeHttpStatusReadyFn: async (url) => {
       statusProbes += 1;
-      assert.equal(url, 'http://127.0.0.1:4318/status');
+      assert.equal(url, 'http://127.0.0.1:4318/health');
       return statusProbes === 2;
     },
     sleepFn: async () => {},
@@ -3004,7 +3004,7 @@ test('stopManagedScanApp uses injected process-tree teardown and waits for port 
   assert.equal(waited[0].options.timeoutMs, _private.MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS);
 });
 
-test('startManagedIsolatedApp launches Python directly with safe managed env and waits for status', async () => {
+test('startManagedIsolatedApp launches Python directly with safe managed env and waits for public health', async () => {
   const child = createFakeChildProcess(5454);
   const calls = [];
   const probes = [];
@@ -3050,7 +3050,7 @@ test('startManagedIsolatedApp launches Python directly with safe managed env and
     calls[0].options.env.ALBUM_HAVEN_FAKE_E2E_PROVIDER_BASE_URL,
     'http://127.0.0.1:4322',
   );
-  assert.deepEqual(probes, ['http://127.0.0.1:4320/status']);
+  assert.deepEqual(probes, ['http://127.0.0.1:4320/health']);
 });
 
 test('non-album rescans and sparse metadata scans seed all unrelated functional cover misses', () => {
@@ -3116,6 +3116,7 @@ test('non-album rescan startup seeds provider-scenario cover misses before launc
 test('functional-core app startup completes shared gallery, cover, and utility warmup before Playwright', async () => {
   const child = createFakeChildProcess(5455);
   const startupEvents = [];
+  const requestHeaders = { Cookie: '__Host-album_haven_session=test-session' };
 
   const started = await _private.startManagedIsolatedApp({
     PLAYWRIGHT_PYTHON: 'python-test.exe',
@@ -3130,30 +3131,79 @@ test('functional-core app startup completes shared gallery, cover, and utility w
       return 'python-functional-start';
     },
     probeHttpStatusReadyFn: async () => true,
+    authenticateFunctionalFixtureFn: async (port) => {
+      startupEvents.push({ stage: 'authenticate', port });
+      return requestHeaders;
+    },
     prewarmFunctionalFixtureFn: async (port, options) => {
       startupEvents.push({ stage: 'warmup', port, options });
       return true;
     },
-    waitForFunctionalFixtureBackgroundIdleFn: async (managedChild, port) => {
-      startupEvents.push({ stage: 'background-idle', managedChild, port });
+    waitForFunctionalFixtureBackgroundIdleFn: async (managedChild, port, options) => {
+      startupEvents.push({ stage: 'background-idle', managedChild, port, options });
     },
     stdout: { write() {} },
     stderr: { write() {} },
   });
 
   assert.equal(started, child);
-  assert.equal(startupEvents.length, 2);
-  assert.equal(startupEvents[0].stage, 'warmup');
-  assert.equal(startupEvents[0].port, 4324);
-  assert.deepEqual(startupEvents[0].options, {
+  assert.equal(startupEvents.length, 3);
+  assert.deepEqual(startupEvents[0], { stage: 'authenticate', port: 4324 });
+  assert.equal(startupEvents[1].stage, 'warmup');
+  assert.equal(startupEvents[1].port, 4324);
+  assert.deepEqual(startupEvents[1].options, {
     fetchHttpResponseCompleteFn: undefined,
     mediaRoot: undefined,
+    requestHeaders,
   });
-  assert.deepEqual(startupEvents[1], {
+  assert.deepEqual(startupEvents[2], {
     stage: 'background-idle',
     managedChild: child,
     port: 4324,
+    options: {
+      fetchHttpResponseCompleteFn: undefined,
+      requestHeaders,
+    },
   });
+});
+
+test('functional fixture HTTP authentication uses the real CSRF-protected login form', async () => {
+  const requests = [];
+  const responses = [
+    {
+      ok: true,
+      statusCode: 200,
+      body: '<input type="hidden" name="csrf_token" value="preauth-token">',
+      setCookieHeaders: ['__Host-album_haven_login_csrf=preauth-token; Path=/; HttpOnly'],
+    },
+    {
+      ok: false,
+      statusCode: 303,
+      body: '',
+      setCookieHeaders: [
+        '__Host-album_haven_session=session-token; Path=/; HttpOnly',
+        '__Host-album_haven_csrf=session-csrf; Path=/',
+      ],
+    },
+  ];
+
+  const headers = await _private.authenticateFunctionalFixture(4324, {
+    fetchHttpResponseCompleteFn: async (url, options) => {
+      requests.push({ url, options });
+      return responses.shift();
+    },
+  });
+
+  assert.deepEqual(headers, { Cookie: '__Host-album_haven_session=session-token' });
+  assert.equal(requests[0].url, 'http://127.0.0.1:4324/login?return_to=%2Fhealth');
+  assert.equal(requests[0].options.method, 'GET');
+  assert.equal(requests[1].url, 'http://127.0.0.1:4324/login');
+  assert.equal(requests[1].options.method, 'POST');
+  assert.equal(requests[1].options.headers.Cookie, '__Host-album_haven_login_csrf=preauth-token');
+  assert.equal(requests[1].options.headers.Origin, 'http://127.0.0.1:4324');
+  assert.match(requests[1].options.body, /username=rendref/);
+  assert.match(requests[1].options.body, /csrf_token=preauth-token/);
+  assert.match(requests[1].options.body, /return_to=%2Fhealth/);
 });
 
 test('functional fixture startup waits for a stable idle production status before Playwright', async () => {
@@ -3183,8 +3233,9 @@ test('functional fixture startup waits for a stable idle production status befor
   let now = 0;
 
   await _private.waitForFunctionalFixtureBackgroundIdle(child, 4324, {
-    fetchHttpResponseCompleteFn: async (url) => {
-      requests.push(url);
+    requestHeaders: { Cookie: 'session=test' },
+    fetchHttpResponseCompleteFn: async (url, options) => {
+      requests.push({ url, options });
       return { ok: true, body: JSON.stringify(responses.shift()) };
     },
     nowFn: () => now,
@@ -3196,7 +3247,16 @@ test('functional fixture startup waits for a stable idle production status befor
     timeoutMs: 100,
   });
 
-  assert.deepEqual(requests, Array(4).fill('http://127.0.0.1:4324/status'));
+  assert.deepEqual(
+    requests,
+    Array(4).fill(null).map(() => ({
+      url: 'http://127.0.0.1:4324/status',
+      options: {
+        requestTimeoutMs: 100,
+        headers: { Cookie: 'session=test' },
+      },
+    })),
+  );
 });
 
 test('functional fixture warmup derives only fixture-owned cover previews from the real gallery payload', async () => {
@@ -3206,8 +3266,9 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   const secondCover = path.join(mediaRoot, 'covers', 'fixture-two.jpg');
   const warmed = await _private.prewarmFunctionalFixture(4324, {
     mediaRoot,
-    fetchHttpResponseCompleteFn: async (url) => {
-      requests.push(url);
+    requestHeaders: { Cookie: 'session=test' },
+    fetchHttpResponseCompleteFn: async (url, options) => {
+      requests.push({ url, options });
       if (requests.length === 1) {
         return { ok: true, body: '<!doctype html>' };
       }
@@ -3235,7 +3296,7 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
   const secondUrl = new URL('/cover', 'http://127.0.0.1:4324');
   secondUrl.searchParams.set('path', secondCover);
   secondUrl.searchParams.set('size', '480');
-  assert.deepEqual(requests, [
+  assert.deepEqual(requests.map((request) => request.url), [
     'http://127.0.0.1:4324/?surface=albums',
     'http://127.0.0.1:4324/view-data?surface=albums&omit_sidebar=1',
     firstUrl.toString(),
@@ -3243,6 +3304,9 @@ test('functional fixture warmup derives only fixture-owned cover previews from t
     'http://127.0.0.1:4324/utilities/problematic-files',
     'http://127.0.0.1:4324/utilities/rules',
   ]);
+  assert.ok(requests.every((request) => (
+    request.options.headers.Cookie === 'session=test'
+  )));
 });
 
 test('waitForManagedIsolatedAppReady rejects an app that exits before status readiness', async () => {

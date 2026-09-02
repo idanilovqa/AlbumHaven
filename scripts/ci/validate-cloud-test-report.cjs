@@ -11,7 +11,7 @@ const FORBIDDEN_CONTENT = [
   /(?:ALBUM_HAVEN_FIXTURES_TOKEN|DATABASE_APP_URL|PGPASSWORD)\s*=/i,
   /(?:^|[\\/\s])[^\\/\s]+\.log(?:$|[\s"<])/i,
   /(?:^|[\\/\s])trace\.zip(?:$|[\s"<])/i,
-  /\/(?:home\/runner\/work|Users\/[^/]+|private\/var|var\/folders|tmp)\//i,
+  /\/(?:home\/runner\/work|Users\/[^/]+|private\/var|srv\/private|var\/folders|tmp)\//i,
 ];
 
 function normalizedPublicPath(name) {

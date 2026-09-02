@@ -8,6 +8,7 @@
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script">
   <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}">
@@ -42,8 +43,8 @@
     <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
 
     <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
-      <form class="toolbar shell-app-bar" id="search-form" method="get" action="/" data-shell-slot="app_bar" data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}">
-        <div class="toolbar-left">
+      <div class="toolbar shell-app-bar" data-shell-slot="app_bar" data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}">
+        <form class="toolbar-left" id="search-form" method="get" action="/">
           <div class="search-input-wrap">
             <input type="search" name="q" id="search-input" value="{{ query }}" placeholder="Search artist, album, or track" aria-label="Search music" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="recent-search-popover" aria-expanded="false">
             <div class="recent-search-popover" id="recent-search-popover" role="listbox" aria-label="Recent searches" hidden></div>
@@ -55,7 +56,7 @@
           {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
           <button class="button" type="submit">Apply</button>
-        </div>
+        </form>
         <div class="toolbar-right">
           <button class="icon-button cover-lookup-drawer-button" type="button" id="cover-lookup-drawer-button" data-toggle-cover-lookup-drawer="1" title="Cover art lookups" aria-label="Cover art lookups">
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
@@ -70,9 +71,10 @@
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
           </button>
-          <button class="icon-button" type="button" id="settings-button" data-open-utilities="1" title="Settings" aria-label="Settings">&#9881;</button>
+          <a class="icon-button" id="account-button" href="/account" title="Account" aria-label="Account">&#9787;</a>
+          {% include 'partials/account-menu.html' %}
         </div>
-      </form>
+      </div>
 
       {% if last_error %}
       <div class="error" id="last-error">Last scan error: {{ last_error }}</div>

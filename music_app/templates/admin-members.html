@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Users &amp; access — Album Haven</title>
+  <link rel="stylesheet" href="/static/css/admin-members.css">
+  <script src="/static/js/admin-members.js" defer></script>
+</head>
+<body>
+  <script id="admin-allowed-actions" type="application/json">{{ allowed_actions.as_payload() | tojson }}</script>
+  <main class="settings-shell">
+    {% include "partials/admin-settings-nav.html" %}
+    <section class="settings-main" data-admin-roster data-csrf-token="{{ csrf_token }}">
+      <header class="members-heading">
+        <div>
+          <h1>Users &amp; access</h1>
+          <p>Manage who can sign in and what they can do in {{ roster.library_name }}.</p>
+        </div>
+        {% if allowed_actions.allows('accounts.create') %}<a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>{% endif %}
+      </header>
+
+      {% if created %}<p class="admin-notice" role="status">The account was created and is waiting for its invitation to be accepted.</p>{% endif %}
+      <p data-admin-roster-status role="status" aria-live="polite" hidden></p>
+      <p data-admin-roster-error role="alert" hidden></p>
+
+      <div class="members-table" role="table" aria-label="Managed users">
+        <div class="members-row members-table-head" role="row">
+          <span role="columnheader">User</span>
+          <span role="columnheader">Role / access</span>
+          <span role="columnheader">Status</span>
+          <span role="columnheader">Sessions</span>
+          <span role="columnheader">Invitation</span>
+          <span role="columnheader">Actions</span>
+        </div>
+        {% for member in roster.members %}
+        {% set can_copy_invitation = member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
+        {% set can_send_invitation = member.account_status == 'Pending invitation' and invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}
+        {% set can_edit_member = allowed_actions.allows('accounts.manage') %}
+        <article class="members-row" role="row">
+          <div class="member-identity" role="cell">
+            <span class="member-avatar" aria-hidden="true">{{ member.username[:2] | upper }}</span>
+            <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
+          </div>
+          <div class="member-access" role="cell" data-label="Role / access">
+            <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | list != listener_defaults | list %} · Customized{% endif %}{% endif %}</strong>
+            <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} explicit capabilities{% else %}No current-library access{% endif %}</small>
+          </div>
+          <div role="cell" data-label="Status"><span class="status-dot {% if member.account_status == 'Disabled' %}is-disabled{% elif member.account_status == 'Pending invitation' %}is-pending{% endif %}"></span>{{ member.account_status }}</div>
+          <div role="cell" data-label="Sessions">{{ member.active_session_count }} active session{{ "" if member.active_session_count == 1 else "s" }}</div>
+          <div role="cell" data-label="Invitation">{% if member.invitation_delivery_status %}Invitation {{ member.invitation_delivery_status }}{% else %}—{% endif %}</div>
+          <div role="cell" data-label="Actions">
+            {% if can_copy_invitation or can_send_invitation or can_edit_member %}
+            <div class="member-actions">
+              <button type="button" class="member-actions-trigger"
+                      aria-label="Actions for {{ member.username }}"
+                      aria-haspopup="menu" aria-expanded="false"
+                      data-member-menu-trigger="{{ member.account_id }}">⋯</button>
+              <div class="member-actions-menu" role="menu" hidden data-member-menu="{{ member.account_id }}">
+                {% if can_copy_invitation %}<button type="button" role="menuitem" data-copy-invitation="{{ member.account_id }}">Copy invite link</button>{% endif %}
+                {% if can_send_invitation %}<button type="button" role="menuitem" data-send-invitation="{{ member.account_id }}">Send invitation email</button>{% endif %}
+                {% if can_edit_member %}<a class="member-edit" role="menuitem" href="/admin/accounts/{{ member.account_id }}">Edit</a>{% endif %}
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </div>
+      <section class="invitation-copy-fallback" data-invitation-copy-fallback hidden
+               aria-labelledby="invitation-copy-title">
+        <h2 id="invitation-copy-title">Copy invitation link</h2>
+        <label for="invitation-copy-value">Invitation link</label>
+        <input id="invitation-copy-value" data-invitation-copy-value type="text" readonly>
+        <button type="button" data-invitation-copy-manual>Copy</button>
+        <button type="button" data-invitation-copy-dismiss>Dismiss</button>
+      </section>
+      <section data-roster-reauth-panel hidden aria-labelledby="roster-reauth-title">
+        <h2 id="roster-reauth-title">Confirm your administrator password</h2>
+        <label for="roster-reauth-password">Password</label>
+        <input id="roster-reauth-password" data-roster-reauth-password
+               type="password" autocomplete="current-password">
+        <button type="button" data-roster-reauth-submit>Continue</button>
+        <button type="button" data-roster-reauth-cancel>Cancel</button>
+      </section>
+    </section>
+  </main>
+</body>
+</html>

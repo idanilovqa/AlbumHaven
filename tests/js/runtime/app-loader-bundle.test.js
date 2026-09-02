@@ -36,6 +36,7 @@ function loadStartupAlbumCardRenderer() {
 }
 
 const expectedRuntimeOrder = [
+  'session-csrf-fetch.js',
   'bootstrap-state.js',
   'startup-metrics-helpers.js',
   'response-state-helpers.js',
@@ -54,6 +55,7 @@ const expectedRuntimeOrder = [
   'core-state-and-helpers.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
+  'account-menu.js',
   'bootstrap-refocus-helpers.js',
   'client-preferences-helpers.js',
   'gallery-display-preference-helpers.js',

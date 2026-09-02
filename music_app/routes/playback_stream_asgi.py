@@ -7,7 +7,7 @@ import json
 import math
 from typing import Any
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
@@ -20,6 +20,7 @@ from music_app.services.playback_pcm import (
     pack_pcm_frame,
 )
 from music_app.services.waveform_peaks import WaveformPeaksBusyError
+from music_app.services.policy_asgi import require_action
 
 
 MAX_PLAYBACK_CONNECTIONS = 6
@@ -34,6 +35,7 @@ MAX_TRACK_PATH_CHARACTERS = 32_768
 PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS = 0.001
 
 CLOSE_INVALID_CONTROL = 4400
+CLOSE_UNAUTHENTICATED = 4401
 CLOSE_FORBIDDEN_ORIGIN = 4403
 CLOSE_MEDIA_NOT_FOUND = 4404
 CLOSE_CREDIT_VIOLATION = 4408
@@ -813,6 +815,17 @@ class _PlaybackPcmConnection:
 async def playback_pcm_socket(websocket: WebSocket) -> None:
     if not _same_origin(websocket):
         await websocket.close(code=CLOSE_FORBIDDEN_ORIGIN)
+        return
+    try:
+        await require_action("library.media.stream")(websocket)
+    except HTTPException as exc:
+        await websocket.close(
+            code=(
+                CLOSE_UNAUTHENTICATED
+                if exc.status_code == 401
+                else CLOSE_FORBIDDEN_ORIGIN
+            )
+        )
         return
     registry: PlaybackPcmRegistry = websocket.app.state.playback_pcm_registry
     connection = await registry.acquire_connection(websocket)

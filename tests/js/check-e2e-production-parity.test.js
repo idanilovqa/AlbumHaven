@@ -134,7 +134,7 @@ contractTest('portable JavaScript gate forwards the setup-python executable to p
 contractTest('hosted review gates fail closed without credentials and run their review actions when configured', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
     'Require OpenAI credential for PR Agent review',
@@ -175,13 +175,15 @@ contractTest('hosted review gates fail closed without credentials and run their 
   );
   assert.doesNotMatch(prAgentAction, /^        (?:if|continue-on-error):/m);
   assert.match(prAgentAction, /OPENAI_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
-  assert.match(prAgentAction, /github_action_config\.auto_review: "true"/);
+  assert.match(prAgentAction, /github_action_config\.auto_review: "\$\{\{ github\.event\.action != 'synchronize' \}\}"/);
   assert.match(prAgentAction, /github_action_config\.auto_describe: "false"/);
   assert.match(prAgentAction, /github_action_config\.auto_improve: "false"/);
   assert.match(
     prAgentAction,
-    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review", "synchronize"\]'/,
+    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review"\]'/,
   );
+  assert.match(prAgentAction, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
+  assert.match(prAgentAction, /github_action_config\.push_commands: .*\["\/review -i"\].*\["\/review"\]/);
   assert.match(prAgentAction, /github_action_config\.enable_output: "true"/);
   assert.match(prAgentOutputGuard, /PR_AGENT_REVIEW_OUTPUT: \$\{\{ steps\.pr_agent\.outputs\.review \}\}/);
   assert.match(prAgentOutputGuard, /run: node scripts\/require-pr-agent-review-output\.cjs/);
@@ -216,17 +218,17 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.doesNotMatch(codexJob, /[Ss]kip.*(?:credential|key)|if:.*CODEX_OPENAI_API_KEY/);
 });
 
-contractTest('hosted review jobs still run after failed E2E guards', () => {
+contractTest('hosted review jobs require successful functional and performance E2E guards', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
 
   for (const reviewJob of [prAgentJob, codexJob]) {
     const condition = reviewJob.match(/^    if: .*$/m)?.[0] || '';
     assert.match(reviewJob, /needs:[\s\S]*?- e2e_functional[\s\S]*?- e2e_performance_ci/);
     assert.match(condition, /if: \$\{\{ always\(\)/);
-    assert.doesNotMatch(condition, /needs\.e2e_functional\.result/);
-    assert.doesNotMatch(condition, /needs\.e2e_performance_ci\.result/);
+    assert.match(condition, /needs\.e2e_functional\.result == 'success'/);
+    assert.match(condition, /needs\.e2e_performance_ci\.result == 'success'/);
   }
 });
 

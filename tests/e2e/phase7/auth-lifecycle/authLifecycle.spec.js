@@ -1,0 +1,201 @@
+import { LoginPage, RecoveryPage } from '../poms/authPages.js';
+import { OWNER, resetLinkFrom, signIn } from '../actions/authActions.js';
+import {
+  databaseAction,
+  databaseState,
+  expect,
+  messages,
+  test,
+  waitForMessage,
+} from '../support/baseFixtures.js';
+
+async function loginResponse(page, username, password) {
+  const login = new LoginPage(page);
+  await login.open('/account');
+  const responsePromise = page.waitForResponse(
+    (response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/login',
+  );
+  await login.signIn(username, password);
+  return responsePromise;
+}
+
+test('anonymous root redirects to the login page', async ({ page }) => {
+  const response = await page.request.get('/', { maxRedirects: 0 });
+
+  expect(response.status()).toBe(303);
+  expect(response.headers().location).toBe('/login');
+
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole('form', { name: 'Album Haven sign in' })).toBeVisible();
+});
+
+test('FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free safe return', async ({ page }) => {
+  const before = await databaseState();
+  expect(before.owner.id).toBe(before.owner.owner_account_id);
+
+  await signIn(page, OWNER, '/account');
+
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(page.getByRole('heading', { name: 'Password & security' })).toBeVisible();
+  await expect(page.getByText(/Signed in as Rendref/)).toBeVisible();
+  expect(page.url()).not.toContain('token=');
+  const after = await databaseState();
+  expect(after.owner.id).toBe(before.owner.id);
+  expect(after.owner.library_id).toBe(before.owner.library_id);
+});
+
+test('FTC-PERMISSIONS-004 keeps failures generic and throttles durably', async ({ page, freshBrowserSession }) => {
+  const unknown = await loginResponse(page, 'unknown.user', 'Wrong private passphrase 2026!');
+  const wrong = await loginResponse(page, OWNER.username, 'Wrong private passphrase 2026!');
+  await databaseAction('disable-owner');
+  const disabled = await loginResponse(page, OWNER.username, OWNER.password);
+
+  expect([unknown.status(), wrong.status(), disabled.status()]).toEqual([401, 401, 401]);
+  await expect(page.getByRole('alert')).toHaveText(
+    'Sign-in failed. Check your credentials and try again.',
+  );
+
+  await fetch(`${process.env.PHASE7_AUTH_CONTROL_URL}/reset`, { method: 'POST' });
+  const statuses = [];
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    statuses.push((await loginResponse(page, OWNER.username, 'Wrong private passphrase 2026!')).status());
+  }
+  expect(statuses).toEqual([401, 401, 401, 401, 401, 401]);
+  const accountThrottle = (await databaseState()).throttles.find(
+    (bucket) => bucket.bucket_kind === 'login_account',
+  );
+  expect(accountThrottle).toMatchObject({ failure_count: 5, blocked: true });
+
+  const secondWorker = await freshBrowserSession.create();
+  const secondWorkerPage = secondWorker.page;
+  const secondWorkerLogin = new LoginPage(secondWorkerPage);
+  await secondWorkerPage.goto(
+    `${process.env.PHASE7_AUTH_WORKER_URL}/login?return_to=%2Faccount`,
+  );
+  const secondWorkerResponse = secondWorkerPage.waitForResponse(
+    (response) => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/login',
+  );
+  await secondWorkerLogin.signIn(OWNER.username, OWNER.password);
+  expect((await secondWorkerResponse).status()).toBe(401);
+  await expect(secondWorkerPage.getByRole('alert')).toHaveText(
+    'Sign-in failed. Check your credentials and try again.',
+  );
+});
+
+test('FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions', async ({ page, freshBrowserSession }) => {
+  await signIn(page);
+  const firstSession = (await page.context().cookies()).find(
+    (cookie) => cookie.name === '__Host-album_haven_session',
+  );
+  await signIn(page);
+  const secondSession = (await page.context().cookies()).find(
+    (cookie) => cookie.name === '__Host-album_haven_session',
+  );
+  expect((await databaseState()).owner.active_sessions).toBe(2);
+
+  const recovery = new RecoveryPage(page);
+  await recovery.request('unknown@example.test');
+  expect((await messages()).some((message) => message.to === 'unknown@example.test')).toBe(false);
+  await recovery.request('rendref@example.test');
+  const recoveryState = await databaseState();
+  expect(recoveryState.reset_tokens).toHaveLength(1);
+  expect(recoveryState.outbox).toHaveLength(1);
+  await expect.poll(async () => (await databaseState()).outbox[0]).toMatchObject({
+    delivery_status: 'sent',
+    attempt_count: 1,
+  });
+  const message = await waitForMessage('rendref@example.test');
+  const resetPath = resetLinkFrom(message);
+  await page.goto(resetPath);
+  await expect(page).toHaveURL(/\/reset-password$/);
+  expect(page.url()).not.toContain('token=');
+  const linkReplay = await page.request.get(resetPath, { maxRedirects: 0 });
+  expect(linkReplay.status()).toBe(303);
+  expect(linkReplay.headers().location).toBe('/reset-password?invalid=1');
+  const newPassword = 'Phase Seven Replacement Passphrase 2026!';
+  await recovery.complete(newPassword);
+
+  const revokedSession = await freshBrowserSession.create();
+  for (const cookie of [firstSession, secondSession]) {
+    await revokedSession.context.clearCookies();
+    await revokedSession.context.addCookies([cookie]);
+    const revoked = await revokedSession.page.goto('/account');
+    expect(revoked.status()).toBe(401);
+    await expect(revokedSession.page.getByText('Authentication required.')).toBeVisible();
+  }
+  expect((await loginResponse(page, OWNER.username, OWNER.password)).status()).toBe(401);
+  expect((await loginResponse(page, OWNER.username, newPassword)).status()).toBe(303);
+
+  const replay = await page.goto(resetPath);
+  expect(replay.status()).toBe(400);
+  await expect(page).toHaveURL(/\/reset-password\?invalid=1$/);
+  expect(page.url()).not.toContain('token=');
+});
+
+test('FTC-PERMISSIONS-007 rejects expired sessions across HTML, API, and media without leaks', async ({ page }) => {
+  await signIn(page);
+  await databaseAction('expire-owner-sessions');
+
+  const html = await page.goto('/account');
+  expect(html.status()).toBe(401);
+  await expect(page.getByText('Authentication required.')).toBeVisible();
+  const api = await page.request.get('/status');
+  expect(api.status()).toBe(401);
+  const privatePath = 'C:\\Private Music\\secret.flac';
+  const media = await page.request.get(`/track?path=${encodeURIComponent(privatePath)}`);
+  expect(media.status()).toBe(401);
+  expect(await media.text()).not.toContain(privatePath);
+});
+
+test('FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse', async ({ page, context, freshBrowserSession }) => {
+  await signIn(page);
+  const cookies = await context.cookies();
+  const session = cookies.find((cookie) => cookie.name === '__Host-album_haven_session');
+  const csrf = cookies.find((cookie) => cookie.name === '__Host-album_haven_csrf');
+  expect(session).toBeTruthy();
+  expect(csrf).toBeTruthy();
+
+  const cookieHeader = `${session.name}=${session.value}; ${csrf.name}=${csrf.value}`;
+  const submitMutation = (token) => context.request.post('/admin/reauthenticate', {
+    data: { password: OWNER.password },
+    headers: {
+      Cookie: cookieHeader,
+      Origin: new URL(page.url()).origin,
+      ...(token === null ? {} : { 'X-Album-Haven-CSRF': token }),
+    },
+  });
+  const mutationStatuses = [];
+  for (const token of [null, 'invalid', csrf.value]) {
+    mutationStatuses.push((await submitMutation(token)).status());
+  }
+  expect(mutationStatuses).toEqual([403, 403, 200]);
+
+  const logoutWithoutCsrf = await context.request.post('/logout', {
+    form: {},
+    headers: {
+      Cookie: cookieHeader,
+      Origin: new URL(page.url()).origin,
+    },
+  });
+  expect(logoutWithoutCsrf.status()).toBe(400);
+
+  await page.goto('/account');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page).toHaveURL(/\/login$/);
+
+  const replaySession = await freshBrowserSession.create();
+  await replaySession.context.addCookies([{
+    name: session.name,
+    value: session.value,
+    domain: session.domain,
+    path: session.path,
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+  }]);
+  const replay = await replaySession.page.goto('/account');
+  expect(replay.status()).toBe(401);
+});

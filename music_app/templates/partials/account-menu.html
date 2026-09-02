@@ -1,0 +1,19 @@
+<div class="account-menu-component" data-account-menu-component>
+  <button class="icon-button" type="button" id="settings-button" data-account-menu-trigger title="Settings" aria-label="Settings" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">&#9881;</button>
+  <div class="account-menu" id="account-menu" data-account-menu role="menu" aria-label="Account actions" hidden>
+    <button class="account-menu-item" type="button" role="menuitem" tabindex="-1" data-account-menu-settings data-open-utilities="1">
+      <span class="account-menu-icon" aria-hidden="true">&#9881;</span><span>Settings</span>
+    </button>
+    {% if account_menu_allowed_actions.allows('accounts.read') %}
+    <a class="account-menu-item" href="/admin/members" role="menuitem" tabindex="-1" data-account-menu-admin>
+      <span class="account-menu-icon" aria-hidden="true">&#9817;</span><span>Admin Panel</span>
+    </a>
+    {% endif %}
+    <form class="account-menu-form" method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{ account_menu_csrf_token }}">
+      <button class="account-menu-item" type="submit" role="menuitem" tabindex="-1" data-account-menu-sign-out>
+        <span class="account-menu-icon" aria-hidden="true">&#8618;</span><span>Sign Out</span>
+      </button>
+    </form>
+  </div>
+</div>

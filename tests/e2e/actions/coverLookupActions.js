@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
   isCoverLookupCancellationSettledBeforeArchiveWork,
   readCoverLookupProviderEvidence,
@@ -117,8 +118,23 @@ export class CoverLookupActions {
     );
   }
 
-  async startSearch() {
-    await this.coverLookup.findBetterButton.click();
+  async startSearch(options = {}) {
+    const timeout = options.timeout || 30000;
+    const responsePromise = this.coverLookup.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/cover-lookup/start'
+    ), { timeout });
+    const [response] = await Promise.all([
+      responsePromise,
+      this.coverLookup.findBetterButton.click(),
+    ]);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok() || payload?.ok !== true) {
+      throw new Error(
+        `Cover lookup start failed with HTTP ${response.status()}: ${JSON.stringify(payload)}`,
+      );
+    }
+    return payload;
   }
 
   async startSearchAndReadToastPlacement(options = {}) {
@@ -1016,7 +1032,7 @@ export class CoverLookupActions {
       throw new Error(`Full-size ${label} evidence cannot use a resized cover variant.`);
     }
 
-    const response = await this.coverLookup.page.request.get(src, {
+    const response = await authenticatedPageGet(this.coverLookup.page, src, {
       headers: { Accept: 'image/*' },
     });
     if (!response.ok()) {

@@ -13,6 +13,8 @@
     "test:component": "playwright test --config=playwright.component.config.js",
     "check:e2e-production-parity": "node scripts/check-e2e-production-parity.cjs",
     "test:e2e:functional": "node scripts/run-functional-playwright.cjs test",
+    "test:e2e:phase7:auth": "playwright test --config=playwright.phase7-auth.config.js",
+    "test:e2e:phase7:admin": "playwright test --config=playwright.phase7-admin.config.js",
     "test:e2e:performance": "node scripts/run-performance-playwright.cjs",
     "test:e2e:performance:idle-memory": "node scripts/run-performance-playwright.cjs --group idle-memory",
     "test:e2e:performance:real-app": "node scripts/run-performance-playwright.cjs --group real-app",

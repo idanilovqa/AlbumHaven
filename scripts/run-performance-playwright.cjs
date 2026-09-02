@@ -43,6 +43,7 @@ const SCAN_SETUP_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL
 const SCAN_RUNTIME_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL';
 const SCAN_ALLOW_SHARED_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_ALLOW_SHARED_DATABASE';
 const SCAN_DATABASE_RUNBOOK = '.env.example';
+const PERFORMANCE_CHILD_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const SCAN_DATABASE_NAME = 'album_haven_scan_e2e';
 const SCAN_SETUP_DATABASE_ROLE = 'album_haven_migrator';
 const SCAN_RUNTIME_DATABASE_ROLE = 'album_haven_app';
@@ -1724,6 +1725,7 @@ function runPerformanceAttempt(
     cwd: repoRoot,
     env: attemptEnv,
     encoding: 'utf8',
+    maxBuffer: PERFORMANCE_CHILD_MAX_BUFFER_BYTES,
     windowsHide: true,
   });
   if (result.error) {

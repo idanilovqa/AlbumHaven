@@ -191,6 +191,12 @@ def classify_fixture_profile_mode(fixture_profile: str) -> str:
     raise RuntimeError(f"Unsupported isolated E2E fixture profile: {normalized_profile!r}.")
 
 
+def fixture_profile_requires_provider_storage_policy_fixture(
+    fixture_profile: str,
+) -> bool:
+    return str(fixture_profile).strip() not in GENERATED_FIXTURE_PROFILES
+
+
 DDT_STUDIO_RECORDS_FIXTURE_TRACKS = tuple(
     {
         "filename": f"{track_number:02d}. Студийная запись {track_number}.mp3",
@@ -513,7 +519,9 @@ if str(ROOT) not in sys.path:
 from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION  # noqa: E402
 from tests.e2e.support.isolatedPostgres import (  # noqa: E402
     IsolatedDatabaseOwnershipLock,
+    configure_performance_auth_environment,
     prepare_isolated_database,
+    provision_performance_auth_owner,
     reset_application_tables,
     resolve_isolated_database_urls,
 )
@@ -2439,7 +2447,11 @@ def materialize_fixture_track_files(
             is_cover_candidate_scan_fixture_track = (
                 str(metadata.get("album_artist") or "").strip() == "Mastodon"
                 and str(metadata.get("album") or "").strip()
-                in {"Crack The Skye Fixture 08", "Crack The Skye Fixture 09"}
+                in {
+                    "Crack The Skye",
+                    "Crack The Skye Fixture 08",
+                    "Crack The Skye Fixture 09",
+                }
             )
             is_problematic_encoding_fixture_track = (
                 str(metadata.get("album_artist") or "").strip()
@@ -2955,7 +2967,7 @@ def persist_provider_storage_policy_candidates(
                 height=900,
                 score=0.99 - (index * 0.01),
                 matched_artist="Mastodon",
-                matched_album="Crack The Skye Fixture 10",
+                matched_album="Crack The Skye",
                 matched_year=2009,
                 debug_payload={
                     "source_label": source_label,
@@ -3021,7 +3033,7 @@ def persist_provider_storage_policy_candidates(
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
             where library.local_artists.name = 'Mastodon'
-              and library.local_albums.title = 'Crack The Skye Fixture 10'
+              and library.local_albums.title = 'Crack The Skye'
               and library.local_albums.release_year = 2009
             on conflict (album_id) do update
             set candidates = excluded.candidates,
@@ -4995,7 +5007,8 @@ def main() -> None:
                 library_root,
                 reuse_existing=True,
             )
-            restore_reused_fixture09_user_owned_cover(library_root, cover_specs)
+            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+                restore_reused_fixture09_user_owned_cover(library_root, cover_specs)
             artist_count = int(fixture_config.get("artistCount") or 0)
             album_count = artist_count * int(fixture_config.get("albumsPerArtist") or 0)
             track_count = album_count * int(fixture_config.get("tracksPerAlbum") or 0)
@@ -5029,16 +5042,23 @@ def main() -> None:
             database_preparation_started = True
             prepare_isolated_database(setup_database_url, runtime_database_url)
             persist_fixture_inventory(setup_database_url, library_root, file_cache)
-            provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
-            persist_provider_storage_policy_candidates(
-                setup_database_url,
-                provider_port,
-                provider_storage_policy_spec,
-            )
+            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+                provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
+                persist_provider_storage_policy_candidates(
+                    setup_database_url,
+                    provider_port,
+                    provider_storage_policy_spec,
+                )
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
-        elif not is_preloaded_fixture:
+        elif (
+            not is_preloaded_fixture
+            and fixture_profile_requires_provider_storage_policy_fixture(fixture_profile)
+        ):
             ensure_provider_storage_policy_cover_spec(cover_specs)
+
+        configure_performance_auth_environment(args.port)
+        provision_performance_auth_owner(runtime_database_url)
 
         if args.prepare_only:
             print(

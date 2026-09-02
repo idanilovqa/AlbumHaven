@@ -5,6 +5,7 @@ const repoRoot = path.join(__dirname, '..');
 const outputPath = path.join(repoRoot, 'music_app', 'static', 'js', 'runtime-bundle.js');
 
 const RUNTIME_SCRIPT_PATHS = [
+  'js/runtime/session-csrf-fetch.js',
   'js/runtime/bootstrap-state.js',
   'js/runtime/startup-metrics-helpers.js',
   'js/runtime/response-state-helpers.js',
@@ -23,6 +24,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/core-state-and-helpers.js',
   'js/runtime/player-streaming-engine.js',
   'js/runtime/shell-navigation-drawer.js',
+  'js/runtime/account-menu.js',
   'js/runtime/bootstrap-refocus-helpers.js',
   'js/runtime/client-preferences-helpers.js',
   'js/runtime/gallery-display-preference-helpers.js',

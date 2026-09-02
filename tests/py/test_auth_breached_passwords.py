@@ -94,6 +94,24 @@ def test_checker_returns_false_for_a_strict_valid_nonmatch(breached_passwords):
     assert _checker(breached_passwords, opener)(PASSWORD) is False
 
 
+def test_checker_accepts_large_valid_padded_official_response(breached_passwords):
+    body = "".join(f"{index:035X}:0\n" for index in range(2_100)).encode("ascii")
+    assert len(body) > 65_536
+    opener = RecordingOpener(body)
+
+    assert _checker(breached_passwords, opener)(PASSWORD) is False
+
+
+def test_checker_still_rejects_response_beyond_defensive_limit(breached_passwords):
+    body = b"A" * (breached_passwords._MAX_RESPONSE_BYTES + 1)
+
+    with pytest.raises(
+        breached_passwords.BreachedPasswordCheckError,
+        match="screening unavailable",
+    ):
+        _checker(breached_passwords, RecordingOpener(body))(PASSWORD)
+
+
 def test_suffix_comparisons_do_not_short_circuit_after_match(
     breached_passwords, monkeypatch
 ):

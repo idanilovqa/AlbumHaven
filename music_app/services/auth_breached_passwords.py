@@ -14,7 +14,9 @@ from urllib.request import Request, urlopen
 
 _RANGE_URL = "https://api.pwnedpasswords.com/range/{}"
 _USER_AGENT = "Album-Haven-Password-Screen/1.0"
-_MAX_RESPONSE_BYTES = 65_536
+# Padded HIBP range responses can exceed 64 KiB for dense SHA-1 prefixes.
+# Keep a bounded read while allowing ample headroom over observed valid payloads.
+_MAX_RESPONSE_BYTES = 262_144
 _SUFFIX_LINE = re.compile(r"^([0-9A-F]{35}):([0-9]+)$")
 
 

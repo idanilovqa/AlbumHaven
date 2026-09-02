@@ -15,7 +15,10 @@
       </a>
       <h2>Account</h2>
       <nav>
-        <a class="account-nav-item is-active" href="/account" aria-current="page">Password &amp; security</a>
+        <a class="account-nav-item is-active" href="/account" aria-current="page">My account</a>
+        {% if account_allowed_actions.allows('accounts.read') %}
+        <a class="account-nav-item" href="/admin/members">Users</a>
+        {% endif %}
         <form class="account-logout" method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button class="account-nav-item" type="submit">Sign Out</button>

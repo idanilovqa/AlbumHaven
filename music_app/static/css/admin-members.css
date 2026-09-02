@@ -107,6 +107,7 @@ select,
 .permission-group h2 { margin: 0 0 7px; color: #9cafc5; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
 .permission-group label { min-height: 25px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #bdc9d6; font-size: 11px; }
 .switch { width: 31px; height: 17px; flex: 0 0 auto; accent-color: var(--green); }
+.switch:disabled, .detail-field > select:disabled { color: var(--muted); accent-color: var(--muted); opacity: .65; cursor: not-allowed; }
 .account-settings { padding-top: 19px; }
 .account-settings > h2 { margin: 0 0 7px; }
 .detail-setting { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }

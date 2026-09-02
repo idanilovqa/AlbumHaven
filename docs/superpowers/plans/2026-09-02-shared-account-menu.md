@@ -12,7 +12,7 @@
 
 - Render Admin Panel only when `accounts.read` is allowed.
 - Submit Sign Out through the existing CSRF-protected POST route.
-- Keep the existing Settings gear as the only related top-bar control.
+- Keep the existing Settings gear as the only related top-bar control; no standalone Account button.
 - Preserve all existing E2E validations while updating the owner-approved Settings action sequence.
 - Keep Phase 7 Admin Management in its dedicated suite and runner.
 
@@ -116,13 +116,51 @@ The new limited-member journey initially reached 403 because the existing Listen
 
 The newly authored post-logout assertion was reconciled with the established `/account` 401 contract. No existing E2E assertion, timeout, retry, or flow was weakened. The owner-approved Settings path change is centralized in the existing Settings helper.
 
+## Owner correction: remove the extra Account button
+
+The owner identified the remaining `#account-button` link in a screenshot and explicitly requested its removal. This corrects the approved single-dropdown navigation design; it does not change the dropdown, account routes, or permissions. The exact removal is approved, so no new visual design is needed.
+
+- [x] Remove the standalone Account link from the shared shell template.
+- [x] Add a regression assertion and verify it fails before removal and passes afterward.
+- [x] Run the focused shared-menu and Account/Admin presentation tests.
+
+Verification: the new assertion failed on the extra link before removal; all 11 focused tests passed afterward. This local correction changes the shell template, shared-menu contract test, and this plan only. It has not been committed or pushed; the previous full-suite results above do not cover this follow-up.
+
+Manual check: refresh the library page after restarting the app if templates are cached. The smiley Account icon must be absent; the Settings gear must still open Settings, Admin Panel, and Sign Out for an authorized owner.
+
+## Owner correction: restore My account navigation
+
+The owner reported that Users was the only working sidebar destination and that their own password/device controls were no longer discoverable. The existing `/account` page still implements those controls; removing the standalone Account icon had left no visible path from Admin. This correction restores navigation using the existing approved sidebar rows, without adding an app-bar button, changing the three-item dropdown, or introducing new permissions.
+
+- [x] Replace the disabled Email delivery, Security, and Audit log placeholders with a working My account link to `/account`.
+- [x] Keep My account active on the account page, preserve its password form and Active sessions list, and show a return Users link only when the server allows `accounts.read`.
+- [x] Add failing presentation and route tests, then verify the correction with owner and non-admin actors.
+- [x] Extend FTC-PERMISSIONS-011 additively to cover Admin → My account → Users, current-user identity, password fields, and connected-device information; preserve existing suite expectations and local SMTP isolation.
+- [x] Run focused tests, production-parity validation, and the dedicated Admin Management E2E suite; record results before handoff.
+
+No new device-management operation is introduced: the existing current-user password form and device/session information remain unchanged. This plan has no aggregate checkbox counter.
+
+Focused evidence: the new navigation assertions failed before implementation (two JavaScript and two Python failures). After implementation, all 13 focused JavaScript and five account-route Python tests passed sequentially; production-parity validation passed. Independent local review found no actionable issue. Full repository regression and publishing are not claimed for this local correction.
+
+The first dedicated Admin Management run retained two failures and three passes. Both failures were in the newly authored password-label lookup; the captured screenshot and accessibility snapshot showed the correct account page, password inputs, and active-device information. Investigation identified an anchored regular expression matching raw multiline label text. The correction is confined to the new POM lookup; assertions, product behavior, timeouts, and established scenarios remain unchanged. Initial failure artifacts are retained under `test-results/my-account-nav-admin-initial-failure-20260902`.
+
+Final verification: all five dedicated Admin Management E2E cases passed in 33.4 seconds (exit 0) after the three new password-label expressions were corrected to tolerate leading whitespace. Production parity passed again, and the independent follow-up review found no issue. Evidence: `test-results/my-account-nav-admin-rerun-20260902.stdout.log`. The recorded runner and descendants exited and ports 6190–6192 were clear afterward. The owner's port-5000 server and real SMTP configuration were untouched. This correction remains local and uncommitted for owner testing; no push or merge was performed.
+
+This correction changes ten files, excluding the preceding standalone-icon removal and unrelated owner work:
+
+- Application: `music_app/routes/account_asgi.py`, `music_app/templates/account.html`, `music_app/templates/partials/admin-settings-nav.html`.
+- Tests: `tests/py/test_account_asgi.py`, `tests/js/phase7-account-admin-presentation.test.js`, `tests/e2e/phase7/admin-management/adminManagement.spec.js`, `tests/e2e/phase7/poms/authPages.js`.
+- Documentation: this plan and private `docs/functional-test-cases/users-and-permissions.md` plus `docs/functional-test-cases.md`.
+
+Exact total elapsed time and the direct-work/process-overhead split were not recorded. The private functional-case statuses and counters remain unchanged at Automated 9/12 for Users And Permissions.
+
 ## Manual acceptance script
 
 1. Restart the local app on this branch and sign in as the owner.
 2. Click the Settings gear. Confirm Settings, Admin Panel, and Sign Out appear in that order.
 3. Hover each row and use Arrow Down/Arrow Up. Highlights have rounded corners; Escape closes the menu and returns focus to the gear. Clicking outside also closes it.
 4. Choose Settings. The existing Utilities dialog opens. Close it, reopen the gear, and choose Admin Panel. Users is the active tab.
-5. Open `/account`. Sessions and Back to library are absent from the sidebar; Active sessions remains in the page; Sign Out looks like a navigation row.
+5. Click My account in the Admin sidebar. Your signed-in username, password form, and Active sessions/device list appear; My account is active. Click Users to return to user management. Email delivery, Security, and Audit log placeholders are absent. Sessions and Back to library are absent from the sidebar; Sign Out looks like a navigation row.
 6. Invite a Listener without administrative capabilities and accept the copied link in a separate browser profile. After login, Settings and Sign Out appear, but Admin Panel does not.
 7. Choose Sign Out. Login appears and the previous session cannot access Account. No real SMTP is needed for these copied-link checks.
 

@@ -23,6 +23,7 @@ from music_app.services.auth_profile_password_postgres import (
     ProfilePasswordOutcome,
 )
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
+from music_app.services.policy_asgi import allowed_actions_for_request
 
 
 router = APIRouter()
@@ -87,6 +88,7 @@ async def _page(
             "request": request,
             "profile": profile,
             "csrf_token": csrf_token,
+            "account_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
             "changed": request.query_params.get("changed") == "1",
             "error": error,
         },

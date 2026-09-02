@@ -187,6 +187,35 @@ def test_admin_update_cannot_disable_or_detach_bootstrap_owner():
     assert connection.events[-1] == "rollback"
 
 
+def test_admin_owner_save_preserves_membership_grants_and_account_state():
+    connection = Connection(target_owner=True)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=True,
+        current_library_access=True,
+        capability_keys=(
+            "library.browse.read", "library.media.read", "library.problems.read",
+            "library.resources.read", "library.playlists.create", "library.playlists.manage",
+            "library.playlists.items.manage", "library.track_preferences.manage",
+            "library.discovery.read", "library.rules.read", "library.logs.read",
+            "library.virtual_discography.read",
+        ),
+        confirm_disable=False,
+        confirm_remove_access=False,
+        request_ref="admin-owner-noop",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert len(statements) == 1
+    assert statements[0].startswith("with locked_accounts")
+    assert not any(sql.startswith(("update ", "insert ", "delete ")) for sql in statements)
+    assert connection.events == ["begin", "commit"]
+
+
 def test_admin_session_revoke_requires_confirmation_and_records_audit():
     connection = Connection()
 

@@ -288,6 +288,27 @@ def _database_state(setup_database_url: str) -> dict[str, object]:
             group by account.id, library.id
             """
         ).fetchone()
+        owner_scope = (
+            (owner or {}).get("id"),
+            (owner or {}).get("library_id"),
+        )
+        owner_membership = connection.execute(
+            """
+            select membership_role
+            from library.library_memberships
+            where account_id = %s and library_id = %s
+            """,
+            owner_scope,
+        ).fetchone()
+        owner_capabilities = connection.execute(
+            """
+            select id, capability_key, revoked_at is not null as revoked
+            from app.capabilities
+            where account_id = %s and scope_kind = 'library' and scope_id = %s
+            order by id
+            """,
+            owner_scope,
+        ).fetchall()
         accounts = connection.execute(
             """
             select id, username_display, contact_email, is_active
@@ -345,6 +366,10 @@ def _database_state(setup_database_url: str) -> dict[str, object]:
         ).fetchall()
     return {
         "owner": dict(owner or {}),
+        "owner_membership_role": (
+            owner_membership["membership_role"] if owner_membership else None
+        ),
+        "owner_capabilities": [dict(row) for row in owner_capabilities],
         "accounts": [dict(row) for row in accounts],
         "throttles": [dict(row) for row in throttles],
         "preauth": [dict(row) for row in preauth],

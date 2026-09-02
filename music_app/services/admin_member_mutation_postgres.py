@@ -85,10 +85,12 @@ class PostgresAdminMemberMutationService:
                     library_id=current_library_id,
                     target_account_id=target_id,
                 )
-                if locked.get("target_is_bootstrap_owner") is True and (
-                    not active or not access
-                ):
-                    raise PermissionError("The bootstrap owner is protected.")
+                if locked.get("target_is_bootstrap_owner") is True:
+                    if not active or not access:
+                        raise PermissionError("The bootstrap owner is protected.")
+                    # Owner capabilities are inherited; saving their displayed
+                    # values must not replace the owner membership or grants.
+                    return
                 connection.execute(
                     """
                     update app.accounts

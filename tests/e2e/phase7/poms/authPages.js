@@ -85,6 +85,39 @@ export class MembersPage {
     this.page = page;
     this.allowedActions = page.locator('#admin-allowed-actions');
     this.documentBody = page.locator('body');
+    this.navigation = page.getByRole('complementary', { name: 'Settings navigation' });
+    this.usersLink = this.navigation.getByRole('link', { name: 'Users', exact: true });
+    this.myAccountLink = this.navigation.getByRole('link', { name: 'My account', exact: true });
+    this.placeholderEntries = this.navigation.getByText(/Email delivery|Security|Audit log/);
+    this.capabilityRole = page.getByRole('combobox', { name: 'Capability role', exact: true });
+    this.ownerRoleOption = this.capabilityRole.getByRole('option', { name: 'Owner', exact: true });
+    this.permissions = page.getByRole('group', { name: /^(Individual|Explicit) permissions$/ });
+    this.capabilitySwitches = this.permissions.getByRole('checkbox');
+    this.checkedCapabilitySwitches = this.permissions.getByRole('checkbox', { checked: true });
+    this.ownerFullAccess = page.getByText(/^Owner\s*·\s*Full access$/);
+    this.libraryAccess = page.getByRole('checkbox', { name: 'Current library access', exact: true });
+    this.saveChanges = page.getByRole('button', { name: 'Save changes', exact: true });
+  }
+
+  capabilitySwitch(label) {
+    return this.permissions.getByRole('checkbox', { name: label, exact: true });
+  }
+
+  async openEditUser(username) {
+    const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const actions = this.page.getByRole('button', {
+      name: new RegExp(`^Actions for ${escapedUsername}$`, 'i'),
+    });
+    const row = this.page.getByRole('row').filter({ has: actions });
+    await actions.click();
+    await row.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    await expect(this.page.getByRole('heading', { name: 'Edit user', exact: true })).toBeVisible();
+  }
+
+  async submitAccountChanges() {
+    await this.saveChanges.click();
+    await expect(this.page).toHaveURL(/\/admin\/members$/);
+    await expect(this.page.getByRole('heading', { name: 'Users & access' })).toBeVisible();
   }
 
   async open() {
@@ -95,6 +128,12 @@ export class MembersPage {
   async openAddUser() {
     await this.page.getByRole('link', { name: /Add user/ }).click();
     await expect(this.page.getByRole('heading', { name: 'Add user' })).toBeVisible();
+  }
+
+  async openMyAccount() {
+    await this.myAccountLink.click();
+    await expect(this.page).toHaveURL(/\/account$/);
+    return new AccountPage(this.page);
   }
 
   async fillCreateUser({ username, email, sendInvitation = false }) {
@@ -150,5 +189,27 @@ export class MembersPage {
 
   async readDocumentText() {
     return this.documentBody.innerText();
+  }
+}
+
+export class AccountPage {
+  constructor(page) {
+    this.page = page;
+    this.navigation = page.getByRole('complementary', { name: 'Account navigation' });
+    this.myAccountLink = this.navigation.getByRole('link', { name: 'My account', exact: true });
+    this.usersLink = this.navigation.getByRole('link', { name: 'Users', exact: true });
+    this.heading = page.getByRole('heading', { name: 'Password & security', exact: true });
+    this.signedInIdentity = page.getByText(/^Signed in as /);
+    this.currentPassword = page.getByLabel(/^\s*Current password/);
+    this.newPassword = page.getByLabel(/^\s*New password/);
+    this.confirmPassword = page.getByLabel(/^\s*Confirm new password/);
+    this.activeSessions = page.getByRole('region', { name: 'Active sessions', exact: true });
+    this.currentDevice = this.activeSessions.getByRole('article').filter({ hasText: 'This device' });
+  }
+
+  async openUsers() {
+    await this.usersLink.click();
+    await expect(this.page).toHaveURL(/\/admin\/members$/);
+    return new MembersPage(this.page);
   }
 }

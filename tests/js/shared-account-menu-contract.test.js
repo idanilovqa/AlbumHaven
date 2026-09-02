@@ -10,6 +10,8 @@ test('the existing Settings gear owns a shared, permission-filtered menu with pr
   const menu = read('music_app/templates/partials/account-menu.html');
   assert.match(index, /include 'partials\/account-menu.html'/);
   assert.doesNotMatch(index, /id="settings-button"/);
+  assert.doesNotMatch(index, /id="account-button"/);
+  assert.doesNotMatch(index, /<a\b[^>]*href=["']\/account["']/);
   assert.match(menu, /id="settings-button"[^>]*data-account-menu-trigger/);
   assert.match(menu, /aria-haspopup="menu"[^>]*aria-expanded="false"/);
   assert.match(menu, /allows\('accounts.read'\)/);

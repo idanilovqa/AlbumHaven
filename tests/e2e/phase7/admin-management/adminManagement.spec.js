@@ -1,4 +1,4 @@
-import { InvitationPage, MembersPage } from '../poms/authPages.js';
+import { AccountPage, InvitationPage, MembersPage } from '../poms/authPages.js';
 import { SettingsModalAppBar } from '../../poms/settingsModalAppBar.js';
 import { SettingsModalAppBarActions } from '../../actions/settingsModalAppBarActions.js';
 import { invitationPathFrom, OWNER, signIn } from '../actions/authActions.js';
@@ -26,6 +26,14 @@ const MENU_LISTENER = Object.freeze({
   email: 'menu.listener+phase7@example.test',
   password: 'Copper Orchard 68! Silent Moon',
 });
+
+const LISTENER_CAPABILITIES = Object.freeze([
+  'View library',
+  'Play and download files',
+  'View library resources',
+  'Create playlists',
+  'Discovery and listening views',
+]);
 
 test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu', async ({ page }) => {
   await signIn(page);
@@ -56,6 +64,21 @@ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared 
   await expect(page).toHaveURL(/\/admin\/members$/);
   await expect(page.getByRole('link', { name: 'Users', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('link', { name: 'Back to library' })).toHaveCount(0);
+  const members = new MembersPage(page);
+  await expect(members.placeholderEntries).toHaveCount(0);
+  const account = await members.openMyAccount();
+  await expect(account.heading).toBeVisible();
+  await expect(account.signedInIdentity).toContainText(new RegExp(OWNER.username, 'i'));
+  await expect(account.myAccountLink).toHaveAttribute('aria-current', 'page');
+  await expect(account.currentPassword).toBeEditable();
+  await expect(account.newPassword).toBeEditable();
+  await expect(account.confirmPassword).toBeEditable();
+  await expect(account.activeSessions).toBeVisible();
+  await expect(account.currentDevice).toContainText('Active now');
+  await expect(account.currentDevice).toContainText('Current');
+  const returnedMembers = await account.openUsers();
+  await expect(returnedMembers.usersLink).toHaveAttribute('aria-current', 'page');
+  await expect(returnedMembers.placeholderEntries).toHaveCount(0);
 });
 
 test('FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu', async ({ page, freshBrowserSession }) => {
@@ -132,6 +155,14 @@ test('creates, rotates, accepts, and signs in through a copied invitation', asyn
     recipient.page.getByRole('heading', { name: 'Password & security' }),
   ).toBeVisible();
 
+  const account = new AccountPage(recipient.page);
+  await expect(account.myAccountLink).toHaveAttribute('aria-current', 'page');
+  await expect(account.usersLink).toHaveCount(0);
+  await expect(account.signedInIdentity).toContainText(LISTENER.username);
+  await expect(account.currentPassword).toBeEditable();
+  await expect(account.activeSessions).toBeVisible();
+  await expect(account.currentDevice).toContainText('Current');
+
   await recipient.page.goto(invitationPathFrom(secondUrl));
   await expect(
     recipient.page.getByText('Invitation link is invalid or expired.'),
@@ -171,6 +202,9 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   const ownerId = ownerState.owner.id;
   await page.goto('/admin/accounts/new');
   await expect(page.getByText('system.admin')).toHaveCount(0);
+  const newMember = new MembersPage(page);
+  await expect(newMember.capabilityRole).toHaveValue('listener');
+  await expect(newMember.ownerRoleOption).toHaveCount(0);
 
   const listenerSession = await freshBrowserSession.create();
   const listenerPage = listenerSession.page;
@@ -186,6 +220,17 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
 
   await page.goto(`/admin/accounts/${ownerId}`);
   const members = new MembersPage(page);
+  await expect(members.capabilityRole).toHaveValue('owner');
+  await expect(members.capabilityRole).toHaveText('Owner');
+  await expect(members.capabilityRole).toBeDisabled();
+  await expect(members.ownerFullAccess).toBeVisible();
+  await expect(members.libraryAccess).toBeChecked();
+  await expect(members.libraryAccess).toBeDisabled();
+  await expect(members.capabilitySwitches).toHaveCount(12);
+  for (let index = 0; index < 12; index += 1) {
+    await expect(members.capabilitySwitches.nth(index)).toBeChecked();
+    await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
+  }
   await expect(page.getByRole('button', { name: 'Send email', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Resend email', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Revoke sessions' })).toBeVisible();
@@ -227,6 +272,16 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
     name: `Actions for ${LISTENER.username}`,
   }).click();
   await listenerRow.getByRole('menuitem', { name: 'Edit' }).click();
+  await expect(members.capabilityRole).toHaveValue('listener');
+  await expect(members.ownerRoleOption).toHaveCount(0);
+  await expect(members.libraryAccess).toBeChecked();
+  await expect(members.libraryAccess).toBeEnabled();
+  await expect(members.capabilitySwitches).toHaveCount(12);
+  await expect(members.checkedCapabilitySwitches).toHaveCount(LISTENER_CAPABILITIES.length);
+  for (const label of LISTENER_CAPABILITIES) {
+    await expect(members.capabilitySwitch(label)).toBeChecked();
+    await expect(members.capabilitySwitch(label)).toBeEnabled();
+  }
   await expect(
     page.getByRole('button', { name: 'Resend email', exact: true }),
   ).toHaveCount(0);
@@ -239,4 +294,34 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   expect(page.url()).not.toContain('token=');
   expect(await members.readDocumentText()).not.toContain('purpose=password-reset');
   expect(resetMessage.body).not.toContain(LISTENER.password);
+});
+
+test('Owner save preserves inherited capabilities and membership', async ({ page }) => {
+  await signIn(page);
+  const members = new MembersPage(page);
+  await members.open();
+  await members.openEditUser(OWNER.username);
+  const before = await databaseState();
+  expect(before.owner_membership_role).toBe('owner');
+  await expect(members.capabilityRole).toHaveValue('owner');
+  await expect(members.ownerFullAccess).toBeVisible();
+  await expect(members.libraryAccess).toBeChecked();
+  await expect(members.libraryAccess).toBeDisabled();
+
+  await members.submitAccountChanges();
+  await members.openEditUser(OWNER.username);
+  await expect(members.capabilityRole).toHaveValue('owner');
+  await expect(members.capabilityRole).toBeDisabled();
+  await expect(members.ownerFullAccess).toBeVisible();
+  await expect(members.libraryAccess).toBeChecked();
+  await expect(members.libraryAccess).toBeDisabled();
+  await expect(members.capabilitySwitches).toHaveCount(12);
+  for (let index = 0; index < 12; index += 1) {
+    await expect(members.capabilitySwitches.nth(index)).toBeChecked();
+    await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
+  }
+  const after = await databaseState();
+  expect(after.owner_membership_role).toBe(before.owner_membership_role);
+  expect(after.owner_capabilities).toEqual(before.owner_capabilities);
+  expect(after.owner).toEqual(before.owner);
 });

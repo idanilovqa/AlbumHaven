@@ -1,8 +1,10 @@
 import asyncio
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 import json
 
 from fastapi import FastAPI
+import pytest
 
 from music_app.services.admin_members_postgres import (
     AdminMemberSummary,
@@ -25,8 +27,22 @@ from music_app.services.current_actor import (
 NOW = datetime(2026, 8, 31, 22, 0, tzinfo=timezone.utc)
 
 
+class FormInputs(HTMLParser):
+    def __init__(self, body, name):
+        super().__init__()
+        self.name = name
+        self.inputs = []
+        self.feed(body)
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag == "input" and attributes.get("name") == self.name:
+            self.inputs.append(attributes)
+
+
 class Service:
-    def __init__(self):
+    def __init__(self, *, member_library_role="member"):
+        self.member_library_role = member_library_role
         self.calls = []
         self.update_calls = []
         self.revoke_calls = []
@@ -61,7 +77,7 @@ class Service:
                     contact_email="test.user+1@example.test",
                     is_active=True,
                     is_bootstrap_owner=False,
-                    membership_role="member",
+                    membership_role=self.member_library_role,
                     capability_keys=(
                         "library.browse.read",
                         "library.playlists.create",
@@ -117,11 +133,11 @@ class Service:
         )
 
 
-def _app(actor_override=None, *, invitation_enabled=True):
+def _app(actor_override=None, *, invitation_enabled=True, member_library_role="member"):
     from music_app.routes.admin_asgi import router
 
     app = FastAPI()
-    service = Service()
+    service = Service(member_library_role=member_library_role)
     app.state.admin_members_service = service
     app.state.admin_member_mutation_service = service
     app.state.admin_reauthentication_service = service
@@ -292,6 +308,118 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
     assert '"accounts.manage": true' in edit_body
     assert '"accounts.membership.manage": true' in edit_body
     assert '"accounts.capabilities.manage": true' in edit_body
+
+
+def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
+    app, service = _app()
+
+    status, _headers, body = _get(app, "/admin/accounts/7")
+
+    assert status == 200
+    assert '<option value="owner" selected>Owner</option>' in body
+    assert '<option value="listener">' not in body
+    assert "Owner · Full access" in body
+    assert "Owner includes every capability." in body
+    assert "Individual permissions below override" not in body
+    inputs = FormInputs(body, "capability_keys").inputs
+    switches = [item for item in inputs if item.get("type") == "checkbox"]
+    inherited_values = [item for item in inputs if item.get("type") == "hidden"]
+    expected_keys = {
+        "library.browse.read", "library.media.read", "library.problems.read",
+        "library.resources.read", "library.playlists.create", "library.playlists.manage",
+        "library.playlists.items.manage", "library.track_preferences.manage",
+        "library.discovery.read", "library.rules.read", "library.logs.read",
+        "library.virtual_discography.read",
+    }
+    assert len(switches) == len(expected_keys)
+    assert {item["value"] for item in switches} == expected_keys
+    assert all("checked" in item and "disabled" in item for item in switches)
+    assert len(inherited_values) == len(expected_keys)
+    assert {item["value"] for item in inherited_values} == expected_keys
+    assert all("disabled" not in item for item in inherited_values)
+
+    update_status, _response = _json_request(
+        app, "PATCH", "/admin/accounts/7",
+        {
+            "is_active": True,
+            "current_library_access": True,
+            "capability_keys": [item["value"] for item in inherited_values],
+            "confirm_disable": False,
+            "confirm_remove_access": False,
+        },
+    )
+    assert update_status == 200
+    assert set(service.update_calls[0]["capability_keys"]) == expected_keys
+
+
+@pytest.mark.parametrize(
+    ("path", "selected_keys"),
+    [
+        ("/admin/accounts/41", {"library.browse.read", "library.playlists.create"}),
+        ("/admin/accounts/new", {
+            "library.browse.read", "library.media.read", "library.resources.read",
+            "library.playlists.create", "library.discovery.read",
+        }),
+    ],
+)
+def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path, selected_keys):
+    app, _service = _app()
+
+    status, _headers, body = _get(app, path)
+
+    assert status == 200
+    assert '<option value="listener">Listener</option>' in body
+    assert '<option value="owner"' not in body
+    assert "Individual permissions below override" in body
+    inputs = FormInputs(body, "capability_keys").inputs
+    assert len(inputs) == 12
+    assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
+    assert {item["value"] for item in inputs if "checked" in item} == selected_keys
+
+
+@pytest.mark.parametrize("membership_only", [False, True])
+def test_owner_library_access_is_protected_and_submittable(membership_only):
+    limited = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=8,
+        session_id=12,
+        username_display="membership.admin",
+        authenticated_at=NOW,
+        current_library_id=9,
+        library_relationships=(LibraryRelationship(9, "member", False),),
+        capability_grants=(
+            CapabilityGrant("accounts.read", "library", 9),
+            CapabilityGrant("accounts.membership.manage", "library", 9),
+        ),
+    )
+    app, _service = _app(limited if membership_only else None)
+
+    status, _headers, body = _get(app, "/admin/accounts/7")
+
+    assert status == 200
+    inputs = FormInputs(body, "current_library_access").inputs
+    switches = [item for item in inputs if item.get("type") == "checkbox"]
+    values = [item for item in inputs if item.get("type") == "hidden"]
+    assert len(switches) == 1
+    assert "checked" in switches[0]
+    assert "disabled" in switches[0]
+    assert len(values) == 1
+    assert values[0]["value"] == "on"
+    assert "disabled" not in values[0]
+
+
+@pytest.mark.parametrize("membership_role", ["member", None])
+def test_nonowner_library_access_remains_editable_without_hidden_override(membership_role):
+    app, _service = _app(member_library_role=membership_role)
+
+    status, _headers, body = _get(app, "/admin/accounts/41")
+
+    assert status == 200
+    inputs = FormInputs(body, "current_library_access").inputs
+    assert len(inputs) == 1
+    assert inputs[0]["type"] == "checkbox"
+    assert "disabled" not in inputs[0]
+    assert ("checked" in inputs[0]) is bool(membership_role)
 
 
 def test_roster_renders_invitation_menu_only_for_server_eligible_pending_account():

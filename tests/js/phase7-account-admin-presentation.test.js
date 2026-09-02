@@ -21,6 +21,15 @@ test('Account and Admin navigation keep Users discoverable and omit redundant li
   assert.doesNotMatch(adminNavigation, /settings-back|Back to library/);
 });
 
+test('Admin navigation offers My account instead of unavailable placeholders', () => {
+  assert.match(adminNavigation, /<a class="settings-nav-item" href="\/account"[^>]*>.*My account<\/a>/);
+  assert.doesNotMatch(adminNavigation, /is-future|aria-disabled|Email delivery|Security|Audit log/);
+});
+
+test('Account navigation identifies the current user settings as My account', () => {
+  assert.match(accountTemplate, /href="\/account" aria-current="page">My account<\/a>/);
+});
+
 test('Account navigation omits the unavailable Profile placeholder', () => {
   assert.doesNotMatch(accountTemplate, />Profile<\/span>/);
 });

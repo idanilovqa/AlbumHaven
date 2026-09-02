@@ -19,10 +19,12 @@ NOW = datetime(2026, 8, 31, 21, 0, tzinfo=timezone.utc)
 
 class Service:
     def __init__(self):
+        self.profile_calls = []
         self.password_calls = []
         self.dismiss_calls = []
 
-    def load_profile(self, **_kwargs):
+    def load_profile(self, **kwargs):
+        self.profile_calls.append(kwargs)
         return ProfileAccountView(
             username="member.one",
             administrator_set_suggestion=True,
@@ -41,7 +43,7 @@ class Service:
         return True
 
 
-def _app():
+def _app(*, is_bootstrap_owner=False):
     from music_app.routes.account_asgi import router
 
     app = FastAPI()
@@ -59,6 +61,7 @@ def _app():
             account_id=41,
             session_id=11,
             username_display="member.one",
+            is_bootstrap_owner=is_bootstrap_owner,
         )
         return await call_next(request)
 
@@ -140,6 +143,32 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert "Sign Out" in body
     assert session not in body
     assert body.count('minlength="8"') == 2
+
+
+def test_my_account_navigation_keeps_personal_password_and_connected_devices():
+    app, service = _app()
+
+    status, _headers, body = _request(app, "GET", "/account", session=_session())
+
+    assert status == 200
+    assert 'href="/account" aria-current="page">My account</a>' in body
+    assert "member.one" in body
+    assert 'action="/account/password"' in body
+    assert "Active sessions" in body
+    assert "Windows browser" in body
+    assert "Android" in body
+    assert service.profile_calls == [{"account_id": 41, "current_session_id": 11}]
+    assert 'href="/admin/members"' not in body
+
+
+def test_my_account_navigation_offers_users_to_authorized_owner():
+    app, service = _app(is_bootstrap_owner=True)
+
+    status, _headers, body = _request(app, "GET", "/account", session=_session())
+
+    assert status == 200
+    assert 'href="/admin/members">Users</a>' in body
+    assert service.profile_calls == [{"account_id": 41, "current_session_id": 11}]
 
 
 def test_account_password_form_requires_session_csrf_and_never_echoes_passwords():

@@ -18,8 +18,15 @@ body {
   color: var(--ink);
   font-family: "Segoe UI", Inter, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  caret-color: transparent;
 }
 button, input { font: inherit; }
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  caret-color: auto;
+}
 
 .account-shell { min-height: 100vh; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
 .account-nav { padding: 34px 24px; border-right: 1px solid var(--line); background: var(--nav); }
@@ -82,7 +89,6 @@ button, input { font: inherit; }
 .button.is-small { height: 34px; padding: 0 12px; font-size: 12px; }
 .button:hover, .button:focus-visible { filter: brightness(1.1); outline: 2px solid transparent; box-shadow: 0 0 0 3px rgb(102 173 255 / 16%); }
 
-.sessions { border-top: 1px solid var(--line); }
 .session { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); }
 .session:last-child { border-bottom: 0; }
 .session strong { display: block; font-size: 12px; }

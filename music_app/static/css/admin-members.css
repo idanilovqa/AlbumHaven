@@ -17,8 +17,15 @@ html, body { min-height: 100%; margin: 0; }
 body {
   color: var(--ink); background: radial-gradient(circle at 72% 20%, rgb(37 73 111 / 18%), transparent 38%), var(--night);
   font-family: "Segoe UI", Inter, Arial, sans-serif; -webkit-font-smoothing: antialiased;
+  caret-color: transparent;
 }
 button, input, select { font: inherit; }
+input,
+textarea,
+select,
+[contenteditable="true"] {
+  caret-color: auto;
+}
 .settings-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
 .settings-nav { min-height: 100vh; padding: 40px 20px; border-right: 1px solid var(--line); background: rgb(8 24 41 / 88%); }
 .settings-brand { display: inline-block; margin: 0 20px 35px; }

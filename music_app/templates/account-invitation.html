@@ -18,8 +18,8 @@
     {% endif %}
     <form method="post" action="/accept-invitation">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>New password <input type="password" name="new_password" required autocomplete="new-password"></label>
-      <label>Confirm new password <input type="password" name="confirm_password" required autocomplete="new-password"></label>
+      <label>New password <input type="password" name="new_password" minlength="8" required autocomplete="new-password"></label>
+      <label>Confirm new password <input type="password" name="confirm_password" minlength="8" required autocomplete="new-password"></label>
       <button type="submit">Set password</button>
     </form>
   {% else %}

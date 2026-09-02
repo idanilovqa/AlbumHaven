@@ -82,6 +82,7 @@ git commit -m "feat(auth): allow eight-character passwords"
 
 **Files:**
 - Modify: `tests/py/test_auth_asgi.py`
+- Modify: `tests/py/test_account_asgi.py`
 - Modify: `music_app/templates/account-invitation.html`
 - Modify: `music_app/templates/password-reset.html`
 - Modify: `music_app/templates/account.html`
@@ -104,7 +105,7 @@ assert response.text.count('minlength="8"') >= 2
 Run:
 
 ```powershell
-python -m pytest tests/py/test_auth_asgi.py -q
+python -m pytest tests/py/test_auth_asgi.py tests/py/test_account_asgi.py -q
 ```
 
 Expected: the new assertions fail because the invitation and account forms omit the attribute and the reset form still uses 15.
@@ -129,7 +130,7 @@ email context, and must pass Pwned Passwords screening.
 Run:
 
 ```powershell
-python -m pytest tests/py/test_auth_asgi.py -q
+python -m pytest tests/py/test_auth_asgi.py tests/py/test_account_asgi.py -q
 rg -n "at least 15|15 to 256|minlength=\"15\"" music_app docs README.md
 ```
 
@@ -138,7 +139,7 @@ Expected: pytest passes and `rg` finds no password-policy remnants.
 - [ ] **Step 5: Commit the form and documentation change**
 
 ```powershell
-git add -- tests/py/test_auth_asgi.py music_app/templates/account-invitation.html music_app/templates/password-reset.html music_app/templates/account.html docs/local-auth-setup-and-manual-tests.md
+git add -- tests/py/test_auth_asgi.py tests/py/test_account_asgi.py music_app/templates/account-invitation.html music_app/templates/password-reset.html music_app/templates/account.html docs/local-auth-setup-and-manual-tests.md
 git commit -m "docs(auth): advertise eight-character password minimum"
 ```
 

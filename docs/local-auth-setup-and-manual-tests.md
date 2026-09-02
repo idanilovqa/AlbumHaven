@@ -62,7 +62,7 @@ python scripts/bootstrap_auth_owner.py
 
 Your owner username is `Rendref`. Album Haven does not define, store, or print a
 default password. The password is the value you enter twice at this prompt. It
-must contain 15 to 256 Unicode code points, must not contain the username or
+must contain 8 to 256 Unicode code points, must not contain the username or
 email context, and must pass Pwned Passwords screening. Store it in your
 password manager.
 

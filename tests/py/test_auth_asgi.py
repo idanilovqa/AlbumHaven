@@ -403,6 +403,7 @@ def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
     assert RESET_TRANSACTION not in rendered
     assert dict(headers)["referrer-policy"] == "same-origin"
     assert '<meta name="referrer" content="same-origin">' in rendered
+    assert rendered.count('minlength="8"') == 2
 
 
 def test_reset_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):
@@ -643,6 +644,7 @@ def test_clean_invitation_page_uses_transaction_bound_csrf_and_same_origin_refer
     assert INVITATION_TRANSACTION not in rendered
     assert dict(headers)["referrer-policy"] == "same-origin"
     assert '<meta name="referrer" content="same-origin">' in rendered
+    assert rendered.count('minlength="8"') == 2
 
 
 def test_invitation_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):

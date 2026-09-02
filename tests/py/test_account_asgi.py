@@ -139,6 +139,7 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert 'action="/logout"' in body
     assert "Sign out" in body
     assert session not in body
+    assert body.count('minlength="8"') == 2
 
 
 def test_account_password_form_requires_session_csrf_and_never_echoes_passwords():

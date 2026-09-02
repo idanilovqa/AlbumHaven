@@ -79,7 +79,7 @@
             <label class="field" for="new-password">
               <span>New password</span>
               <span class="password-control">
-                <input id="new-password" name="new_password" type="password" autocomplete="new-password" required>
+                <input id="new-password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
                 <button type="button" data-password-toggle="new-password" aria-pressed="false">Show</button>
               </span>
               <small>Use a long, unique password.</small>
@@ -87,7 +87,7 @@
             <label class="field" for="confirm-password">
               <span>Confirm new password</span>
               <span class="password-control">
-                <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" required>
+                <input id="confirm-password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required>
                 <button type="button" data-password-toggle="confirm-password" aria-pressed="false">Show</button>
               </span>
               <small class="field-error" data-password-match-error aria-live="polite"></small>

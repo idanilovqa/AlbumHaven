@@ -40,6 +40,13 @@ function createCompactPlayerSessionPosition(options = {}) {
   });
 }
 
+function resolveDockedCompactGeometry(treeRect = {}) {
+  return {
+    left: Number(treeRect.left) || 0,
+    width: Math.max(0, Number(treeRect.width) || 0),
+  };
+}
+
 function resolveCompactQueueControls({ queueLength, currentIndex } = {}) {
   const length = Math.max(0, Number(queueLength) || 0);
   const index = Number(currentIndex);
@@ -58,5 +65,6 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
+  resolveDockedCompactGeometry,
   resolveCompactQueueControls,
 };

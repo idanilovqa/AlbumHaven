@@ -146,6 +146,15 @@ test('docked queue controls disable previous and next at their respective bounda
   });
 });
 
+test('docked player geometry follows the rendered artist-tree panel', () => {
+  const helper = loadHelper();
+
+  assert.deepEqual(plain(helper.resolveDockedCompactGeometry({ left: 8, width: 264 })), {
+    left: 8,
+    width: 264,
+  });
+});
+
 test('compact markup and layout expose only approved transport controls and reserve docked tree space', () => {
   const template = fs.readFileSync(templatePath, 'utf8');
   const compact = template.match(/<div class="compact-player-shell"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
@@ -159,10 +168,12 @@ test('compact markup and layout expose only approved transport controls and rese
   }
   assert.match(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*padding-bottom:\s*88px/);
   assert.match(css, /:root\.has-compact-player\s*\{\s*--player-height:\s*0px/);
+  assert.match(css, /width:\s*var\(--compact-docked-width/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@property --player-height/);
   assert.match(css, /\.is-compact-player-dragging\s*\{[^}]*transition:[^}]*height[^}]*opacity/);
   assert.match(controller, /previousStyle !== 'floating'/);
+  assert.match(controller, /getElementById\('shell-navigation-rail'\)/);
   assert.match(controller, /addEventListener\('pointercancel', finishDrag\)/);
   assert.match(controller, /hasPointerCapture\?\./);
   assert.match(controller, /compactPlayerDrag = null/);

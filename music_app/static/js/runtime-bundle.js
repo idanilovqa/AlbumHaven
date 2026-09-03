@@ -3928,6 +3928,13 @@ function createCompactPlayerSessionPosition(options = {}) {
   });
 }
 
+function resolveDockedCompactGeometry(treeRect = {}) {
+  return {
+    left: Number(treeRect.left) || 0,
+    width: Math.max(0, Number(treeRect.width) || 0),
+  };
+}
+
 function resolveCompactQueueControls({ queueLength, currentIndex } = {}) {
   const length = Math.max(0, Number(queueLength) || 0);
   const index = Number(currentIndex);
@@ -3946,6 +3953,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   didCompactPlayerDrag,
   clampCompactPlayerPosition,
   createCompactPlayerSessionPosition,
+  resolveDockedCompactGeometry,
   resolveCompactQueueControls,
 };
 
@@ -29517,6 +29525,15 @@ function getCompactPlayerStyle() {
   catch (_error) { return 'docked'; }
 }
 
+function syncDockedCompactGeometry() {
+  const els = compactPlayerElements();
+  const tree = document.getElementById('shell-navigation-rail');
+  if (!els.player || !tree) return;
+  const geometry = resolveDockedCompactGeometry(tree.getBoundingClientRect());
+  els.player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
+  els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
+}
+
 function applyCompactPlayerMode(mode, { persist = true } = {}) {
   const els = compactPlayerElements();
   const next = resolveCompactPlayerMode({ eligible: compactPlayerEligible(), persistedMode: mode });
@@ -29541,6 +29558,7 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     els.compact.setAttribute('aria-hidden', String(!compact));
   }
   if (els.collapse) els.collapse.hidden = compact || !compactPlayerEligible();
+  if (compact && compactPlayerStyle === 'docked') syncDockedCompactGeometry();
   if (compact && compactPlayerStyle === 'floating') {
     if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
     else {
@@ -29668,6 +29686,8 @@ function initCompactPlayer() {
         viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: 12 });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
+    } else if (compactPlayerStyle === 'docked') {
+      syncDockedCompactGeometry();
     }
   });
   window.addEventListener('album-haven-appearance-change', () => {

@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.admin_account_creation import AdminAccountCreationService
 from music_app.services.admin_account_creation_postgres import (
     ManagedAccountIdentityConflict,
@@ -108,7 +109,7 @@ async def members_roster(request: Request) -> Response:
     roster = await _load_roster(request)
     if isinstance(roster, Response):
         return roster
-    return _render_admin(
+    return await _render_admin(
         request,
         "admin-members.html",
         roster=roster,
@@ -124,7 +125,7 @@ async def new_managed_account(request: Request) -> Response:
     roster = await _load_roster(request)
     if isinstance(roster, Response):
         return roster
-    return _render_admin(
+    return await _render_admin(
         request,
         "admin-account-detail.html",
         roster=roster,
@@ -144,7 +145,7 @@ async def edit_managed_account(request: Request, account_id: int) -> Response:
     member = next((item for item in roster.members if item.account_id == account_id), None)
     if member is None:
         return HTMLResponse("Account was not found.", status_code=404)
-    return _render_admin(
+    return await _render_admin(
         request,
         "admin-account-detail.html",
         roster=roster,
@@ -570,7 +571,7 @@ async def _load_roster(request: Request):
         return HTMLResponse("Members & Access is temporarily unavailable.", status_code=503)
 
 
-def _render_admin(request: Request, template: str, **context) -> Response:
+async def _render_admin(request: Request, template: str, **context) -> Response:
     try:
         csrf_token = issue_session_csrf(
             request.cookies.get(_SESSION_COOKIE), request.app.state.auth_policy_config
@@ -581,7 +582,8 @@ def _render_admin(request: Request, template: str, **context) -> Response:
     response = templates.TemplateResponse(
         request,
         template,
-        {"request": request, "csrf_token": csrf_token, **context},
+        {"request": request, "csrf_token": csrf_token,
+         **await load_appearance_context(request), **context},
     )
     response.headers["Cache-Control"] = "no-store, max-age=0"
     return response

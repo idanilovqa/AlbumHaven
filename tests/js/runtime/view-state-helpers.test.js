@@ -3,7 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+const navigationItemTemplate = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/components/navigation-tree-item.html'), 'utf8');
 const helperPaths = [
+  path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'),
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-state-helpers.js'),
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'browser-navigation-helpers.js'),
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js'),
@@ -22,6 +24,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   const context = {
     URL,
     URLSearchParams,
+    document: { getElementById(id) { return id === 'navigation-tree-item-template' ? { textContent: navigationItemTemplate } : null; } },
     state: {
       view: {},
     },
@@ -1096,7 +1099,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
   assert.match(html, /data-sidebar-all-artists="1"/);
   assert.match(html, /data-sidebar-artist="Beach House"/);
   assert.match(html, /artist-link active/);
-  assert.match(html, /\?surface=albums&q=dream\+pop&artist=Beach\+House/);
+  assert.match(html, /\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House/);
 }
 
 {
@@ -1121,8 +1124,8 @@ function loadHelpers(origin = 'http://localhost:5000') {
     selectedArtistOverride: 'Beach House',
     allArtistsActiveOverride: false,
   });
-  assert.match(html, /class="artist-link active" href="\/\?surface=albums&q=dream\+pop&artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
-  assert.doesNotMatch(html, /class="artist-link active" href="\/\?surface=albums&q=dream\+pop&artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Beach\+House" data-nav="1" data-sidebar-artist="Beach House"/);
+  assert.doesNotMatch(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=dream\+pop&amp;artist=Cocteau\+Twins" data-nav="1" data-sidebar-artist="Cocteau Twins"/);
 }
 
 {
@@ -1142,7 +1145,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     allArtistsActiveOverride: true,
     selectedArtistOverride: '',
   });
-  assert.match(html, /class="artist-link active" href="\/\?surface=albums" data-nav="1" data-sidebar-all-artists="1"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums" data-nav="1" data-sidebar-all-artists="1"/);
 }
 
 {
@@ -1174,7 +1177,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
       count: 1,
     },
   ]);
-  assert.match(html, /class="artist-link active" href="\/\?surface=albums&q=Neal\+Morse&artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=Neal\+Morse&amp;artist=Neal\+Morse" data-nav="1" data-sidebar-artist="Neal Morse"/);
   assert.match(html, /data-sidebar-all-artists="1"/);
 }
 
@@ -1253,7 +1256,7 @@ function loadHelpers(origin = 'http://localhost:5000') {
     selectedArtistOverride: 'Devin Townsend Project',
   });
   assert.match(html, /data-sidebar-all-artists="1"/);
-  assert.match(html, /class="artist-link active" href="\/\?surface=albums&q=devin\+townsend&artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
+  assert.match(html, /class="artist-link active[^"]*"[^>]* href="\/\?surface=albums&amp;q=devin\+townsend&amp;artist=Devin\+Townsend\+Project" data-nav="1" data-sidebar-artist="Devin Townsend Project"/);
   assert.match(html, /data-sidebar-artist="Devin Townsend"/);
 }
 

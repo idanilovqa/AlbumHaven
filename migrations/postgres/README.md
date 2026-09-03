@@ -52,6 +52,12 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0045_add_non_album_candidate_index.sql
 0046_add_local_auth_lifecycle.sql
 0047_add_auth_preauth_tokens.sql
+0048_add_password_reset_transactions.sql
+0049_enforce_single_use_password_reset_exchange.sql
+0050_add_security_audit_cleanup_index.sql
+0051_add_auth_throttle_cleanup_index.sql
+0052_add_managed_account_invitations.sql
+0053_create_user_appearance_preferences.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -91,5 +97,7 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0050_add_security_audit_cleanup_index.sql` adds the global UTC timestamp and ID index used by the migrator-owned bounded audit-retention command. It grants no runtime deletion privilege; `album_haven_app` remains append-only for security audit events.
 
 `0051_add_auth_throttle_cleanup_index.sql` adds the expiry and ID index used by the bounded throttle cleanup command. It does not expand privileges; the runtime role already owns the narrow delete permission required to remove expired HMAC-keyed buckets.
+
+`0053_create_user_appearance_preferences.sql` adds two optional RGB background overrides keyed directly by account ID. The primary key also supports account-scoped reads; a null value preserves each surface's existing default. Both values update together. The application role receives only select, insert, and update, while account deletion cascades to preferences. No new sequence, bootstrap-owner lookup, or file-backed fallback is introduced.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

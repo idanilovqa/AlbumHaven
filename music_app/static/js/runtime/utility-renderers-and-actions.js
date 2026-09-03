@@ -381,7 +381,7 @@ function renderUtilityAppearance() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
-  els.count.textContent = '1';
+  els.count.textContent = '3';
   if (els.search) {
     els.search.value = '';
     els.search.disabled = true;
@@ -393,9 +393,25 @@ function renderUtilityAppearance() {
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  state.utility.appearanceKey = 'seekbar';
-  els.list.innerHTML = buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', true);
-  els.detail.innerHTML = buildUtilityAppearanceDetail();
+  const appearanceKeys = ['seekbar', 'backgrounds', 'selection-accent'];
+  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'seekbar';
+  const selectedKey = state.utility.appearanceKey;
+  els.list.innerHTML = [
+    buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', selectedKey === 'seekbar'),
+    buildUtilityAppearanceListItem('backgrounds', 'Backgrounds', 'Main surface, app bar, and panels', selectedKey === 'backgrounds'),
+    buildUtilityAppearanceListItem('selection-accent', 'Selection accent', 'Color on the left of selected items', selectedKey === 'selection-accent'),
+  ].join('');
+  if (selectedKey === 'backgrounds') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
+  } else if (selectedKey === 'selection-accent') {
+    if (typeof getBackgroundAppearanceEditor === 'function') getBackgroundAppearanceEditor()?.unmount();
+    if (typeof window !== 'undefined' && window.AlbumHavenSelectionAccent?.mount) window.AlbumHavenSelectionAccent.mount(els.detail);
+    else els.detail.innerHTML = '<div class="utility-empty-state">Selection accent could not be loaded. Reload this page to try again.</div>';
+  } else {
+    if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+    els.detail.innerHTML = buildUtilityAppearanceDetail();
+  }
 }
 
 function getSelectedUtilityIntegration() {
@@ -490,6 +506,7 @@ function renderUtilityLogHistory() {
 function renderUtilityModalContent() {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {

@@ -38,6 +38,7 @@ function collapseAllUtilityLoopGroups() {
 
 function setUtilityActiveTab(nextTab) {
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
     clearUtilityLoopSpaceOwner();
   }

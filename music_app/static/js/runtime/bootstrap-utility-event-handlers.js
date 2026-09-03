@@ -178,7 +178,9 @@
   const utilityAppearanceButton = event.target.closest('[data-utility-appearance-key]');
   if (utilityAppearanceButton) {
     event.preventDefault();
-    state.utility.appearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    if (nextAppearanceKey !== state.utility.appearanceKey && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;
   }

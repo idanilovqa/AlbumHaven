@@ -43,6 +43,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/problem-exclusion-mutations.js',
   'js/runtime/library-settings.js',
   'js/runtime/cover-lookup-notification-helpers.js',
+  'js/runtime/appearance-backgrounds-bridge.js',
   'js/runtime/utility-renderers-and-actions.js',
   'js/runtime/utility-loop-playback.js',
   'js/runtime/utility-loaders-and-cover-lookup.js',

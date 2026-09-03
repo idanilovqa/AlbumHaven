@@ -63,31 +63,32 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? Boolean(options.showAllArtistsOverride)
-      : view.show_all_artists_sidebar_link !== false;
+    : view.show_all_artists_sidebar_link !== false;
   const selectedArtist = resolveSidebarSelectedArtist(view, options);
   const artistCount = resolveSidebarArtistCount(view, sidebarArtists);
   const allArtistsActive = Object.prototype.hasOwnProperty.call(options, 'allArtistsActiveOverride')
     ? Boolean(options.allArtistsActiveOverride)
     : Boolean(activeSurface === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
-  let html = showAllArtistsLink ? `<a class="artist-link ${allArtistsActive ? 'active' : ''}" href="/?surface=albums" data-nav="1" data-sidebar-all-artists="1">
-      <span class="artist-name-label">All artists</span>
-      <span class="artist-count">${artistCount}</span>
-    </a>` : '';
+  const renderItem = window.NavigationTree.renderItem;
+  let html = showAllArtistsLink ? renderItem({
+    label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
+    selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
+  }) : '';
   const displayedSidebarArtists = [...sidebarArtists].sort((left, right) => {
     const leftLabel = String(left?.artist_display || left?.artist || '');
     const rightLabel = String(right?.artist_display || right?.artist || '');
     return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
   });
-  html += displayedSidebarArtists.map((item) => `
-    <a class="artist-link ${item.artist === selectedArtist ? 'active' : ''}" href="${buildUrl({
+  html += displayedSidebarArtists.map(item => renderItem({
+    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    count: item.count, selected: item.artist === selectedArtist,
+    href: buildUrl({
       ...view,
       selected_artist: item.artist,
       all_artists_active: Boolean(view.query) ? Boolean(view.all_artists_active) : false,
-    })}" data-nav="1" data-sidebar-artist="${escapeHtml(item.artist)}">
-      <span class="artist-name-label">${escapeHtml(item.artist_display || item.artist)}</span>
-      <span class="artist-count">${item.count}</span>
-    </a>
-  `).join('');
+    }),
+    attributes: { 'data-nav': '1', 'data-sidebar-artist': item.artist },
+  })).join('');
   return html;
 }
 
@@ -115,15 +116,11 @@ function applySidebarSelectionMarkup(container, options = {}) {
   container.querySelectorAll('.artist-link[data-sidebar-artist]').forEach((link) => {
     if (!(link instanceof HTMLElement)) return;
     const isActive = String(link.getAttribute('data-sidebar-artist') || '') === selectedArtist;
-    link.classList.toggle('active', isActive);
-    if (isActive) link.setAttribute('aria-current', 'true');
-    else link.removeAttribute('aria-current');
+    window.NavigationTree.setItemSelected(link, isActive);
   });
   const allArtistsLink = container.querySelector('.artist-link[data-sidebar-all-artists="1"]');
   if (allArtistsLink instanceof HTMLElement) {
-    allArtistsLink.classList.toggle('active', allArtistsActive);
-    if (allArtistsActive) allArtistsLink.setAttribute('aria-current', 'true');
-    else allArtistsLink.removeAttribute('aria-current');
+    window.NavigationTree.setItemSelected(allArtistsLink, allArtistsActive);
   }
 }
 

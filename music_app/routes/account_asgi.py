@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.routes.auth_asgi import (
     _form_payload,
     _policy_config,
@@ -86,6 +87,7 @@ async def _page(
         "account.html",
         {
             "request": request,
+            **await load_appearance_context(request),
             "profile": profile,
             "csrf_token": csrf_token,
             "account_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),

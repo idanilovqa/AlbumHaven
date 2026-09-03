@@ -1,0 +1,85 @@
+/* Semantic overrides preserve every family's default and original opacity. */
+:root {
+  --app-chrome: var(--appearance-panel-background, #0e1b2b);
+  --app-surface: var(--appearance-main-surface, #111c2c);
+}
+html .track-modal-dialog,
+html .utility-modal-dialog,
+html .utility-modal-body,
+html .utility-tab.is-active,
+html .confirm-modal-dialog,
+html .tag-editor-dialog,
+html .cover-lookup-modal-dialog { background: var(--appearance-panel-background, var(--panel)); }
+html .account-menu { background: var(--appearance-panel-background, #0d1b2b); }
+html .settings-host .member-actions-menu { background: var(--appearance-panel-background, var(--surface-2)); }
+html .recent-search-popover { background: var(--appearance-panel-background, var(--panel-2)); }
+html .gallery-options-menu,
+html .status-context-menu,
+html .album-card-context-menu { background: rgba(var(--appearance-panel-background-rgb, 28, 31, 38), 0.98); }
+html .utility-problem-filter-menu,
+html .track-modal-version-context-menu { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98); }
+html .repair-progress-card { background: rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.96); }
+html .utility-loop-speed-menu { background: rgba(var(--appearance-panel-background-rgb, 8, 28, 24), 0.98); }
+html .non-album-modal-dialog {
+  background: linear-gradient(180deg, rgba(var(--appearance-panel-background-rgb, 31, 41, 55), 0.98), rgba(var(--appearance-panel-background-rgb, 15, 23, 42), 0.98));
+}
+html .cover-lookup-drawer {
+  background: linear-gradient(180deg, rgba(var(--appearance-panel-background-rgb, 8, 15, 27), 0.98), rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98));
+}
+/* Keep the approved editing surface readable even after a low-contrast save. */
+.appearance-background-editor {
+  color: #f3f6fa;
+  background: #202938;
+  border-radius: 10px;
+  padding: 4px 6px 8px;
+  min-width: 0;
+  font-size: 14px;
+}
+.appearance-background-editor h3 { font-size: 17px; margin: 0 0 7px; }
+.background-intro { color: #a9b4c4; margin: 0 0 20px; line-height: 1.5; }
+.background-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.background-color-field { min-width: 0; }
+.background-color-field > label { font-weight: 650; }
+.background-color-field > p { color: #a9b4c4; font-size: 12px; line-height: 1.45; margin: 6px 0 12px; min-height: 35px; }
+.background-color-inputs { display: flex; align-items: center; gap: 8px; }
+.background-color-inputs input { box-sizing: border-box; height: 40px; border: 1px solid #556173; border-radius: 8px; color: #f3f6fa; }
+.background-color-inputs input[type='color'] { width: 47px; padding: 4px; background: #111c2c; cursor: pointer; }
+.background-color-inputs input[type='text'] { width: 110px; min-width: 0; padding: 8px 10px; background: #142031; font: 14px Consolas, monospace; }
+.background-color-field > small { display: block; margin-top: 7px; color: #9baabd; font-size: 11px; }
+.background-field-error { color: #ffb7b7; font-size: 12px; min-height: 17px; margin-top: 8px; }
+.background-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 18px 0 10px; font-weight: 600; }
+.background-preview-heading small { color: #9baabd; font-size: 11px; font-weight: 400; text-align: right; }
+.background-preview { border: 1px solid #526074; border-radius: 10px; overflow: hidden; color: #f3f6fa; }
+.background-preview-bar { height: 40px; background: var(--preview-panels); display: flex; align-items: center; padding: 0 12px; gap: 14px; font-size: 11px; }
+.background-preview-search { background: #1e2c3e; border-radius: 5px; padding: 5px 10px; color: #c0ccda; flex: 1; }
+.background-preview-body { display: grid; grid-template-columns: 110px minmax(0, 1fr); min-height: 188px; background: var(--preview-panels); }
+.background-preview-tree { padding: 15px 11px; font-size: 11px; }
+.background-preview-tree strong { display: block; margin-bottom: 15px; }
+.background-preview-tree span { display: block; margin: 12px 0; }
+.background-preview-content { position: relative; min-width: 0; margin-right: 5px; border-radius: 9px 9px 0 0; padding: 17px 14px; background: var(--preview-main); }
+.background-preview-content > strong { font-size: 12px; }
+.background-preview-card { width: 105px; margin-top: 12px; padding: 8px; border: 1px solid #394253; border-radius: 7px; background: #202938; }
+.background-preview-card > div { height: 43px; display: grid; place-items: center; border-radius: 4px; background: linear-gradient(140deg, #50756f, #263944); color: #d7eae5; font-size: 23px; }
+.background-preview-card small { display: block; margin-top: 5px; font-size: 10px; }
+.background-preview-stars { color: #ffd05c; font-size: 10px; }
+.background-preview-floating { position: absolute; right: 12px; top: 51px; width: 140px; padding: 12px; border: 1px solid #64748b; border-radius: 8px; background: var(--preview-floating); box-shadow: 0 12px 20px #0003; font-size: 11px; }
+.background-preview-floating span { display: block; margin-top: 9px; }
+.background-preview-player { background: #101d27; padding: 9px 13px; color: #a9c4b9; font-size: 10px; }
+.background-warning { margin: 14px 0 0; padding: 10px 12px; border: 1px solid #97754a; border-radius: 8px; color: #ffe1a6; background: #372e23; font-size: 12px; line-height: 1.5; }
+.background-request-error { color: #ffb7b7; font-size: 12px; }
+.background-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid #394253; }
+.background-actions .button { height: 37px; padding: 0 15px; border: 1px solid #506075; border-radius: 8px; color: #f3f6fa; background: #28384b; font: inherit; }
+.background-actions .background-reset { margin-right: auto; background: transparent; color: #c1cedb; }
+.background-actions .background-save { background: #245f8e; border-color: #63a1d5; font-weight: 600; }
+.background-status { min-height: 17px; margin: 12px 0 0; color: #a9b4c4; font-size: 12px; }
+.appearance-background-editor :is(button, input):focus-visible { outline: 2px solid #8ec5ff; outline-offset: 3px; }
+.appearance-background-editor :is(button, input):disabled { opacity: .42; filter: grayscale(1); cursor: default; }
+.appearance-background-editor [hidden] { display: none; }
+@media (max-width: 650px) {
+  .background-fields { grid-template-columns: minmax(0, 1fr); }
+  .background-color-field > p { min-height: 0; }
+  .background-preview-body { grid-template-columns: 85px minmax(0, 1fr); }
+  .background-preview-floating { width: 100px; right: 7px; top: 77px; font-size: 10px; }
+  .background-preview-card { width: 91px; }
+  .background-actions .button { padding: 0 11px; }
+}

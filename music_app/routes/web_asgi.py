@@ -14,6 +14,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 
+from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
 from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
@@ -870,6 +871,7 @@ async def index(request: Request) -> Response:
     response = _template_response(
         request,
         {
+            **await load_appearance_context(request),
             "query": query_raw,
             "selected_artist": selected_artist,
             "effective_selected_artist": resolve_effective_selected_artist(
@@ -883,6 +885,7 @@ async def index(request: Request) -> Response:
             "startup_preview": startup_preview,
         },
     )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
         try:
@@ -964,9 +967,10 @@ async def news_center(request: Request) -> Response:
         "has_related": False,
         "initial_view_partial": False,
     }
-    return _template_response(
+    response = _template_response(
         request,
         {
+            **await load_appearance_context(request),
             "query": "",
             "selected_artist": "",
             "effective_selected_artist": "",
@@ -978,6 +982,8 @@ async def news_center(request: Request) -> Response:
             "startup_preview": startup_preview,
         },
     )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 @router.get("/bootstrap-data")

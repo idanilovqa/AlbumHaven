@@ -74,6 +74,7 @@ const expectedRuntimeOrder = [
   'problem-exclusion-mutations.js',
   'library-settings.js',
   'cover-lookup-notification-helpers.js',
+  'appearance-backgrounds-bridge.js',
   'utility-renderers-and-actions.js',
   'utility-loop-playback.js',
   'utility-loaders-and-cover-lookup.js',

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from html import unescape
 import io
 import json
@@ -1013,7 +1014,7 @@ def test_startup_sidebar_uses_artist_count_for_all_artists_total():
 
     html = str(markup)
 
-    assert '<span class="artist-count">128</span>' in html
+    assert re.search(r'<span class="[^"]*\bartist-count\b[^"]*">128</span>', html)
     assert 'data-sidebar-home="1"' not in html
 
 
@@ -1556,4 +1557,8 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "password-recovery.js",
         "account.js",
         "admin-members.js",
+        "appearance-backgrounds.js",
+        "settings-navigation.js",
+        "navigation-tree.js",
+        "selection-accent.js",
     }

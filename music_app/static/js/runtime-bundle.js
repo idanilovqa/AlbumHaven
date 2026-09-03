@@ -3106,31 +3106,32 @@ function buildSidebarHtml(view = {}, sidebarArtists = [], options = {}) {
   const showAllArtistsLink = Object.prototype.hasOwnProperty.call(options, 'showAllArtistsOverride')
     && options.showAllArtistsOverride !== null
     ? Boolean(options.showAllArtistsOverride)
-      : view.show_all_artists_sidebar_link !== false;
+    : view.show_all_artists_sidebar_link !== false;
   const selectedArtist = resolveSidebarSelectedArtist(view, options);
   const artistCount = resolveSidebarArtistCount(view, sidebarArtists);
   const allArtistsActive = Object.prototype.hasOwnProperty.call(options, 'allArtistsActiveOverride')
     ? Boolean(options.allArtistsActiveOverride)
     : Boolean(activeSurface === 'albums' && (view.all_artists_active || (!view.query && !selectedArtist)));
-  let html = showAllArtistsLink ? `<a class="artist-link ${allArtistsActive ? 'active' : ''}" href="/?surface=albums" data-nav="1" data-sidebar-all-artists="1">
-      <span class="artist-name-label">All artists</span>
-      <span class="artist-count">${artistCount}</span>
-    </a>` : '';
+  const renderItem = window.NavigationTree.renderItem;
+  let html = showAllArtistsLink ? renderItem({
+    label: 'All artists', href: '/?surface=albums', key: 'all-artists', count: artistCount,
+    selected: allArtistsActive, attributes: { 'data-nav': '1', 'data-sidebar-all-artists': '1' },
+  }) : '';
   const displayedSidebarArtists = [...sidebarArtists].sort((left, right) => {
     const leftLabel = String(left?.artist_display || left?.artist || '');
     const rightLabel = String(right?.artist_display || right?.artist || '');
     return leftLabel.localeCompare(rightLabel, 'en', { numeric: true, sensitivity: 'base' });
   });
-  html += displayedSidebarArtists.map((item) => `
-    <a class="artist-link ${item.artist === selectedArtist ? 'active' : ''}" href="${buildUrl({
+  html += displayedSidebarArtists.map(item => renderItem({
+    label: item.artist_display || item.artist, key: 'artist:' + item.artist,
+    count: item.count, selected: item.artist === selectedArtist,
+    href: buildUrl({
       ...view,
       selected_artist: item.artist,
       all_artists_active: Boolean(view.query) ? Boolean(view.all_artists_active) : false,
-    })}" data-nav="1" data-sidebar-artist="${escapeHtml(item.artist)}">
-      <span class="artist-name-label">${escapeHtml(item.artist_display || item.artist)}</span>
-      <span class="artist-count">${item.count}</span>
-    </a>
-  `).join('');
+    }),
+    attributes: { 'data-nav': '1', 'data-sidebar-artist': item.artist },
+  })).join('');
   return html;
 }
 
@@ -3158,15 +3159,11 @@ function applySidebarSelectionMarkup(container, options = {}) {
   container.querySelectorAll('.artist-link[data-sidebar-artist]').forEach((link) => {
     if (!(link instanceof HTMLElement)) return;
     const isActive = String(link.getAttribute('data-sidebar-artist') || '') === selectedArtist;
-    link.classList.toggle('active', isActive);
-    if (isActive) link.setAttribute('aria-current', 'true');
-    else link.removeAttribute('aria-current');
+    window.NavigationTree.setItemSelected(link, isActive);
   });
   const allArtistsLink = container.querySelector('.artist-link[data-sidebar-all-artists="1"]');
   if (allArtistsLink instanceof HTMLElement) {
-    allArtistsLink.classList.toggle('active', allArtistsActive);
-    if (allArtistsActive) allArtistsLink.setAttribute('aria-current', 'true');
-    else allArtistsLink.removeAttribute('aria-current');
+    window.NavigationTree.setItemSelected(allArtistsLink, allArtistsActive);
   }
 }
 
@@ -16694,6 +16691,27 @@ function markCoverLookupTaskActionTaken(taskId, album = null) {
 
 // END js/runtime/cover-lookup-notification-helpers.js
 
+// BEGIN js/runtime/appearance-backgrounds-bridge.js
+
+// Utilities owns navigation; the standalone module owns the account draft/editor.
+function getBackgroundAppearanceEditor() {
+  return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
+}
+function confirmBackgroundAppearanceLeave() {
+  return getBackgroundAppearanceEditor()?.allowLeave(message => showBrowserConfirm(message)) !== false;
+}
+function unmountAppearanceEditors() {
+  getBackgroundAppearanceEditor()?.unmount();
+  if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+}
+function mountBackgroundAppearanceEditor(detail) {
+  const editor = getBackgroundAppearanceEditor();
+  if (editor) editor.mount(detail);
+  else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
+}
+
+// END js/runtime/appearance-backgrounds-bridge.js
+
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
 ﻿function renderProblematicFiles() {
@@ -17079,7 +17097,7 @@ function renderUtilityAppearance() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
-  els.count.textContent = '1';
+  els.count.textContent = '3';
   if (els.search) {
     els.search.value = '';
     els.search.disabled = true;
@@ -17091,9 +17109,25 @@ function renderUtilityAppearance() {
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  state.utility.appearanceKey = 'seekbar';
-  els.list.innerHTML = buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', true);
-  els.detail.innerHTML = buildUtilityAppearanceDetail();
+  const appearanceKeys = ['seekbar', 'backgrounds', 'selection-accent'];
+  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'seekbar';
+  const selectedKey = state.utility.appearanceKey;
+  els.list.innerHTML = [
+    buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', selectedKey === 'seekbar'),
+    buildUtilityAppearanceListItem('backgrounds', 'Backgrounds', 'Main surface, app bar, and panels', selectedKey === 'backgrounds'),
+    buildUtilityAppearanceListItem('selection-accent', 'Selection accent', 'Color on the left of selected items', selectedKey === 'selection-accent'),
+  ].join('');
+  if (selectedKey === 'backgrounds') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
+  } else if (selectedKey === 'selection-accent') {
+    if (typeof getBackgroundAppearanceEditor === 'function') getBackgroundAppearanceEditor()?.unmount();
+    if (typeof window !== 'undefined' && window.AlbumHavenSelectionAccent?.mount) window.AlbumHavenSelectionAccent.mount(els.detail);
+    else els.detail.innerHTML = '<div class="utility-empty-state">Selection accent could not be loaded. Reload this page to try again.</div>';
+  } else {
+    if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+    els.detail.innerHTML = buildUtilityAppearanceDetail();
+  }
 }
 
 function getSelectedUtilityIntegration() {
@@ -17188,6 +17222,7 @@ function renderUtilityLogHistory() {
 function renderUtilityModalContent() {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {
@@ -17254,6 +17289,7 @@ function collapseAllUtilityLoopGroups() {
 
 function setUtilityActiveTab(nextTab) {
   const normalizedTab = String(nextTab || 'problematic-files');
+  if (normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
     clearUtilityLoopSpaceOwner();
   }
@@ -19262,6 +19298,8 @@ async function disconnectLastfmIntegration() {
 }
 
 function closeUtilityModal() {
+  if (typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+  if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
@@ -29594,7 +29632,9 @@ function attachRepairConfirmEvents() {
   const utilityAppearanceButton = event.target.closest('[data-utility-appearance-key]');
   if (utilityAppearanceButton) {
     event.preventDefault();
-    state.utility.appearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    if (nextAppearanceKey !== state.utility.appearanceKey && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;
   }

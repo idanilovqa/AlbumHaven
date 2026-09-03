@@ -39,6 +39,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/admin/accounts/{account_id}/invitation/send"): "accounts.invitation.send",
     ("POST", "/admin/reauthenticate"): "accounts.reauthenticate",
     ("GET", "/account"): "account.self.read",
+    ("GET", "/account/appearance"): "account.self.appearance.read",
+    ("PUT", "/account/appearance"): "account.self.appearance.write",
+    ("GET", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.read",
+    ("PUT", "/api/account/appearance/selection-accent"): "account.self.appearance.selection_accent.update",
     ("POST", "/account/password"): "account.self.password.change",
     ("POST", "/account/password-suggestion/dismiss"): "account.self.password_suggestion.dismiss",
     ("GET", "/"): "app.shell.read",
@@ -164,6 +168,10 @@ def install_private_route_boundary(app: FastAPI) -> None:
             return await call_next(request)
         route_path = _matched_route_path(app, request)
         action = private_action_for_route(request.method, route_path) or "app.access"
+        preference_headers = (
+            {"Cache-Control": "no-store, max-age=0"}
+            if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}
+        )
         resource = _private_resource(request, route_path)
         try:
             await require_action(action, resource=resource)(request)
@@ -177,13 +185,14 @@ def install_private_route_boundary(app: FastAPI) -> None:
             return JSONResponse(
                 {"detail": exc.detail},
                 status_code=exc.status_code,
-                headers=exc.headers,
+                headers={**(exc.headers or {}), **preference_headers},
             )
         csrf_mode = csrf_mode_for_route(request.method, route_path)
         if csrf_mode == "session_header" and not _valid_session_csrf(request):
             return JSONResponse(
                 {"detail": "CSRF validation failed."},
                 status_code=403,
+                headers=preference_headers,
             )
         response = await call_next(request)
         if request.method.upper() in _READ_METHODS:

@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -21,12 +21,14 @@
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
+  {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
+  {% include "partials/appearance-bootstrap.html" %}
 </head>
 <body>
   {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
@@ -75,7 +77,7 @@
       <div class="sidebar-top shell-navigation-rail-header">
         <h2>Artists</h2>
       </div>
-      <div class="artist-list" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
+      <div class="artist-list navigation-tree" data-navigation-tree="artists" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
     </aside>
     <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
 
@@ -239,4 +241,3 @@
   </script>
 </body>
 </html>
-

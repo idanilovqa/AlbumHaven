@@ -1,0 +1,4 @@
+{% set backgrounds = appearance_preferences | default({'main_surface_color': none, 'panel_background_color': none}) %}
+<script id="appearance-bootstrap" type="application/json">{{ {'main_surface_color': backgrounds.main_surface_color, 'panel_background_color': backgrounds.panel_background_color, 'load_error': appearance_load_error | default(false)} | tojson }}</script>
+<link rel="stylesheet" href="/static/css/appearance-backgrounds.css{% if runtime_asset_version is defined %}?v={{ runtime_asset_version }}{% endif %}">
+<script src="/static/js/appearance-backgrounds.js{% if runtime_asset_version is defined %}?v={{ runtime_asset_version }}{% endif %}"></script>

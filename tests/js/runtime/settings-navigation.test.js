@@ -10,7 +10,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   const listeners = new Map();
   const attributes = (values = {}) => ({
     values, hidden: false, children: [], childNodes: [], style: {}, dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} },
+    classList: (() => { const classes = new Set(); return { contains(name) { return classes.has(name); }, add(name) { classes.add(name); }, remove(name) { classes.delete(name); }, toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); } }; })(),
     getAttribute(name) { return this.values[name] ?? null; },
     setAttribute(name, value) { this.values[name] = String(value); },
     removeAttribute(name) { delete this.values[name]; },
@@ -23,8 +23,8 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
     appendChild(node) { this.append(node); return node; },
     focus() {}, cloneNode() { return this; },
   });
-  const users = attributes({ href: '/admin/members', 'data-settings-section': 'users' });
-  const account = attributes({ href: '/account', 'data-settings-section': 'account' });
+  const users = attributes({ href: '/admin/members', 'data-settings-section': 'users', 'data-navigation-tree-key': 'users', 'data-navigation-tree-item': 'settings' });
+  const account = attributes({ href: '/account', 'data-settings-section': 'account', 'data-navigation-tree-key': 'account', 'data-navigation-tree-item': 'settings' });
   users.dataset.settingsSection = 'users';
   account.dataset.settingsSection = 'account';
   const nav = attributes();
@@ -81,6 +81,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
     }
   }
   const context = vm.createContext({ window, fetch, DOMParser, URL, AbortController, console, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context);
   const navigation = window.AlbumHavenSettingsNavigation.create({ document, window, fetch, DOMParser });
   const respond = (html, url = 'http://localhost:5000/account', status = 200) => responses.push({ ok: status >= 200 && status < 300, status, url, redirected: false, headers: { get: () => 'text/html' }, text: async () => html });

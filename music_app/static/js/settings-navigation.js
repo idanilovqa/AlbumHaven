@@ -66,12 +66,7 @@
       const token = incoming.querySelector('[name="csrf_token"]');
       const currentToken = nav.querySelector('[name="csrf_token"]');
       if (token && currentToken) currentToken.value = token.value;
-      nav.querySelectorAll('[data-settings-section]').forEach((link) => {
-        const active = link.dataset.settingsSection === (url.pathname === '/account' ? 'account' : 'users');
-        link.classList.toggle('is-active', active);
-        if (active) link.setAttribute('aria-current', 'page');
-        else link.removeAttribute('aria-current');
-      });
+      window.NavigationTree.setSelection(nav, url.pathname === '/account' ? 'account' : 'users');
     };
 
     async function navigate(value, { historyMode = 'push', method = 'GET', body } = {}) {
@@ -79,6 +74,7 @@
       const posting = method === 'POST' && url && isAccountPost(url.pathname);
       const returning = library && url && (url.href === libraryUrl || url.pathname === '/');
       if (destroyed || !url || (!isSettingsPath(url.pathname) && !posting && !returning)) return false;
+      if (window.AlbumHavenAppearance?.instance?.allowLeave() === false) return false;
       const ownSequence = ++sequence;
       navigationPending = true;
       pending?.abort();
@@ -102,6 +98,7 @@
         if (ownSequence !== sequence || destroyed) return false;
         const destination = urlFor(response.url || url.href);
         if (response.status === 401 || (destination?.pathname === '/login' && response.redirected)) {
+          window.AlbumHavenAppearance?.instance?.clearSession();
           window.location.assign('/login');
           return false;
         }

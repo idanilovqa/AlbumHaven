@@ -1207,6 +1207,8 @@ async function disconnectLastfmIntegration() {
 }
 
 function closeUtilityModal() {
+  if (typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+  if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;

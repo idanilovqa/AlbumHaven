@@ -1,12 +1,13 @@
+{% from "components/navigation-tree.html" import navigation_tree_item %}
 {% set navigation_actions = account_allowed_actions if account_allowed_actions is defined else allowed_actions %}
-<aside class="settings-nav" aria-label="Settings navigation" data-settings-nav>
+<aside class="settings-nav navigation-tree" aria-label="Settings navigation" data-settings-nav data-navigation-tree="settings">
   <h2>Settings</h2>
   <nav>
-    {% if navigation_actions.allows('accounts.read') %}<a class="settings-nav-item{% if settings_section != 'account' %} is-active{% endif %}" href="/admin/members" data-settings-section="users"{% if settings_section != 'account' %} aria-current="page"{% endif %}><span aria-hidden="true">♙</span> Users</a>{% endif %}
-    <a class="settings-nav-item{% if settings_section == 'account' %} is-active{% endif %}" href="/account" data-settings-section="account"{% if settings_section == 'account' %} aria-current="page"{% endif %}><span aria-hidden="true">◇</span> My account</a>
+    {% if navigation_actions.allows('accounts.read') %}{{ navigation_tree_item('Users', '/admin/members', 'users', settings_section != 'account', '♙', attributes={'data-settings-section': 'users'}) }}{% endif %}
+    {{ navigation_tree_item('My account', '/account', 'account', settings_section == 'account', '◇', attributes={'data-settings-section': 'account'}) }}
     <form class="settings-logout" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <button class="settings-nav-item" type="submit"><span aria-hidden="true">↪</span> Sign Out</button>
+      {{ navigation_tree_item('Sign Out', key='sign-out', icon='↪', action=true) }}
     </form>
   </nav>
 </aside>

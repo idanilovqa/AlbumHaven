@@ -14,7 +14,7 @@
 }
 .settings-host * { box-sizing: border-box; }
 .settings-host {
-  color: var(--ink); background: radial-gradient(circle at 72% 20%, rgb(37 73 111 / 18%), transparent 38%), var(--night);
+  color: var(--ink);
   font-family: "Segoe UI", Inter, Arial, sans-serif; -webkit-font-smoothing: antialiased;
   caret-color: transparent;
 }
@@ -27,11 +27,6 @@
 .settings-host [contenteditable="true"] {
   caret-color: auto;
 }
-.settings-host.settings-shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
-.settings-host .settings-nav { min-height: 100vh; padding: 40px 20px; border-right: 1px solid var(--line); background: rgb(8 24 41 / 88%); }
-.settings-host .settings-brand { display: inline-block; margin: 0 20px 35px; }
-.settings-host .settings-brand img { width: 62px; height: 58px; object-fit: contain; }
-.settings-host .settings-nav h2 { margin: 0 6px 18px; font-size: 20px; }
 .settings-host .settings-nav nav { display: grid; gap: 5px; }
 .settings-host .settings-nav-item { min-height: 44px; padding: 0 13px; display: flex; align-items: center; gap: 13px; border-radius: 9px; color: #a3b0c1; font-size: 14px; text-decoration: none; }
 .settings-host .settings-nav-item span { width: 22px; color: #8498b0; font-size: 20px; text-align: center; }
@@ -41,7 +36,6 @@
 .settings-host .detail-back:focus-visible,
 .settings-host .member-edit:hover,
 .settings-host .member-edit:focus-visible { color: #fff; outline: none; }
-.settings-host .settings-main { min-width: 0; padding: 34px 45px 60px; }
 .settings-host .members-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
 .settings-host .members-heading h1,
 .settings-host .detail-heading h1 { margin: 0; font-size: 29px; letter-spacing: -.035em; }
@@ -148,13 +142,7 @@
 .settings-host .members-row { min-width: 910px; }
 }
 @media (max-width: 720px) {
-.settings-host.settings-shell { grid-template-columns: 1fr; }
-.settings-host .settings-nav { min-height: auto; padding: 18px 20px; border-right: 0; border-bottom: 1px solid var(--line); }
-.settings-host .settings-brand { margin: 0 10px 0 0; vertical-align: middle; }
-.settings-host .settings-brand img { width: 48px; height: 44px; }
-.settings-host .settings-nav h2 { display: inline; vertical-align: 14px; }
 .settings-host .settings-nav nav { margin-top: 14px; grid-template-columns: 1fr 1fr; }
-.settings-host .settings-main { padding: 28px 21px 45px; }
 .settings-host .members-table { overflow-x: visible; border: 0; }
 .settings-host .members-row { min-width: 0; padding: 14px 0; grid-template-columns: 1fr 1fr; align-items: start; gap: 12px 18px; }
 .settings-host .members-table-head { display: none; }

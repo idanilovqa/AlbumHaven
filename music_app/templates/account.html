@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/admin-members.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css">
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
@@ -14,6 +15,8 @@
 <body>
   <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
   <main class="settings-host settings-shell" data-settings-host>
+    {% from "partials/app-bar.html" import app_bar with context %}
+    {{ app_bar() }}
     {% set settings_section = 'account' %}
     {% include "partials/admin-settings-nav.html" %}
     <div class="settings-outlet" data-settings-outlet>

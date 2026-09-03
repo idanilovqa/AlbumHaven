@@ -1,8 +1,5 @@
 {% set navigation_actions = account_allowed_actions if account_allowed_actions is defined else allowed_actions %}
 <aside class="settings-nav" aria-label="Settings navigation" data-settings-nav>
-  <a class="settings-brand" href="/" aria-label="Album Haven library">
-    <img src="/static/images/album-haven-cloud-vinyl.png" alt="">
-  </a>
   <h2>Settings</h2>
   <nav>
     {% if navigation_actions.allows('accounts.read') %}<a class="settings-nav-item{% if settings_section != 'account' %} is-active{% endif %}" href="/admin/members" data-settings-section="users"{% if settings_section != 'account' %} aria-current="page"{% endif %}><span aria-hidden="true">♙</span> Users</a>{% endif %}

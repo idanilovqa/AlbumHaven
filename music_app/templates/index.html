@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="/static/css/admin-members.css">
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css">
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
@@ -39,17 +40,9 @@
   {% set shell_drawer = shell_slots.info_drawer if shell_slots and shell_slots.info_drawer else {} %}
   {% set shell_bottom_player = shell_slots.bottom_player if shell_slots and shell_slots.bottom_player else {} %}
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
+  {% from "partials/app-bar.html" import app_bar with context %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
-    <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
-      <div class="sidebar-top shell-navigation-rail-header">
-        <h2>Artists</h2>
-      </div>
-      <div class="artist-list" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
-    </aside>
-    <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
-
-    <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
-      <div class="toolbar shell-app-bar" data-shell-slot="app_bar" data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}">
+    {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/">
           <div class="search-input-wrap">
             <input type="search" name="q" id="search-input" value="{{ query }}" placeholder="Search artist, album, or track" aria-label="Search music" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="recent-search-popover" aria-expanded="false">
@@ -79,7 +72,16 @@
           </button>
           {% include 'partials/account-menu.html' %}
         </div>
+    {% endcall %}
+    <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
+      <div class="sidebar-top shell-navigation-rail-header">
+        <h2>Artists</h2>
       </div>
+      <div class="artist-list" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
+    </aside>
+    <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
+
+    <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
 
       {% if last_error %}
       <div class="error" id="last-error">Last scan error: {{ last_error }}</div>
@@ -116,6 +118,7 @@
       </div>
       {% else %}
       <div class="gallery-top-row">
+        <button class="button artists-drawer-button" type="button" id="artists-drawer-button" data-toggle-artists-drawer="1" aria-controls="shell-navigation-rail" aria-expanded="false" hidden>Artists</button>
         <section class="related-box shell-contextual-pane {% if not startup_preview.related_expanded %}is-collapsed{% endif %}" id="related-box" data-shell-slot="contextual_pane" data-shell-content-kind="{{ shell_contextual.content_kind or 'contextual_navigation' }}" data-shell-is-visible="{{ 'true' if shell_contextual.is_visible else 'false' }}" data-shell-active-pane="{{ shell_contextual.active_pane or '' }}" data-shell-supported-panes="{{ (shell_contextual.supported_panes or [])|join(',') }}" data-shell-local-tree-submode="{{ shell_contextual.local_tree.active_submode if shell_contextual.local_tree else '' }}" data-shell-local-tree-submodes="{{ (shell_contextual.local_tree.supported_submodes if shell_contextual.local_tree else [])|join(',') }}" data-shell-splitter-desktop-only="{{ 'true' if shell_contextual.splitter and shell_contextual.splitter.desktop_only else 'false' }}" data-shell-splitter-placement="{{ shell_contextual.splitter.placement if shell_contextual.splitter else '' }}" data-shell-mobile-fallback="{{ shell_contextual.splitter.mobile_fallback if shell_contextual.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_contextual.splitter.state_scope if shell_contextual.splitter else '' }}" {% if startup_preview.has_related %}style="display:block"{% else %}style="display:none"{% endif %}>
           <button class="related-toggle" id="related-toggle" type="button" aria-expanded="{% if startup_preview.related_expanded %}true{% else %}false{% endif %}" aria-controls="related-list-wrap">
             <span class="related-title">Artist Family</span>
@@ -171,6 +174,7 @@
 
   <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
   <main class="settings-host settings-shell" data-settings-host hidden>
+    {{ app_bar() }}
     {% with allowed_actions = account_menu_allowed_actions, csrf_token = account_menu_csrf_token %}
       {% include "partials/admin-settings-nav.html" %}
     {% endwith %}

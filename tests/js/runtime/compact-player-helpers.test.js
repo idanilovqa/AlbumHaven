@@ -160,9 +160,12 @@ test('compact markup and layout expose only approved transport controls and rese
   const compact = template.match(/<div class="compact-player-shell"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
   const css = fs.readFileSync(stylePath, 'utf8');
   const controller = fs.readFileSync(controllerPath, 'utf8');
-  for (const name of ['Expand player', 'Open album details', 'Previous track', 'Play', 'Next track']) {
+  for (const name of ['Open album details', 'Previous track', 'Play', 'Next track']) {
     assert.match(compact, new RegExp(`aria-label="${name}"`));
   }
+  assert.equal((template.match(/data-player-toggle/g) || []).length, 1);
+  assert.doesNotMatch(template, /data-player-(?:collapse|expand)/);
+  assert.match(template, /data-player-toggle[^>]+aria-label="Collapse player"/);
   for (const hiddenFeature of ['waveform', 'seekbar', 'Loop', 'player-title', 'player-artist']) {
     assert.doesNotMatch(compact, new RegExp(hiddenFeature, 'i'));
   }
@@ -173,6 +176,7 @@ test('compact markup and layout expose only approved transport controls and rese
   assert.match(css, /@property --player-height/);
   assert.match(css, /\.is-compact-player-dragging\s*\{[^}]*transition:[^}]*height[^}]*opacity/);
   assert.match(controller, /previousStyle !== 'floating'/);
+  assert.match(controller, /toggle\.setAttribute\('aria-label', compact \? 'Expand player' : 'Collapse player'\)/);
   assert.match(controller, /getElementById\('shell-navigation-rail'\)/);
   assert.match(controller, /addEventListener\('pointercancel', finishDrag\)/);
   assert.match(controller, /hasPointerCapture\?\./);

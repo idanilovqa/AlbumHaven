@@ -10,8 +10,7 @@ function compactPlayerElements() {
     player,
     expanded: player?.querySelector('.player-shell'),
     compact: player?.querySelector('.compact-player-shell'),
-    collapse: player?.querySelector('[data-player-collapse]'),
-    expand: player?.querySelector('[data-player-expand]'),
+    toggle: player?.querySelector('[data-player-toggle]'),
     cover: player?.querySelector('[data-compact-player-cover]'),
     play: player?.querySelector('[data-compact-player-play]'),
     previous: player?.querySelector('[data-compact-player-previous]'),
@@ -63,7 +62,12 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     els.compact.inert = !compact;
     els.compact.setAttribute('aria-hidden', String(!compact));
   }
-  if (els.collapse) els.collapse.hidden = compact || !compactPlayerEligible();
+  if (els.toggle) {
+    els.toggle.hidden = !compactPlayerEligible();
+    els.toggle.textContent = compact ? '›' : '‹';
+    els.toggle.setAttribute('aria-label', compact ? 'Expand player' : 'Collapse player');
+    els.toggle.title = compact ? 'Expand player' : 'Collapse player';
+  }
   if (compact && compactPlayerStyle === 'docked') syncDockedCompactGeometry();
   if (compact && compactPlayerStyle === 'floating') {
     if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
@@ -140,8 +144,7 @@ function initCompactPlayer() {
   let saved = 'expanded';
   try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
-  els.collapse?.addEventListener('click', () => applyCompactPlayerMode('compact'));
-  els.expand?.addEventListener('click', () => applyCompactPlayerMode('expanded'));
+  els.toggle?.addEventListener('click', () => applyCompactPlayerMode(compactPlayerMode === 'compact' ? 'expanded' : 'compact'));
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));

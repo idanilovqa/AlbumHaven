@@ -6,6 +6,7 @@ attachCoverLookupDeleteConfirmEvents();
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
+if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }

@@ -1,6 +1,10 @@
 /* The shell owns a persistent player lane below every app surface. */
 .global-player {
-  position: relative;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
   z-index: 4500;
   isolation: isolate;
 }

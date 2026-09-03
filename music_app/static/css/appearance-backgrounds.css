@@ -82,6 +82,7 @@ html .cover-lookup-drawer {
 .appearance-background-editor :is(button, input):disabled { opacity: .42; filter: grayscale(1); cursor: default; }
 .appearance-background-editor [hidden] { display: none; }
 @media (max-width: 650px) {
+  .compact-player-style-section { display: none; }
   .background-fields { grid-template-columns: minmax(0, 1fr); }
   .background-color-field > p { min-height: 0; }
   .background-preview-body { grid-template-columns: 85px minmax(0, 1fr); }
@@ -97,6 +98,10 @@ html .cover-lookup-drawer {
   --accent: var(--appearance-accent); --star-on: var(--appearance-stars);
   --app-ink: var(--appearance-ink); --app-muted: var(--appearance-muted);
   --app-control: var(--appearance-control); --app-active: var(--appearance-hover);
+}
+
+@media (min-width: 651px) and (max-width: 900px) {
+  .compact-player-style-section { display: none; }
 }
 :root[data-appearance-mode='light'], :root[data-appearance-mode='light'] .settings-host { color-scheme: light; }
 :root[data-appearance-mode='dark'] { color-scheme: dark; }

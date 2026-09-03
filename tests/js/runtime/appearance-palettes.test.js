@@ -5,7 +5,7 @@ const path = require('node:path');
 const runtime = () => require(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'));
 const defaults = () => ({
   main_surface_color: null, panel_background_color: null,
-  palette_id: null, panel_index: 0, player_override: null,
+  palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked',
 });
 const green = () => ({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' });
 const steel = () => ({ background: '#14283B', fill: '#8BAED1', edge: '#B9CADD' });
@@ -54,6 +54,15 @@ test('palette and companion edits stay in the preview and save one complete pref
   assert.deepEqual(requests, [{ method: 'PUT', payload: expected }]);
   assert.deepEqual(applied, [expected]);
   assert.equal(controller.getState().canSave, false);
+});
+
+test('compact player style shares the Appearance draft and saves with the canonical preference', async () => {
+  const { controller, requests } = setup();
+  controller.setCompactPlayerStyle('floating');
+  assert.equal(controller.getState().draft.compact_player_style, 'floating');
+  assert.throws(() => controller.setCompactPlayerStyle('unknown'), TypeError);
+  assert.equal(await controller.save(), true);
+  assert.equal(requests[0].payload.compact_player_style, 'floating');
 });
 
 test('unknown palette, invalid companion and unknown player mode cannot alter the draft', () => {

@@ -181,6 +181,7 @@
     <div class="settings-outlet" data-settings-outlet></div>
   </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
+    <button class="player-collapse-button" type="button" data-player-collapse aria-label="Collapse player" title="Collapse player">⌄</button>
     <div class="player-shell">
       <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
       <span class="loop-play-control-cluster player-play-cluster">
@@ -202,6 +203,15 @@
             <button class="player-loop-handle loop-range-handle is-end" type="button" id="player-loop-end-handle" role="slider" data-loop-range-handle="end" aria-label="Loop end" hidden></button>
           </div>
         </div>
+      </div>
+    </div>
+    <div class="compact-player-shell" aria-label="Compact player" hidden>
+      <button class="compact-player-expand" type="button" data-player-expand aria-label="Expand player" title="Expand player">⌃</button>
+      <button class="compact-player-cover" type="button" data-compact-player-cover aria-label="Open album details"></button>
+      <div class="compact-player-transport">
+        <button type="button" data-compact-player-previous aria-label="Previous track">◀</button>
+        <button class="compact-player-play" type="button" data-compact-player-play aria-label="Play">▶</button>
+        <button type="button" data-compact-player-next aria-label="Next track">▶</button>
       </div>
     </div>
   </div>

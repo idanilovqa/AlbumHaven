@@ -11,6 +11,7 @@ PALETTES = ("steelblue", "navy", "powderblue", "graphite", "slate", "midnight", 
 DEFAULTS = {
     "main_surface_color": None, "panel_background_color": None,
     "palette_id": None, "panel_index": 0, "player_override": None,
+    "compact_player_style": "docked",
 }
 PLAYER = {"background": "#142E22", "fill": "#8BBFA0", "edge": "#D5EFDE"}
 
@@ -128,8 +129,8 @@ def test_repository_persists_full_player_group_and_palette_in_one_account_owned_
     assert _repository(connection).save_preferences(account_id=52, preferences=payload) == {**payload, "waveform_recent_colors": []}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
-    assert "on conflict (account_id)" in sql
-    assert tuple(params) == (52, None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [])
+    assert "on conflict (account_id, client_profile)" in sql
+    assert tuple(params) == (52, "desktop", None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [], "docked")
     assert connection.closed
 
 

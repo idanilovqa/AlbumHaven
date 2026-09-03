@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.auth_asgi import _policy_config
 from music_app.services.appearance_preferences_postgres import (
     PostgresAppearancePreferencesRepository,
+    appearance_client_profile,
     expand_appearance_preferences,
     normalize_appearance_preferences,
 )
@@ -26,6 +27,14 @@ def _repository(request: Request):
     return PostgresAppearancePreferencesRepository(_policy_config(request))
 
 
+def _client_profile(request: Request) -> str:
+    # Policy owns this classification. Current required web requests are
+    # private_web -> desktop; optional/future hosts can supply their trusted class.
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    trusted_surface = getattr(getattr(evaluation, "audit", None), "client_surface_class", "private_web")
+    return appearance_client_profile(trusted_surface)
+
+
 async def load_appearance_context(request: Request) -> dict[str, object]:
     """Load only this request's actor; never retain preferences in application state."""
     colors = expand_appearance_preferences({"main_surface_color": None, "panel_background_color": None})
@@ -34,7 +43,8 @@ async def load_appearance_context(request: Request) -> dict[str, object]:
     if actor is not None and actor.is_authenticated and actor.account_id is not None:
         try:
             colors = expand_appearance_preferences(await run_in_threadpool(
-                _repository(request).load_preferences, account_id=actor.account_id
+                _repository(request).load_preferences, account_id=actor.account_id,
+                client_profile=_client_profile(request),
             ))
         except Exception:
             failed = True
@@ -47,6 +57,7 @@ async def get_appearance(request: Request) -> JSONResponse:
         colors = expand_appearance_preferences(await run_in_threadpool(
             _repository(request).load_preferences,
             account_id=request.state.current_actor.account_id,
+            client_profile=_client_profile(request),
         ))
         token = issue_session_csrf(
             request.cookies.get("__Host-album_haven_session"), _policy_config(request)
@@ -67,6 +78,7 @@ async def put_appearance(request: Request) -> JSONResponse:
             _repository(request).save_preferences,
             account_id=request.state.current_actor.account_id,
             preferences=colors,
+            client_profile=_client_profile(request),
         ))
     except Exception:
         return JSONResponse({"error": "appearance_unavailable"}, status_code=503, headers=_NO_STORE)

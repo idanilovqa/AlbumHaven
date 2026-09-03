@@ -92,6 +92,7 @@ function updatePlayerUi() {
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
+  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
     els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);

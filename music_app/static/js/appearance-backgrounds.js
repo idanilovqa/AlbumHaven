@@ -6,7 +6,7 @@
   const keys = ['main_surface_color', 'panel_background_color'];
   const defaults = { main_surface_color: '#111C2C', panel_background_color: '#0E1B2B' };
   const empty = () => ({ main_surface_color: null, panel_background_color: null });
-  const canonicalEmpty = () => ({ ...empty(), palette_id: null, panel_index: 0, player_override: null });
+  const canonicalEmpty = () => ({ ...empty(), palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked' });
   const isCanonical = value => ['palette_id', 'panel_index', 'player_override'].some(key => Object.hasOwn(value, key));
   const copy = value => ({ ...value, ...(Object.hasOwn(value, 'player_override') ? { player_override: value.player_override ? { ...value.player_override } : null } : {}) });
   function normalizeColor(value) {
@@ -22,7 +22,8 @@
     const id = value.palette_id;
     if (id !== null && !palettes.some(palette => palette.id === id)) throw new TypeError('Unknown palette.');
     if (!Number.isInteger(value.panel_index) || value.panel_index < 0 || value.panel_index > (id === null ? 0 : 2)) throw new TypeError('Unknown panel companion.');
-    return { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override) };
+    const compactStyle = value.compact_player_style === 'floating' ? 'floating' : 'docked';
+    return { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override), compact_player_style: compactStyle };
   }
   function normalizeRecentColors(value) {
     if (value === undefined) return [];
@@ -70,6 +71,7 @@
     } else { rootElement.removeAttribute?.('data-appearance-palette'); rootElement.removeAttribute?.('data-appearance-mode'); }
     if (playerThemed) rootElement.setAttribute?.('data-appearance-player', 'custom');
     else rootElement.removeAttribute?.('data-appearance-player');
+    rootElement.setAttribute?.('data-compact-player-style', preference.compact_player_style || 'docked');
   }
   // Pin the resolved draft locally, including defaults that would otherwise inherit
   // the document's saved palette. This never applies anything to the live app.
@@ -142,6 +144,11 @@
       for (const field of ['background', 'fill', 'edge']) delete errors['player_' + field];
       error = ''; syncInputs(true); notify();
     };
+    const setCompactPlayerStyle = style => {
+      if (!['docked', 'floating'].includes(style)) throw new TypeError('Unknown compact player style.');
+      if (busy()) return;
+      promote(); draft.compact_player_style = style; error = ''; notify();
+    };
     const rememberColor = color => { waveformColorUpdates = [color, ...waveformColorUpdates.filter(item => item !== color)].slice(0, 5); };
     const setPlayerColor = (field, value, { recordRecent = true } = {}) => {
       if (!['background', 'fill', 'edge'].includes(field)) throw new TypeError('Unknown player color.');
@@ -199,7 +206,7 @@
       recentColors = []; waveformColorUpdates = [];
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
-    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setPlayerColor, restoreWaveformColors, cancel, reset, load, save, clear,
+    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setPlayerColor, restoreWaveformColors, cancel, reset, load, save, clear,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
@@ -226,6 +233,7 @@
       <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match palette</button><button type="button" data-background-player-mode="custom" aria-pressed="false">Custom player colors</button></div>
       <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}<small>Player text and buttons adapt to the background.</small></div>
       <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="seekbar">Edit waveform in Seekbar</button><p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge stay with this group. Edit those colors in Seekbar.</p></section>
+      <section class="background-player-section compact-player-style-section" aria-labelledby="appearance-compact-player-label"><h4 id="appearance-compact-player-label"><span>4</span>Compact player</h4><p class="background-help">Choose the desktop layout used when the player is collapsed.</p><div class="background-player-modes" role="group" aria-label="Compact player style"><button type="button" data-compact-player-style="docked" aria-pressed="true">Docked</button><button type="button" data-compact-player-style="floating" aria-pressed="false">Floating</button></div></section>
       <p class="background-help">Save applies the palette and all three player colors together. Cancel restores the saved set. Reset backgrounds keeps your custom player group.</p></div></div>
       <p class="background-warning" data-background-warning role="status" hidden></p><p class="background-request-error" data-background-request-error role="alert" hidden></p>
       <div class="background-actions"><button class="button button-secondary background-reset" type="button" data-background-reset>Reset backgrounds</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
@@ -304,6 +312,7 @@
         for (const [token, value] of Object.entries(effective.tokens)) preview.style.setProperty('--preview-' + token, value);
         const custom = Boolean(preference.player_override);
         editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
+        editor.querySelectorAll('[data-compact-player-style]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-compact-player-style') === preference.compact_player_style)));
         find('[data-background-player-fields]').hidden = !custom;
         find('[data-background-player-help]').textContent = custom ? 'Your background, waveform fill and edge stay together when you change palettes.' : 'The palette sets your player background, waveform fill and edge together.';
         for (const field of ['background']) {
@@ -330,6 +339,7 @@
         if (button.hasAttribute('data-background-palette')) controller.setPalette(button.getAttribute('data-background-palette'));
         else if (button.hasAttribute('data-background-panel')) controller.setPanelIndex(Number(button.getAttribute('data-background-panel')));
         else if (button.hasAttribute('data-background-player-mode')) controller.setPlayerMode(button.getAttribute('data-background-player-mode'));
+        else if (button.hasAttribute('data-compact-player-style')) controller.setCompactPlayerStyle(button.getAttribute('data-compact-player-style'));
 
         else if (button.hasAttribute('data-background-reset')) controller.reset();
         else if (button.hasAttribute('data-background-cancel')) controller.cancel();

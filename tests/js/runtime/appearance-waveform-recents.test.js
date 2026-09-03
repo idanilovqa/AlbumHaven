@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const api = require('../../../music_app/static/js/appearance-backgrounds.js');
-const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null});
+const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked'});
 const custom = () => ({...defaults(),palette_id:'steelblue',player_override:{background:'#14283B',fill:'#8BAED1',edge:'#B9CADD'}});
 function setup(options={}) {
   const requests=[],applied=[];

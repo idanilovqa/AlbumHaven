@@ -16,7 +16,7 @@ from tests.py.asgi_testing import decode_json, run_asgi_request
 
 
 DEFAULTS = {"main_surface_color": None, "panel_background_color": None}
-EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None, "waveform_recent_colors": []}
+EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None, "waveform_recent_colors": [], "compact_player_style": "docked"}
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}
 SESSION = "s" * 43
 
@@ -26,16 +26,19 @@ class Repository:
         self.rows = {}
         self.reads = []
         self.writes = []
+        self.profiles = []
         self.fail = False
 
-    def load_preferences(self, *, account_id):
+    def load_preferences(self, *, account_id, client_profile="desktop"):
         self.reads.append(account_id)
+        self.profiles.append(("read", client_profile))
         if self.fail:
             raise RuntimeError("private database connection details")
         return dict(self.rows.get(account_id, DEFAULTS))
 
-    def save_preferences(self, *, account_id, preferences):
+    def save_preferences(self, *, account_id, preferences, client_profile="desktop"):
         self.writes.append(account_id)
+        self.profiles.append(("write", client_profile))
         if self.fail:
             raise RuntimeError("private database connection details")
         self.rows[account_id] = dict(preferences)
@@ -87,6 +90,7 @@ def test_ordinary_active_member_can_read_defaults_without_library_grants(deploym
     }
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]
+    assert repository.profiles == [("read", "desktop")]
 
 
 def test_save_normalizes_any_rgb_and_reset_is_scoped_to_the_authenticated_account():

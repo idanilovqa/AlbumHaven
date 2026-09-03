@@ -13,7 +13,7 @@ from tests.py.test_appearance_preferences_postgres import Connection, _repositor
 
 
 LEGACY = {"main_surface_color": None, "panel_background_color": None}
-FULL = {**LEGACY, "palette_id": None, "panel_index": 0, "player_override": None}
+FULL = {**LEGACY, "palette_id": None, "panel_index": 0, "player_override": None, "compact_player_style": "docked"}
 
 
 @pytest.mark.parametrize("base", [LEGACY, FULL])
@@ -74,14 +74,14 @@ def test_api_returns_authoritative_account_history_and_passes_only_selection_eve
     assert decode_json(_request(app)[2])["waveform_recent_colors"] == []
 
     captured = []
-    def save(*, account_id, preferences):
-        captured.append((account_id, preferences))
+    def save(*, account_id, preferences, client_profile):
+        captured.append((account_id, client_profile, preferences))
         return {**FULL, "waveform_recent_colors": ["#AABBCC", "#79B390"]}
     repository.save_preferences = save
     status, _, body = _request(app, "PUT", {**FULL, "waveform_color_updates": ["#aabbcc"]})
     assert status == 200
     assert decode_json(body) == {**FULL, "waveform_recent_colors": ["#AABBCC", "#79B390"]}
-    assert captured == [(52, {**FULL, "waveform_color_updates": ["#AABBCC"]})]
+    assert captured == [(52, "desktop", {**FULL, "waveform_color_updates": ["#AABBCC"]})]
 
 
 def test_bootstrap_exposes_this_actor_history_and_failure_clears_it():
@@ -115,7 +115,7 @@ def test_repository_returns_history_and_binds_events_in_one_atomic_owner_upsert(
     assert result == {**FULL, "waveform_recent_colors": row["waveform_recent_colors"]}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
-    assert "on conflict (account_id)" in sql
+    assert "on conflict (account_id, client_profile)" in sql
     assert "merge_waveform_recent_colors" in sql
     assert params[0] == 41
     assert ["#AABBCC"] in params

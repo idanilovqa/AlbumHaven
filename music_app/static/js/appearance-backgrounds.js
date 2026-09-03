@@ -71,6 +71,18 @@
     if (playerThemed) rootElement.setAttribute?.('data-appearance-player', 'custom');
     else rootElement.removeAttribute?.('data-appearance-player');
   }
+  // Pin the resolved draft locally, including defaults that would otherwise inherit
+  // the document's saved palette. This never applies anything to the live app.
+  function applyDraftEditorTheme(value, editor) {
+    const effective = resolveAppearance(value);
+    editor.style.setProperty('--appearance-main-surface', effective.main);
+    editor.style.setProperty('--appearance-panel-background', effective.panel);
+    for (const [token, color] of Object.entries(effective.tokens)) editor.style.setProperty('--appearance-' + token, color);
+    editor.style.setProperty('--appearance-on-accent', catalog.contrastingInk(effective.tokens.accent));
+    editor.setAttribute('data-appearance-mode', effective.mode);
+    if (value.palette_id) editor.setAttribute('data-appearance-palette', value.palette_id);
+    else editor.removeAttribute('data-appearance-palette');
+  }
   function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
   function createController({ initial = empty(), request, apply = () => {} }) {
     let saved = normalizePreferences(initial), draft = copy(saved), errors = {}, inputValues = {};
@@ -269,6 +281,7 @@
       let drawnPalette;
       const sync = state => {
         if (mounted !== editor) return;
+        applyDraftEditorTheme(state.draft, editor);
         const disabled = state.loading || state.saving || state.loadFailed, preference = state.draft, effective = state.effective;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
@@ -331,6 +344,7 @@
       let recoveryMessage = '';
       const sync = state => {
         if (mounted !== editor) return;
+        applyDraftEditorTheme(state.draft, editor);
         const disabled = state.loading || state.saving || state.loadFailed, custom = Boolean(state.draft.player_override);
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });

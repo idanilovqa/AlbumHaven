@@ -208,9 +208,19 @@
     <div class="compact-player-shell" aria-label="Compact player" hidden>
       <button class="compact-player-cover" type="button" data-compact-player-cover aria-label="Open album details"></button>
       <div class="compact-player-transport">
-        <button type="button" data-compact-player-previous aria-label="Previous track">◀</button>
+        <button class="compact-player-skip" type="button" data-compact-player-previous aria-label="Previous track">
+          <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M18 6l-6 6 6 6"></path>
+            <path d="M11 6l-6 6 6 6"></path>
+          </svg>
+        </button>
         <button class="compact-player-play" type="button" data-compact-player-play aria-label="Play">▶</button>
-        <button type="button" data-compact-player-next aria-label="Next track">▶</button>
+        <button class="compact-player-skip" type="button" data-compact-player-next aria-label="Next track">
+          <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 6l6 6-6 6"></path>
+            <path d="M13 6l6 6-6 6"></path>
+          </svg>
+        </button>
       </div>
     </div>
   </div>

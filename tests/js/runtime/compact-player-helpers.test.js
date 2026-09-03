@@ -163,6 +163,12 @@ test('compact markup and layout expose only approved transport controls and rese
   for (const name of ['Open album details', 'Previous track', 'Play', 'Next track']) {
     assert.match(compact, new RegExp(`aria-label="${name}"`));
   }
+  for (const attribute of ['data-compact-player-previous', 'data-compact-player-next']) {
+    const skipButton = compact.match(new RegExp(`<button[^>]+${attribute}[^>]*>[\\s\\S]*?<\\/button>`))?.[0] || '';
+    assert.match(skipButton, /<svg[^>]+aria-hidden="true"/);
+    assert.equal((skipButton.match(/<path /g) || []).length, 2);
+    assert.doesNotMatch(skipButton, /[◀▶]/);
+  }
   assert.equal((template.match(/data-player-toggle/g) || []).length, 1);
   assert.doesNotMatch(template, /data-player-(?:collapse|expand)/);
   assert.match(template, /data-player-toggle[^>]+aria-label="Collapse player"/);

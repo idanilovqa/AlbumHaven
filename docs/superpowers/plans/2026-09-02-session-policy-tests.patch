@@ -1,0 +1,242 @@
+diff --git a/tests/py/test_auth_asgi.py b/tests/py/test_auth_asgi.py
+index b96a39c..6e55aa2 100644
+--- a/tests/py/test_auth_asgi.py
++++ b/tests/py/test_auth_asgi.py
+@@ -81,16 +81,18 @@ class FakePreAuth:
+ 
+ 
+ class FakeLogin:
+-    def __init__(self, outcome=LoginOutcome.INVALID):
++    def __init__(self, outcome=LoginOutcome.INVALID, *, absolute_seconds=90 * 24 * 60 * 60):
+         self.outcome = outcome
+         self.calls = []
++        self.absolute_seconds = absolute_seconds
+ 
+     def authenticate(self, **kwargs):
+         self.calls.append(kwargs)
+         if self.outcome is LoginOutcome.SUCCESS:
+             from datetime import datetime, timedelta, timezone
+             now = datetime.now(timezone.utc)
+-            session = IssuedBrowserSession(SESSION, 8, 41, now, now + timedelta(hours=12), now + timedelta(days=7))
++            expires_at = now + timedelta(seconds=self.absolute_seconds)
++            session = IssuedBrowserSession(SESSION, 8, 41, now, expires_at, expires_at)
+             return LoginResult(LoginOutcome.SUCCESS, 41, True, session)
+         return LoginResult(self.outcome)
+ 
+@@ -919,6 +921,42 @@ def test_success_consumes_then_authenticates_sets_unrelated_session_and_clears_p
+     )
+ 
+ 
++@pytest.mark.parametrize("absolute_seconds", [90 * 24 * 60 * 60, 60 * 60])
++def test_success_persists_session_and_csrf_for_issued_absolute_lifetime(
++    auth_asgi, absolute_seconds
++):
++    app, _, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
++    login.absolute_seconds = absolute_seconds
++    app.state.auth_policy_config["session"] = {
++        "idle_seconds": absolute_seconds,
++        "absolute_seconds": absolute_seconds,
++        "activity_write_seconds": 300,
++    }
++
++    status, headers, _ = _request(
++        app, "POST", form=_valid_form(), headers=_valid_headers()
++    )
++
++    assert status == 303
++    cookies = SimpleCookie()
++    for header in _set_cookies(headers):
++        cookies.load(header)
++    for name in (SESSION_COOKIE, "__Host-album_haven_csrf"):
++        cookie = cookies[name]
++        assert cookie["max-age"] == str(absolute_seconds)
++        assert cookie["secure"]
++        assert cookie["samesite"].lower() == "lax"
++        assert cookie["path"] == "/"
++        assert cookie["domain"] == ""
++    assert cookies[SESSION_COOKIE]["httponly"]
++    assert not cookies["__Host-album_haven_csrf"]["httponly"]
++    assert matches_session_csrf(
++        cookies[SESSION_COOKIE].value,
++        cookies["__Host-album_haven_csrf"].value,
++        app.state.auth_policy_config,
++    )
++
++
+ def test_logout_requires_session_bound_csrf_revokes_and_clears_cookies(auth_asgi):
+     from music_app.services.auth_session_csrf import issue_session_csrf
+ 
+diff --git a/tests/py/test_auth_config.py b/tests/py/test_auth_config.py
+index c36248d..01c15ff 100644
+--- a/tests/py/test_auth_config.py
++++ b/tests/py/test_auth_config.py
+@@ -105,8 +105,8 @@ def test_auth_defaults_normalize_bootstrap_identity_and_lock_security_policy(con
+         "max_utf8_bytes": 1_024,
+     }
+     assert config["session"] == {
+-        "idle_seconds": 12 * 60 * 60,
+-        "absolute_seconds": 7 * 24 * 60 * 60,
++        "idle_seconds": 90 * 24 * 60 * 60,
++        "absolute_seconds": 90 * 24 * 60 * 60,
+         "activity_write_seconds": 5 * 60,
+     }
+     assert config["reset_token_seconds"] == 30 * 60
+@@ -422,8 +422,8 @@ def test_auth_cookie_defaults_are_host_only_secure_and_http_only(contracts):
+         ("ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", "7"),
+         ("ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS", "257"),
+         ("ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES", "1025"),
+-        ("ALBUM_HAVEN_SESSION_IDLE_SECONDS", str(13 * 60 * 60)),
+-        ("ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS", str(8 * 24 * 60 * 60)),
++        ("ALBUM_HAVEN_SESSION_IDLE_SECONDS", str(90 * 24 * 60 * 60 + 1)),
++        ("ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS", str(90 * 24 * 60 * 60 + 1)),
+         ("ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS", str(4 * 60)),
+         ("ALBUM_HAVEN_RESET_TOKEN_SECONDS", str(31 * 60)),
+         ("ALBUM_HAVEN_INVITATION_TOKEN_SECONDS", str(60 * 60 - 1)),
+@@ -440,6 +440,30 @@ def test_auth_config_rejects_values_weaker_than_the_locked_policy(
+         auth_config.build_auth_config(_auth_env(**{env_key: value}))
+ 
+ 
++@pytest.mark.parametrize(
++    ("idle_seconds", "absolute_seconds"),
++    [
++        (90 * 24 * 60 * 60, 90 * 24 * 60 * 60),
++        (12 * 60 * 60, 7 * 24 * 60 * 60),
++        (30 * 60, 60 * 60),
++    ],
++)
++def test_auth_config_accepts_ninety_day_limit_and_shorter_session_policies(
++    contracts, idle_seconds, absolute_seconds
++):
++    auth_config, _ = contracts
++
++    config = auth_config.build_auth_config(
++        _auth_env(
++            ALBUM_HAVEN_SESSION_IDLE_SECONDS=str(idle_seconds),
++            ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS=str(absolute_seconds),
++        )
++    )
++
++    assert config["session"]["idle_seconds"] == idle_seconds
++    assert config["session"]["absolute_seconds"] == absolute_seconds
++
++
+ def test_auth_config_accepts_eight_character_password_floor(contracts):
+     auth_config, _ = contracts
+ 
+diff --git a/tests/py/test_auth_sessions_postgres.py b/tests/py/test_auth_sessions_postgres.py
+index e137201..8971c02 100644
+--- a/tests/py/test_auth_sessions_postgres.py
++++ b/tests/py/test_auth_sessions_postgres.py
+@@ -145,6 +145,26 @@ def test_constructor_requires_database_url(sessions):
+         sessions.PostgresAuthSessionService({"session": _config()["session"]})
+ 
+ 
++def test_issue_without_session_policy_defaults_to_ninety_days(sessions):
++    connection = RecordingConnection()
++    service = sessions.PostgresAuthSessionService(
++        {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL},
++        connect=lambda _url: connection,
++        token_issuer=lambda: RAW_TOKEN,
++        clock=lambda: NOW,
++    )
++
++    result = service.issue_session(account_id=41)
++
++    assert result.idle_expires_at == NOW + timedelta(days=90)
++    assert result.absolute_expires_at == NOW + timedelta(days=90)
++    insert_params = next(
++        params for sql, params in connection.operations
++        if sql.startswith("insert into app.account_sessions")
++    )
++    assert insert_params[5:7] == (result.idle_expires_at, result.absolute_expires_at)
++
++
+ def test_issue_uses_one_owned_transaction_digest_only_lifetimes_and_lock_order(sessions):
+     connection = RecordingConnection()
+     result = _service(sessions, connection).issue_session(
+@@ -222,6 +242,85 @@ def test_resolve_rejects_disabled_revoked_or_exactly_expired(sessions, overrides
+     assert not any(item.startswith("update app.account_sessions") for item in _sql(connection))
+ 
+ 
++@pytest.mark.parametrize(
++    ("elapsed", "authorized"),
++    [
++        (timedelta(days=90) - timedelta(microseconds=1), True),
++        (timedelta(days=90), False),
++        (timedelta(days=90, microseconds=1), False),
++    ],
++)
++def test_ninety_day_session_expires_at_issued_boundary(sessions, elapsed, authorized):
++    expires_at = NOW + timedelta(days=90)
++    connection = RecordingConnection(session_rows=(_resolved_row(
++        created_at=NOW,
++        authenticated_at=NOW,
++        last_seen_at=NOW,
++        idle_expires_at=expires_at,
++        absolute_expires_at=expires_at,
++    ),))
++    service = sessions.PostgresAuthSessionService(
++        _config(idle_seconds=90 * 24 * 60 * 60, absolute_seconds=90 * 24 * 60 * 60),
++        connect=lambda _url: connection,
++        clock=lambda: NOW + elapsed,
++    )
++
++    result = service.resolve_session(RAW_TOKEN)
++
++    assert (result is not None) is authorized
++    updates = [
++        (sql, params) for sql, params in connection.operations
++        if sql.startswith("update app.account_sessions")
++    ]
++    if authorized:
++        assert result.absolute_expires_at == expires_at
++        assert result.idle_expires_at == expires_at
++        assert len(updates) == 1
++        assert expires_at in updates[0][1]
++    else:
++        assert updates == []
++
++
++@pytest.mark.parametrize("expired_field", ["idle_expires_at", "absolute_expires_at"])
++def test_longer_policy_does_not_revive_previously_issued_expired_session(
++    sessions, expired_field
++):
++    connection = RecordingConnection(session_rows=(_resolved_row(
++        **{expired_field: NOW}
++    ),))
++    service = _service(
++        sessions, connection,
++        idle_seconds=90 * 24 * 60 * 60,
++        absolute_seconds=90 * 24 * 60 * 60,
++    )
++
++    assert service.resolve_session(RAW_TOKEN) is None
++    assert not any(sql.startswith("update app.account_sessions") for sql in _sql(connection))
++
++
++def test_longer_policy_preserves_existing_absolute_expiry(sessions):
++    old_expiry = NOW + timedelta(days=6)
++    connection = RecordingConnection(session_rows=(_resolved_row(
++        absolute_expires_at=old_expiry
++    ),))
++    service = _service(
++        sessions, connection,
++        idle_seconds=90 * 24 * 60 * 60,
++        absolute_seconds=90 * 24 * 60 * 60,
++    )
++
++    result = service.resolve_session(RAW_TOKEN)
++
++    assert result.absolute_expires_at == old_expiry
++    assert result.idle_expires_at == old_expiry
++    update = next(
++        (sql, params) for sql, params in connection.operations
++        if sql.startswith("update app.account_sessions")
++    )
++    assert old_expiry in update[1]
++    assert "absolute_expires_at" not in update[0].split(" where ")[0]
++
++
+ def test_resolve_writes_activity_at_threshold_and_clamps_idle_to_absolute(sessions):
+     connection = RecordingConnection(session_rows=(_resolved_row(
+         last_seen_at=NOW - timedelta(minutes=5),

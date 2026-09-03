@@ -292,6 +292,19 @@ Perform this case last because it invalidates all Rendref sessions.
 
 ## Automated Phase 7 suites
 
+Ordinary functional and performance tests authenticate once per Playwright worker
+through the production login form. Each test receives a fresh browser context with
+only the genuine session and CSRF cookies restored from worker memory. Readiness,
+warmup, and additional fresh contexts reuse that same authentication. No cookie
+file belongs in the test-data repository or test artifacts. A replacement worker
+creates its own login; parallel workers and separate runner invocations do not
+share the in-memory state.
+
+Tests that exercise login, logout, revocation, password changes, or other identities
+must opt out at file scope with `test.use({ reuseAuthentication: false })`
+and own their login setup. The existing Phase 7 authentication and admin fixtures
+already opt out. Tests must still isolate their server-side changes.
+
 Run the two production-path suites separately. Each provisions isolated test
 data and starts the production ASGI application:
 

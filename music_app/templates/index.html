@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
   <link rel="stylesheet" href="/static/css/app-chrome.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
@@ -41,20 +42,17 @@
   {% set shell_bottom_player = shell_slots.bottom_player if shell_slots and shell_slots.bottom_player else {} %}
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
   {% from "partials/app-bar.html" import app_bar with context %}
+  {% from "partials/search-input.html" import search_input %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/">
-          <div class="search-input-wrap">
-            <input type="search" name="q" id="search-input" value="{{ query }}" placeholder="Search artist, album, or track" aria-label="Search music" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="recent-search-popover" aria-expanded="false">
-            <div class="recent-search-popover" id="recent-search-popover" role="listbox" aria-label="Recent searches" hidden></div>
-          </div>
+          {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
           {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_display_mode and bootstrap_payload.initial_view.gallery_display_mode != 'cards' %}<input type="hidden" name="gallery_display" value="{{ bootstrap_payload.initial_view.gallery_display_mode }}">{% endif %}
           {% if effective_selected_artist and bootstrap_payload.initial_view.selected_artist_family_display_mode and bootstrap_payload.initial_view.selected_artist_family_display_mode != 'grouped' %}<input type="hidden" name="family_display" value="{{ bootstrap_payload.initial_view.selected_artist_family_display_mode }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
-          <button class="button" type="submit">Apply</button>
         </form>
         <div class="toolbar-right">
           <button class="icon-button cover-lookup-drawer-button" type="button" id="cover-lookup-drawer-button" data-toggle-cover-lookup-drawer="1" title="Cover art lookups" aria-label="Cover art lookups">

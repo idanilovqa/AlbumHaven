@@ -51,7 +51,7 @@ import { installContextRequestInterceptionGuard } from './requestInterceptionGua
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
-import { authenticateProductionContext } from './performanceAuthentication.js';
+import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -298,11 +298,16 @@ function formatStacktrace(errors) {
 const functionalBrowserWarmupFixtures = (
   process.env.ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP === '1'
     ? {
-      functionalBrowserWarmup: [async ({ browser, startupRelationProjectionReadiness }, use, workerInfo) => {
+      functionalBrowserWarmup: [async ({ browser, startupRelationProjectionReadiness, reuseAuthentication, workerAuthentication }, use, workerInfo) => {
+        if (!reuseAuthentication) {
+          await use();
+          return;
+        }
         await warmFunctionalBrowser({
           browser,
           baseURL: String(workerInfo.project.use?.baseURL || ''),
           viewport: workerInfo.project.use?.viewport,
+          storageState: await workerAuthentication.getStorageState(),
         });
         await use();
       }, { scope: 'worker', auto: true }],
@@ -311,7 +316,23 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  // Login/alternate-user suites opt out at file scope with test.use().
+  reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
+
+  workerAuthentication: [async ({ browser }, use, workerInfo) => {
+    await use(createWorkerAuthentication({
+      browser,
+      baseURL: String(workerInfo.project.use?.baseURL || ''),
+      viewport: workerInfo.project.use?.viewport,
+    }));
+  }, { scope: 'worker' }],
+
+  storageState: async ({ reuseAuthentication, workerAuthentication }, use) => {
+    await use(reuseAuthentication
+      ? await workerAuthentication.getStorageState()
+      : { cookies: [], origins: [] });
+  },
 
   managedAppLifecycle: [async ({}, use) => {
     await use(createManagedAppLifecycle());
@@ -321,6 +342,7 @@ export const test = base.extend({
     browser,
     testArtifacts,
     authenticateFreshBrowserSession,
+    storageState,
   }, use, testInfo) => {
     let session = null;
     try {
@@ -333,13 +355,11 @@ export const test = base.extend({
           const context = await browser.newContext({
             baseURL: configuredBaseUrl,
             viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
+            storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           try {
             const page = await context.newPage();
-            if (authenticateFreshBrowserSession) {
-              await authenticateProductionContext(page);
-            }
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
             session = {
@@ -395,21 +415,21 @@ export const test = base.extend({
     }
   },
 
-  startupRelationProjectionReadiness: [async ({ browser }, use, workerInfo) => {
+  startupRelationProjectionReadiness: [async ({ browser, reuseAuthentication, workerAuthentication }, use, workerInfo) => {
+    if (!reuseAuthentication) {
+      await use(null);
+      return;
+    }
     const baseURL = String(workerInfo.project.use?.baseURL || '');
     await use(await readAuthenticatedStartupRelationProjectionReadiness({
       browser,
       baseURL,
       viewport: workerInfo.project.use?.viewport,
+      storageState: await workerAuthentication.getStorageState(),
     }));
   }, { scope: 'worker', auto: true }],
 
   ...functionalBrowserWarmupFixtures,
-
-  functionalAuthentication: [async ({ page }, use) => {
-    await authenticateProductionContext(page);
-    await use();
-  }, { auto: true }],
 
   requestInterceptionGuard: [async ({ page, context }, use) => {
     const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);

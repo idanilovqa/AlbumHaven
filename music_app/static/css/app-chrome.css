@@ -82,6 +82,16 @@
 .app-bar :is(.icon-button, .status-indicator) { width: 34px; flex-shrink: 0; }
 .app-bar :is(.button, .icon-button, .status-indicator):hover:not(:disabled) { background: #293a50; }
 .app-bar button:disabled { opacity: .5; cursor: default; }
+.app-bar .search-field {
+  --search-field-height: 34px;
+  --search-field-border: #ffffff06;
+  --search-field-background: var(--app-control);
+  --search-field-color: var(--app-ink);
+  --search-field-muted: var(--app-muted);
+  --search-field-hover: var(--app-active);
+  --search-field-focus: #72baff;
+  font-size: 12px;
+}
 
 .shell-navigation-rail,
 .settings-host .settings-nav {
@@ -177,6 +187,7 @@
   .app-bar .toolbar-left { grid-column: 1 / -1; grid-row: 2; padding: 0 0 10px; }
   .app-bar .search-input-wrap { width: auto; flex: 1 1 auto; }
   .app-bar input[type='search'], .app-bar .button { height: 36px; }
+  .app-bar .search-field { --search-field-height: 36px; }
   .app-bar .toolbar-right { grid-column: 2; grid-row: 1; padding: 0; }
   .shell-main-surface,
   .settings-host .settings-outlet { grid-column: 1 / -1; margin: 0 6px; border-radius: 12px 12px 0 0; }

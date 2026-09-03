@@ -137,7 +137,7 @@ def test_library_search_preserves_selected_scope_and_repeated_categories(render)
         ("category", "albums"),
         ("category", "singles"),
     ]
-    assert form.one("button", type="submit").text.strip() == "Apply"
+    assert form.one("button", type="submit").attrs["aria-label"] == "Search"
 
 
 @pytest.mark.parametrize("administrator", [False, True])
@@ -193,3 +193,54 @@ def test_mobile_artist_drawer_has_a_reachable_existing_action_outside_the_drawer
     assert trigger.attrs["aria-expanded"] == "false"
     assert "disabled" not in trigger.attrs
     assert not shell.one(id="shell-navigation-rail").find_all(id="artists-drawer-button")
+
+
+@pytest.fixture
+def render_search_component():
+    templates = Path(__file__).resolve().parents[2] / "music_app" / "templates"
+    environment = Environment(loader=FileSystemLoader(templates), autoescape=select_autoescape())
+
+    def render_component(source, **context):
+        return Document(environment.from_string(
+            '{% from "partials/search-input.html" import search_input %}' + source
+        ).render(**context)).root
+
+    return render_component
+
+
+def test_search_component_defaults_to_an_accessible_embedded_submit_action(render_search_component):
+    document = render_search_component(
+        '{{ search_input("catalog-search", value=query, suggestions_id="catalog-suggestions") }}',
+        query='Music & "More"',
+    )
+    field = document.one("input", id="catalog-search")
+    button = document.one("button", type="submit")
+    assert field.attrs["value"] == 'Music & "More"'
+    assert field.attrs["name"] == "q"
+    assert field.attrs["aria-controls"] == "catalog-suggestions"
+    assert field.attrs["role"] == "combobox"
+    assert button.attrs["aria-label"] == "Search"
+    assert button.parent.parent is field.parent
+    assert button.one("svg").attrs["aria-hidden"] == "true"
+    assert "hidden" in document.one(id="catalog-suggestions").attrs
+
+
+def test_search_component_allows_a_complete_button_override_and_multiple_instances(render_search_component):
+    document = render_search_component('''
+        {% call(action_class) search_input("filter-search", name="filter", label="Filter albums") %}
+          <button class="{{ action_class }}" type="button" aria-label="Filter" data-filter="albums">Go</button>
+        {% endcall %}
+        {{ search_input("second-search", button_label="Find tracks") }}
+    ''')
+    field = document.one("input", id="filter-search")
+    custom = document.one("button", **{"aria-label": "Filter"})
+    assert field.attrs["name"] == "filter"
+    assert field.attrs["aria-label"] == "Filter albums"
+    assert "role" not in field.attrs
+    assert "aria-controls" not in field.attrs
+    assert custom.attrs["type"] == "button"
+    assert custom.attrs["data-filter"] == "albums"
+    assert custom.parent.parent is field.parent
+    assert not custom.find_all("svg")
+    assert len(document.find_all("button")) == 2
+    assert document.one("button", type="submit").attrs["aria-label"] == "Find tracks"

@@ -405,31 +405,35 @@ test('functional cold-browser warmup is one read-only worker setup rather than p
   assert.match(source, /process\.env\.ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP\s*===\s*['"]1['"]/);
   assert.match(source, /warmFunctionalBrowser\(/);
   assert.match(helperSource, /browser\.newContext\(/);
-  assert.match(helperSource, /authenticateProductionContext\(page\)/);
+  assert.match(helperSource, /storageState/);
+  assert.doesNotMatch(helperSource, /authenticateProductionContext/);
   assert.match(helperSource, /#artist-groups \.album-card/);
   assert.match(helperSource, /__ALBUM_HAVEN_STARTUP_METRICS__/);
   assert.match(source, /\{\s*scope:\s*['"]worker['"],\s*auto:\s*true\s*\}/);
 });
 
-test('functional fixtures authenticate every production browser context through the login form', () => {
+test('functional fixtures restore one genuine worker login into every production browser context', () => {
   const source = fs.readFileSync(baseFixturesPath, 'utf8');
 
   assert.match(
     source,
-    /import \{ authenticateProductionContext \} from '\.\/performanceAuthentication\.js';/,
+    /import \{ createWorkerAuthentication \} from '.*playwright-worker-authentication\.mjs';/,
   );
   assert.match(
     source,
-    /functionalAuthentication:\s*\[async\s*\(\{\s*page\s*\},\s*use\)\s*=>\s*\{[\s\S]*authenticateProductionContext\(page\)[\s\S]*\{\s*auto:\s*true\s*\}/,
+    /workerAuthentication:\s*\[async[\s\S]*createWorkerAuthentication\([\s\S]*scope:\s*'worker'/,
   );
   assert.match(
     source,
-    /freshBrowserSession:[\s\S]*authenticateProductionContext\(page\)/,
+    /freshBrowserSession:[\s\S]*storageState: authenticateFreshBrowserSession \? storageState : \{ cookies: \[\], origins: \[\] \}/,
   );
   assert.match(
     source,
     /startupRelationProjectionReadiness:[\s\S]*readAuthenticatedStartupRelationProjectionReadiness/,
   );
+  assert.match(source, /storageState: async \(\{ reuseAuthentication, workerAuthentication \}, use\)/);
+  assert.match(source, /\? await workerAuthentication\.getStorageState\(\)\s*: \{ cookies: \[\], origins: \[\] \}/);
+  assert.doesNotMatch(source, /authenticateProductionContext\(page\)/);
 });
 
 test('phase 7 fixtures retain ownership of their authentication lifecycle', () => {
@@ -440,7 +444,7 @@ test('phase 7 fixtures retain ownership of their authentication lifecycle', () =
 
   assert.match(
     source,
-    /functionalAuthentication:\s*\[async\s*\(\{\},\s*use\)\s*=>\s*use\(\),\s*\{\s*auto:\s*true\s*\}\]/,
+    /reuseAuthentication:\s*false/,
   );
   assert.match(
     source,

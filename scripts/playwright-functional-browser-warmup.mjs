@@ -1,18 +1,18 @@
-import { authenticateProductionContext } from '../tests/e2e/support/performanceAuthentication.js';
 import { readStartupRelationProjectionReadiness } from '../tests/e2e/helpers/startupRelationProjectionReadiness.js';
 
 export async function readAuthenticatedStartupRelationProjectionReadiness({
   browser,
   baseURL,
   viewport,
+  storageState,
 }) {
   const context = await browser.newContext({
     baseURL,
     viewport: viewport || { width: 1440, height: 960 },
+    storageState,
   });
   try {
     const page = await context.newPage();
-    await authenticateProductionContext(page);
     return await readStartupRelationProjectionReadiness({
       baseURL,
       async fetchFn(url, options) {
@@ -35,14 +35,14 @@ export async function readAuthenticatedStartupRelationProjectionReadiness({
   }
 }
 
-export async function warmFunctionalBrowser({ browser, baseURL, viewport }) {
+export async function warmFunctionalBrowser({ browser, baseURL, viewport, storageState }) {
   const context = await browser.newContext({
     baseURL,
     viewport: viewport || { width: 1440, height: 960 },
+    storageState,
   });
   try {
     const page = await context.newPage();
-    await authenticateProductionContext(page);
     await page.goto('/?surface=albums');
     await page.locator('#artist-groups .album-card').first().waitFor({
       state: 'visible',

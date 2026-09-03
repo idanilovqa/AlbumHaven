@@ -160,6 +160,22 @@ python app.py
 The application listens on the local address configured by the runtime. Album
 Haven does not upload your local music library by default.
 
+For HTTPS testing from another device on your LAN, set these values in `.env`
+(replace the example IP with your server's LAN address):
+
+```text
+MUSIC_APP_TLS_MODE=local
+MUSIC_APP_PORT=5000
+ALBUM_HAVEN_PUBLIC_BASE_URL=https://192.168.1.50:5000
+```
+
+Then use the same `python app.py` command and open that HTTPS address on either
+device. Album Haven generates and reuses a local certificate; no proxy or extra
+process is needed. Browsers show an untrusted-certificate warning, which must be
+accepted where supported. This mode is for local testing, not publicly trusted
+HTTPS. See [local HTTPS setup and checks](docs/local-auth-setup-and-manual-tests.md#local-https-on-other-devices)
+for firewall, certificate, and password-reset details.
+
 For Phase 7 environment values, owner and managed-user setup, and a manual
 acceptance checklist, see [Local authentication setup and testing](docs/local-auth-setup-and-manual-tests.md).
 

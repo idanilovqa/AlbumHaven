@@ -12,3 +12,4 @@ psycopg[binary]
 zstandard
 argon2-cffi
 aiosmtplib
+cryptography>=42

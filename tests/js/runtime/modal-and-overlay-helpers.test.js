@@ -230,6 +230,49 @@ function loadHelper() {
   };
 }
 
+test('non-album tracks follow the displayed artist family instead of a retained root list', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Neal Morse', title: 'Solo track' },
+    { artist: 'Flying Colors', title: 'Family track' },
+    { artist: 'Folkstone', title: 'Unrelated track' },
+  ];
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    related_artists: ['Flying Colors'],
+    non_album_tracks: tracks,
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
+  context.state.view.non_album_tracks = [tracks[2]];
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('non-album tracks use search gallery artists and keep the broad library list', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Flying Colors', title: 'Family track' },
+    { artist: 'Folkstone', title: 'Unrelated track' },
+  ];
+  context.state.view = { non_album_tracks: tracks, artist_groups: [{ artist: 'Neal Morse' }] };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks);
+  context.state.view.query = 'Neal Morse';
+  context.state.view.artist_groups.push({ artist: 'Flying Colors' });
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  context.state.view.artist_groups = [];
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('non-album artist scope retains folder matches and canonical album artists', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Unknown', display_path: 'Rock\\Neal Morse\\song.mp3' },
+    { artist: 'Guest', album_artist: 'neal morse' },
+    { artist: 'Other', display_path: 'Rock\\Other\\Neal Morse.mp3' },
+  ];
+  context.state.view = { selected_artist: 'Neal Morse', non_album_tracks: tracks };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
+});
+
 test('non-album modal uses compact three-column tables in exception order', () => {
   const { context } = loadHelper();
   const markup = context.buildNonAlbumTrackSectionsMarkup([

@@ -15,7 +15,7 @@ npm ci
 Copy-Item .env.example .env
 ```
 
-Set these values in `.env` for a loopback-only local server:
+Set these values in `.env` for local HTTPS testing on the server computer:
 
 ```text
 MUSIC_DIR=C:\path\to\your\music
@@ -23,7 +23,8 @@ ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app:YOUR_APP_DB_PASSWORD@l
 ALBUM_HAVEN_MIGRATOR_DATABASE_URL=postgresql://album_haven_migrator:YOUR_MIGRATOR_DB_PASSWORD@localhost:5432/album_haven_core
 ALBUM_HAVEN_BOOTSTRAP_USERNAME=Rendref
 ALBUM_HAVEN_BOOTSTRAP_EMAIL=your-real-or-local-test-address@example.com
-ALBUM_HAVEN_PUBLIC_BASE_URL=http://127.0.0.1:5000
+ALBUM_HAVEN_PUBLIC_BASE_URL=https://127.0.0.1:5000
+MUSIC_APP_TLS_MODE=local
 ALBUM_HAVEN_AUTH_HMAC_SECRET=YOUR_PRIVATE_RANDOM_VALUE_OF_AT_LEAST_32_BYTES
 ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION=1
 ALBUM_HAVEN_WELCOME_EMAIL_ENABLED=false
@@ -87,14 +88,67 @@ $env:MUSIC_APP_PORT = '5000'
 python app.py
 ```
 
-Open `http://127.0.0.1:5000/login`. Keep that host spelling consistent during
-the session. Switching between `127.0.0.1` and `localhost` changes the browser
-origin and cookie scope.
+Open `https://127.0.0.1:5000/login` and accept the local certificate warning if
+your browser permits it. Keep that host spelling consistent during the session;
+switching hosts changes the browser origin and cookie scope.
 
-For access from another device, put Album Haven behind an HTTPS reverse proxy,
-set `ALBUM_HAVEN_PUBLIC_BASE_URL` to its exact external origin, and list any
-additional exact HTTPS origins in `ALBUM_HAVEN_TRUSTED_ORIGINS`. Do not expose
-the development HTTP listener directly to the internet.
+### Local HTTPS on other devices
+
+Set these values once in `.env`, replacing the example address with the server's
+LAN IP, then restart with the same `python app.py` command:
+
+```text
+MUSIC_APP_TLS_MODE=local
+MUSIC_APP_PORT=5000
+ALBUM_HAVEN_PUBLIC_BASE_URL=https://192.168.1.50:5000
+```
+
+The public URL's port must match `MUSIC_APP_PORT`. Leave
+`ALBUM_HAVEN_TRUSTED_PROXIES` unset for direct local HTTPS. When
+`ALBUM_HAVEN_TRUSTED_ORIGINS` is unset, the configured public URL is already
+trusted; if explicitly configured, include its exact HTTPS origin.
+
+Open that same HTTPS address on the server computer and on another device on
+the same LAN. Do not use `localhost` in links intended for other devices. No
+domain, proxy, additional process, or certificate installation is required.
+Allow the chosen TCP port through the server firewall for the private local
+network only. Guest Wi-Fi isolation can prevent device-to-device connections;
+router internet port forwarding is unnecessary. Reserving the server's IP in
+DHCP keeps links stable.
+
+The launcher creates `tls/local-server.pem` under the configured app data
+directory. It contains private key material: keep that directory accessible
+only to the server account/administrators and never share or commit the file.
+On Windows files inherit that directory's ACL; on POSIX generated files are
+owner-only. No operating-system or browser trust store is changed. The
+certificate is reused and renewed at startup when less than seven days of its
+90-day lifetime remain, or when the configured host changes. Restart before
+expiry if keeping the server running continuously. Invalid or unreadable key
+material stops HTTPS startup instead of falling back to HTTP.
+
+Browsers will warn because the certificate is self-signed. Proceed only for
+your known local instance where the browser permits an exception. Some managed
+devices or browsers do not permit exceptions, and an exception can need to be
+accepted again after renewal. This is a temporary testing mode; it cannot
+promise warning-free or policy-independent browser support.
+
+Manual checks:
+
+1. On the server computer, open the configured HTTPS URL's `/login`, accept the
+   warning, sign in, and confirm the library loads.
+2. On another LAN device, use the same URL, accept its warning, and sign in.
+3. Start a track, seek, and confirm continued audible playback. HTTPS transport
+   retains the existing AudioWorklet/WSS player; device behavior needs this check.
+4. With SMTP already configured, request recovery for a dedicated test account.
+   Open the complete fresh email link on the second device and reset its password.
+   Confirm replay fails. Do not paste or log the reset token.
+5. Restart Album Haven normally and confirm HTTPS still works with the reused
+   certificate and links still contain the configured LAN address.
+
+For an external HTTPS reverse proxy, leave `MUSIC_APP_TLS_MODE=off`, configure
+its exact public origin and trusted proxy addresses, and use its certificate
+management. Existing loopback HTTP development remains available with mode off;
+it does not provide working cross-device HTTPS links.
 
 ## Configure SMTP
 

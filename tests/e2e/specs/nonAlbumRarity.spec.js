@@ -849,6 +849,27 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
       RARITY_TRACK_TITLE,
     ]);
     await artistPageSettingsActions.closeNonAlbumTracks();
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await artistPageSettingsActions.openNonAlbumTracks(1);
+    expect(await artistPageSettingsActions.readNonAlbumTrackTitles()).toEqual([
+      RARITY_TRACK_TITLE,
+    ]);
+    await artistPageSettingsActions.closeNonAlbumTracks();
+    await searchToolbarActions.search('Neal Morse', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Neal Morse');
+    await galleryActions.waitForAlbumVisibleUnderHeading('Neal Morse', 'Neal Morse Plays Pink Floyd');
+    await artistPageSettingsActions.expectNoNonAlbumTracks();
+    await galleryActions.goto('/?surface=albums&artist=Neal%20Morse');
+    await galleryActions.waitForGalleryReady();
+    await artistPageSettingsActions.expectNoNonAlbumTracks();
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
+    await galleryActions.waitForGalleryReady();
+    await artistPageSettingsActions.openNonAlbumTracks(1);
+    expect(await artistPageSettingsActions.readNonAlbumTrackTitles()).toEqual([
+      RARITY_TRACK_TITLE,
+    ]);
+    await artistPageSettingsActions.closeNonAlbumTracks();
     await settingsModalAppBarActions.openSettings();
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();

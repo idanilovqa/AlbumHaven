@@ -156,7 +156,22 @@ function closeVersionPickerModal() {
 }
 
 function getVisibleNonAlbumTracks() {
-  return Array.isArray(state.view.non_album_tracks) ? state.view.non_album_tracks : [];
+  const view = state.view;
+  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist && !String(view.query || '').trim()) return tracks;
+  const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
+  const artists = new Set([
+    selectedArtist,
+    ...(selectedArtist && Array.isArray(view.related_artists) ? view.related_artists : []),
+    ...(Array.isArray(view.artist_groups) ? view.artist_groups : [])
+      .flatMap((group) => [group.artist, group.artist_display]),
+  ].map(artistKey).filter(Boolean));
+  return tracks.filter((track) => (
+    artists.has(artistKey(track.album_artist || track.artist))
+    || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
+      .some((part) => artists.has(artistKey(part)))
+  ));
 }
 
 function getNonAlbumMenuLabel() {

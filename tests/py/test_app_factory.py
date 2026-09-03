@@ -245,6 +245,7 @@ def test_music_app_package_source_has_no_flask_factory_markers():
 
 
 def test_asgi_runner_uses_import_factory_target_when_reloader_enabled(monkeypatch):
+    monkeypatch.setenv("MUSIC_APP_TLS_MODE", "off")
     calls: list[dict[str, object]] = []
 
     fake_uvicorn = types.SimpleNamespace(
@@ -272,6 +273,7 @@ def test_asgi_runner_uses_import_factory_target_when_reloader_enabled(monkeypatc
 
 
 def test_asgi_runner_is_default_server_kind(monkeypatch):
+    monkeypatch.setenv("MUSIC_APP_TLS_MODE", "off")
     calls: list[dict[str, object]] = []
 
     fake_uvicorn = types.SimpleNamespace(

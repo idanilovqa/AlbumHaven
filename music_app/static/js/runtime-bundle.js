@@ -12689,8 +12689,8 @@ function buildUtilityAppearanceDetail() {
           <span>Waveform seekbar</span>
         </label>
       </div>
-      <p class="utility-rule-description">Player background, waveform fill and edge are saved together in Backgrounds.</p>
-      <button class="button button-secondary" type="button" data-utility-appearance-key="backgrounds">Edit player &amp; waveform colors</button>
+      <p class="utility-rule-description">Display mode applies immediately on this browser. Save color changes to your account below.</p>
+      <div data-appearance-seekbar-editor></div>
     </div>
   `;
 }
@@ -16714,6 +16714,28 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
   });
 }
 
+// Read the existing browser preference only when the owner asks to recover it.
+// Normalized runtime defaults are not evidence that earlier colors were stored.
+function getPreviousBrowserWaveformColors() {
+  if (typeof getLocalStorageItem !== 'function' || typeof PLAYER_APPEARANCE_STORAGE_KEY === 'undefined') return null;
+  try {
+    const raw = getLocalStorageItem(PLAYER_APPEARANCE_STORAGE_KEY);
+    if (!raw) return null;
+    const previous = JSON.parse(raw);
+    if (!previous || typeof previous !== 'object' || Array.isArray(previous)) return null;
+    const colors = [previous.waveformFillColor, previous.waveformEdgeColor];
+    if (!colors.every(color => typeof color === 'string' && color.length === 7 && /^#[0-9a-f]{6}$/i.test(color))) return null;
+    return { fill: colors[0].toUpperCase(), edge: colors[1].toUpperCase() };
+  } catch (_failure) { return null; }
+}
+function mountSeekbarAppearanceEditor(detail) {
+  const host = detail.querySelector('[data-appearance-seekbar-editor]');
+  if (!host) return;
+  const editor = getBackgroundAppearanceEditor();
+  if (editor?.mountSeekbar) editor.mountSeekbar(host, { getLegacyColors: getPreviousBrowserWaveformColors });
+  else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+}
+
 // END js/runtime/appearance-backgrounds-bridge.js
 
 // BEGIN js/runtime/utility-renderers-and-actions.js
@@ -17131,6 +17153,7 @@ function renderUtilityAppearance() {
   } else {
     if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
     els.detail.innerHTML = buildUtilityAppearanceDetail();
+    if (typeof mountSeekbarAppearanceEditor === 'function') mountSeekbarAppearanceEditor(els.detail);
   }
 }
 
@@ -29637,7 +29660,8 @@ function attachRepairConfirmEvents() {
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
-    if (nextAppearanceKey !== state.utility.appearanceKey && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    const sharedAppearanceDraft = ['backgrounds', 'seekbar'].includes(state.utility.appearanceKey) && ['backgrounds', 'seekbar'].includes(nextAppearanceKey);
+    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
     state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;

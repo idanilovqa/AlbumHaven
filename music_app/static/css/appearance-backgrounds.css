@@ -204,3 +204,24 @@ html .cover-lookup-drawer {
 :root[data-appearance-player] .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) .loop-edit-action-icon { filter: none; }
 :root[data-appearance-player] .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-waveform-fill); box-shadow: 0 0 0 1px var(--appearance-waveform-fill); }
 :root[data-appearance-player] .global-player .loop-edit-actions.is-disabled .loop-edit-action-pod { border-color: color-mix(in srgb, var(--appearance-player-ink) 48%, transparent); }
+
+/* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */
+.appearance-background-editor .background-editor-link, .waveform-recovery .button { border: 1px solid #566476; border-radius: 7px; padding: 9px 12px; background: #263446; color: #dce4ee; font: inherit; font-size: 12px; cursor: pointer; }
+.appearance-background-editor .background-editor-link { margin-top: 12px; }
+.appearance-seekbar-editor { padding: 20px; margin-top: 20px; color-scheme: dark; --text: #edf0f4; --muted: #abb6c5; --panel: #202938; --panel-2: #1b2431; --border: #526173; }
+.appearance-seekbar-editor .background-intro { font-size: 13px; margin-bottom: 17px; }
+.appearance-seekbar-editor .background-help { color: #abb6c5; font-size: 12px; line-height: 1.5; margin: 12px 0; }
+.waveform-color-fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 24px; margin-top: 20px; }
+.waveform-color-fields > div { min-width: 0; }
+.waveform-color-fields .background-color-inputs { margin-top: 10px; }
+.waveform-recents { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; min-height: 27px; }
+.waveform-recent-swatch { width: 28px; height: 28px; border: 1px solid #9aabba; border-radius: 6px; cursor: pointer; box-shadow: inset 0 0 0 2px #0002; }
+.waveform-recent-swatch:hover { outline: 2px solid #8abde9; outline-offset: 2px; }
+.waveform-color-preview { display: flex; align-items: center; min-height: 68px; padding: 10px 14px; border: 1px solid #526173; border-radius: 9px; background: var(--preview-player); }
+.waveform-color-preview svg { width: 100%; height: 48px; fill: var(--preview-waveform-fill); stroke: var(--preview-waveform-edge); stroke-width: 1; }
+.waveform-recovery { margin-top: 20px; padding-top: 17px; border-top: 1px solid #394253; }
+.appearance-seekbar-editor .background-actions { justify-content: flex-end; }
+@media (max-width:650px) {
+  .appearance-seekbar-editor { padding: 14px; }
+  .waveform-color-fields { grid-template-columns: minmax(0,1fr); gap: 18px; }
+}

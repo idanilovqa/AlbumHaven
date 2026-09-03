@@ -179,7 +179,8 @@
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
-    if (nextAppearanceKey !== state.utility.appearanceKey && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    const sharedAppearanceDraft = ['backgrounds', 'seekbar'].includes(state.utility.appearanceKey) && ['backgrounds', 'seekbar'].includes(nextAppearanceKey);
+    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
     state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;

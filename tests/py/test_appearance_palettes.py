@@ -68,7 +68,7 @@ def test_legacy_pair_expands_without_losing_colors_or_assigning_a_player_overrid
 
     legacy = {"main_surface_color": "#12abcd", "panel_background_color": None}
     assert normalize_appearance_preferences(legacy) == {**legacy, "main_surface_color": "#12ABCD"}
-    assert expand_appearance_preferences(legacy) == {**DEFAULTS, "main_surface_color": "#12ABCD"}
+    assert expand_appearance_preferences(legacy) == {**DEFAULTS, "main_surface_color": "#12ABCD", "waveform_recent_colors": []}
 
 
 def test_api_saves_palette_panel_and_player_together_for_only_the_current_account():
@@ -78,7 +78,7 @@ def test_api_saves_palette_panel_and_player_together_for_only_the_current_accoun
     status, _headers, body = _request(app, "PUT", payload)
 
     assert status == 200
-    assert decode_json(body) == payload
+    assert decode_json(body) == {**payload, "waveform_recent_colors": []}
     resolver.actor = _actor(52)
     other = decode_json(_request(app)[2])
     assert {key: other[key] for key in DEFAULTS} == DEFAULTS
@@ -110,7 +110,7 @@ def test_repository_maps_migrated_legacy_row_into_canonical_defaults_without_mut
         "player_background_color": None, "player_waveform_fill_color": None, "player_waveform_edge_color": None,
     }
     connection = Connection(row)
-    assert _repository(connection).load_preferences(account_id=41) == {**DEFAULTS, "main_surface_color": "#123456"}
+    assert _repository(connection).load_preferences(account_id=41) == {**DEFAULTS, "main_surface_color": "#123456", "waveform_recent_colors": []}
     assert len(connection.operations) == 1
     assert connection.operations[0][0].startswith("select")
 
@@ -125,11 +125,11 @@ def test_repository_persists_full_player_group_and_palette_in_one_account_owned_
     }
     connection = Connection(row)
 
-    assert _repository(connection).save_preferences(account_id=52, preferences=payload) == payload
+    assert _repository(connection).save_preferences(account_id=52, preferences=payload) == {**payload, "waveform_recent_colors": []}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "on conflict (account_id)" in sql
-    assert tuple(params) == (52, None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"])
+    assert tuple(params) == (52, None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [])
     assert connection.closed
 
 
@@ -147,7 +147,7 @@ def test_legacy_write_clears_palette_but_preserves_the_saved_player_override():
         account_id=41, preferences={"main_surface_color": "#123456", "panel_background_color": None},
     )
 
-    assert result == {**DEFAULTS, "main_surface_color": "#123456", "player_override": PLAYER}
+    assert result == {**DEFAULTS, "main_surface_color": "#123456", "player_override": PLAYER, "waveform_recent_colors": []}
     update = connection.operations[0][0].split("do update", 1)[1].split("returning", 1)[0]
     for column in ("player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"):
         assert column not in update

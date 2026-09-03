@@ -411,6 +411,7 @@ function renderUtilityAppearance() {
   } else {
     if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
     els.detail.innerHTML = buildUtilityAppearanceDetail();
+    if (typeof mountSeekbarAppearanceEditor === 'function') mountSeekbarAppearanceEditor(els.detail);
   }
 }
 

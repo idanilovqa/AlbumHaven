@@ -59,6 +59,7 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0052_add_managed_account_invitations.sql
 0053_create_user_appearance_preferences.sql
 0054_add_appearance_palettes_and_player_colors.sql
+0055_waveform_recent_colors.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -102,5 +103,7 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0053_create_user_appearance_preferences.sql` adds two optional RGB background overrides keyed directly by account ID. The primary key also supports account-scoped reads; a null value preserves each surface's existing default. Both values update together. The application role receives only select, insert, and update, while account deletion cascades to preferences. No new sequence, bootstrap-owner lookup, or file-backed fallback is introduced.
 
 `0054_add_appearance_palettes_and_player_colors.sql` extends account appearance with a validated palette ID, one of three panel companions, and an optional complete player-background/waveform-fill/waveform-edge color group. Existing custom background rows remain unchanged. Palette selection excludes conflicting legacy colors, and legacy background writes preserve the player group. Existing account-keyed table privileges and index cover these additions; no new sequence or grant is required.
+
+`0055_waveform_recent_colors.sql` adds a per-account newest-first history of up to five distinct waveform colors. It seeds only persisted custom fill and edge values when adding the column. A bounded immutable helper deduplicates ordered candidates during the same account upsert; explicit selections merge with current server history instead of replacing it with a client snapshot. Constraints reject invalid RGB, null members, duplicates, oversized or multidimensional arrays. Only app and migration roles receive helper execution privileges; existing table grants remain sufficient.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

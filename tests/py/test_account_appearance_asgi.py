@@ -16,7 +16,7 @@ from tests.py.asgi_testing import decode_json, run_asgi_request
 
 
 DEFAULTS = {"main_surface_color": None, "panel_background_color": None}
-EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None}
+EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None, "waveform_recent_colors": []}
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}
 SESSION = "s" * 43
 

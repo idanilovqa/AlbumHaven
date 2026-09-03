@@ -195,8 +195,8 @@ function buildUtilityAppearanceDetail() {
           <span>Waveform seekbar</span>
         </label>
       </div>
-      <p class="utility-rule-description">Player background, waveform fill and edge are saved together in Backgrounds.</p>
-      <button class="button button-secondary" type="button" data-utility-appearance-key="backgrounds">Edit player &amp; waveform colors</button>
+      <p class="utility-rule-description">Display mode applies immediately on this browser. Save color changes to your account below.</p>
+      <div data-appearance-seekbar-editor></div>
     </div>
   `;
 }

@@ -21,7 +21,7 @@ _PLAYER_FIELDS = ("background", "fill", "edge")
 _PLAYER_COLUMNS = (
     "player_background_color", "player_waveform_fill_color", "player_waveform_edge_color"
 )
-_STORAGE_FIELDS = (*_FIELDS, "palette_id", "panel_index", *_PLAYER_COLUMNS)
+_STORAGE_FIELDS = (*_FIELDS, "palette_id", "panel_index", *_PLAYER_COLUMNS, "waveform_recent_colors")
 _READ_COLUMNS = ", ".join(_STORAGE_FIELDS)
 APPEARANCE_PALETTE_IDS = frozenset({
     "steelblue", "navy", "powderblue", "graphite", "slate", "midnight",
@@ -39,10 +39,12 @@ def _color(value: object, *, nullable: bool = True) -> str | None:
 
 def normalize_appearance_preferences(payload: object) -> dict[str, object]:
     """Validate either a legacy pair or the complete palette/player preference."""
-    if not isinstance(payload, Mapping) or set(payload) not in (set(_FIELDS), set(_FULL_FIELDS)):
+    if not isinstance(payload, Mapping) or set(payload) - {"waveform_color_updates"} not in (set(_FIELDS), set(_FULL_FIELDS)):
         raise ValueError("Appearance requires a complete preference object.")
     result: dict[str, object] = {name: _color(payload[name]) for name in _FIELDS}
-    if set(payload) == set(_FIELDS):
+    if "waveform_color_updates" in payload:
+        result["waveform_color_updates"] = _recent_colors(payload["waveform_color_updates"])
+    if "palette_id" not in payload:
         return result
     palette = payload["palette_id"]
     if palette is not None and (not isinstance(palette, str) or palette not in APPEARANCE_PALETTE_IDS):
@@ -63,8 +65,23 @@ def normalize_appearance_preferences(payload: object) -> dict[str, object]:
 
 def expand_appearance_preferences(payload: object) -> dict[str, object]:
     """Canonical read shape, including defaults for legacy two-color preferences."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("Appearance requires a complete preference object.")
+    writable = dict(payload)
+    history = _recent_colors(writable.pop("waveform_recent_colors", []))
+    normalized = normalize_appearance_preferences(writable)
+    normalized.pop("waveform_color_updates", None)
     return {"palette_id": None, "panel_index": 0, "player_override": None,
-            **normalize_appearance_preferences(payload)}
+            **normalized, "waveform_recent_colors": history}
+
+
+def _recent_colors(value: object) -> list[str]:
+    if not isinstance(value, list) or len(value) > 5:
+        raise ValueError("Waveform color selections must contain at most five colors.")
+    colors = [_color(color, nullable=False) for color in value]
+    if len(set(colors)) != len(colors):
+        raise ValueError("Waveform color selections must be distinct.")
+    return colors
 
 
 def _account_id(value: object) -> int:
@@ -78,11 +95,12 @@ def _preferences(row: object) -> dict[str, object]:
         return expand_appearance_preferences(dict.fromkeys(_FIELDS))
     values = row if isinstance(row, Mapping) else dict(zip(_STORAGE_FIELDS, row))
     player = {name: values.get(column) for name, column in zip(_PLAYER_FIELDS, _PLAYER_COLUMNS)}
-    return normalize_appearance_preferences({
+    return expand_appearance_preferences({
         **{name: values[name] for name in _FIELDS},
         "palette_id": values.get("palette_id"),
         "panel_index": values.get("panel_index", 0),
         "player_override": player if any(value is not None for value in player.values()) else None,
+        "waveform_recent_colors": values.get("waveform_recent_colors", []),
     })
 
 
@@ -113,25 +131,44 @@ class PostgresAppearancePreferencesRepository:
     ) -> dict[str, object]:
         owner = _account_id(account_id)
         colors = normalize_appearance_preferences(preferences)
+        updates = colors.get("waveform_color_updates", [])
         if "palette_id" not in colors:
             # An older client can edit backgrounds without overwriting the player
             # group last saved by another session. No read/modify/write window.
-            sql = f"""insert into app.user_appearance_preferences
-                     (account_id, main_surface_color, panel_background_color)
-                   values (%s, %s, %s)
+            history_column = ", waveform_recent_colors" if updates else ""
+            history_value = ", %s::text[]" if updates else ""
+            history_update = """waveform_recent_colors = app.merge_waveform_recent_colors(
+                             excluded.waveform_recent_colors || saved.waveform_recent_colors
+                             || array[saved.player_waveform_fill_color, saved.player_waveform_edge_color]),""" if updates else ""
+            sql = f"""insert into app.user_appearance_preferences as saved
+                     (account_id, main_surface_color, panel_background_color{history_column})
+                   values (%s, %s, %s{history_value})
                    on conflict (account_id) do update
                      set main_surface_color = excluded.main_surface_color,
                          panel_background_color = excluded.panel_background_color,
                          palette_id = null,
                          panel_index = 0,
+                         {history_update}
                          updated_at = now()
                    returning {_READ_COLUMNS}"""
             params = (owner, colors["main_surface_color"], colors["panel_background_color"])
+            if updates:
+                params += (updates,)
         else:
             player = colors["player_override"] or dict.fromkeys(_PLAYER_FIELDS)
-            sql = f"""insert into app.user_appearance_preferences
+            sql = f"""with incoming as (
+                     select %s::bigint as account_id, %s::text as main_surface_color,
+                            %s::text as panel_background_color, %s::text as palette_id,
+                            %s::smallint as panel_index, %s::text as player_background_color,
+                            %s::text as player_waveform_fill_color, %s::text as player_waveform_edge_color,
+                            %s::text[] as updates
+                   )
+                   insert into app.user_appearance_preferences as saved
                      (account_id, {_READ_COLUMNS})
-                   values (%s, %s, %s, %s, %s, %s, %s, %s)
+                   select account_id, main_surface_color, panel_background_color, palette_id, panel_index,
+                          player_background_color, player_waveform_fill_color, player_waveform_edge_color,
+                          app.merge_waveform_recent_colors(updates || array[player_waveform_fill_color, player_waveform_edge_color])
+                     from incoming where true
                    on conflict (account_id) do update
                      set main_surface_color = excluded.main_surface_color,
                          panel_background_color = excluded.panel_background_color,
@@ -140,11 +177,25 @@ class PostgresAppearancePreferencesRepository:
                          player_background_color = excluded.player_background_color,
                          player_waveform_fill_color = excluded.player_waveform_fill_color,
                          player_waveform_edge_color = excluded.player_waveform_edge_color,
+                         waveform_recent_colors = app.merge_waveform_recent_colors(
+                           (select updates from incoming)
+                           || case when excluded.player_waveform_fill_color is distinct from saved.player_waveform_fill_color
+                                then array[excluded.player_waveform_fill_color] else array[]::text[] end
+                           || case when excluded.player_waveform_edge_color is distinct from saved.player_waveform_edge_color
+                                then array[excluded.player_waveform_edge_color] else array[]::text[] end
+                           || case when excluded.player_waveform_fill_color is distinct from saved.player_waveform_fill_color
+                                     and not (saved.player_waveform_fill_color = any(saved.waveform_recent_colors))
+                                then array[saved.player_waveform_fill_color] else array[]::text[] end
+                           || case when excluded.player_waveform_edge_color is distinct from saved.player_waveform_edge_color
+                                     and not (saved.player_waveform_edge_color = any(saved.waveform_recent_colors))
+                                then array[saved.player_waveform_edge_color] else array[]::text[] end
+                           || saved.waveform_recent_colors
+                           || array[saved.player_waveform_fill_color, saved.player_waveform_edge_color]),
                          updated_at = now()
                    returning {_READ_COLUMNS}"""
             params = (owner, colors["main_surface_color"], colors["panel_background_color"],
                       colors["palette_id"], colors["panel_index"],
-                      player["background"], player["fill"], player["edge"])
+                      player["background"], player["fill"], player["edge"], updates)
         with self._connection() as connection:
             row = connection.execute(sql, params).fetchone()
             if row is None:

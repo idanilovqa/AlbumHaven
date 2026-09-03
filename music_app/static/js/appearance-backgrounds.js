@@ -24,6 +24,13 @@
     if (!Number.isInteger(value.panel_index) || value.panel_index < 0 || value.panel_index > (id === null ? 0 : 2)) throw new TypeError('Unknown panel companion.');
     return { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override) };
   }
+  function normalizeRecentColors(value) {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 5) throw new TypeError('Invalid recent waveform colors.');
+    const colors = value.map(color => { const normalized = normalizeColor(color); if (normalized === null) throw new TypeError('A recent color is required.'); return normalized; });
+    if (new Set(colors).size !== colors.length) throw new TypeError('Duplicate recent waveform colors.');
+    return colors;
+  }
   function colorToRgb(value) {
     const color = normalizeColor(value);
     if (color === null) throw new TypeError('A color is required.');
@@ -67,6 +74,7 @@
   function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
   function createController({ initial = empty(), request, apply = () => {} }) {
     let saved = normalizePreferences(initial), draft = copy(saved), errors = {}, inputValues = {};
+    let recentColors = normalizeRecentColors(initial.waveform_recent_colors), waveformColorUpdates = [];
     let loading = false, saving = false, error = '', loadFailed = false, generation = 0;
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
     const syncInputs = (preserveErrors = false) => {
@@ -78,7 +86,7 @@
     };
     syncInputs();
     const getState = () => {
-      const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || Object.keys(errors).length > 0;
+      const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || Object.keys(errors).length > 0 || waveformColorUpdates.length > 0;
       const effective = resolveAppearance(draft), warnings = [];
       if (!draft.palette_id) for (const key of keys) {
         const label = key === 'main_surface_color' ? 'Main surface' : 'App bar and panels';
@@ -87,7 +95,7 @@
         }
       }
       return { saved: copy(saved), draft: copy(draft), errors: { ...errors }, inputValues: { ...inputValues }, effective,
-        loading, saving, dirty, canSave: dirty && !busy() && !Object.keys(errors).length, error, loadFailed, warnings };
+        recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave: dirty && !busy() && !Object.keys(errors).length, error, loadFailed, warnings };
     };
     const notify = () => listeners.forEach(listener => listener(getState()));
     const promote = () => {
@@ -122,18 +130,29 @@
       for (const field of ['background', 'fill', 'edge']) delete errors['player_' + field];
       error = ''; syncInputs(true); notify();
     };
-    const setPlayerColor = (field, value) => {
+    const rememberColor = color => { waveformColorUpdates = [color, ...waveformColorUpdates.filter(item => item !== color)].slice(0, 5); };
+    const setPlayerColor = (field, value, { recordRecent = true } = {}) => {
       if (!['background', 'fill', 'edge'].includes(field)) throw new TypeError('Unknown player color.');
       if (busy()) return;
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A player color is required.');
         draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), [field]: color };
+        if (recordRecent && field !== 'background') rememberColor(color);
         delete errors[key]; error = ''; syncInputs(true);
       } catch (failure) { errors[key] = failure.message; }
       notify();
     };
-    const cancel = () => { if (loading || saving) return; draft = copy(saved); errors = {}; error = ''; syncInputs(); notify(); };
+    const restoreWaveformColors = pair => {
+      if (!pair || typeof pair !== 'object' || Array.isArray(pair) || Object.keys(pair).length !== 2 || !['fill', 'edge'].every(field => Object.hasOwn(pair, field))) throw new TypeError('Both previous waveform colors are required.');
+      const fill = normalizeColor(pair.fill), edge = normalizeColor(pair.edge);
+      if (fill === null || edge === null) throw new TypeError('Both previous waveform colors are required.');
+      if (busy()) return;
+      promote(); draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), fill, edge };
+      rememberColor(fill); rememberColor(edge); delete errors.player_fill; delete errors.player_edge;
+      error = ''; syncInputs(true); notify();
+    };
+    const cancel = () => { if (loading || saving) return; draft = copy(saved); errors = {}; waveformColorUpdates = []; error = ''; syncInputs(); notify(); };
     const reset = () => {
       if (busy()) return;
       draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null } : empty();
@@ -143,29 +162,32 @@
       if (loading || saving) return false;
       const ownGeneration = ++generation; loading = true; error = ''; notify();
       try {
-        const preference = normalizePreferences(await request('GET'));
+        const response = await request('GET');
+        const preference = normalizePreferences(response), history = normalizeRecentColors(response.waveform_recent_colors);
         if (ownGeneration !== generation) return false;
-        saved = preference; draft = copy(saved); errors = {}; loadFailed = false; syncInputs(); apply(copy(saved)); return true;
+        saved = preference; draft = copy(saved); recentColors = history; waveformColorUpdates = []; errors = {}; loadFailed = false; syncInputs(); apply(copy(saved)); return true;
       } catch (_failure) {
         if (ownGeneration === generation) { error = 'Backgrounds could not be loaded. Try again.'; loadFailed = true; } return false;
       } finally { if (ownGeneration === generation) { loading = false; notify(); } }
     };
     const save = async () => {
       if (!getState().canSave) return false;
-      const ownGeneration = ++generation, submitted = copy(draft); saving = true; error = ''; notify();
+      const ownGeneration = ++generation, submitted = { ...copy(draft), ...(waveformColorUpdates.length ? { waveform_color_updates: [...waveformColorUpdates] } : {}) }; saving = true; error = ''; notify();
       try {
-        const preference = normalizePreferences(await request('PUT', submitted));
+        const response = await request('PUT', submitted);
+        const preference = normalizePreferences(response), history = normalizeRecentColors(response.waveform_recent_colors);
         if (ownGeneration !== generation) return false;
-        saved = preference; draft = copy(saved); errors = {}; syncInputs(); apply(copy(saved)); return true;
+        saved = preference; draft = copy(saved); recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved)); return true;
       } catch (_failure) {
         if (ownGeneration === generation) error = 'Backgrounds could not be saved. Your changes are kept. Try Save again.'; return false;
       } finally { if (ownGeneration === generation) { saving = false; notify(); } }
     };
     const clear = (message = '') => {
       ++generation; saved = isCanonical(saved) ? canonicalEmpty() : empty(); draft = copy(saved); errors = {};
+      recentColors = []; waveformColorUpdates = [];
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
-    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setPlayerColor, cancel, reset, load, save, clear,
+    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setPlayerColor, restoreWaveformColors, cancel, reset, load, save, clear,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
@@ -190,17 +212,31 @@
       <div class="background-pair-summary"><strong data-background-pair-title></strong><p class="background-help" data-background-pair-description></p></div>
       <section class="background-player-section" aria-labelledby="appearance-player-label"><h4 id="appearance-player-label"><span>3</span>Player &amp; waveform</h4><p class="background-help">One color group for your player and waveform.</p>
       <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match palette</button><button type="button" data-background-player-mode="custom" aria-pressed="false">Custom player colors</button></div>
-      <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}${colorField('fill', 'Waveform fill')}${colorField('edge', 'Waveform edge')}<button class="button button-secondary" type="button" data-background-green>Deep green set</button><small>Player text and buttons adapt to the background.</small></div>
-      <div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge follow this group. Seekbar keeps only the display mode.</p></section>
+      <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}<small>Player text and buttons adapt to the background.</small></div>
+      <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="seekbar">Edit waveform in Seekbar</button><p class="background-field-error" data-background-other-errors hidden></p><div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge stay with this group. Edit those colors in Seekbar.</p></section>
       <p class="background-help">Save applies the palette and all three player colors together. Cancel restores the saved set. Reset backgrounds keeps your custom player group.</p></div></div>
       <p class="background-warning" data-background-warning role="status" hidden></p><p class="background-request-error" data-background-request-error role="alert" hidden></p>
       <div class="background-actions"><button class="button button-secondary background-reset" type="button" data-background-reset>Reset backgrounds</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
+  }
+  function seekbarMarkup() {
+    return `<section class="appearance-background-editor appearance-seekbar-editor" aria-labelledby="appearance-waveform-title">
+      <h3 id="appearance-waveform-title">Waveform colors</h3><p class="background-intro">Choose the fill and edge together with your player background.</p>
+      <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match palette</button><button type="button" data-background-player-mode="custom" aria-pressed="false">Custom player colors</button></div>
+      <p class="background-help" data-waveform-mode-help></p>
+      <div class="waveform-color-fields">${['fill', 'edge'].map(field => `<div>${colorField(field, field === 'fill' ? 'Waveform fill' : 'Waveform edge')}<div class="waveform-recents" data-waveform-recents="${field}" role="group" aria-label="Recent waveform ${field} colors"></div></div>`).join('')}</div>
+      <p class="background-help" data-waveform-recents-help></p>
+      <div class="waveform-color-preview" data-waveform-preview aria-label="Waveform color preview"><svg viewBox="0 0 300 48" role="img" aria-label="Draft waveform fill and edge"><path d="M0 24 L12 18 L24 8 L36 19 L48 6 L60 15 L72 3 L84 10 L96 19 L108 5 L120 14 L132 8 L144 17 L156 3 L168 12 L180 7 L192 18 L204 9 L216 4 L228 16 L240 10 L252 3 L264 15 L276 18 L288 10 L300 24 L288 38 L276 30 L264 33 L252 45 L240 38 L228 32 L216 44 L204 39 L192 30 L180 41 L168 36 L156 45 L144 31 L132 40 L120 34 L108 43 L96 29 L84 38 L72 45 L60 33 L48 42 L36 29 L24 40 L12 30 Z"/></svg></div>
+      <div class="waveform-recovery"><button class="button button-secondary" type="button" data-waveform-restore>Restore previous browser colors</button><p class="background-help">Use the earlier waveform colors stored in this browser. They apply to this account only after Save.</p><p class="background-field-error" data-waveform-recovery-status role="status" hidden></p></div>
+      <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="backgrounds">Edit player background in Backgrounds</button>
+      <p class="background-field-error" data-background-other-errors hidden></p><p class="background-help">Save applies all pending Backgrounds and waveform colors together. Cancel restores your saved colors.</p>
+      <p class="background-request-error" data-background-request-error role="alert" hidden></p>
+      <div class="background-actions"><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function installBrowser(window, document) {
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
     const root = document.documentElement;
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
-    try { initial = normalizePreferences(JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}')); }
+    try { const bootstrap = JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}'); initial = { ...normalizePreferences(bootstrap), waveform_recent_colors: normalizeRecentColors(bootstrap.waveform_recent_colors) }; }
     catch (_failure) { /* Missing or invalid bootstrap never applies untrusted CSS. */ }
     let savedPlayerColors = null;
     const applySavedTheme = preference => {
@@ -257,11 +293,12 @@
         editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
         find('[data-background-player-fields]').hidden = !custom;
         find('[data-background-player-help]').textContent = custom ? 'Your background, waveform fill and edge stay together when you change palettes.' : 'The palette sets your player background, waveform fill and edge together.';
-        for (const field of ['background', 'fill', 'edge']) {
+        for (const field of ['background']) {
           const key = 'player_' + field, picker = find(`[data-player-picker="${field}"]`), hex = find(`[data-player-hex="${field}"]`);
           picker.value = effective.player[field]; if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
           hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
         }
+        const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_fill && !state.errors.player_edge; otherErrors.textContent = 'Fix the waveform color errors in Seekbar before saving.';
         find('[data-background-player-summary]').innerHTML = Object.entries(effective.player).map(([field, color]) => `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`).join('');
         const warning = find('[data-background-warning]'); warning.hidden = !state.warnings.length;
         warning.textContent = state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '';
@@ -273,14 +310,14 @@
       };
       editor.addEventListener('input', event => {
         const field = event.target.getAttribute('data-player-picker') || event.target.getAttribute('data-player-hex');
-        if (field) controller.setPlayerColor(field, event.target.value);
+        if (field) controller.setPlayerColor(field, event.target.value, { recordRecent: !event.target.hasAttribute('data-player-picker') });
       });
       editor.addEventListener('click', event => {
         const button = event.target.closest('button'); if (!button || button.disabled) return;
         if (button.hasAttribute('data-background-palette')) controller.setPalette(button.getAttribute('data-background-palette'));
         else if (button.hasAttribute('data-background-panel')) controller.setPanelIndex(Number(button.getAttribute('data-background-panel')));
         else if (button.hasAttribute('data-background-player-mode')) controller.setPlayerMode(button.getAttribute('data-background-player-mode'));
-        else if (button.hasAttribute('data-background-green')) { controller.setPlayerMode('custom'); for (const [field, value] of Object.entries({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' })) controller.setPlayerColor(field, value); }
+
         else if (button.hasAttribute('data-background-reset')) controller.reset();
         else if (button.hasAttribute('data-background-cancel')) controller.cancel();
         else if (button.hasAttribute('data-background-save')) void controller.save();
@@ -288,11 +325,62 @@
       });
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
+    const mountSeekbar = (host, { getLegacyColors = () => null } = {}) => {
+      unmount(); host.innerHTML = seekbarMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      const editor = mounted, find = selector => editor.querySelector(selector);
+      let recoveryMessage = '';
+      const sync = state => {
+        if (mounted !== editor) return;
+        const disabled = state.loading || state.saving || state.loadFailed, custom = Boolean(state.draft.player_override);
+        editor.setAttribute('aria-busy', String(state.loading || state.saving));
+        editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
+        editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
+        find('[data-waveform-mode-help]').textContent = custom ? 'Custom colors stay together when you change palettes. Match palette resets the player background, fill and edge together.' : 'Your palette sets all three player colors. Choosing a waveform color creates a custom group and keeps the current player background.';
+        const history = [...new Set([...state.waveformColorUpdates, ...state.recentColors])].slice(0, 5);
+        for (const field of ['fill', 'edge']) {
+          const key = 'player_' + field, picker = find(`[data-player-picker="${field}"]`), hex = find(`[data-player-hex="${field}"]`);
+          picker.value = state.effective.player[field]; if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
+          hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
+          find(`[data-waveform-recents="${field}"]`).innerHTML = history.map(color => `<button class="waveform-recent-swatch" type="button" data-waveform-recent="${color}" data-waveform-field="${field}" style="background:${color}" aria-label="Use ${color} for waveform ${field}" title="${color}" ${disabled ? 'disabled' : ''}></button>`).join('');
+        }
+        find('[data-waveform-recents-help]').textContent = history.length ? 'Recent colors · last five choices. Choose a swatch below either field.' : 'Your five most recent waveform colors will appear here.';
+        const preview = find('[data-waveform-preview]');
+        preview.style.setProperty('--preview-player', state.effective.player.background); preview.style.setProperty('--preview-waveform-fill', state.effective.player.fill); preview.style.setProperty('--preview-waveform-edge', state.effective.player.edge);
+        const recovery = find('[data-waveform-recovery-status]'); recovery.hidden = !recoveryMessage; recovery.textContent = recoveryMessage;
+        const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_background && !state.errors.main_surface_color && !state.errors.panel_background_color; otherErrors.textContent = 'Fix the color errors in Backgrounds before saving.';
+        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        find('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+        find('[data-background-save]').disabled = !state.canSave; find('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
+        find('[data-background-retry]').hidden = !state.loadFailed; find('[data-background-retry]').disabled = state.loading || state.saving;
+        find('[data-background-status]').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
+      };
+      editor.addEventListener('input', event => {
+        const field = event.target.getAttribute('data-player-picker') || event.target.getAttribute('data-player-hex');
+        if (field) { recoveryMessage = ''; controller.setPlayerColor(field, event.target.value, { recordRecent: !event.target.hasAttribute('data-player-picker') }); }
+      });
+      editor.addEventListener('change', event => {
+        const field = event.target.getAttribute('data-player-picker');
+        if (field) controller.setPlayerColor(field, event.target.value);
+      });
+      editor.addEventListener('click', event => {
+        const button = event.target.closest('button'); if (!button || button.disabled) return;
+        if (button.hasAttribute('data-waveform-recent')) { recoveryMessage = ''; controller.setPlayerColor(button.getAttribute('data-waveform-field'), button.getAttribute('data-waveform-recent')); }
+        else if (button.hasAttribute('data-background-player-mode')) { recoveryMessage = ''; controller.setPlayerMode(button.getAttribute('data-background-player-mode')); }
+        else if (button.hasAttribute('data-waveform-restore')) {
+          try { const pair = getLegacyColors(); controller.restoreWaveformColors(pair); recoveryMessage = 'Previous browser colors are in the preview. Save to apply them.'; }
+          catch (_failure) { recoveryMessage = 'No valid previous waveform colors were found in this browser. You can choose colors above.'; }
+          sync(controller.getState());
+        } else if (button.hasAttribute('data-background-cancel')) { recoveryMessage = ''; controller.cancel(); }
+        else if (button.hasAttribute('data-background-save')) { recoveryMessage = ''; void controller.save(); }
+        else if (button.hasAttribute('data-background-retry')) { recoveryMessage = ''; void load(); }
+      });
+      unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
+    };
     const allowLeave = (confirm = message => window.confirm(message)) => {
       const state = controller.getState();
       if (state.saving) return false;
       if (!state.dirty) return true;
-      if (!confirm('Discard your unsaved background changes?')) return false;
+      if (!confirm('Discard your unsaved appearance changes?')) return false;
       controller.cancel(); return true;
     };
     // Observe the same-origin auth boundary, including requests outside this editor.
@@ -319,7 +407,7 @@
     });
     window.addEventListener('pagehide', () => clearSession());
     window.addEventListener('pageshow', event => { if (event.persisted) { clearSession(); void load(); } });
-    return { controller, mount, unmount, allowLeave, clearSession, load, getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
+    return { controller, mount, mountSeekbar, unmount, allowLeave, clearSession, load, getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
   }
   const api = { normalizeColor, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, resolveAppearance, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

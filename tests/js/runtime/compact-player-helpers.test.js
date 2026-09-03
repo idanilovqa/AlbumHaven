@@ -107,7 +107,7 @@ test('floating position is clamped inside the visible viewport with its safety m
   );
 });
 
-test('each visit creates a fresh floating default beside the lower-left artist tree', () => {
+test('each visit creates a fresh floating default at the practical lower-left viewport corner', () => {
   const helper = loadHelper();
   const options = {
     treeRect: { left: 0, top: 64, width: 280, height: 636 },
@@ -115,7 +115,7 @@ test('each visit creates a fresh floating default beside the lower-left artist t
     playerHeight: 96,
     viewportWidth: 1200,
     viewportHeight: 700,
-    margin: 12,
+    margin: 4,
   };
 
   const first = helper.createCompactPlayerSessionPosition(options);
@@ -123,7 +123,14 @@ test('each visit creates a fresh floating default beside the lower-left artist t
   first.y = 100;
   const nextVisit = helper.createCompactPlayerSessionPosition(options);
 
-  assert.deepEqual(plain(nextVisit), { x: 12, y: 592 });
+  assert.deepEqual(plain(nextVisit), { x: 4, y: 600 });
+});
+
+test('floating controller keeps the player within the practical viewport edge', () => {
+  const controller = fs.readFileSync(controllerPath, 'utf8');
+
+  assert.match(controller, /const FLOATING_COMPACT_PLAYER_MARGIN = 4/);
+  assert.equal((controller.match(/margin: FLOATING_COMPACT_PLAYER_MARGIN/g) || []).length, 4);
 });
 
 test('docked queue controls disable previous and next at their respective boundaries', () => {

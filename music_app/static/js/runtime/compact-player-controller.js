@@ -3,6 +3,7 @@ let compactPlayerStyle = 'docked';
 let compactPlayerDrag = null;
 let compactPlayerPosition = null;
 let compactPlayerSuppressClick = false;
+const FLOATING_COMPACT_PLAYER_MARGIN = 4;
 
 function compactPlayerElements() {
   const player = document.querySelector('.global-player');
@@ -73,7 +74,7 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
     else {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: 12 });
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     }
@@ -88,7 +89,7 @@ function resetCompactPlayerPosition() {
   if (!els.player || !tree) return;
   compactPlayerPosition = createCompactPlayerSessionPosition({
     treeRect: tree.getBoundingClientRect(), playerWidth: 96, playerHeight: 96,
-    viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: 12,
+    viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
   });
   els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
   els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
@@ -166,7 +167,7 @@ function initCompactPlayer() {
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 96, playerHeight: 96,
-      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: 12 });
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
     els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
     els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
   });
@@ -192,7 +193,7 @@ function initCompactPlayer() {
       if (savedMode === 'compact') applyCompactPlayerMode(savedMode, { persist: false });
     } else if (compactPlayerStyle === 'floating' && compactPlayerPosition) {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: 12 });
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     } else if (compactPlayerStyle === 'docked') {

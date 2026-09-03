@@ -17,6 +17,7 @@ const helperPath = path.join(
 );
 const templatePath = path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html');
 const stylePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css');
+const appChromeStylePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'app-chrome.css');
 const controllerPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'compact-player-controller.js');
 
 function loadHelper() {
@@ -159,6 +160,7 @@ test('compact markup and layout expose only approved transport controls and rese
   const template = fs.readFileSync(templatePath, 'utf8');
   const compact = template.match(/<div class="compact-player-shell"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || '';
   const css = fs.readFileSync(stylePath, 'utf8');
+  const appChromeCss = fs.readFileSync(appChromeStylePath, 'utf8');
   const controller = fs.readFileSync(controllerPath, 'utf8');
   for (const name of ['Open album details', 'Previous track', 'Play', 'Next track']) {
     assert.match(compact, new RegExp(`aria-label="${name}"`));
@@ -175,7 +177,10 @@ test('compact markup and layout expose only approved transport controls and rese
   for (const hiddenFeature of ['waveform', 'seekbar', 'Loop', 'player-title', 'player-artist']) {
     assert.doesNotMatch(compact, new RegExp(hiddenFeature, 'i'));
   }
-  assert.match(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*padding-bottom:\s*88px/);
+  assert.match(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*height:\s*calc\(100% - 76px\)/);
+  assert.match(css, /:root\.has-floating-compact-player #shell-navigation-rail\s*\{[^}]*height:\s*100%/);
+  assert.doesNotMatch(css, /:root\.has-docked-compact-player #shell-navigation-rail\s*\{[^}]*padding-bottom:\s*88px/);
+  assert.match(appChromeCss, /\.shell-layout\s*\{[^}]*height:\s*calc\(100dvh - var\(--player-height\)\)/);
   assert.match(css, /:root\.has-compact-player\s*\{\s*--player-height:\s*0px/);
   assert.match(css, /width:\s*var\(--compact-docked-width/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);

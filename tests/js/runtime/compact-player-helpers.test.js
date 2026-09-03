@@ -183,11 +183,15 @@ test('compact markup and layout expose only approved transport controls and rese
   assert.match(appChromeCss, /\.shell-layout\s*\{[^}]*height:\s*calc\(100dvh - var\(--player-height\)\)/);
   assert.match(css, /:root\.has-compact-player\s*\{\s*--player-height:\s*0px/);
   assert.match(css, /width:\s*var\(--compact-docked-width/);
+  assert.match(css, /\.global-player:not\(\.is-compact\)\s*\{[^}]*padding-left:\s*28px/);
+  assert.doesNotMatch(css, /\.global-player\.is-compact \.player-mode-toggle\s*\{[^}]*(?:border|background|box-shadow)/);
+  assert.doesNotMatch(css, /\.global-player\.is-floating-compact \.player-mode-toggle\s*\{[^}]*(?:border|background|box-shadow|border-radius)/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@property --player-height/);
   assert.match(css, /\.is-compact-player-dragging\s*\{[^}]*transition:[^}]*height[^}]*opacity/);
   assert.match(controller, /previousStyle !== 'floating'/);
   assert.match(controller, /toggle\.setAttribute\('aria-label', compact \? 'Expand player' : 'Collapse player'\)/);
+  assert.match(controller, /toggle\.textContent = compact \? '›' : '‹'/);
   assert.match(controller, /getElementById\('shell-navigation-rail'\)/);
   assert.match(controller, /addEventListener\('pointercancel', finishDrag\)/);
   assert.match(controller, /hasPointerCapture\?\./);

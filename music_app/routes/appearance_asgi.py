@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.auth_asgi import _policy_config
 from music_app.services.appearance_preferences_postgres import (
     PostgresAppearancePreferencesRepository,
+    expand_appearance_preferences,
     normalize_appearance_preferences,
 )
 from music_app.services.auth_session_csrf import issue_session_csrf
@@ -27,12 +28,12 @@ def _repository(request: Request):
 
 async def load_appearance_context(request: Request) -> dict[str, object]:
     """Load only this request's actor; never retain preferences in application state."""
-    colors = {"main_surface_color": None, "panel_background_color": None}
+    colors = expand_appearance_preferences({"main_surface_color": None, "panel_background_color": None})
     actor = getattr(request.state, "current_actor", None)
     failed = False
     if actor is not None and actor.is_authenticated and actor.account_id is not None:
         try:
-            colors = normalize_appearance_preferences(await run_in_threadpool(
+            colors = expand_appearance_preferences(await run_in_threadpool(
                 _repository(request).load_preferences, account_id=actor.account_id
             ))
         except Exception:
@@ -43,7 +44,7 @@ async def load_appearance_context(request: Request) -> dict[str, object]:
 @router.get("/account/appearance")
 async def get_appearance(request: Request) -> JSONResponse:
     try:
-        colors = normalize_appearance_preferences(await run_in_threadpool(
+        colors = expand_appearance_preferences(await run_in_threadpool(
             _repository(request).load_preferences,
             account_id=request.state.current_actor.account_id,
         ))
@@ -62,7 +63,7 @@ async def put_appearance(request: Request) -> JSONResponse:
     except (ValueError, UnicodeDecodeError):
         return JSONResponse({"error": "invalid_appearance"}, status_code=400, headers=_NO_STORE)
     try:
-        saved = normalize_appearance_preferences(await run_in_threadpool(
+        saved = expand_appearance_preferences(await run_in_threadpool(
             _repository(request).save_preferences,
             account_id=request.state.current_actor.account_id,
             preferences=colors,

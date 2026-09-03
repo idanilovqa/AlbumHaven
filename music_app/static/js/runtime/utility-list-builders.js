@@ -195,16 +195,8 @@ function buildUtilityAppearanceDetail() {
           <span>Waveform seekbar</span>
         </label>
       </div>
-      <div class="appearance-color-grid ${waveformSelected ? '' : 'is-disabled'}">
-        <label class="appearance-color-field">
-          <span>Waveform fill</span>
-          <input type="color" value="${escapeHtml(appearance.waveformFillColor)}" data-appearance-color="fill" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-        <label class="appearance-color-field">
-          <span>Waveform edge</span>
-          <input type="color" value="${escapeHtml(appearance.waveformEdgeColor)}" data-appearance-color="edge" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-      </div>
+      <p class="utility-rule-description">Player background, waveform fill and edge are saved together in Backgrounds.</p>
+      <button class="button button-secondary" type="button" data-utility-appearance-key="backgrounds">Edit player &amp; waveform colors</button>
     </div>
   `;
 }

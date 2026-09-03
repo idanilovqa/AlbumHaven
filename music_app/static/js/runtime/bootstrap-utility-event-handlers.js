@@ -847,21 +847,6 @@ function handleUtilityBootstrapInput(event) {
     syncCoverLookupManualControlsUi();
     return;
   }
-  const appearanceColor = event.target.closest('[data-appearance-color]');
-  if (appearanceColor) {
-    const color = String(appearanceColor.value || '');
-    if (/^#[0-9a-f]{6}$/i.test(color)) {
-      const field = appearanceColor.getAttribute('data-appearance-color') || 'fill';
-      state.player.appearance = normalizePlayerAppearance({
-        ...state.player.appearance,
-        waveformFillColor: field === 'fill' ? color : state.player.appearance.waveformFillColor,
-        waveformEdgeColor: field === 'edge' ? color : state.player.appearance.waveformEdgeColor,
-      });
-      persistPlayerAppearance();
-      updateWaveformAppearance();
-    }
-    return;
-  }
   if (handleLibrarySettingsInput(event)) {
     return;
   }

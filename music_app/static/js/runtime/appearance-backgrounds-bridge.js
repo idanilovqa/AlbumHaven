@@ -14,3 +14,13 @@ function mountBackgroundAppearanceEditor(detail) {
   if (editor) editor.mount(detail);
   else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
 }
+
+// Live canvases consume only the account's applied state, never the editor draft.
+function getSavedAppearancePlayerColors() {
+  return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('album-haven-appearance-change', () => {
+    if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+  });
+}

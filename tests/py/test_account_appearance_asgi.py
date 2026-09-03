@@ -16,6 +16,7 @@ from tests.py.asgi_testing import decode_json, run_asgi_request
 
 
 DEFAULTS = {"main_surface_color": None, "panel_background_color": None}
+EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None}
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}
 SESSION = "s" * 43
 
@@ -82,7 +83,7 @@ def test_ordinary_active_member_can_read_defaults_without_library_grants(deploym
 
     assert status == 200
     assert decode_json(body) == {
-        **DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]
@@ -95,12 +96,12 @@ def test_save_normalizes_any_rgb_and_reset_is_scoped_to_the_authenticated_accoun
     status, headers, body = _request(app, "PUT", lower)
 
     assert status == 200
-    assert decode_json(body) == CUSTOM
+    assert decode_json(body) == {**CUSTOM, **EXTENDED_DEFAULTS}
     assert "no-store" in headers["cache-control"]
     assert repository.rows == {41: CUSTOM}
     resolver.actor = _actor(52)
     assert decode_json(_request(app)[2]) == {
-        **DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     black_white = {"main_surface_color": "#000000", "panel_background_color": "#FFFFFF"}
     assert _request(app, "PUT", black_white)[0] == 200
@@ -195,8 +196,8 @@ def test_shell_hydration_uses_each_requests_actor_and_does_not_reuse_another_the
     first = asyncio.run(load_appearance_context(_shell_request(app, _actor(41))))
     second = asyncio.run(load_appearance_context(_shell_request(app, _actor(52))))
 
-    assert first == {"appearance_preferences": CUSTOM, "appearance_load_error": False}
-    assert second == {"appearance_preferences": DEFAULTS, "appearance_load_error": False}
+    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
+    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
     assert repository.reads == [41, 52]
 
 
@@ -209,7 +210,7 @@ def test_public_or_expired_session_hydration_returns_defaults_without_loading_ac
 
     context = asyncio.run(load_appearance_context(_shell_request(app, actor)))
 
-    assert context == {"appearance_preferences": DEFAULTS, "appearance_load_error": False}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
     assert repository.reads == []
 
 
@@ -221,7 +222,7 @@ def test_shell_storage_failure_returns_explicit_retry_state_and_defaults():
 
     context = asyncio.run(load_appearance_context(_shell_request(app, _actor())))
 
-    assert context == {"appearance_preferences": DEFAULTS, "appearance_load_error": True}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": True}
 
 
 def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rendering():
@@ -243,7 +244,7 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
     html = body.decode("utf-8")
     bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
     assert bootstrap is not None
-    assert json.loads(bootstrap.group(1)) == {**CUSTOM, "load_error": False}
+    assert json.loads(bootstrap.group(1)) == {**CUSTOM, **EXTENDED_DEFAULTS, "load_error": False}
     assert bootstrap.end() < html.index("<body")
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]

@@ -9925,8 +9925,9 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const barWidth = width / count;
   const center = Math.floor(height / 2);
   const maxHalfHeight = Math.max(0, Math.floor((height - 1) / 2));
-  const fill = (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
-  const edge = (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
+  const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
+  const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
   context.fillStyle = fill;
   context.globalAlpha = 0.42;
   for (let index = 0; index < count; index += 1) {
@@ -10117,7 +10118,7 @@ const loopEditSessionExpiryController = createLoopEditSessionExpiryController({
 
 // BEGIN js/runtime/player-and-waveform.js
 
-﻿function getPlayerElements() {
+function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
     coverButton: document.getElementById('player-cover-button'),
@@ -10202,8 +10203,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.scale(ratio, ratio);
 
-  const fill = state.player.appearance.waveformFillColor;
-  const edge = state.player.appearance.waveformEdgeColor;
+  const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
+  const fill = savedColors?.fill || state.player.appearance.waveformFillColor;
+  const edge = savedColors?.edge || state.player.appearance.waveformEdgeColor;
   const topMid = height * 0.24;
   const bottomMid = height * 0.76;
   const halfBand = Math.max(3, height * 0.18);
@@ -12687,16 +12689,8 @@ function buildUtilityAppearanceDetail() {
           <span>Waveform seekbar</span>
         </label>
       </div>
-      <div class="appearance-color-grid ${waveformSelected ? '' : 'is-disabled'}">
-        <label class="appearance-color-field">
-          <span>Waveform fill</span>
-          <input type="color" value="${escapeHtml(appearance.waveformFillColor)}" data-appearance-color="fill" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-        <label class="appearance-color-field">
-          <span>Waveform edge</span>
-          <input type="color" value="${escapeHtml(appearance.waveformEdgeColor)}" data-appearance-color="edge" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-      </div>
+      <p class="utility-rule-description">Player background, waveform fill and edge are saved together in Backgrounds.</p>
+      <button class="button button-secondary" type="button" data-utility-appearance-key="backgrounds">Edit player &amp; waveform colors</button>
     </div>
   `;
 }
@@ -16708,6 +16702,16 @@ function mountBackgroundAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor) editor.mount(detail);
   else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
+}
+
+// Live canvases consume only the account's applied state, never the editor draft.
+function getSavedAppearancePlayerColors() {
+  return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('album-haven-appearance-change', () => {
+    if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+  });
 }
 
 // END js/runtime/appearance-backgrounds-bridge.js
@@ -30299,21 +30303,6 @@ function handleUtilityBootstrapInput(event) {
   if (manualCoverLookupInput) {
     state.coverLookup.modal.manualUrlText = String(manualCoverLookupInput.value || '');
     syncCoverLookupManualControlsUi();
-    return;
-  }
-  const appearanceColor = event.target.closest('[data-appearance-color]');
-  if (appearanceColor) {
-    const color = String(appearanceColor.value || '');
-    if (/^#[0-9a-f]{6}$/i.test(color)) {
-      const field = appearanceColor.getAttribute('data-appearance-color') || 'fill';
-      state.player.appearance = normalizePlayerAppearance({
-        ...state.player.appearance,
-        waveformFillColor: field === 'fill' ? color : state.player.appearance.waveformFillColor,
-        waveformEdgeColor: field === 'edge' ? color : state.player.appearance.waveformEdgeColor,
-      });
-      persistPlayerAppearance();
-      updateWaveformAppearance();
-    }
     return;
   }
   if (handleLibrarySettingsInput(event)) {

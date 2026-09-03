@@ -1,4 +1,4 @@
-﻿function getPlayerElements() {
+function getPlayerElements() {
   return {
     player: document.querySelector('.global-player'),
     coverButton: document.getElementById('player-cover-button'),
@@ -83,8 +83,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.scale(ratio, ratio);
 
-  const fill = state.player.appearance.waveformFillColor;
-  const edge = state.player.appearance.waveformEdgeColor;
+  const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
+  const fill = savedColors?.fill || state.player.appearance.waveformFillColor;
+  const edge = savedColors?.edge || state.player.appearance.waveformEdgeColor;
   const topMid = height * 0.24;
   const bottomMid = height * 0.76;
   const halfBand = Math.max(3, height * 0.18);

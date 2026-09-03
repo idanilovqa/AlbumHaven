@@ -1,21 +1,28 @@
-/* Account-owned background preferences. Only saved values reach the document. */
+/* Account-owned appearance. Drafts never recolor the live document. */
 (function (scope) {
   'use strict';
+  const catalog = typeof module !== 'undefined' && module.exports ? require('./appearance-palettes.js') : scope.AlbumHavenAppearancePalettes;
+  const { palettes, resolveAppearance, normalizePlayerOverride } = catalog;
   const keys = ['main_surface_color', 'panel_background_color'];
   const defaults = { main_surface_color: '#111C2C', panel_background_color: '#0E1B2B' };
   const empty = () => ({ main_surface_color: null, panel_background_color: null });
+  const canonicalEmpty = () => ({ ...empty(), palette_id: null, panel_index: 0, player_override: null });
+  const isCanonical = value => ['palette_id', 'panel_index', 'player_override'].some(key => Object.hasOwn(value, key));
+  const copy = value => ({ ...value, ...(Object.hasOwn(value, 'player_override') ? { player_override: value.player_override ? { ...value.player_override } : null } : {}) });
   function normalizeColor(value) {
     if (value === null) return null;
-    if (typeof value !== 'string' || value.length !== 7 || !/^#[0-9a-f]{6}$/i.test(value)) {
-      throw new TypeError('Enter a color as #RRGGBB, for example #237A68.');
-    }
+    if (typeof value !== 'string' || value.length !== 7 || !/^#[0-9a-f]{6}$/i.test(value)) throw new TypeError('Enter a color as #RRGGBB, for example #237A68.');
     return value.toUpperCase();
   }
   function normalizePreferences(value) {
-    if (!value || !keys.every(key => Object.prototype.hasOwnProperty.call(value, key))) {
-      throw new TypeError('Invalid appearance response.');
-    }
-    return Object.fromEntries(keys.map(key => [key, normalizeColor(value[key])]));
+    if (!value || !keys.every(key => Object.hasOwn(value, key))) throw new TypeError('Invalid appearance response.');
+    const normalized = Object.fromEntries(keys.map(key => [key, normalizeColor(value[key])]));
+    if (!isCanonical(value)) return normalized;
+    if (!['palette_id', 'panel_index', 'player_override'].every(key => Object.hasOwn(value, key))) throw new TypeError('Incomplete appearance response.');
+    const id = value.palette_id;
+    if (id !== null && !palettes.some(palette => palette.id === id)) throw new TypeError('Unknown palette.');
+    if (!Number.isInteger(value.panel_index) || value.panel_index < 0 || value.panel_index > (id === null ? 0 : 2)) throw new TypeError('Unknown panel companion.');
+    return { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override) };
   }
   function colorToRgb(value) {
     const color = normalizeColor(value);
@@ -23,118 +30,171 @@
     return [1, 3, 5].map(offset => parseInt(color.slice(offset, offset + 2), 16)).join(', ');
   }
   function luminance(color) {
-    const channels = colorToRgb(color).split(', ').map(value => Number(value) / 255)
-      .map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+    const channels = colorToRgb(color).split(', ').map(value => Number(value) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
     return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
   }
   function contrastRatio(first, second) {
     const a = luminance(first), b = luminance(second);
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
   }
+  const surfaceTokens = ['ink', 'muted', 'card', 'control', 'line', 'hover', 'accent', 'stars'];
+  const playerTokens = ['player', 'player-ink', 'play', 'play-ink', 'waveform-fill', 'waveform-edge'];
   function applyTheme(value, rootElement) {
-    const preference = normalizePreferences(value);
-    const style = rootElement.style;
-    for (const [key, variable] of [['main_surface_color', '--appearance-main-surface'], ['panel_background_color', '--appearance-panel-background']]) {
-      if (preference[key] === null) style.removeProperty(variable);
-      else style.setProperty(variable, preference[key]);
+    const preference = normalizePreferences(value), effective = resolveAppearance(preference), style = rootElement.style;
+    const themed = Boolean(preference.palette_id), playerThemed = themed || Boolean(preference.player_override);
+    const main = themed ? effective.main : preference.main_surface_color;
+    const panel = themed ? effective.panel : preference.panel_background_color;
+    for (const [color, variable] of [[main, '--appearance-main-surface'], [panel, '--appearance-panel-background']]) {
+      if (color === null) style.removeProperty(variable); else style.setProperty(variable, color);
     }
-    if (preference.panel_background_color === null) style.removeProperty('--appearance-panel-background-rgb');
-    else style.setProperty('--appearance-panel-background-rgb', colorToRgb(preference.panel_background_color));
+    if (panel === null) style.removeProperty('--appearance-panel-background-rgb');
+    else style.setProperty('--appearance-panel-background-rgb', colorToRgb(panel));
+    for (const token of surfaceTokens) {
+      if (themed) style.setProperty('--appearance-' + token, effective.tokens[token]);
+      else style.removeProperty('--appearance-' + token);
+    }
+    for (const token of playerTokens) {
+      if (playerThemed) style.setProperty('--appearance-' + token, effective.tokens[token]);
+      else style.removeProperty('--appearance-' + token);
+    }
+    if (themed) {
+      rootElement.setAttribute?.('data-appearance-palette', preference.palette_id);
+      rootElement.setAttribute?.('data-appearance-mode', effective.mode);
+    } else { rootElement.removeAttribute?.('data-appearance-palette'); rootElement.removeAttribute?.('data-appearance-mode'); }
+    if (playerThemed) rootElement.setAttribute?.('data-appearance-player', 'custom');
+    else rootElement.removeAttribute?.('data-appearance-player');
   }
   function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
   function createController({ initial = empty(), request, apply = () => {} }) {
-    let saved = normalizePreferences(initial), draft = { ...saved }, errors = {}, inputValues = {};
+    let saved = normalizePreferences(initial), draft = copy(saved), errors = {}, inputValues = {};
     let loading = false, saving = false, error = '', loadFailed = false, generation = 0;
-    const listeners = new Set();
-    const syncInputs = () => { inputValues = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]])); };
+    const listeners = new Set(), busy = () => loading || saving || loadFailed;
+    const syncInputs = (preserveErrors = false) => {
+      const next = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]]));
+      const player = resolveAppearance(draft).player;
+      for (const field of ['background', 'fill', 'edge']) next['player_' + field] = player[field];
+      if (preserveErrors) for (const key of Object.keys(errors)) next[key] = inputValues[key];
+      inputValues = next;
+    };
     syncInputs();
     const getState = () => {
-      const dirty = keys.some(key => draft[key] !== saved[key]) || Object.keys(errors).length > 0;
-      const warnings = [];
-      for (const key of keys) {
+      const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || Object.keys(errors).length > 0;
+      const effective = resolveAppearance(draft), warnings = [];
+      if (!draft.palette_id) for (const key of keys) {
         const label = key === 'main_surface_color' ? 'Main surface' : 'App bar and panels';
-        const background = draft[key] || defaults[key];
         for (const [labelText, foreground] of [['light text', '#F3F6FA'], ['muted text', '#97A6BB']]) {
-          if (contrastRatio(background, foreground) < 4.5) warnings.push(`${labelText} on ${label}`);
+          if (contrastRatio(draft[key] || defaults[key], foreground) < 4.5) warnings.push(`${labelText} on ${label}`);
         }
       }
-      return { saved: { ...saved }, draft: { ...draft }, errors: { ...errors }, inputValues: { ...inputValues },
-        loading, saving, dirty, canSave: dirty && !loading && !saving && !loadFailed && !Object.keys(errors).length,
-        error, loadFailed, warnings };
+      return { saved: copy(saved), draft: copy(draft), errors: { ...errors }, inputValues: { ...inputValues }, effective,
+        loading, saving, dirty, canSave: dirty && !busy() && !Object.keys(errors).length, error, loadFailed, warnings };
     };
     const notify = () => listeners.forEach(listener => listener(getState()));
+    const promote = () => {
+      if (!isCanonical(saved)) saved = { ...canonicalEmpty(), ...saved };
+      if (!isCanonical(draft)) draft = { ...canonicalEmpty(), ...draft };
+    };
     const setColor = (key, value) => {
       if (!keys.includes(key)) throw new TypeError('Unknown appearance field.');
-      if (loading || saving || loadFailed) return;
+      if (busy()) return;
       inputValues[key] = value === null ? defaults[key] : String(value);
-      try { draft[key] = normalizeColor(value); delete errors[key]; error = ''; }
+      try { draft[key] = normalizeColor(value); if (isCanonical(draft)) { draft.palette_id = null; draft.panel_index = 0; } delete errors[key]; error = ''; }
       catch (failure) { errors[key] = failure.message; }
       notify();
     };
-    const cancel = () => {
-      if (loading || saving) return;
-      draft = { ...saved }; errors = {}; error = ''; syncInputs(); notify();
+    const setPalette = id => {
+      if (id !== null && !palettes.some(palette => palette.id === id)) throw new TypeError('Unknown palette.');
+      if (busy()) return;
+      promote(); draft = { ...draft, ...empty(), palette_id: id, panel_index: 0 };
+      keys.forEach(key => delete errors[key]); error = ''; syncInputs(true); notify();
     };
+    const setPanelIndex = index => {
+      if (!Number.isInteger(index) || index < 0 || index > (draft.palette_id ? 2 : 0)) throw new TypeError('Unknown panel companion.');
+      if (busy()) return;
+      promote(); draft.panel_index = index; error = ''; syncInputs(true); notify();
+    };
+    const setPlayerMode = mode => {
+      if (!['palette', 'custom'].includes(mode)) throw new TypeError('Unknown player mode.');
+      if (busy()) return;
+      promote();
+      if (mode === 'custom' && draft.player_override) return;
+      draft.player_override = mode === 'custom' ? { ...resolveAppearance(draft).player } : null;
+      for (const field of ['background', 'fill', 'edge']) delete errors['player_' + field];
+      error = ''; syncInputs(true); notify();
+    };
+    const setPlayerColor = (field, value) => {
+      if (!['background', 'fill', 'edge'].includes(field)) throw new TypeError('Unknown player color.');
+      if (busy()) return;
+      promote(); const key = 'player_' + field; inputValues[key] = String(value);
+      try {
+        const color = normalizeColor(value); if (color === null) throw new TypeError('A player color is required.');
+        draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), [field]: color };
+        delete errors[key]; error = ''; syncInputs(true);
+      } catch (failure) { errors[key] = failure.message; }
+      notify();
+    };
+    const cancel = () => { if (loading || saving) return; draft = copy(saved); errors = {}; error = ''; syncInputs(); notify(); };
     const reset = () => {
-      if (loading || saving || loadFailed) return;
-      draft = empty(); errors = {}; error = ''; syncInputs(); notify();
+      if (busy()) return;
+      draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null } : empty();
+      keys.forEach(key => delete errors[key]); error = ''; syncInputs(true); notify();
     };
     const load = async () => {
       if (loading || saving) return false;
-      const ownGeneration = ++generation;
-      loading = true; error = ''; notify();
+      const ownGeneration = ++generation; loading = true; error = ''; notify();
       try {
         const preference = normalizePreferences(await request('GET'));
         if (ownGeneration !== generation) return false;
-        saved = preference; draft = { ...saved }; errors = {}; loadFailed = false; syncInputs(); apply({ ...saved });
-        return true;
+        saved = preference; draft = copy(saved); errors = {}; loadFailed = false; syncInputs(); apply(copy(saved)); return true;
       } catch (_failure) {
-        if (ownGeneration === generation) { error = 'Backgrounds could not be loaded. Try again.'; loadFailed = true; }
-        return false;
+        if (ownGeneration === generation) { error = 'Backgrounds could not be loaded. Try again.'; loadFailed = true; } return false;
       } finally { if (ownGeneration === generation) { loading = false; notify(); } }
     };
     const save = async () => {
       if (!getState().canSave) return false;
-      const ownGeneration = ++generation, submitted = { ...draft };
-      saving = true; error = ''; notify();
+      const ownGeneration = ++generation, submitted = copy(draft); saving = true; error = ''; notify();
       try {
         const preference = normalizePreferences(await request('PUT', submitted));
         if (ownGeneration !== generation) return false;
-        saved = preference; draft = { ...saved }; errors = {}; syncInputs(); apply({ ...saved });
-        return true;
+        saved = preference; draft = copy(saved); errors = {}; syncInputs(); apply(copy(saved)); return true;
       } catch (_failure) {
-        if (ownGeneration === generation) error = 'Backgrounds could not be saved. Your changes are kept. Try Save again.';
-        return false;
+        if (ownGeneration === generation) error = 'Backgrounds could not be saved. Your changes are kept. Try Save again.'; return false;
       } finally { if (ownGeneration === generation) { saving = false; notify(); } }
     };
     const clear = (message = '') => {
-      ++generation; saved = empty(); draft = empty(); errors = {}; error = typeof message === 'string' ? message : ''; loading = false; saving = false;
-      loadFailed = true; syncInputs(); notify();
+      ++generation; saved = isCanonical(saved) ? canonicalEmpty() : empty(); draft = copy(saved); errors = {};
+      error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
-    return { getState, setColor, cancel, reset, load, save, clear,
+    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setPlayerColor, cancel, reset, load, save, clear,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
-  function colorField(key, label, help) {
-    return `<div class="background-color-field"><label for="appearance-${key}-hex">${label}</label>
-      <p id="appearance-${key}-help">${help}</p><div class="background-color-inputs">
-      <input type="color" data-background-picker="${key}" aria-label="${label} color picker" aria-describedby="appearance-${key}-help">
-      <input type="text" id="appearance-${key}-hex" data-background-hex="${key}" maxlength="7" spellcheck="false" autocomplete="off" aria-describedby="appearance-${key}-help appearance-${key}-error"></div>
-      <small data-background-mode="${key}"></small><div class="background-field-error" id="appearance-${key}-error" data-background-error="${key}" aria-live="polite"></div></div>`;
+  function colorField(field, label) {
+    return `<div class="background-color-field"><label for="appearance-player-${field}-hex">${label}</label>
+      <div class="background-color-inputs"><input type="color" data-player-picker="${field}" aria-label="${label} color picker">
+      <input type="text" id="appearance-player-${field}-hex" data-player-hex="${field}" maxlength="7" spellcheck="false" autocomplete="off" aria-describedby="appearance-player-${field}-error"></div>
+      <div class="background-field-error" id="appearance-player-${field}-error" data-player-error="${field}" role="status"></div></div>`;
   }
   function editorMarkup() {
-    return `<section class="appearance-background-editor" aria-labelledby="appearance-background-title">
-      <h3 id="appearance-background-title">Backgrounds</h3><p class="background-intro">Choose your colors. Saved backgrounds follow your account.</p>
-      <div class="background-fields">${colorField(keys[0], 'Main surface', 'Library content and Settings content area.')}${colorField(keys[1], 'App bar and panels', 'App bar, artist tree, floating panels, and dialogs.')}</div>
-      <div class="background-preview-heading">Preview <small>Only this preview changes before Save</small></div>
-      <div class="background-preview" data-background-preview aria-label="Background color preview">
-        <div class="background-preview-bar"><span aria-hidden="true">♫</span><span class="background-preview-search">Search artist, album, or track</span><span aria-hidden="true">⚙</span></div>
-        <div class="background-preview-body"><div class="background-preview-tree"><strong>Artists</strong><span>All artists</span><span>Sample artist</span><span>Another artist</span></div>
-        <div class="background-preview-content"><strong>Your library</strong><div class="background-preview-card"><div aria-hidden="true">♫</div><small>Sample album</small><span class="background-preview-stars" aria-label="5 stars">★★★★★</span></div>
-        <div class="background-preview-floating">Floating panel<span>View album</span><span>Album details</span></div></div></div><div class="background-preview-player">▶ &nbsp; Nothing is playing</div></div>
-      <p class="background-warning" data-background-warning role="status" hidden></p>
-      <p class="background-request-error" data-background-request-error role="alert" hidden></p>
-      <div class="background-actions"><button class="button button-secondary background-reset" type="button" data-background-reset>Reset backgrounds</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div>
-      <p class="background-status" data-background-status role="status"></p></section>`;
+    return `<section class="appearance-background-editor appearance-palette-editor" aria-labelledby="appearance-background-title">
+      <div class="background-editor-heading"><div><h3 id="appearance-background-title">Backgrounds</h3><p class="background-intro">Dark, black, and light. Pick a foundation that feels right.</p></div><span>Personal appearance</span></div>
+      <div class="background-editor-columns"><div class="background-choices">
+      <section aria-labelledby="appearance-palette-label"><h4 id="appearance-palette-label"><span>1</span>Main background</h4><p class="background-help">Choose a palette for your library.</p>
+      <div class="background-palette-grid">${palettes.map(palette => `<button type="button" class="background-family" data-background-palette="${palette.id}" aria-label="${palette.name}" aria-pressed="false" title="${palette.desc}"><span class="background-family-swatch" style="background:${palette.main};--swatch-panel:${palette.panels[0][1]}"></span><strong>${palette.name}</strong></button>`).join('')}</div></section>
+      <section aria-labelledby="appearance-panel-label"><h4 id="appearance-panel-label"><span>2</span>App bar &amp; panels</h4><p class="background-help" data-background-panel-help></p><div class="background-companions" data-background-companions></div>
+      <p class="background-help">App bar, artist tree, menus, floating panels, and dialogs.</p></section></div>
+      <div class="background-preview-column"><div class="background-preview-heading">Preview <small>Changes apply after Save</small></div>
+      <div class="background-preview" data-background-preview aria-label="Appearance preview"><div class="background-preview-bar"><span aria-hidden="true">♫</span><span class="background-preview-search">Search your library</span><span aria-hidden="true">A</span></div>
+      <div class="background-preview-body"><div class="background-preview-tree"><strong>Artists</strong><span>All artists</span><span>Coastal Lines</span><span>Northbound</span><span>Slow Seasons</span></div>
+      <div class="background-preview-content"><strong>Your library</strong><div class="background-preview-card"><div aria-hidden="true">♫</div><small>Still Water</small><span class="background-preview-stars" aria-label="5 stars">★★★★★</span></div><div class="background-preview-floating">Album options<span>View album</span><span>Album details</span></div></div></div>
+      <div class="background-preview-player"><span class="background-preview-play">▶</span><span>Waveform</span><svg viewBox="0 0 160 28" role="img" aria-label="Waveform color preview"><path d="M0 14 L8 9 L16 6 L24 4 L32 2 L40 9 L48 11 L56 3 L64 10 L72 1 L80 10 L88 6 L96 3 L104 11 L112 5 L120 2 L128 10 L136 9 L144 7 L152 12 L160 14 L152 16 L144 21 L136 19 L128 18 L120 26 L112 23 L104 17 L96 25 L88 22 L80 18 L72 27 L64 18 L56 25 L48 17 L40 19 L32 26 L24 24 L16 22 L8 19 Z"/></svg></div></div>
+      <div class="background-pair-summary"><strong data-background-pair-title></strong><p class="background-help" data-background-pair-description></p></div>
+      <section class="background-player-section" aria-labelledby="appearance-player-label"><h4 id="appearance-player-label"><span>3</span>Player &amp; waveform</h4><p class="background-help">One color group for your player and waveform.</p>
+      <div class="background-player-modes" role="group" aria-label="Player color mode"><button type="button" data-background-player-mode="palette" aria-pressed="true">Match palette</button><button type="button" data-background-player-mode="custom" aria-pressed="false">Custom player colors</button></div>
+      <p class="background-help" data-background-player-help></p><div class="background-player-fields" data-background-player-fields hidden>${colorField('background', 'Player background')}${colorField('fill', 'Waveform fill')}${colorField('edge', 'Waveform edge')}<button class="button button-secondary" type="button" data-background-green>Deep green set</button><small>Player text and buttons adapt to the background.</small></div>
+      <div class="background-player-summary" data-background-player-summary></div><p class="background-help">Waveform fill and edge follow this group. Seekbar keeps only the display mode.</p></section>
+      <p class="background-help">Save applies the palette and all three player colors together. Cancel restores the saved set. Reset backgrounds keeps your custom player group.</p></div></div>
+      <p class="background-warning" data-background-warning role="status" hidden></p><p class="background-request-error" data-background-request-error role="alert" hidden></p>
+      <div class="background-actions"><button class="button button-secondary background-reset" type="button" data-background-reset>Reset backgrounds</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function installBrowser(window, document) {
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
@@ -142,8 +202,14 @@
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
     try { initial = normalizePreferences(JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}')); }
     catch (_failure) { /* Missing or invalid bootstrap never applies untrusted CSS. */ }
-    applyTheme(initial, root);
-    const clearSession = (message = '') => { ++sessionGeneration; csrfToken = ''; loaded = false; controller.clear(message); clearTheme(root); };
+    let savedPlayerColors = null;
+    const applySavedTheme = preference => {
+      applyTheme(preference, root);
+      savedPlayerColors = preference.palette_id || preference.player_override ? resolveAppearance(preference).player : null;
+      if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change'));
+    };
+    applySavedTheme(initial);
+    const clearSession = (message = '') => { ++sessionGeneration; csrfToken = ''; loaded = false; controller.clear(message); savedPlayerColors = null; clearTheme(root); if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change')); };
     const request = async (method, payload) => {
       const ownSession = sessionGeneration;
       const headers = { Accept: 'application/json' };
@@ -158,57 +224,69 @@
       if (method === 'GET') csrfToken = typeof data.csrf_token === 'string' ? data.csrf_token : '';
       return data;
     };
-    const controller = createController({ initial, request, apply: preference => applyTheme(preference, root) });
+    const controller = createController({ initial, request, apply: applySavedTheme });
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     const unmount = () => { unsubscribe?.(); unsubscribe = null; mounted = null; };
-    const mount = (host) => {
-      unmount();
-      host.innerHTML = editorMarkup();
-      mounted = host.querySelector('.appearance-background-editor');
-      const editor = mounted;
-      const find = selector => editor.querySelector(selector);
+    const mount = host => {
+      unmount(); host.innerHTML = editorMarkup(); mounted = host.querySelector('.appearance-background-editor');
+      const editor = mounted, find = selector => editor.querySelector(selector);
+      let drawnPalette;
       const sync = state => {
         if (mounted !== editor) return;
+        const disabled = state.loading || state.saving || state.loadFailed, preference = state.draft, effective = state.effective;
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
-        const disabled = state.loading || state.saving || state.loadFailed;
-        for (const key of keys) {
-          const picker = find(`[data-background-picker="${key}"]`), hex = find(`[data-background-hex="${key}"]`);
-          picker.value = state.draft[key] || defaults[key];
-          if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
-          hex.setAttribute('aria-invalid', String(Boolean(state.errors[key])));
-          picker.disabled = hex.disabled = disabled;
-          find(`[data-background-mode="${key}"]`).textContent = state.draft[key] === null ? 'Theme default' : 'Custom color';
-          find(`[data-background-error="${key}"]`).textContent = state.errors[key] || '';
+        editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
+        editor.querySelectorAll('[data-background-palette]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-background-palette') === preference.palette_id)));
+        const palette = palettes.find(item => item.id === preference.palette_id);
+        const legacy = !palette && (preference.main_surface_color || preference.panel_background_color);
+        if (drawnPalette !== (preference.palette_id || null)) {
+          find('[data-background-companions]').innerHTML = palette ? palette.panels.map((panel, index) => `<button type="button" class="background-companion" data-background-panel="${index}" aria-label="${panel[0]}" aria-pressed="false"><span style="background:${panel[1]}"></span><span><strong>${panel[0]}</strong><small>${panel[2]}</small></span><i aria-hidden="true"></i></button>`).join('') : '<p class="background-current-colors"></p>';
+          drawnPalette = preference.palette_id || null;
         }
+        editor.querySelectorAll('[data-background-panel]').forEach(button => { button.disabled = disabled; button.setAttribute('aria-pressed', String(Number(button.getAttribute('data-background-panel')) === preference.panel_index)); });
+        if (!palette) find('.background-current-colors').textContent = legacy ? 'Current custom colors are kept until you choose a palette or reset backgrounds.' : 'Theme defaults. Each panel keeps its original background.';
+        find('[data-background-panel-help]').textContent = palette ? 'Three companions for ' + palette.name + '.' : 'Choose a palette to see coordinated panel options.';
+        const panel = palette?.panels[preference.panel_index];
+        find('[data-background-pair-title]').textContent = palette ? palette.name + ' + ' + panel[0] : legacy ? 'Current custom colors' : 'Theme defaults';
+        find('[data-background-pair-description]').textContent = panel?.[2] || 'Saved backgrounds remain unchanged until Save.';
         const preview = find('[data-background-preview]');
-        preview.style.setProperty('--preview-main', state.draft.main_surface_color || defaults.main_surface_color);
-        preview.style.setProperty('--preview-panels', state.draft.panel_background_color || defaults.panel_background_color);
-        preview.style.setProperty('--preview-floating', state.draft.panel_background_color || '#1F2937');
-        const warning = find('[data-background-warning]');
-        warning.hidden = !state.warnings.length;
+        preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
+        preview.style.setProperty('--preview-floating', !palette && !preference.panel_background_color ? '#1F2937' : effective.panel);
+        for (const [token, value] of Object.entries(effective.tokens)) preview.style.setProperty('--preview-' + token, value);
+        const custom = Boolean(preference.player_override);
+        editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
+        find('[data-background-player-fields]').hidden = !custom;
+        find('[data-background-player-help]').textContent = custom ? 'Your background, waveform fill and edge stay together when you change palettes.' : 'The palette sets your player background, waveform fill and edge together.';
+        for (const field of ['background', 'fill', 'edge']) {
+          const key = 'player_' + field, picker = find(`[data-player-picker="${field}"]`), hex = find(`[data-player-hex="${field}"]`);
+          picker.value = effective.player[field]; if (hex.value !== state.inputValues[key]) hex.value = state.inputValues[key];
+          hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
+        }
+        find('[data-background-player-summary]').innerHTML = Object.entries(effective.player).map(([field, color]) => `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`).join('');
+        const warning = find('[data-background-warning]'); warning.hidden = !state.warnings.length;
         warning.textContent = state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '';
-        const failure = find('[data-background-request-error]');
-        failure.hidden = !state.error; failure.textContent = state.error;
-        find('[data-background-reset]').disabled = disabled;
+        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         find('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
-        find('[data-background-save]').disabled = !state.canSave;
-        find('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
-        find('[data-background-retry]').hidden = !state.loadFailed;
-        find('[data-background-retry]').disabled = state.loading || state.saving;
-        find('[data-background-status]').textContent = state.loading ? 'Loading your backgrounds…' : state.saving ? 'Saving backgrounds…'
-          : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved changes' : 'Saved to your account';
+        find('[data-background-save]').disabled = !state.canSave; find('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
+        find('[data-background-retry]').hidden = !state.loadFailed; find('[data-background-retry]').disabled = state.loading || state.saving;
+        find('[data-background-status]').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
       };
       editor.addEventListener('input', event => {
-        const key = event.target.getAttribute('data-background-picker') || event.target.getAttribute('data-background-hex');
-        if (key) controller.setColor(key, event.target.value);
+        const field = event.target.getAttribute('data-player-picker') || event.target.getAttribute('data-player-hex');
+        if (field) controller.setPlayerColor(field, event.target.value);
       });
-      find('[data-background-reset]').addEventListener('click', () => controller.reset());
-      find('[data-background-cancel]').addEventListener('click', () => controller.cancel());
-      find('[data-background-save]').addEventListener('click', () => { void controller.save(); });
-      find('[data-background-retry]').addEventListener('click', () => { void load(); });
-      unsubscribe = controller.subscribe(sync); sync(controller.getState());
-      if (!loaded) void load();
-      return unmount;
+      editor.addEventListener('click', event => {
+        const button = event.target.closest('button'); if (!button || button.disabled) return;
+        if (button.hasAttribute('data-background-palette')) controller.setPalette(button.getAttribute('data-background-palette'));
+        else if (button.hasAttribute('data-background-panel')) controller.setPanelIndex(Number(button.getAttribute('data-background-panel')));
+        else if (button.hasAttribute('data-background-player-mode')) controller.setPlayerMode(button.getAttribute('data-background-player-mode'));
+        else if (button.hasAttribute('data-background-green')) { controller.setPlayerMode('custom'); for (const [field, value] of Object.entries({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' })) controller.setPlayerColor(field, value); }
+        else if (button.hasAttribute('data-background-reset')) controller.reset();
+        else if (button.hasAttribute('data-background-cancel')) controller.cancel();
+        else if (button.hasAttribute('data-background-save')) void controller.save();
+        else if (button.hasAttribute('data-background-retry')) void load();
+      });
+      unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
     const allowLeave = (confirm = message => window.confirm(message)) => {
       const state = controller.getState();
@@ -241,9 +319,9 @@
     });
     window.addEventListener('pagehide', () => clearSession());
     window.addEventListener('pageshow', event => { if (event.persisted) { clearSession(); void load(); } });
-    return { controller, mount, unmount, allowLeave, clearSession, load };
+    return { controller, mount, unmount, allowLeave, clearSession, load, getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
   }
-  const api = { normalizeColor, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser };
+  const api = { normalizeColor, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, resolveAppearance, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope && scope.document) { scope.AlbumHavenAppearance = api; api.instance = installBrowser(scope, scope.document); }
 })(typeof window !== 'undefined' ? window : null);

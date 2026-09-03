@@ -4,6 +4,7 @@ import pytest
 
 
 DEFAULTS = {"main_surface_color": None, "panel_background_color": None}
+EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None}
 
 
 class Connection:
@@ -103,7 +104,7 @@ def test_repository_loads_only_the_requested_account_and_defaults_when_no_row_ex
 
     result = _repository(connection).load_preferences(account_id=41)
 
-    assert result == (row or DEFAULTS)
+    assert result == {**(row or DEFAULTS), **EXTENDED_DEFAULTS}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "where account_id = %s" in sql or "where account_id=%s" in sql
@@ -120,7 +121,7 @@ def test_repository_saves_both_normalized_colors_in_one_account_owned_upsert():
         preferences={"main_surface_color": "#12abcd", "panel_background_color": "#fe019a"},
     )
 
-    assert result == expected
+    assert result == {**expected, **EXTENDED_DEFAULTS}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "insert into app.user_appearance_preferences" in sql
@@ -132,7 +133,7 @@ def test_repository_saves_both_normalized_colors_in_one_account_owned_upsert():
 def test_repository_reset_writes_null_overrides_for_only_the_requested_account():
     connection = Connection(DEFAULTS)
 
-    assert _repository(connection).save_preferences(account_id=41, preferences=DEFAULTS) == DEFAULTS
+    assert _repository(connection).save_preferences(account_id=41, preferences=DEFAULTS) == {**DEFAULTS, **EXTENDED_DEFAULTS}
 
     assert len(connection.operations) == 1
     assert tuple(connection.operations[0][1]) == (41, None, None)

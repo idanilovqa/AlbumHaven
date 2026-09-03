@@ -92,6 +92,27 @@ Open `https://127.0.0.1:5000/login` and accept the local certificate warning if
 your browser permits it. Keep that host spelling consistent during the session;
 switching hosts changes the browser origin and cookie scope.
 
+### Session lifetime
+
+New logins have a **30-day idle timeout** and a **90-day absolute lifetime**.
+Authenticated activity renews the idle window, but it cannot extend the session
+beyond 90 days from login. Background authenticated requests can count as activity.
+The session and CSRF cookies survive normal browser restarts. Logout, password
+reset, account disablement, and session revocation still invalidate access earlier.
+
+To use shorter limits, set `ALBUM_HAVEN_SESSION_IDLE_SECONDS` (maximum `2592000`)
+and `ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS` (maximum `7776000`). If only a shorter
+absolute limit is set, the implicit idle limit is capped to that lifetime. An
+explicit idle limit must not exceed the absolute limit. Restart the application after configuration changes.
+Existing sessions retain their stored absolute expiry; sign out and sign in again
+to receive the new lifetime. Private browsing or clearing site data can remove
+cookies sooner.
+
+Manual check: after restarting the updated application, sign in in a normal
+browser window, fully close the browser, and reopen the same application URL.
+Confirm the library opens without another login. Then sign out and confirm that
+the protected URL requires login again.
+
 ### Local HTTPS on other devices
 
 Set these values once in `.env`, replacing the example address with the server's

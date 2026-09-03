@@ -145,6 +145,54 @@ def test_constructor_requires_database_url(sessions):
         sessions.PostgresAuthSessionService({"session": _config()["session"]})
 
 
+def test_issue_defaults_to_thirty_day_idle_and_ninety_day_absolute_lifetimes(sessions):
+    connection = RecordingConnection()
+    service = sessions.PostgresAuthSessionService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL},
+        connect=lambda _url: connection,
+        token_issuer=lambda: RAW_TOKEN,
+        clock=lambda: NOW,
+    )
+
+    result = service.issue_session(account_id=41)
+
+    assert result.idle_expires_at == NOW + timedelta(days=30)
+    assert result.absolute_expires_at == NOW + timedelta(days=90)
+    insert_params = next(
+        params for sql, params in connection.operations
+        if sql.startswith("insert into app.account_sessions")
+    )
+    assert insert_params[5:7] == (result.idle_expires_at, result.absolute_expires_at)
+
+
+@pytest.mark.parametrize(("absolute_days", "expected_idle_days"), [(7, 7), (60, 30)])
+def test_issue_caps_implicit_idle_at_explicit_absolute_lifetime(
+    sessions, absolute_days, expected_idle_days
+):
+    connection = RecordingConnection()
+    service = sessions.PostgresAuthSessionService(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
+            "session": {"absolute_seconds": absolute_days * 24 * 60 * 60},
+        },
+        connect=lambda _url: connection,
+        token_issuer=lambda: RAW_TOKEN,
+        clock=lambda: NOW,
+    )
+
+    result = service.issue_session(account_id=41)
+
+    assert result.idle_expires_at == NOW + timedelta(days=expected_idle_days)
+    assert result.absolute_expires_at == NOW + timedelta(days=absolute_days)
+
+
+def test_explicit_idle_longer_than_absolute_remains_invalid(sessions):
+    with pytest.raises(ValueError, match="Session lifetime configuration is invalid"):
+        sessions.PostgresAuthSessionService(
+            _config(idle_seconds=8 * 24 * 60 * 60, absolute_seconds=7 * 24 * 60 * 60)
+        )
+
+
 def test_issue_uses_one_owned_transaction_digest_only_lifetimes_and_lock_order(sessions):
     connection = RecordingConnection()
     result = _service(sessions, connection).issue_session(
@@ -220,6 +268,131 @@ def test_resolve_rejects_disabled_revoked_or_exactly_expired(sessions, overrides
     connection = RecordingConnection(session_rows=(_resolved_row(**overrides),))
     assert _service(sessions, connection).resolve_session(RAW_TOKEN) is None
     assert not any(item.startswith("update app.account_sessions") for item in _sql(connection))
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "authorized"),
+    [
+        (timedelta(days=30) - timedelta(microseconds=1), True),
+        (timedelta(days=30), False),
+        (timedelta(days=30, microseconds=1), False),
+    ],
+)
+def test_thirty_day_idle_boundary_and_active_session_renewal(sessions, elapsed, authorized):
+    absolute_expires_at = NOW + timedelta(days=90)
+    connection = RecordingConnection(session_rows=(_resolved_row(
+        created_at=NOW,
+        authenticated_at=NOW,
+        last_seen_at=NOW,
+        idle_expires_at=NOW + timedelta(days=30),
+        absolute_expires_at=absolute_expires_at,
+    ),))
+    service = sessions.PostgresAuthSessionService(
+        _config(idle_seconds=30 * 24 * 60 * 60, absolute_seconds=90 * 24 * 60 * 60),
+        connect=lambda _url: connection,
+        clock=lambda: NOW + elapsed,
+    )
+
+    result = service.resolve_session(RAW_TOKEN)
+
+    assert (result is not None) is authorized
+    updates = [
+        (sql, params) for sql, params in connection.operations
+        if sql.startswith("update app.account_sessions")
+    ]
+    if authorized:
+        renewed_idle_expiry = NOW + elapsed + timedelta(days=30)
+        assert result.absolute_expires_at == absolute_expires_at
+        assert result.idle_expires_at == renewed_idle_expiry
+        assert len(updates) == 1
+        assert renewed_idle_expiry in updates[0][1]
+    else:
+        assert updates == []
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "authorized"),
+    [
+        (timedelta(days=75), True),
+        (timedelta(days=90) - timedelta(microseconds=1), True),
+        (timedelta(days=90), False),
+        (timedelta(days=90, microseconds=1), False),
+    ],
+)
+def test_recent_activity_cannot_extend_ninety_day_absolute_boundary(
+    sessions, elapsed, authorized
+):
+    absolute_expires_at = NOW + timedelta(days=90)
+    connection = RecordingConnection(session_rows=(_resolved_row(
+        created_at=NOW,
+        authenticated_at=NOW,
+        last_seen_at=NOW + timedelta(days=70),
+        idle_expires_at=absolute_expires_at,
+        absolute_expires_at=absolute_expires_at,
+    ),))
+    service = sessions.PostgresAuthSessionService(
+        _config(idle_seconds=30 * 24 * 60 * 60, absolute_seconds=90 * 24 * 60 * 60),
+        connect=lambda _url: connection,
+        clock=lambda: NOW + elapsed,
+    )
+
+    result = service.resolve_session(RAW_TOKEN)
+
+    assert (result is not None) is authorized
+    updates = [
+        (sql, params) for sql, params in connection.operations
+        if sql.startswith("update app.account_sessions")
+    ]
+    if authorized:
+        assert result.idle_expires_at == absolute_expires_at
+        assert result.absolute_expires_at == absolute_expires_at
+        assert len(updates) == 1
+        assert absolute_expires_at in updates[0][1]
+        assert "absolute_expires_at" not in updates[0][0].split(" where ")[0]
+    else:
+        assert updates == []
+
+
+@pytest.mark.parametrize(
+    "invalid_field", ["idle_expires_at", "absolute_expires_at", "revoked_at"]
+)
+def test_longer_policy_does_not_revive_expired_or_revoked_sessions(
+    sessions, invalid_field
+):
+    connection = RecordingConnection(session_rows=(_resolved_row(
+        **{invalid_field: NOW}
+    ),))
+    service = _service(
+        sessions, connection,
+        idle_seconds=30 * 24 * 60 * 60,
+        absolute_seconds=90 * 24 * 60 * 60,
+    )
+
+    assert service.resolve_session(RAW_TOKEN) is None
+    assert not any(sql.startswith("update app.account_sessions") for sql in _sql(connection))
+
+
+def test_longer_policy_preserves_existing_absolute_expiry(sessions):
+    old_expiry = NOW + timedelta(days=6)
+    connection = RecordingConnection(session_rows=(_resolved_row(
+        absolute_expires_at=old_expiry
+    ),))
+    service = _service(
+        sessions, connection,
+        idle_seconds=30 * 24 * 60 * 60,
+        absolute_seconds=90 * 24 * 60 * 60,
+    )
+
+    result = service.resolve_session(RAW_TOKEN)
+
+    assert result.absolute_expires_at == old_expiry
+    assert result.idle_expires_at == old_expiry
+    update = next(
+        (sql, params) for sql, params in connection.operations
+        if sql.startswith("update app.account_sessions")
+    )
+    assert old_expiry in update[1]
+    assert "absolute_expires_at" not in update[0].split(" where ")[0]
 
 
 def test_resolve_writes_activity_at_threshold_and_clamps_idle_to_absolute(sessions):

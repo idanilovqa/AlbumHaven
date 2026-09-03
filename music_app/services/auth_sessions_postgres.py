@@ -11,6 +11,7 @@ import hmac
 from typing import Any
 import unicodedata
 
+from music_app.services.auth_config import SESSION_ABSOLUTE_SECONDS, SESSION_IDLE_SECONDS
 from music_app.services.auth_tokens import (
     IssuedOpaqueToken,
     hash_opaque_token,
@@ -125,12 +126,15 @@ class PostgresAuthSessionService:
             )
         session = payload.get("session")
         session_policy = session if isinstance(session, Mapping) else {}
-        self._idle_seconds = _positive_integer(
-            session_policy.get("idle_seconds", 12 * 60 * 60), "idle lifetime"
-        )
         self._absolute_seconds = _positive_integer(
-            session_policy.get("absolute_seconds", 7 * 24 * 60 * 60),
+            session_policy.get("absolute_seconds", SESSION_ABSOLUTE_SECONDS),
             "absolute lifetime",
+        )
+        self._idle_seconds = _positive_integer(
+            session_policy.get(
+                "idle_seconds", min(SESSION_IDLE_SECONDS, self._absolute_seconds)
+            ),
+            "idle lifetime",
         )
         self._activity_seconds = _positive_integer(
             session_policy.get("activity_write_seconds", 5 * 60),

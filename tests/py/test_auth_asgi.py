@@ -81,16 +81,20 @@ class FakePreAuth:
 
 
 class FakeLogin:
-    def __init__(self, outcome=LoginOutcome.INVALID):
+    def __init__(self, outcome=LoginOutcome.INVALID, *, absolute_seconds=90 * 24 * 60 * 60):
         self.outcome = outcome
         self.calls = []
+        self.absolute_seconds = absolute_seconds
+        self.idle_seconds = 30 * 24 * 60 * 60
 
     def authenticate(self, **kwargs):
         self.calls.append(kwargs)
         if self.outcome is LoginOutcome.SUCCESS:
             from datetime import datetime, timedelta, timezone
             now = datetime.now(timezone.utc)
-            session = IssuedBrowserSession(SESSION, 8, 41, now, now + timedelta(hours=12), now + timedelta(days=7))
+            expires_at = now + timedelta(seconds=self.absolute_seconds)
+            idle_expires_at = now + timedelta(seconds=self.idle_seconds)
+            session = IssuedBrowserSession(SESSION, 8, 41, now, idle_expires_at, expires_at)
             return LoginResult(LoginOutcome.SUCCESS, 41, True, session)
         return LoginResult(self.outcome)
 
@@ -915,6 +919,47 @@ def test_success_consumes_then_authenticates_sets_unrelated_session_and_clears_p
     assert matches_session_csrf(
         SESSION,
         parsed["__Host-album_haven_csrf"].value,
+        app.state.auth_policy_config,
+    )
+
+
+@pytest.mark.parametrize(
+    ("idle_seconds", "absolute_seconds"),
+    [(30 * 24 * 60 * 60, 90 * 24 * 60 * 60), (30 * 60, 60 * 60)],
+)
+def test_success_persists_session_and_csrf_for_issued_absolute_lifetime(
+    auth_asgi, idle_seconds, absolute_seconds
+):
+    app, _, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
+    login.absolute_seconds = absolute_seconds
+    login.idle_seconds = idle_seconds
+    # The issued session remains authoritative even if configured limits are longer.
+    app.state.auth_policy_config["session"] = {
+        "idle_seconds": 30 * 24 * 60 * 60,
+        "absolute_seconds": 90 * 24 * 60 * 60,
+        "activity_write_seconds": 300,
+    }
+
+    status, headers, _ = _request(
+        app, "POST", form=_valid_form(), headers=_valid_headers()
+    )
+
+    assert status == 303
+    cookies = SimpleCookie()
+    for header in _set_cookies(headers):
+        cookies.load(header)
+    for name in (SESSION_COOKIE, "__Host-album_haven_csrf"):
+        cookie = cookies[name]
+        assert cookie["max-age"] == str(absolute_seconds)
+        assert cookie["secure"]
+        assert cookie["samesite"].lower() == "lax"
+        assert cookie["path"] == "/"
+        assert cookie["domain"] == ""
+    assert cookies[SESSION_COOKIE]["httponly"]
+    assert not cookies["__Host-album_haven_csrf"]["httponly"]
+    assert matches_session_csrf(
+        cookies[SESSION_COOKIE].value,
+        cookies["__Host-album_haven_csrf"].value,
         app.state.auth_policy_config,
     )
 

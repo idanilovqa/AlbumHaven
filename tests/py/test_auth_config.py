@@ -105,8 +105,8 @@ def test_auth_defaults_normalize_bootstrap_identity_and_lock_security_policy(con
         "max_utf8_bytes": 1_024,
     }
     assert config["session"] == {
-        "idle_seconds": 12 * 60 * 60,
-        "absolute_seconds": 7 * 24 * 60 * 60,
+        "idle_seconds": 30 * 24 * 60 * 60,
+        "absolute_seconds": 90 * 24 * 60 * 60,
         "activity_write_seconds": 5 * 60,
     }
     assert config["reset_token_seconds"] == 30 * 60
@@ -422,8 +422,8 @@ def test_auth_cookie_defaults_are_host_only_secure_and_http_only(contracts):
         ("ALBUM_HAVEN_PASSWORD_MIN_CODEPOINTS", "7"),
         ("ALBUM_HAVEN_PASSWORD_MAX_CODEPOINTS", "257"),
         ("ALBUM_HAVEN_PASSWORD_MAX_UTF8_BYTES", "1025"),
-        ("ALBUM_HAVEN_SESSION_IDLE_SECONDS", str(13 * 60 * 60)),
-        ("ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS", str(8 * 24 * 60 * 60)),
+        ("ALBUM_HAVEN_SESSION_IDLE_SECONDS", str(30 * 24 * 60 * 60 + 1)),
+        ("ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS", str(90 * 24 * 60 * 60 + 1)),
         ("ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS", str(4 * 60)),
         ("ALBUM_HAVEN_RESET_TOKEN_SECONDS", str(31 * 60)),
         ("ALBUM_HAVEN_INVITATION_TOKEN_SECONDS", str(60 * 60 - 1)),
@@ -438,6 +438,44 @@ def test_auth_config_rejects_values_weaker_than_the_locked_policy(
 
     with pytest.raises(ValueError, match=env_key):
         auth_config.build_auth_config(_auth_env(**{env_key: value}))
+
+
+@pytest.mark.parametrize(
+    ("idle_seconds", "absolute_seconds"),
+    [
+        (30 * 24 * 60 * 60, 90 * 24 * 60 * 60),
+        (12 * 60 * 60, 7 * 24 * 60 * 60),
+        (30 * 60, 60 * 60),
+    ],
+)
+def test_auth_config_accepts_thirty_day_idle_ninety_day_absolute_limits_and_shorter_policies(
+    contracts, idle_seconds, absolute_seconds
+):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(
+        _auth_env(
+            ALBUM_HAVEN_SESSION_IDLE_SECONDS=str(idle_seconds),
+            ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS=str(absolute_seconds),
+        )
+    )
+
+    assert config["session"]["idle_seconds"] == idle_seconds
+    assert config["session"]["absolute_seconds"] == absolute_seconds
+
+
+@pytest.mark.parametrize(("absolute_days", "expected_idle_days"), [(7, 7), (60, 30)])
+def test_auth_config_caps_implicit_idle_at_explicit_absolute_lifetime(
+    contracts, absolute_days, expected_idle_days
+):
+    auth_config, _ = contracts
+
+    config = auth_config.build_auth_config(
+        _auth_env(ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS=str(absolute_days * 24 * 60 * 60))
+    )
+
+    assert config["session"]["idle_seconds"] == expected_idle_days * 24 * 60 * 60
+    assert config["session"]["absolute_seconds"] == absolute_days * 24 * 60 * 60
 
 
 def test_auth_config_accepts_eight_character_password_floor(contracts):

@@ -9,6 +9,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
+SESSION_IDLE_SECONDS = 30 * 24 * 60 * 60
+SESSION_ABSOLUTE_SECONDS = 90 * 24 * 60 * 60
+
+
 _ARGON2_DEFAULTS = {
     "memory_cost": 65_536,
     "time_cost": 3,
@@ -290,21 +294,22 @@ def build_auth_config(env: Mapping[str, str]) -> dict[str, Any]:
             "minimum password length"
         )
 
+    absolute_seconds = _integer(
+        env,
+        "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
+        SESSION_ABSOLUTE_SECONDS,
+        minimum=1,
+        maximum=SESSION_ABSOLUTE_SECONDS,
+    )
     session = {
         "idle_seconds": _integer(
             env,
             "ALBUM_HAVEN_SESSION_IDLE_SECONDS",
-            43_200,
+            min(SESSION_IDLE_SECONDS, absolute_seconds),
             minimum=1,
-            maximum=43_200,
+            maximum=SESSION_IDLE_SECONDS,
         ),
-        "absolute_seconds": _integer(
-            env,
-            "ALBUM_HAVEN_SESSION_ABSOLUTE_SECONDS",
-            604_800,
-            minimum=1,
-            maximum=604_800,
-        ),
+        "absolute_seconds": absolute_seconds,
         "activity_write_seconds": _integer(
             env,
             "ALBUM_HAVEN_SESSION_ACTIVITY_WRITE_SECONDS",

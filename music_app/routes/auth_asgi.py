@@ -408,10 +408,14 @@ async def post_login(request: Request) -> Response:
             return_to=payload.get("return_to"),
         )
 
+    session_lifetime_seconds = int(
+        (result.session.absolute_expires_at - result.session.authenticated_at).total_seconds()
+    )
     response = RedirectResponse(_safe_return_path(payload.get("return_to")), status_code=303)
     response.set_cookie(
         _SESSION_COOKIE,
         result.session.raw_token,
+        max_age=session_lifetime_seconds,
         httponly=True,
         secure=secure,
         samesite="lax",
@@ -420,6 +424,7 @@ async def post_login(request: Request) -> Response:
     response.set_cookie(
         _SESSION_CSRF_COOKIE,
         issue_session_csrf(result.session.raw_token, config),
+        max_age=session_lifetime_seconds,
         httponly=False,
         secure=secure,
         samesite="lax",

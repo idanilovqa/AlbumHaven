@@ -13,9 +13,10 @@
 - Preserve the owner-locked AudioWorklet, PCM WebSocket, decoder, seeking, and waveform architecture.
 - Keep Previous and Next visible only in compact mode.
 - Keep the waveform 56px high.
-- Align the expanded waveform and Play/Pause centers within 1px.
+- Align the expanded collapse chevron, artwork, and Play/Pause centers with the player centerline within 1px.
+- Keep the waveform and metadata geometry unchanged from the approved 92px layout.
 - Keep 4–6px between metadata and the waveform, about 6px below the lowest child, and 6–8px above the metadata text.
-- Start from 108px player height and remove only unused top space after the alignment rules pass.
+- Keep the approved 92px player height and its existing top and bottom padding.
 - Preserve native button semantics, accessible names, disabled behavior, keyboard activation, focus treatment, playback, queue, seek, loop, artwork, compact-mode, and saved-loop behavior.
 - Web desktop is required. Tauri uses the web implementation. Native Android, TV, and Apple renderers remain outside this slice.
 - Preserve all unrelated uncommitted work. Do not stage or commit overlapping implementation files as part of this run.
@@ -134,20 +135,21 @@ Have `compactPlayerElements()` find the compact component root and call `getPlay
 
 Run the same four-file Node command. Expected: all tests pass.
 
-### Task 4: Tighten and align the expanded player
+### Task 4: Tighten the expanded player and separate its centerlines
 
 **Files:**
+- Modify: `music_app/templates/index.html`
 - Modify: `music_app/static/css/runtime/non-album-and-player.css`
 - Modify: `tests/js/runtime/player-and-waveform.test.js`
 - Modify: `tests/js/runtime/playback-control-cluster.test.js`
 
 **Interfaces:**
 - Consumes: `.playback-control-cluster--expanded`, `.player-meta`, `.player-time`, and `.player-timeline-wrap`.
-- Produces: component-owned positioning plus measurable expanded-player spacing variables.
+- Produces: a `.player-controls` layout root centered independently from `.player-main`.
 
 - [ ] **Step 1: Add failing layout contracts**
 
-Require the expanded player to define explicit layout variables for waveform height `56px`, bottom clearance near `6px`, metadata gap from `4px` through `6px`, and top clearance from `6px` through `8px`. Require artwork, expanded component root, and waveform row to share one centerline without separate positive margins. Require compact and saved-loop variants to keep their current dimensions.
+Require `index.html` to render one `.player-controls` wrapper containing the collapse chevron, artwork button, and expanded `PlaybackControlCluster`, with `.player-main` as its sibling. Require CSS to span the controls wrapper across the player height, vertically center its visible children, and leave `.player-main` rows, waveform height, and player spacing variables unchanged. Require compact and saved-loop markup to keep its current structure and dimensions.
 
 - [ ] **Step 2: Run layout tests and confirm RED**
 
@@ -157,15 +159,15 @@ Run:
 node --test --test-concurrency=1 tests/js/runtime/player-and-waveform.test.js tests/js/runtime/playback-control-cluster.test.js
 ```
 
-Expected: FAIL against the current translated grid rows.
+Expected: FAIL because the three expanded controls remain separate grid children and no `.player-controls` root exists.
 
-- [ ] **Step 3: Implement the aligned grid**
+- [ ] **Step 3: Implement the independent controls centerline**
 
-Use player-level custom properties for the approved clearances and waveform height. Replace independent negative Y transforms with a two-row metadata/waveform layout. Place artwork and `.playback-control-cluster--expanded` on the waveform row centerline. Keep the time in the metadata row. Keep the waveform, range input, loop surface, and idle backdrop at `56px`.
+Wrap the collapse button, artwork button, and expanded `PlaybackControlCluster` in `.player-controls`. Make `.player-shell` a two-column grid with `.player-controls` and `.player-main`. Make `.player-controls` a full-height flex row with vertically centered children. Position the collapse chevron relative to that wrapper. Remove the artwork and playback cluster grid-row assignments. Do not change `.player-main`, waveform, range input, loop surface, idle backdrop, player height, or player padding.
 
-- [ ] **Step 4: Reduce unused height only when the grid leaves excess top space**
+- [ ] **Step 4: Verify the preserved waveform geometry**
 
-Calculate the fixed player height from top padding, metadata line, metadata gap, waveform height, and bottom padding. Keep `108px` if those values consume the height; otherwise reduce `--player-height` by the unused top excess while retaining the approved ranges.
+Confirm the layout still uses `--player-height: 92px`, `--player-waveform-height: 56px`, `--player-top-clearance: 7px`, `--player-metadata-gap: 4px`, and `--player-bottom-clearance: 6px`. Confirm compact-player selectors and markup remain unchanged.
 
 - [ ] **Step 5: Rerun layout tests and confirm GREEN**
 
@@ -214,6 +216,6 @@ Expected: no whitespace errors.
 
 - [ ] **Step 4: Record evidence and manual checks**
 
-Record the test command and result in the component record. Set implementation status to `implemented_for_manual_review`. Manual checks: expanded Play/Pause and waveform centers, metadata gap, top and bottom clearance, paused/playing state, loop enter/save/cancel, compact Previous/Next, saved-loop Play/Pause and loop actions, and expanded/compact transitions.
+Record the test command and result in the component record. Set implementation status to `implemented_for_manual_review`. Manual checks: expanded chevron/artwork/Play-Pause centerline, unchanged waveform and metadata placement, paused/playing state, loop enter/save/cancel, compact Previous/Next, saved-loop Play/Pause and loop actions, and expanded/compact transitions.
 
 Do not run full JavaScript, Python, functional E2E, or performance suites in this focused implementation pass. The branch remains in its larger manual-acceptance workflow.

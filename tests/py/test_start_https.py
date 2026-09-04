@@ -88,6 +88,7 @@ def test_main_loads_config_and_launches_only_when_requested(certificate_dir, mon
         assert calls[0][1]["factory"] is True
         assert calls[0][1]["port"] == 5443
         assert calls[0][1]["proxy_headers"] is False
+        assert calls[0][1]["timeout_graceful_shutdown"] == 5
 
 
 def test_main_missing_certificate_returns_clean_error(tmp_path, monkeypatch, capsys):

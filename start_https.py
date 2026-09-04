@@ -7,6 +7,9 @@ import ssl
 import sys
 
 
+GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 5
+
+
 def build_https_options(data_dir: Path, port: int) -> dict[str, object]:
     if not 1 <= port <= 65535:
         raise ValueError("MUSIC_APP_PORT must be a port between 1 and 65535.")
@@ -63,7 +66,12 @@ def main(argv=None) -> int:
     print("Using existing trusted-server.pem and trusted-server-key.pem. Press Ctrl+C to stop.", flush=True)
     import uvicorn
 
-    uvicorn.run("music_app:create_asgi_app", factory=True, **options)
+    uvicorn.run(
+        "music_app:create_asgi_app",
+        factory=True,
+        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+        **options,
+    )
     return 0
 
 

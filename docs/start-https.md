@@ -7,7 +7,11 @@ python start_https.py
 ```
 
 Stop any existing Album Haven process using the same port first. Stop this
-server with Ctrl+C. Use HTTPS, not HTTP, on the selected port.
+server with one Ctrl+C. Use HTTPS, not HTTP, on the selected port. The launcher
+allows active requests up to five seconds to drain; after that Uvicorn cancels
+the remaining request tasks and runs the application's normal shutdown cleanup.
+This bound prevents active cover requests or browser connections from leaving
+the process waiting indefinitely.
 
 This is the single-file version of the direct Uvicorn/mkcert command. It reads
 the repository's `.env` through normal configuration, uses `MUSIC_APP_PORT`

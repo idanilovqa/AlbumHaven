@@ -57,7 +57,7 @@
 }
 .app-bar .toolbar-left,
 .app-bar .toolbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.app-bar .toolbar-left { margin: 0; padding-left: 24px; }
+.app-bar .toolbar-left { margin: 0; padding-left: 0; }
 .app-bar .toolbar-right { padding-left: 20px; flex-wrap: nowrap; }
 .app-bar .search-input-wrap { width: 360px; min-width: 0; flex: 0 1 360px; }
 .app-bar input[type='search'] {
@@ -91,6 +91,9 @@
   --search-field-hover: var(--app-active);
   --search-field-focus: #72baff;
   font-size: 12px;
+}
+.app-bar .search-field .search-field-control > input[type='search'] {
+  padding-right: 0;
 }
 
 .shell-navigation-rail,

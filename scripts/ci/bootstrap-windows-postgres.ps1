@@ -18,6 +18,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 $allowedHosts = @('localhost', '127.0.0.1', '::1')
 $requiredExecutables = @('postgres.exe', 'psql.exe', 'pg_isready.exe')
 

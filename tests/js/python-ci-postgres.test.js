@@ -41,6 +41,7 @@ test('Python CI provisions and tears down an exact disposable PostgreSQL 17 data
 });
 
 test('schema-only bootstrap skips only fixture loading and preserves migrations and privilege probes', () => {
+  assert.match(bootstrap, /Import-Module\s+Microsoft\.PowerShell\.Utility\s+-ErrorAction\s+Stop/);
   assert.match(bootstrap, /\[switch\]\$SkipFixtureLoad/);
   assert.match(
     bootstrap,

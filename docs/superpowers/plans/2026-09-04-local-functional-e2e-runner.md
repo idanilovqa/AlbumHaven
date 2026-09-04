@@ -31,7 +31,7 @@
 - Consumes: `tests/ci/functional-shards.json`, `scripts/ci/validate-functional-shards.cjs`, `scripts/ci/bootstrap-windows-postgres.ps1`.
 - Produces: `scripts/run-functional-e2e-local.ps1 -List`, `-Shard <name>`, `-Case <exact title>`, and `-All`.
 
-- [ ] **Step 1: Write failing list and source-contract tests**
+- [x] **Step 1: Write failing list and source-contract tests**
 
 Create a Node test that runs PowerShell with `-List`, verifies all four approved
 shards and exact case titles, and asserts the script contains the safety-critical
@@ -58,7 +58,7 @@ test('local functional runner owns setup, delegation, and teardown', () => {
 });
 ```
 
-- [ ] **Step 2: Run the test and verify RED**
+- [x] **Step 2: Run the test and verify RED**
 
 Run:
 
@@ -68,7 +68,7 @@ Run:
 
 Expected: FAIL because `scripts/run-functional-e2e-local.ps1` does not exist.
 
-- [ ] **Step 3: Implement parameter validation and list mode**
+- [x] **Step 3: Implement parameter validation and list mode**
 
 Add a strict parameter set with mutually exclusive `-List`, `-All`, and
 `-Shard`; allow `-Case` only with or without `-Shard`, resolving an omitted shard
@@ -85,7 +85,7 @@ param(
 )
 ```
 
-- [ ] **Step 4: Implement isolated local orchestration**
+- [x] **Step 4: Implement isolated local orchestration**
 
 Resolve Node, Python, PostgreSQL 18 binaries, fixture distribution, and pgpass.
 Validate `manifest.json` release and the expanded `profiles/functional-core`
@@ -107,13 +107,13 @@ clear secret/runtime variables, validate the temp root prefix and parent, and
 remove it on success. On failure retain only the report/output subtree after all
 database, role, process, and fixture cleanup is complete.
 
-- [ ] **Step 5: Run the focused contract test and verify GREEN**
+- [x] **Step 5: Run the focused contract test and verify GREEN**
 
 Run the Step 2 command.
 
 Expected: all tests pass and list mode performs no provisioning.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```powershell
 git add -- scripts/run-functional-e2e-local.ps1 tests/js/run-functional-e2e-local.test.js
@@ -131,7 +131,7 @@ git commit -m "test: add safe local functional e2e runner"
 - Consumes: Task 1 PowerShell parameter contract.
 - Produces: npm aliases `test:e2e:functional:local:list`, `test:e2e:functional:local`, and documented argument forwarding.
 
-- [ ] **Step 1: Add failing npm and documentation contract tests**
+- [x] **Step 1: Add failing npm and documentation contract tests**
 
 Assert that package scripts call only the new PowerShell entry point, that the
 guide includes list/case/shard/all examples, and that it explicitly requires the
@@ -147,13 +147,13 @@ assert.match(guide, /npm run test:e2e:functional:local -- -Shard gallery-search-
 assert.match(guide, /Do not.*run-playwright\.cjs/is);
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run the Task 1 test command.
 
 Expected: FAIL because the npm aliases and guide do not exist.
 
-- [ ] **Step 3: Add npm aliases and the guide**
+- [x] **Step 3: Add npm aliases and the guide**
 
 Add:
 
@@ -165,13 +165,13 @@ Add:
 Document prerequisites, fixture location/release, PostgreSQL host and pgpass
 behavior, exact commands, output retention, teardown, and troubleshooting.
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the Task 1 test command.
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```powershell
 git add -- package.json docs/local-functional-e2e.md tests/js/run-functional-e2e-local.test.js
@@ -187,7 +187,7 @@ git commit -m "docs: publish local functional e2e commands"
 - Consumes: Task 2 npm command surface.
 - Produces: verified local focused E2E execution and residue audit.
 
-- [ ] **Step 1: Run command and parity contracts**
+- [x] **Step 1: Run command and parity contracts**
 
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' --test --test-concurrency=1 tests/js/run-functional-e2e-local.test.js tests/js/validate-functional-shards.test.js
@@ -196,7 +196,7 @@ git commit -m "docs: publish local functional e2e commands"
 
 Expected: zero failures and zero production-path violations.
 
-- [ ] **Step 2: Run one real focused case through the npm alias**
+- [x] **Step 2: Run one real focused case through the npm alias**
 
 ```powershell
 npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
@@ -205,7 +205,7 @@ npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on 
 Expected: the command resolves `gallery-search-visual`, provisions the isolated
 fixture, reports one passed Playwright test, and tears down PostgreSQL state.
 
-- [ ] **Step 3: Audit owned residue**
+- [x] **Step 3: Audit owned residue**
 
 Verify no invocation-prefixed temp roots, database/roles, application/browser
 processes, or selected port listeners remain. Do not inspect or terminate
@@ -218,7 +218,7 @@ Get-ChildItem ([IO.Path]::GetTempPath()) -Directory -Filter 'album-haven-functio
 Expected: no successful-run temp roots and zero task-owned database, role,
 process, or port records.
 
-- [ ] **Step 4: Run diff and focused regression checks**
+- [x] **Step 4: Run diff and focused regression checks**
 
 ```powershell
 git diff --check -- package.json scripts/run-functional-e2e-local.ps1 docs/local-functional-e2e.md tests/js/run-functional-e2e-local.test.js
@@ -227,7 +227,7 @@ git diff --check -- package.json scripts/run-functional-e2e-local.ps1 docs/local
 
 Expected: zero diff errors and all focused Node tests pass.
 
-- [ ] **Step 5: Commit verification fixes if any**
+- [x] **Step 5: Commit verification fixes if any**
 
 If Step 2 or Step 3 required a test-first correction, stage only the files in
 this plan and commit them:

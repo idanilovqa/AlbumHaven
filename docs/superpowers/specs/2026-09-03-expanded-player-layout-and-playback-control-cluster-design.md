@@ -2,11 +2,11 @@
 
 ## Approved outcome
 
-Album Haven will tighten the expanded bottom player around its title, time, waveform, artwork, and playback controls. The waveform center will match the expanded Play/Pause button center. The title and time will sit closer to the waveform. The player will keep about 6px of clearance below its lowest visible element and 6–8px above the text. The implementation will start from the current 108px height and remove any height that remains unused above the text after alignment.
+Album Haven will tighten the expanded bottom player around its title, time, waveform, artwork, and playback controls. The title and time will sit close to the waveform. The player will keep about 6px of clearance below its lowest visible element and 6–8px above the text. The implementation will start from the current 108px height and remove any height that remains unused above the text after alignment.
 
 Album Haven will also replace the player’s separate playback-control markup with one reusable `PlaybackControlCluster` component. The component owns its buttons, loop-action area, layout, state hooks, and accessibility contract. Player layouts select a component variant instead of attaching buttons or action pods around a standalone Play/Pause button.
 
-The owner approved this design from the current-player screenshot and the written layout criteria on 2026-09-03.
+The owner approved this design from the current-player screenshot and the written layout criteria on 2026-09-03. After reviewing the first implementation, the owner approved a revision that separates the waveform centerline from the controls centerline.
 
 ## Component boundary
 
@@ -32,27 +32,34 @@ The current web stack needs matching JavaScript and Jinja render paths because t
 
 ## Expanded player layout
 
-The expanded player uses one vertical composition for metadata and waveform:
+The expanded player uses two sibling layout regions:
+
+- `.player-controls` contains the collapse chevron, artwork, and expanded `PlaybackControlCluster`. It spans the expanded player height and centers its children on the player centerline.
+- `.player-main` contains metadata, time, and waveform. It keeps the approved lower waveform placement.
+
+The resulting composition is:
 
 ```text
 top clearance: 6–8px
 title / album                                      elapsed / duration
 gap: 4–6px
-artwork   [ PlaybackControlCluster ]   waveform, 56px high
+centered controls                      waveform, 56px high
 bottom clearance: about 6px
 ```
 
 The layout must satisfy these measurable rules at the reference desktop width:
 
-- The waveform’s vertical center and the Play/Pause circle’s vertical center differ by no more than 1px.
+- The collapse chevron, artwork, and Play/Pause circle share the expanded player centerline within 1px.
 - The waveform remains 56px high.
 - The metadata row ends 4–6px above the waveform’s visible top edge.
 - The player’s lowest visible child ends about 6px above the player’s bottom edge.
 - The player leaves 6–8px between its top edge and the metadata text box.
 
-The implementation will first align and position the content within the current 108px player. If the top clearance exceeds 8px after the other rules pass, the implementation will reduce `--player-height` by that excess. It will not shrink the waveform, Play/Pause target, artwork target, text line height, or bottom clearance to reach a smaller height.
+The first implementation reduced the player from 108px to 92px after removing unused top space. This revision keeps that height and the existing padding. It changes only the controls centerline.
 
-Artwork and the expanded control cluster share the waveform center line. The title and time move as one metadata row so their baselines remain aligned. Loop edit handles and the range surface continue to use the waveform’s full height and follow the same vertical placement.
+The waveform centerline remains lower than the controls centerline because metadata occupies the row above it. The title and time remain one metadata row so their baselines stay aligned. Loop edit handles and the range surface continue to use the waveform’s full height and current vertical placement.
+
+`.player-controls` is an expanded-player layout component, not a second playback state owner. The existing `PlaybackControlCluster` remains the reusable owner of Play/Pause and loop buttons. `.player-controls` groups the collapse chevron, artwork, and playback cluster so they cannot drift onto separate vertical alignment rules.
 
 Compact-player dimensions and visible controls do not change in this layout pass. Previous and Next remain visible only in compact mode.
 
@@ -80,7 +87,9 @@ Focused source and component tests will prove:
 - saved-loop mode renders Play/Pause plus its loop actions without Previous or Next;
 - external player markup no longer mounts transport or loop controls around the component;
 - component state preserves accessible names, disabled semantics, and action callbacks;
-- the expanded waveform and Play/Pause centers differ by no more than 1px;
+- the expanded `.player-controls` wrapper contains the collapse chevron, artwork, and `PlaybackControlCluster`;
+- the controls wrapper and its visible children use the expanded player centerline;
+- the metadata and waveform geometry remains unchanged from the approved 92px layout;
 - metadata-to-waveform, top, and bottom spacing meet the approved ranges;
 - the waveform remains 56px high; and
 - existing playback, waveform, loop, compact-player, and generated-bundle contracts pass their focused suites.

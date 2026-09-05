@@ -256,7 +256,11 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
-            _execute_pipeline_batches(connection, _upsert_local_album_sql(), album_rows)
+            _execute_pipeline_batches(
+                connection,
+                _upsert_local_album_sql(preserve_existing_cover_authority=True),
+                album_rows,
+            )
             _execute_pipeline_batches(
                 connection,
                 _upsert_local_album_featured_artist_sql(),
@@ -2454,17 +2458,22 @@ def _increment_inventory_mutation_revision_sql() -> str:
         ),
         updated_library as (
           update library.libraries
-             set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
-               || jsonb_build_object(
-                    'inventory_mutation_revision',
-                    coalesce(
-                      nullif(
-                        library.libraries.metadata ->> 'inventory_mutation_revision',
-                        ''
-                      )::bigint,
-                      0
-                    ) + 1
-                  ),
+             set metadata = jsonb_set(
+                   coalesce(library.libraries.metadata, '{}'::jsonb)
+                   || jsonb_build_object(
+                        'inventory_mutation_revision',
+                        coalesce(
+                          nullif(
+                            library.libraries.metadata ->> 'inventory_mutation_revision',
+                            ''
+                          )::bigint,
+                          0
+                        ) + 1
+                      ),
+                   '{scan_cache,relation_projection,status}',
+                   to_jsonb('stale'::text),
+                   true
+                 ),
                  updated_at = now()
           from bootstrap_context
           where library.libraries.id = bootstrap_context.library_id
@@ -4720,8 +4729,28 @@ def _upsert_local_artist_sql() -> str:
     """
 
 
-def _upsert_local_album_sql() -> str:
-    return """
+def _upsert_local_album_sql(
+    *, preserve_existing_cover_authority: bool = False
+) -> str:
+    cover_path_update = (
+        """case
+                when library.local_albums.metadata ->> 'cover_selection_origin' = 'user'
+                then library.local_albums.cover_path
+                else excluded.cover_path
+              end"""
+        if preserve_existing_cover_authority
+        else "excluded.cover_path"
+    )
+    metadata_update = (
+        """library.local_albums.metadata || case
+                when library.local_albums.metadata ->> 'cover_selection_origin' = 'user'
+                then excluded.metadata - array['cover_revision', 'cover_selection_origin']
+                else excluded.metadata
+              end"""
+        if preserve_existing_cover_authority
+        else "library.local_albums.metadata || excluded.metadata"
+    )
+    return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -4759,9 +4788,9 @@ def _upsert_local_album_sql() -> str:
                 then library.local_albums.release_year
                 else excluded.release_year
               end,
-              cover_path = excluded.cover_path,
+              cover_path = {cover_path_update},
               last_seen_at = now(),
-              metadata = library.local_albums.metadata || excluded.metadata;
+              metadata = {metadata_update};
     """
 
 

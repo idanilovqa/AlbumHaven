@@ -126,8 +126,8 @@ Expected: PASS.
 - Modify: `music_app/static/css/app-chrome.css`
 - Modify: `music_app/static/css/runtime/album-details-components.css`
 - Modify: `music_app/static/js/runtime-bundle.js` (generated)
-- Modify: `C:/Repositories/album-haven-internal/docs/design-mockups/components/shared-button/v001/component-record.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/ui-component-system.md`
+- Modify: `../album-haven-internal/docs/design-mockups/components/shared-button/v001/component-record.md`
+- Modify: `../album-haven-internal/docs/ui-component-system.md`
 
 **Interfaces:**
 - Consumes: JavaScript `renderActionButton(options)` and Jinja `action_button(...)` from Task 2.

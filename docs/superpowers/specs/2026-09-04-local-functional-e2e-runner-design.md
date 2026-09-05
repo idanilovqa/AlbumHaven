@@ -39,10 +39,10 @@ writable roots before loading the PostgreSQL projection.
 
 Local PostgreSQL connections use `localhost`, not `127.0.0.1`, because the
 supported noninteractive local authentication entry is scoped to `localhost`.
-The process sets `PGPASSFILE` to
-`C:\Users\Rendref\AppData\Roaming\postgresql\pgpass.conf` when that file exists,
-while preserving an explicitly supplied `PGPASSFILE`. Missing authentication is
-reported as a setup error before Playwright starts.
+The process preserves an explicitly supplied `PGPASSFILE`; otherwise it resolves
+`postgresql\pgpass.conf` beneath the current user's standard application-data
+directory. Missing authentication is reported as a setup error before Playwright
+starts.
 
 The runner clears owner runtime paths before delegating to the existing shard
 runner. It never targets the owner's application process, database, library, or

@@ -26,12 +26,12 @@
 ### Task 1: Record the approved component artifact
 
 **Files:**
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/prompt.md`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/notes.md`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/review.json`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/component-record.md`
-- Copy: owner screenshot to `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/references/current-app-desktop.png`
-- Modify: `C:/Repositories/album-haven-internal/docs/ui-component-system.md`
+- Create: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/prompt.md`
+- Create: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/notes.md`
+- Create: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/review.json`
+- Create: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/component-record.md`
+- Copy: owner screenshot to `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/references/current-app-desktop.png`
+- Modify: `../album-haven-internal/docs/ui-component-system.md`
 
 **Interfaces:**
 - Consumes: approved spec `docs/superpowers/specs/2026-09-03-expanded-player-layout-and-playback-control-cluster-design.md` and owner screenshot `codex-clipboard-d5427b35-6f27-4c18-8f3d-8431415199f9.png`.
@@ -50,8 +50,8 @@ Append an `Approved current-web PlaybackControlCluster v001 extension` section t
 Run:
 
 ```powershell
-Get-Content -Raw C:\Repositories\album-haven-internal\docs\design-mockups\components\playback-control-cluster\v001\review.json | ConvertFrom-Json | Out-Null
-Test-Path C:\Repositories\album-haven-internal\docs\design-mockups\components\playback-control-cluster\v001\references\current-app-desktop.png
+Get-Content -Raw ..\album-haven-internal\docs\design-mockups\components\playback-control-cluster\v001\review.json | ConvertFrom-Json | Out-Null
+Test-Path ..\album-haven-internal\docs\design-mockups\components\playback-control-cluster\v001\references\current-app-desktop.png
 ```
 
 Expected: JSON parsing succeeds and `Test-Path` returns `True`.
@@ -177,8 +177,8 @@ Run the same two-file Node command. Expected: all tests pass.
 
 **Files:**
 - Regenerate: `music_app/static/js/runtime-bundle.js`
-- Modify: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/component-record.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/review.json`
+- Modify: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/component-record.md`
+- Modify: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v001/review.json`
 
 **Interfaces:**
 - Consumes: all completed component and layout changes.

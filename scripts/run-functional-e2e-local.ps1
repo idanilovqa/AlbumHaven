@@ -166,7 +166,13 @@ foreach ($requiredPath in @(
 
 $configuredPgpass = [Environment]::GetEnvironmentVariable('PGPASSFILE', 'Process')
 if ([string]::IsNullOrWhiteSpace($configuredPgpass)) {
-    $configuredPgpass = 'C:\Users\Rendref\AppData\Roaming\postgresql\pgpass.conf'
+    $applicationData = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::ApplicationData
+    )
+    if ([string]::IsNullOrWhiteSpace($applicationData)) {
+        throw 'Set PGPASSFILE because the current application-data directory could not be resolved.'
+    }
+    $configuredPgpass = Join-Path $applicationData 'postgresql\pgpass.conf'
 }
 if (-not (Test-Path -LiteralPath $configuredPgpass -PathType Leaf)) {
     throw "PostgreSQL password file was not found. Set PGPASSFILE or create: $configuredPgpass"

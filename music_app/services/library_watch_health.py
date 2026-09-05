@@ -239,7 +239,8 @@ class LibraryWatchHealthService:
             self._pending[root_id] = problem
         self._store.upsert(problem)
         with self._lock:
-            self._pending.pop(root_id, None)
+            if self._pending.get(root_id) is problem:
+                self._pending.pop(root_id, None)
         return True
 
     def load_problems(self) -> list[LibraryWatchHealthProblem]:

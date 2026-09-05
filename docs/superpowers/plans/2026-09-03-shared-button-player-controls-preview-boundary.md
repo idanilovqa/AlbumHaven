@@ -70,8 +70,8 @@
 ### Task 4: Registry, bundle, and aggregate verification
 
 **Files:**
-- Modify: `C:/Repositories/album-haven-internal/docs/ui-component-system.md`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/components/shared-button/v001/component-record.md`
+- Modify: `../album-haven-internal/docs/ui-component-system.md`
+- Create: `../album-haven-internal/docs/design-mockups/components/shared-button/v001/component-record.md`
 - Regenerate: `music_app/static/js/runtime-bundle.js`
 
 **Interfaces:**

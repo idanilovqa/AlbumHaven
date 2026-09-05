@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from asyncio import sleep as _sleep
 import hmac
 import ipaddress
 import threading
 from collections.abc import Mapping
 from inspect import isawaitable
 from pathlib import Path
+from time import monotonic as _monotonic
 from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import uuid4
 
@@ -63,6 +65,7 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _FORM_CONTENT_TYPE = "application/x-www-form-urlencoded"
 _MAXIMUM_BODY_BYTES = 8_192
+_PUBLIC_RECOVERY_MINIMUM_SECONDS = 0.5
 _FALLBACK_TEMPLATES = Jinja2Templates(
     directory=str(Path(__file__).resolve().parent.parent / "templates")
 )
@@ -473,6 +476,7 @@ async def post_forgot_password(
     request: Request,
     background_tasks: BackgroundTasks,
 ) -> Response:
+    started_at = _monotonic()
     try:
         config = _policy_config(request)
     except Exception:
@@ -513,6 +517,7 @@ async def post_forgot_password(
     except Exception:
         result = None
 
+    await _pad_public_recovery_response(started_at)
     delivery = getattr(result, "delivery", None)
     if delivery is not None:
         background_tasks.add_task(_deliver_password_reset, request.app, delivery)
@@ -526,6 +531,12 @@ async def post_forgot_password(
         samesite="lax",
     )
     return _no_store(response)
+
+
+async def _pad_public_recovery_response(started_at: float) -> None:
+    remaining = _PUBLIC_RECOVERY_MINIMUM_SECONDS - (_monotonic() - started_at)
+    if remaining > 0:
+        await _sleep(remaining)
 
 
 def _generic_recovery_bad_request() -> HTMLResponse:

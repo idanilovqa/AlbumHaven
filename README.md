@@ -84,7 +84,7 @@ values shown in `.env.example`, run this once from an interactive terminal:
 python scripts/bootstrap_auth_owner.py
 ```
 
-The command reads Rendref's password twice through the terminal's protected
+The command reads the configured bootstrap owner's password twice through the terminal's protected
 password prompt. It does not accept command-line arguments, redirected input,
 or a password environment variable. Password policy screening uses the free
 [Pwned Passwords range API](https://haveibeenpwned.com/API/v3): only the first
@@ -107,7 +107,7 @@ python scripts/break_glass_auth_owner.py
 ```
 
 The command accepts no arguments or password environment variable. It reads a
-new password twice through the protected terminal prompt, replaces the Rendref
+new password twice through the protected terminal prompt, replaces the bootstrap-owner
 credential, revokes active sessions and reset state, and records the emergency
 action in the security audit transaction. Use it only for owner lockout, not as
 the routine password-change path.

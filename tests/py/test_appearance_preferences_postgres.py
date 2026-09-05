@@ -22,6 +22,19 @@ EXTENDED_DEFAULTS = {
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
 }
+AGGREGATE_DEFAULTS = {
+    "revision": 0,
+    "interaction_overrides": {
+        "item_hover": None,
+        "item_selected": None,
+        "button_hover_background": None,
+        "button_pressed": None,
+        "item_outline": {"source": "automatic", "color": None},
+    },
+    "selection_accent": {"enabled": True, "color": "#34CA78"},
+    "player_style_override": None,
+    "player_recent_sets": [],
+}
 
 
 class Connection:
@@ -121,7 +134,10 @@ def test_repository_loads_only_the_requested_account_and_defaults_when_no_row_ex
 
     result = _repository(connection).load_preferences(account_id=41)
 
-    assert result == {**(row or DEFAULTS), **EXTENDED_DEFAULTS}
+    expected = {**(row or DEFAULTS), **EXTENDED_DEFAULTS}
+    if row is None:
+        expected.update(AGGREGATE_DEFAULTS)
+    assert result == expected
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "where account_id = %s" in sql or "where account_id=%s" in sql
@@ -143,6 +159,8 @@ def test_repository_saves_both_normalized_colors_in_one_account_owned_upsert():
     sql, params = connection.operations[0]
     assert "insert into app.user_appearance_preferences" in sql
     assert "on conflict (account_id, client_profile)" in sql
+    assert "revision" in sql
+    assert "revision = saved.revision + 1" in sql
     assert tuple(params) == (52, "desktop", "#12ABCD", "#FE019A")
     assert connection.closed
 
@@ -154,6 +172,22 @@ def test_repository_reset_writes_null_overrides_for_only_the_requested_account()
 
     assert len(connection.operations) == 1
     assert tuple(connection.operations[0][1]) == (41, "desktop", None, None)
+
+
+def test_legacy_palette_write_advances_the_aggregate_revision():
+    connection = Connection({**AGGREGATE_APPEARANCE, "revision": 8})
+    preferences = {
+        **DEFAULTS,
+        "palette_id": "steelblue",
+        "panel_index": 0,
+        "player_override": None,
+    }
+
+    _repository(connection).save_preferences(account_id=41, preferences=preferences)
+
+    sql, _params = connection.operations[0]
+    assert "revision" in sql
+    assert "revision = saved.revision + 1" in sql
 
 
 def aggregate_write(**changes):

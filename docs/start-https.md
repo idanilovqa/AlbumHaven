@@ -89,7 +89,7 @@ failed before the guard was implemented. The final run passed all 32 tests:
 python -m pytest tests/py/test_start_https.py tests/py/test_server_tls.py -q --tb=short
 ```
 
-`python C:\Repositories\album-haven-app\start_https.py --check` also passed
+`python .\start_https.py --check` also passed
 against the owner's existing pair from outside the repository. No real server
 was started or restarted for this validation. No certificate trust, accounts,
 database, or existing certificate files were changed.

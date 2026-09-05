@@ -244,7 +244,7 @@ git commit -m "test: cover player centerlines by seekbar mode"
 **Files:**
 - Regenerate: `music_app/static/js/runtime-bundle.js`
 - Modify: `docs/superpowers/plans/2026-09-05-player-centerline-mode-layout.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/design-mockups/components/playback-control-cluster/v002/review.json`
+- Modify: `../album-haven-internal/docs/design-mockups/components/playback-control-cluster/v002/review.json`
 
 **Interfaces:**
 - Consumes: completed source and component changes.
@@ -348,7 +348,7 @@ Stage only the four Task 4A paths and commit with `fix: add regular player botto
 - Modify: `tests/e2e/actions/globalPlayerActions.js`
 - Modify: `tests/e2e/specs/playerViewModes.spec.js`
 - Modify: `tests/ci/test-data-matrix.json`
-- Modify: `C:/Repositories/album-haven-internal/docs/functional-test-cases/bottom-player-and-playback.md`
+- Modify: `../album-haven-internal/docs/functional-test-cases/bottom-player-and-playback.md`
 
 **Interfaces:**
 - Produces: `GlobalPlayer.readExpandedGeometryCheckpoint(): object` and `GlobalPlayerActions.expectExpandedGeometry(mode): object`.

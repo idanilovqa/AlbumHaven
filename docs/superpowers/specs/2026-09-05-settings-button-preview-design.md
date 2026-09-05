@@ -17,4 +17,3 @@ The footer remains inside the existing preview frame and uses restrained spacing
 - A runtime markup test proves the preview uses the shared Button renderer, exposes the explanatory label, and does not attach save/cancel action attributes.
 - The existing focused Appearance and Button tests guard the surrounding behavior.
 - A focused Playwright component test verifies the preview buttons receive the live hover and focus outline styling.
-

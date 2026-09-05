@@ -282,7 +282,28 @@ def _account_id(value: object) -> int:
 
 def _preferences(row: object) -> dict[str, object]:
     if row is None:
-        return expand_appearance_preferences(dict.fromkeys(_FIELDS))
+        return expand_appearance_preferences({
+            **dict.fromkeys(_FIELDS),
+            "palette_id": None,
+            "panel_index": 0,
+            "player_override": None,
+            "waveform_recent_colors": [],
+            "compact_player_style": "docked",
+            "album_details_layout": "classic_bar",
+            "album_playing_row_animation": "enabled",
+            "alert_family": "ember",
+            "revision": 0,
+            "interaction_overrides": {
+                "item_hover": None,
+                "item_selected": None,
+                "button_hover_background": None,
+                "button_pressed": None,
+                "item_outline": {"source": "automatic", "color": None},
+            },
+            "selection_accent": {"enabled": True, "color": "#34CA78"},
+            "player_style_override": None,
+            "player_recent_sets": [],
+        })
     values = row if isinstance(row, Mapping) else dict(zip(_ROW_COLUMNS, row))
     player = {name: values.get(column) for name, column in zip(_PLAYER_FIELDS, _PLAYER_COLUMNS)}
     if set(_AGGREGATE_COLUMNS).issubset(values):
@@ -426,8 +447,8 @@ class PostgresAppearancePreferencesRepository:
                              excluded.waveform_recent_colors || saved.waveform_recent_colors
                              || array[saved.player_waveform_fill_color, saved.player_waveform_edge_color]),""" if updates else ""
             sql = f"""insert into app.user_appearance_preferences as saved
-                     (account_id, client_profile, main_surface_color, panel_background_color{history_column}{style_column})
-                   values (%s, %s, %s, %s{history_value}{style_value})
+                     (account_id, client_profile, main_surface_color, panel_background_color{history_column}{style_column}, revision)
+                   values (%s, %s, %s, %s{history_value}{style_value}, 1)
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,
                          panel_background_color = excluded.panel_background_color,
@@ -435,6 +456,7 @@ class PostgresAppearancePreferencesRepository:
                          panel_index = 0,
                          {history_update}
                          {style_update}
+                         revision = saved.revision + 1,
                          updated_at = now()
                    returning {_READ_COLUMNS}"""
             params = (owner, profile, colors["main_surface_color"], colors["panel_background_color"])
@@ -452,11 +474,11 @@ class PostgresAppearancePreferencesRepository:
                             %s::text[] as updates, %s::text as compact_player_style
                    )
                    insert into app.user_appearance_preferences as saved
-                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)})
+                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)}, revision)
                    select account_id, client_profile, main_surface_color, panel_background_color, palette_id, panel_index,
                           player_background_color, player_waveform_fill_color, player_waveform_edge_color,
                           app.merge_waveform_recent_colors(updates || array[player_waveform_fill_color, player_waveform_edge_color]),
-                          coalesce(compact_player_style, 'docked')
+                          coalesce(compact_player_style, 'docked'), 1
                      from incoming where true
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,
@@ -467,6 +489,7 @@ class PostgresAppearancePreferencesRepository:
                          player_waveform_fill_color = excluded.player_waveform_fill_color,
                          player_waveform_edge_color = excluded.player_waveform_edge_color,
                          compact_player_style = coalesce((select compact_player_style from incoming), saved.compact_player_style),
+                         revision = saved.revision + 1,
                          waveform_recent_colors = app.merge_waveform_recent_colors(
                            (select updates from incoming)
                            || case when excluded.player_waveform_fill_color is distinct from saved.player_waveform_fill_color

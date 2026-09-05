@@ -132,6 +132,16 @@ class TargetedLibraryReconciler:
         if not active_targets and not deleted_paths and not deleted_subtrees and not normalized_moves:
             return TargetedReconciliationResult(0, ())
 
+        expanded_targets: list[tuple[Path, dict[str, object]]] = []
+        for candidate, matched_root in active_targets:
+            expanded_targets.append((candidate, matched_root))
+            expanded_targets.extend(
+                (sibling, matched_root)
+                for sibling in self._supported_media_siblings(candidate)
+                if self._belongs_to_root(sibling, matched_root)
+            )
+        active_targets = expanded_targets
+
         folder_cover_cache: dict[str, object] = {}
         cover_metadata_cache: dict[
             str,
@@ -219,4 +229,19 @@ class TargetedLibraryReconciler:
             path
             for path in directory.rglob("*")
             if path.is_file() and path.suffix.casefold() in supported
+        )
+
+    def _supported_media_siblings(self, path: Path) -> tuple[Path, ...]:
+        supported = {
+            str(extension).casefold()
+            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
+        }
+        if not supported or not path.parent.is_dir():
+            return ()
+        return tuple(
+            sibling
+            for sibling in path.parent.iterdir()
+            if sibling != path
+            and sibling.is_file()
+            and sibling.suffix.casefold() in supported
         )

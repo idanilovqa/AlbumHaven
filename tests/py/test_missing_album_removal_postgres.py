@@ -146,6 +146,28 @@ def test_confirm_removal_preserves_album_when_owning_root_is_unavailable(tmp_pat
     assert ALBUM_KEY in _flatten_values(params)
 
 
+def test_confirm_removal_preserves_album_when_owning_watcher_is_unhealthy():
+    from music_app.services.missing_album_removal_postgres import (
+        MissingAlbumRootUnavailable,
+    )
+
+    connection = Connection(
+        {
+            "album_found": True,
+            "active_file_count": 0,
+            "unhealthy_root_count": 1,
+            "removed_album_key": None,
+            "removed_album_count": 0,
+            "inventory_mutation_revision": 17,
+        }
+    )
+
+    with pytest.raises(MissingAlbumRootUnavailable):
+        _service(connection).confirm_removal(ALBUM_KEY)
+
+    assert connection.events == ["begin", "rollback"]
+
+
 def test_confirm_removal_reports_unknown_album_without_cross_library_delete():
     from music_app.services.missing_album_removal_postgres import MissingAlbumNotFound
 

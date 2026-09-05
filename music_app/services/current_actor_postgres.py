@@ -69,6 +69,7 @@ class PostgresCurrentActorResolver:
                          select 1
                          from app.bootstrap_owners
                          where app.bootstrap_owners.account_id = app.accounts.id
+                           and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
                        ) as is_bootstrap_owner,
                        (
                          select library.libraries.id
@@ -76,6 +77,7 @@ class PostgresCurrentActorResolver:
                          join library.libraries
                            on library.libraries.owner_account_id = runtime_owner.account_id
                          where runtime_owner.owner_key = 'local-bootstrap-owner'
+                           and library.libraries.library_kind = 'local'
                          order by library.libraries.id
                          limit 1
                        ) as current_library_id,

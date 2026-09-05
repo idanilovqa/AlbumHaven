@@ -198,6 +198,30 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     assert connection.exit_exc_type is None
 
 
+def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
+    from music_app.services import scan_cache_persistence
+
+    sql = scan_cache_persistence._increment_inventory_mutation_revision_sql()
+    normalized = _normalized_sql(sql)
+
+    assert "'{scan_cache,relation_projection,status}'" in normalized
+    assert "to_jsonb('stale'::text)" in normalized
+
+
+def test_targeted_album_upsert_preserves_existing_user_cover_authority():
+    from music_app.services import scan_cache_persistence
+
+    sql = _normalized_sql(
+        scan_cache_persistence._upsert_local_album_sql(
+            preserve_existing_cover_authority=True
+        )
+    )
+
+    assert "cover_selection_origin" in sql
+    assert "then library.local_albums.cover_path" in sql
+    assert "cover_revision" in sql
+
+
 def test_scan_album_upsert_preserves_structural_release_year_authority():
     from music_app.services import scan_cache_persistence
 

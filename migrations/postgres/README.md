@@ -124,4 +124,6 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0061_create_missing_album_removal_function.sql` moves confirmed missing-album deletion behind a bounded security-definer function. The application role can execute the function without receiving direct delete privileges on library inventory tables.
 
+`0062_narrow_readonly_account_privileges.sql` removes table-wide readonly access to account identity data and restores only the non-private operational columns needed for approved verification. The sanitized security-audit table remains readable under the deployment's operator-access policy.
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

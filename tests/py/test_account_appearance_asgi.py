@@ -435,3 +435,20 @@ def test_aggregate_put_rejects_invalid_or_server_owned_nested_state_before_write
     assert decode_json(body) == {"error": "invalid_appearance"}
     assert "no-store" in headers["cache-control"]
     assert repository.writes == []
+
+
+def test_production_app_registers_each_appearance_method_once():
+    from music_app import create_asgi_app
+
+    app = create_asgi_app()
+    registrations = [
+        (method, route.path)
+        for route in app.routes
+        if getattr(route, "path", None) == "/account/appearance"
+        for method in getattr(route, "methods", set())
+    ]
+
+    assert sorted(registrations) == [
+        ("GET", "/account/appearance"),
+        ("PUT", "/account/appearance"),
+    ]

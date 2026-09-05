@@ -23,12 +23,12 @@
 ### Task 0: Approve the exact visual and additive E2E contract
 
 **Files:**
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/mockup.html`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/mockup.css`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/notes.md`
-- Create: `C:/Repositories/album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/review.json`
-- Modify: `C:/Repositories/album-haven-internal/docs/ui-component-system.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/permissions-and-capabilities.md`
+- Create: `../album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/mockup.html`
+- Create: `../album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/mockup.css`
+- Create: `../album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/notes.md`
+- Create: `../album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/review.json`
+- Modify: `../album-haven-internal/docs/ui-component-system.md`
+- Modify: `../album-haven-internal/docs/permissions-and-capabilities.md`
 
 **Interfaces:**
 - Consumes: the approved design in `docs/superpowers/specs/2026-09-04-player-aware-hover-focus-outline-design.md` and the owner's current-app screenshots.
@@ -82,8 +82,8 @@ Set `review.json` to `approved_for_implementation` only after the owner approves
 - [ ] **Step 5: Commit the approved artifact and registry records**
 
 ```powershell
-git -C C:/Repositories/album-haven-internal add -- docs/design-mockups/screens/appearance-backgrounds/v011 docs/ui-component-system.md docs/permissions-and-capabilities.md
-git -C C:/Repositories/album-haven-internal commit -m "docs: approve player-aware interaction outline"
+git -C ../album-haven-internal add -- docs/design-mockups/screens/appearance-backgrounds/v011 docs/ui-component-system.md docs/permissions-and-capabilities.md
+git -C ../album-haven-internal commit -m "docs: approve player-aware interaction outline"
 ```
 
 Expected: one private-repository documentation commit containing only the approved artifact and registry changes.
@@ -613,7 +613,7 @@ git commit -m "test: cover player-aware interaction outlines"
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-09-05-player-aware-hover-focus-outline.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/notes.md`
+- Modify: `../album-haven-internal/docs/design-mockups/screens/appearance-backgrounds/v011/notes.md`
 
 **Interfaces:**
 - Consumes: committed persistence, browser, UI, and E2E slices.

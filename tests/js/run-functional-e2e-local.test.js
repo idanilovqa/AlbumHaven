@@ -52,7 +52,9 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.match(source, /Import-Module\s+Microsoft\.PowerShell\.Utility/);
   assert.match(source, /WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe/);
   assert.match(source, /PGPASSFILE/);
-  assert.match(source, /AppData[\\/]Roaming[\\/]postgresql[\\/]pgpass\.conf/);
+  assert.match(source, /GetFolderPath/);
+  assert.match(source, /postgresql[\\\\/]pgpass\.conf/);
+  assert.doesNotMatch(source, /C:[\\\\/]Users[\\\\/]/i);
   assert.match(source, /['"]-HostName['"]\s*,\s*['"]localhost['"]/);
   assert.match(source, /['"]-ExpectedMajorVersion['"]\s*,\s*['"]18['"]/);
   assert.match(source, /bootstrap-windows-postgres\.ps1/);

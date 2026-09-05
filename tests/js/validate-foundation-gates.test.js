@@ -39,13 +39,14 @@ function assertWorkflowDrift(validator, workflow, changedWorkflow, expectedError
   assert.match(validator.validateWorkflowContract(changedWorkflow).join('\n'), expectedError);
 }
 
-test('foundation workflow uses a published Linux Chrome pin and clears inherited admin passwords before Windows probes', () => {
+test('foundation workflow uses a published Chrome pin and matches component snapshots to Windows', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   for (const jobName of ['test_js', 'test_components']) {
     const start = workflow.indexOf(`  ${jobName}:`);
     const next = workflow.slice(start + 1).match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
     const job = workflow.slice(start, next ? start + 1 + next.index : workflow.length);
     assert.match(job, /chrome-version:\s*["']151\.0\.7922\.138["']/);
+    if (jobName === 'test_components') assert.match(job, /runs-on:\s*windows-2025/);
   }
   for (const jobName of ['test_node_windows', 'test_python', 'e2e_functional']) {
     const start = workflow.indexOf(`  ${jobName}:`);
@@ -72,6 +73,8 @@ test('dedicated Phase 7 jobs select their pinned Chrome executable', () => {
   for (const configName of ['playwright.phase7-auth.config.js', 'playwright.phase7-admin.config.js']) {
     const config = fs.readFileSync(path.join(repoRoot, configName), 'utf8');
     assert.match(config, /resolveBrowserProjectUse\(process\.env\.PLAYWRIGHT_BROWSER \|\| 'chromium'\)/);
+    assert.match(config, /retries:\s*0/);
+    assert.match(config, /trace:\s*'retain-on-failure'/);
   }
 });
 
@@ -115,7 +118,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 5);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 15);
 
   assert.deepEqual(
     validator.validatePytestCollection(

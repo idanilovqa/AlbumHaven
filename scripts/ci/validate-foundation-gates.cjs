@@ -143,13 +143,23 @@ function validateWorkflowContract(workflow) {
     }
   }
 
-  for (const [name, source] of [['portable', jobs.portable], ['components', jobs.components], ['production parity', jobs.parity]]) {
+  for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {
     if (!source) continue;
     if (!/runs-on:\s*ubuntu-latest/.test(source)) errors.push(`${name} job must run on Ubuntu`);
     if (/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
       errors.push(`${name} portable job must remain available to forks without secrets`);
     }
     if (/secrets\./.test(source)) errors.push(`${name} portable job must not receive secrets`);
+  }
+
+  if (jobs.components) {
+    if (!/runs-on:\s*windows-2025/.test(jobs.components)) {
+      errors.push('components job must run on windows-2025 for its approved win32 snapshots');
+    }
+    if (/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(jobs.components)) {
+      errors.push('components job must remain available to forks without secrets');
+    }
+    if (/secrets\./.test(jobs.components)) errors.push('components job must not receive secrets');
   }
 
   for (const [name, source] of [['windows Node', jobs.windowsNode], ['Windows Python', jobs.python]]) {

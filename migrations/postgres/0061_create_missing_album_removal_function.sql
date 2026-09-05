@@ -5,6 +5,7 @@ returns table (
   stale_private_paths text[],
   root_private_paths text[],
   unresolved_root_count bigint,
+  unhealthy_root_count bigint,
   removed_album_key text,
   removed_album_count bigint,
   inventory_mutation_revision bigint
@@ -29,7 +30,8 @@ as $function$
     limit 1
   ),
   locked_album as materialized (
-    select library.local_albums.id, library.local_albums.album_key
+    select library.local_albums.id, library.local_albums.album_key,
+           library.local_albums.library_id
     from library.local_albums
     cross join inventory_lock
     join bootstrap_context
@@ -43,12 +45,23 @@ as $function$
       library.local_track_files.id,
       library.local_track_files.private_path,
       library.local_track_files.scan_cache_stale,
-      library.library_roots.root_path
+      library.library_roots.root_path,
+      coalesce(
+        nullif(library.library_roots.metadata ->> 'root_id', ''),
+        library.local_track_files.metadata ->> 'library_root_id'
+      ) as root_id,
+      coalesce(library.libraries.metadata -> 'library_watch_health', '{}'::jsonb)
+        ? coalesce(
+            nullif(library.library_roots.metadata ->> 'root_id', ''),
+            library.local_track_files.metadata ->> 'library_root_id'
+          ) as root_unhealthy
     from library.local_track_files
     join library.local_tracks
       on library.local_tracks.id = library.local_track_files.track_id
     join locked_album
       on locked_album.id = library.local_tracks.album_id
+    join library.libraries
+      on library.libraries.id = locked_album.library_id
     left join library.library_roots
       on library.library_roots.id = library.local_track_files.library_root_id
     for update of local_track_files
@@ -58,7 +71,8 @@ as $function$
       exists(select 1 from locked_album) as album_found,
       count(*) filter (
         where library.local_track_files.scan_cache_stale is false
-      ) as active_file_count
+      ) as active_file_count,
+      (select count(*) from locked_files where root_unhealthy) as unhealthy_root_count
     from locked_album
     left join library.local_tracks
       on library.local_tracks.album_id = locked_album.id
@@ -74,6 +88,7 @@ as $function$
     where library.local_track_files.track_id = library.local_tracks.id
       and library.local_tracks.album_id = locked_album.id
       and album_state.active_file_count = 0
+      and album_state.unhealthy_root_count = 0
     returning library.local_track_files.track_id
   ),
   deleted_tracks as (
@@ -81,6 +96,7 @@ as $function$
     using locked_album, album_state
     where library.local_tracks.album_id = locked_album.id
       and album_state.active_file_count = 0
+      and album_state.unhealthy_root_count = 0
     returning library.local_tracks.id
   ),
   deleted_album as (
@@ -88,6 +104,7 @@ as $function$
     using locked_album, album_state
     where library.local_albums.id = locked_album.id
       and album_state.active_file_count = 0
+      and album_state.unhealthy_root_count = 0
     returning library.local_albums.album_key
   ),
   revised_library as (
@@ -95,8 +112,8 @@ as $function$
     set metadata = pg_catalog.jsonb_set(
       pg_catalog.jsonb_set(
         library.libraries.metadata,
-        '{scan_cache,relation_projection,ready}',
-        'false'::jsonb,
+        '{scan_cache,relation_projection,status}',
+        pg_catalog.to_jsonb('stale'::text),
         true
       ),
       '{inventory_mutation_revision}',
@@ -136,6 +153,7 @@ as $function$
       from locked_files
       where locked_files.root_path is null
     ) as unresolved_root_count,
+    album_state.unhealthy_root_count,
     (select deleted_album.album_key from deleted_album limit 1) as removed_album_key,
     (select count(*) from deleted_album) as removed_album_count,
     coalesce(

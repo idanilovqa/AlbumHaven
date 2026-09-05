@@ -3,12 +3,53 @@ from __future__ import annotations
 import importlib
 import json
 from pathlib import Path
+from threading import Event, Thread
+
+import pytest
 
 from tests.py.asgi_testing import decode_json, run_asgi_request
 
 
 def _health_module():
     return importlib.import_module("music_app.services.library_watch_health")
+
+
+def test_earlier_health_write_does_not_remove_later_failed_pending_event():
+    health = _health_module()
+    first_started = Event()
+    release_first = Event()
+    calls = 0
+
+    class InterleavedStore:
+        def upsert(self, _problem):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                assert release_first.wait(2)
+                return
+            raise RuntimeError("second write failed")
+
+        def load(self):
+            return []
+
+    service = health.LibraryWatchHealthService(InterleavedStore())
+    event = health.LibraryEvent(
+        health.LibraryEventKind.OVERFLOW,
+        "main-root",
+        Path("C:/Music"),
+    )
+    first = Thread(target=service.record_event, args=(event,))
+    first.start()
+    assert first_started.wait(2)
+
+    with pytest.raises(RuntimeError, match="second write failed"):
+        service.record_event(event)
+    release_first.set()
+    first.join(2)
+
+    assert not first.is_alive()
+    assert [problem.root_id for problem in service.load_problems()] == ["main-root"]
 
 
 class _Rows:

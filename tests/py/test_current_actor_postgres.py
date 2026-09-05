@@ -175,6 +175,22 @@ def test_active_actor_loads_bootstrap_memberships_and_grants_in_one_snapshot(act
     assert RAW_SESSION not in repr(connection.operations)
 
 
+def test_bootstrap_authority_and_current_library_are_bound_to_local_owner_key(actors):
+    connection = Connection((_row(),))
+
+    _resolver(actors, Sessions(_resolved()), connection).resolve(RAW_SESSION)
+
+    sql, _params = connection.operations[0]
+    assert (
+        "where app.bootstrap_owners.account_id = app.accounts.id "
+        "and app.bootstrap_owners.owner_key = 'local-bootstrap-owner'"
+    ) in sql
+    assert (
+        "where runtime_owner.owner_key = 'local-bootstrap-owner' "
+        "and library.libraries.library_kind = 'local'"
+    ) in sql
+
+
 def test_account_disabled_after_session_resolution_returns_inactive_without_authority(
     actors,
 ):

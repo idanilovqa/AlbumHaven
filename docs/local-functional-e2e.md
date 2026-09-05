@@ -15,8 +15,8 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   `..\album-haven-test-data\dist`. Its `profiles\functional-core` directory must
   contain `database`, `media`, and `loopback`.
 - PostgreSQL passwordless automation is configured in `PGPASSFILE`. When that
-  variable is unset, the command uses
-  `C:\Users\Rendref\AppData\Roaming\postgresql\pgpass.conf`.
+  variable is unset, the command uses the current user's standard application-data
+  path at `postgresql\pgpass.conf`.
 
 The runner connects through `localhost`. Do not replace it with `127.0.0.1`:
 pgpass host matching is exact, and the supported local entry is scoped to
@@ -58,8 +58,8 @@ or Python executable without changing the supported setup path:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-functional-e2e-local.ps1 `
   -Shard gallery-search-visual `
-  -FixtureDistribution C:\Repositories\album-haven-test-data\dist `
-  -PythonPath C:\Users\Rendref\Miniconda3\python.exe
+  -FixtureDistribution $env:ALBUM_HAVEN_TEST_DATA_DIST `
+  -PythonPath $env:PLAYWRIGHT_PYTHON
 ```
 
 ## What the command owns

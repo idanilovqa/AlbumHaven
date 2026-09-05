@@ -91,6 +91,52 @@ def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     assert entries[str(requested)]["library_root_category"] == "main_library"
 
 
+def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
+    tmp_path,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    requested = album / "01.flac"
+    sibling = album / "02.flac"
+    album.mkdir(parents=True)
+    requested.write_bytes(b"one")
+    sibling.write_bytes(b"two")
+    parsed: list[Path] = []
+    repository = RecordingRepository()
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[
+            {"id": "main", "path": root, "category": "main_library_roots"}
+        ],
+        metadata_reader=lambda path: (
+            parsed.append(path)
+            or {
+                "path": str(path),
+                "album": "Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": path.stem,
+                "mtime": 1.0,
+                "size": path.stat().st_size,
+            }
+        ),
+    )
+
+    reconciler.reconcile(_request(paths=(requested,)))
+
+    assert parsed == [requested, sibling]
+    assert set(repository.calls[0]["active_file_entries"]) == {
+        str(requested),
+        str(sibling),
+    }
+
+
 def test_targeted_reconciler_keeps_move_endpoints_in_one_repository_mutation(tmp_path):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,

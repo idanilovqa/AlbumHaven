@@ -994,6 +994,63 @@ def test_live_isolated_postgres_pristine_bootstrap_cleanup_and_second_run(monkey
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_appearance_constraints_reject_nested_json_nulls(monkeypatch):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    psycopg = pytest.importorskip("psycopg")
+    cleanup_complete = False
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            account_id = int(
+                connection.execute(
+                    "select min(id) as account_id from app.accounts"
+                ).fetchone()["account_id"]
+            )
+            connection.execute(
+                "insert into app.user_appearance_preferences (account_id) values (%s)",
+                (account_id,),
+            )
+
+        invalid_assignments = (
+            ("selection_accent", '{"enabled":true,"color":null}'),
+            (
+                "player_style_override",
+                json.dumps(
+                    {
+                        "surface": {
+                            "mode": None,
+                            "angle": 0,
+                            "start": "#112233",
+                            "end": "#445566",
+                        },
+                        "controls": {"fill": "#112233", "border": "#445566"},
+                        "waveform": {"fill": "#112233", "edge": "#445566"},
+                        "handles": {"color": "#112233"},
+                    }
+                ),
+            ),
+            ("player_recent_sets", "null"),
+        )
+        for column_name, invalid_value in invalid_assignments:
+            with isolatedPostgres._connect(setup_url) as connection:
+                connection.autocommit = True
+                with pytest.raises(psycopg.errors.CheckViolation) as exc_info:
+                    connection.execute(
+                        f"update app.user_appearance_preferences "
+                        f"set {column_name} = %s::jsonb where account_id = %s",
+                        (invalid_value, account_id),
+                    )
+                assert exc_info.value.sqlstate == "23514"
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_semantic_album_delete_grant_repair_closes_historical_gap(monkeypatch):
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     migration_path = (

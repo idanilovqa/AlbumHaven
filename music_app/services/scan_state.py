@@ -255,6 +255,16 @@ def refresh_library_state(
         if callable(load_cover_mutation_revision)
         else None
     )
+    load_inventory_mutation_revision = getattr(
+        scan_cache_adapter,
+        "load_inventory_mutation_revision",
+        None,
+    )
+    expected_inventory_mutation_revision = (
+        int(load_inventory_mutation_revision())
+        if callable(load_inventory_mutation_revision)
+        else None
+    )
     relations_refreshed_from_disk = False
     file_cache, disk_last_scan, disk_relation_views, disk_relations_last_built, disk_error = scan_cache_adapter.load_snapshot(
         cache_path,
@@ -411,6 +421,10 @@ def refresh_library_state(
         if expected_cover_mutation_revision is not None:
             relation_refresh_options["expected_cover_mutation_revision"] = (
                 expected_cover_mutation_revision
+            )
+        if expected_inventory_mutation_revision is not None:
+            relation_refresh_options["expected_inventory_mutation_revision"] = (
+                expected_inventory_mutation_revision
             )
         refresh_relation_views(**relation_refresh_options)
         with cache_lock:

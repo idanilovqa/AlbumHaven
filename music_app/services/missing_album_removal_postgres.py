@@ -60,8 +60,10 @@ class PostgresMissingAlbumRemovalService:
                     for path in (result.get("root_private_paths") or [])
                     if str(path).strip()
                 ]
-                if int(result.get("unresolved_root_count") or 0) or any(
-                    not path.is_dir() for path in root_paths
+                if (
+                    int(result.get("unresolved_root_count") or 0)
+                    or int(result.get("unhealthy_root_count") or 0)
+                    or any(not path.is_dir() for path in root_paths)
                 ):
                     raise MissingAlbumRootUnavailable()
                 if any(

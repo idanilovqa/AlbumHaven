@@ -82,7 +82,7 @@
 - Modify: `tests/e2e/poms/settingsModalAppBar.js`
 - Modify: `tests/e2e/actions/settingsModalAppBarActions.js`
 - Modify: `tests/e2e/phase7/admin-management/adminManagement.spec.js`
-- Modify: `C:/Repositories/album-haven-internal/docs/functional-test-cases/users-and-permissions.md`
+- Modify: `../album-haven-internal/docs/functional-test-cases/users-and-permissions.md`
 
 **Interfaces:**
 - Consumes: the shared account menu and the existing Phase 7 isolated Postgres fixture.
@@ -96,8 +96,8 @@
 ### Task 5: Review and publish to the open PR
 
 **Files:**
-- Modify: `C:/Repositories/album-haven-internal/docs/ui-component-system.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/permissions-and-capabilities.md`
+- Modify: `../album-haven-internal/docs/ui-component-system.md`
+- Modify: `../album-haven-internal/docs/permissions-and-capabilities.md`
 
 **Interfaces:**
 - Consumes: focused test and E2E evidence.

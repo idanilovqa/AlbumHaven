@@ -13,7 +13,7 @@
 - Use Windows-native PowerShell plus npm aliases.
 - Use `fixtures-v1.0.19` and the `functional-core` profile.
 - Use `localhost` for local PostgreSQL authentication.
-- Preserve an explicit `PGPASSFILE`; otherwise use `C:\Users\Rendref\AppData\Roaming\postgresql\pgpass.conf` when present.
+- Preserve an explicit `PGPASSFILE`; otherwise use `postgresql\pgpass.conf` beneath the current user's standard application-data directory when present.
 - Run all shards sequentially and never start more than one Playwright process.
 - Never target owner application, database, library, media, or runtime paths.
 - Teardown may remove only invocation-owned databases, roles, ports, and temporary roots.

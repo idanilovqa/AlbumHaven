@@ -326,6 +326,58 @@ def test_forgot_password_submission_has_one_generic_response_and_background_deli
     )
 
 
+def test_public_recovery_padding_uses_one_minimum_duration_for_fast_paths(
+    auth_asgi, monkeypatch
+):
+    observed_sleeps = []
+    ticks = iter((100.125,))
+
+    monkeypatch.setattr(auth_asgi, "_monotonic", lambda: next(ticks), raising=False)
+
+    async def record_sleep(seconds):
+        observed_sleeps.append(seconds)
+
+    monkeypatch.setattr(auth_asgi, "_sleep", record_sleep, raising=False)
+
+    asyncio.run(auth_asgi._pad_public_recovery_response(100.0))
+
+    assert observed_sleeps == pytest.approx([0.375])
+
+
+@pytest.mark.parametrize("eligible", [False, True])
+def test_forgot_password_submission_always_applies_public_response_padding(
+    auth_asgi, monkeypatch, eligible
+):
+    app, _, _ = _app(auth_asgi)
+    app.state.password_reset_request_service = FakeResetRequests(eligible=eligible)
+    padded = []
+
+    async def record_padding(started_at):
+        padded.append(started_at)
+
+    monkeypatch.setattr(auth_asgi, "_monotonic", lambda: 42.0, raising=False)
+    monkeypatch.setattr(
+        auth_asgi,
+        "_pad_public_recovery_response",
+        record_padding,
+        raising=False,
+    )
+
+    status, _, _ = _request(
+        app,
+        "POST",
+        path="/forgot-password",
+        form={"candidate": "member@example.test", "csrf_token": CSRF},
+        headers={
+            "origin": "https://music.test",
+            "cookie": f"{FORGOT_CSRF_COOKIE}={CSRF}",
+        },
+    )
+
+    assert status == 200
+    assert padded == [42.0]
+
+
 def test_reset_link_exchanges_to_httponly_clean_url_transaction(auth_asgi):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeResetLifecycle()

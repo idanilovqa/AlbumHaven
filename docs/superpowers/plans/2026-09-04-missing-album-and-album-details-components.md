@@ -346,8 +346,8 @@
 - Modify: `tests/e2e/support/isolatedLibraryApp.py`
 - Modify: `tests/ci/functional-shards.json`
 - Modify: `tests/ci/test-data-matrix.json`
-- Modify: `C:/Repositories/album-haven-internal/docs/functional-test-cases/library-roots-new-arrivals-and-file-moves.md`
-- Modify: `C:/Repositories/album-haven-internal/docs/functional-test-cases/album-details-versions-and-tracklists.md`
+- Modify: `../album-haven-internal/docs/functional-test-cases/library-roots-new-arrivals-and-file-moves.md`
+- Modify: `../album-haven-internal/docs/functional-test-cases/album-details-versions-and-tracklists.md`
 
 - [ ] **Step 1: Update the owner-approved cases exactly**
 

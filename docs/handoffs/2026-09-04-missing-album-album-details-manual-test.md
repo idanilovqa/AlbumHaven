@@ -2,7 +2,7 @@
 
 ## Build under test
 
-- Checkout: `C:\Repositories\album-haven-app`
+- Checkout: repository root
 - Base commit: `03a455f`
 - Runtime bundle: freshly generated with `npm run build:runtime`
 - Database migration: `0058_album_details_appearance.sql`

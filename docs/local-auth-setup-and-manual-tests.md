@@ -21,7 +21,7 @@ Set these values in `.env` for local HTTPS testing on the server computer:
 MUSIC_DIR=C:\path\to\your\music
 ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app:YOUR_APP_DB_PASSWORD@localhost:5432/album_haven_core
 ALBUM_HAVEN_MIGRATOR_DATABASE_URL=postgresql://album_haven_migrator:YOUR_MIGRATOR_DB_PASSWORD@localhost:5432/album_haven_core
-ALBUM_HAVEN_BOOTSTRAP_USERNAME=Rendref
+ALBUM_HAVEN_BOOTSTRAP_USERNAME=your-owner-username
 ALBUM_HAVEN_BOOTSTRAP_EMAIL=your-real-or-local-test-address@example.com
 ALBUM_HAVEN_PUBLIC_BASE_URL=https://127.0.0.1:5000
 MUSIC_APP_TLS_MODE=local
@@ -61,7 +61,7 @@ Run the bootstrap once in an interactive terminal:
 python scripts/bootstrap_auth_owner.py
 ```
 
-Your owner username is `Rendref`. Album Haven does not define, store, or print a
+Your owner username is the configured `ALBUM_HAVEN_BOOTSTRAP_USERNAME`. Album Haven does not define, store, or print a
 default password. The password is the value you enter twice at this prompt. It
 must contain 8 to 256 Unicode code points, must not contain the username or
 email context, and must pass Pwned Passwords screening. Store it in your
@@ -75,8 +75,8 @@ are unavailable, run the local emergency command:
 python scripts/break_glass_auth_owner.py
 ```
 
-Break-glass recovery replaces Rendref's credential and revokes every active
-Rendref session and password-reset token. Run it only from the machine or
+Break-glass recovery replaces the bootstrap owner's credential and revokes every active
+bootstrap-owner session and password-reset token. Run it only from the machine or
 operator environment that has the application database credential.
 
 ## Start the site
@@ -206,7 +206,7 @@ out of Git, terminal transcripts, screenshots, and support bundles.
 
 ## Create managed users
 
-Sign in as `Rendref`, open **Settings**, then **Users & access**, and choose
+Sign in as the bootstrap owner, open **Settings**, then **Users & access**, and choose
 **Add user**. Supply:
 
 - A unique username.
@@ -232,22 +232,22 @@ Use a private browser window for each identity so sessions do not overlap.
 
 1. Open `/` while signed out.
 2. Confirm the browser redirects to `/login`.
-3. Sign in as `Rendref` with the bootstrap password.
+3. Sign in as the bootstrap owner with the bootstrap password.
 4. Confirm the gallery loads and the Settings entry is available.
 5. Try the wrong password in a fresh private window and confirm the response
    does not reveal whether the username or password was wrong.
 
 ### 2. Logout and password change
 
-1. Sign in as Rendref and log out.
+1. Sign in as the bootstrap owner and log out.
 2. Confirm the private page no longer opens in that window.
 3. Sign in again, open Profile, and change the password.
 4. Confirm the old password fails and the new password succeeds.
-5. Confirm other Rendref browser sessions were revoked by the change.
+5. Confirm other bootstrap-owner browser sessions were revoked by the change.
 
 ### 3. Managed-user creation and authorization
 
-1. As Rendref, create a listener with a unique username and email.
+1. As the bootstrap owner, create a listener with a unique username and email.
 2. Confirm the roster shows **Pending invitation** and no password-reset action.
 3. Copy the invitation link twice. Confirm the first link shows the same generic
    invalid-or-expired result used for expired, consumed, revoked, disabled, and
@@ -260,7 +260,7 @@ Use a private browser window for each identity so sessions do not overlap.
 
 ### 4. Administrator account lifecycle
 
-1. As Rendref, edit the listener and change its allowed capabilities.
+1. As the bootstrap owner, edit the listener and change its allowed capabilities.
 2. Confirm the listener gains only the selected actions after a new request.
 3. Revoke the listener's sessions and confirm its active window loses access.
 4. Disable the listener with the required confirmation.
@@ -291,9 +291,9 @@ Use a private browser window for each identity so sessions do not overlap.
 
 ### 7. Break-glass owner recovery
 
-Perform this case last because it invalidates all Rendref sessions.
+Perform this case last because it invalidates all bootstrap-owner sessions.
 
-1. Sign in as Rendref in two private browser windows.
+1. Sign in as the bootstrap owner in two private browser windows.
 2. Stop the server and run `python scripts/break_glass_auth_owner.py` from an
    interactive terminal.
 3. Enter and confirm a new compliant password.

@@ -2152,6 +2152,60 @@ def test_unsuccessful_scan_never_publishes_rating_seed_intent(
     assert publication_intents == []
 
 
+def test_full_scan_carries_inventory_revision_captured_before_filesystem_scan(
+    runtime_config,
+    runtime_logger,
+    library_state,
+    monkeypatch,
+):
+    observed: dict[str, object] = {}
+
+    class RevisionAdapter(FakeScanCacheAdapter):
+        def load_cover_mutation_revision(self):
+            return 11
+
+        def load_inventory_mutation_revision(self):
+            observed["inventory_revision_loaded"] = True
+            return 23
+
+    _install_scan_cache_adapter(monkeypatch, RevisionAdapter())
+    monkeypatch.setattr(scan_state, "load_separate_release_keys", lambda _cfg: set())
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda _file_cache, _separate_keys: [SimpleNamespace(key="artist::album")],
+    )
+    library_state.update(
+        {
+            "file_cache": {},
+            "albums": [],
+            "last_scan": 0.0,
+            "relation_views": {"artists": []},
+        }
+    )
+
+    def scan(**_kwargs):
+        assert observed.get("inventory_revision_loaded") is True
+        return {"track": {"path": "track", "album": "Album"}}, 55.0
+
+    def refresh(**kwargs):
+        observed["refresh_kwargs"] = kwargs
+
+    scan_state.refresh_library_state(
+        library_state,
+        config=runtime_config,
+        logger=runtime_logger,
+        force=True,
+        cache_lock=scan_state.Lock(),
+        scan_music_incremental=scan,
+        refresh_relation_views=refresh,
+        start_manual_cover_refresh=lambda *, force_search=False: {"started": True},
+        start_background_cover_refresh=lambda: None,
+    )
+
+    assert observed["refresh_kwargs"]["expected_inventory_mutation_revision"] == 23
+
+
 def test_stale_scan_generation_does_not_publish_rating_seed_intent(
     runtime_config,
     runtime_logger,

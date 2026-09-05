@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give waveform and regular expanded-player modes the owner-approved heights, metadata anchors, and shared control/timeline centerlines.
+**Goal:** Give waveform and regular expanded-player modes the owner-approved heights, metadata anchors, shared control/timeline centerlines, and revised regular-mode bottom padding.
 
 **Architecture:** `updateWaveformAppearance()` remains the authority for the effective waveform rule, including loop-forced waveform rendering. A small helper publishes that effective mode to the player and document root. CSS uses the published mode to select a 92px waveform layout or 68px regular layout without changing `PlaybackControlCluster`, streaming, queue, seek, or loop ownership.
 
@@ -12,9 +12,9 @@
 
 - Keep the owner-locked AudioWorklet, PCM WebSocket, decoder, seeking, and waveform architecture unchanged.
 - Keep waveform mode at 92px with a 56px waveform and a 57px centerline.
-- Keep regular mode at 68px with a 43px centerline.
+- Keep regular mode at 68px with a 39px centerline and 5px below its 48px timeline box.
 - Start waveform metadata at the player inner-left edge; keep regular metadata at the seekbar start.
-- Use 14px and 15px regular-mode top offsets for metadata and timestamp.
+- Use 10px and 11px regular-mode top offsets for metadata and timestamp.
 - Keep the timestamp right-aligned in both modes.
 - Keep loop editing's existing `loopActive || seekbarMode === 'waveform'` rule.
 - Preserve compact docked and floating dimensions and behavior.
@@ -103,9 +103,9 @@ Require the stylesheet to encode these values:
 assert.equal(basePlayerHeight, 68);
 assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*92px/s);
 assert.match(css, /--player-waveform-centerline:\s*57px/);
-assert.match(css, /--player-regular-centerline:\s*43px/);
-assert.match(css, /data-player-seekbar-presentation="regular"[^}]*\.player-meta[^}]*top:\s*14px/s);
-assert.match(css, /data-player-seekbar-presentation="regular"[^}]*\.player-time[^}]*top:\s*15px/s);
+assert.match(css, /--player-regular-centerline:\s*39px/);
+assert.match(css, /data-player-seekbar-presentation="regular"[^}]*\.player-meta[^}]*top:\s*10px/s);
+assert.match(css, /data-player-seekbar-presentation="regular"[^}]*\.player-time[^}]*top:\s*11px/s);
 ```
 
 Keep assertions for the 56px canvas/range surface, compact dimensions, and component-owned controls.
@@ -137,7 +137,7 @@ Keep the existing two columns and component ownership. Introduce these layout va
 
 ```css
 --player-waveform-centerline: 57px;
---player-regular-centerline: 43px;
+--player-regular-centerline: 39px;
 --player-controls-size: 48px;
 --player-leading-width: 114px;
 ```
@@ -161,9 +161,9 @@ Regular selectors must use:
 .global-player[data-player-seekbar-presentation="regular"] .player-controls {
   margin-top: calc(var(--player-regular-centerline) - (var(--player-controls-size) / 2));
 }
-.global-player[data-player-seekbar-presentation="regular"] .player-meta { top: 14px; left: 0; }
-.global-player[data-player-seekbar-presentation="regular"] .player-time { top: 15px; }
-.global-player[data-player-seekbar-presentation="regular"] .player-timeline-wrap { top: 19px; height: 48px; }
+.global-player[data-player-seekbar-presentation="regular"] .player-meta { top: 10px; left: 0; }
+.global-player[data-player-seekbar-presentation="regular"] .player-time { top: 11px; }
+.global-player[data-player-seekbar-presentation="regular"] .player-timeline-wrap { top: 15px; height: 48px; }
 ```
 
 Set the expanded collapse button to a 48px alignment box with `line-height: 1`; keep its glyph and hit target inside `.player-controls`. The artwork and Play/Pause sizes remain 50px and 48px. Center tests use each rendered box center, so compensate for the artwork's 50px size through its top position rather than shrinking it.
@@ -201,7 +201,7 @@ Make `mountPlayer(page, mode)` emit `data-player-seekbar-presentation="waveform"
 
 For waveform mode, assert 92px height and compare center Y values for collapse, cover, Play/Pause, waveform, and player-relative `57px`. Assert the metadata left edge matches the player inner-left edge within 1px.
 
-For regular mode, assert 68px height and compare collapse, cover, Play/Pause, timeline, and player-relative `43px`. Assert metadata left equals timeline left within 1px, metadata top equals player top plus 14px, and timestamp top equals player top plus 15px.
+For regular mode, assert 68px height and compare collapse, cover, Play/Pause, timeline, and player-relative `39px`. Assert metadata left equals timeline left within 1px, metadata top equals player top plus 10px, timestamp top equals player top plus 11px, and the timeline bottom leaves 5px inside the player.
 
 Use `getByRole()` for buttons, stable component locators for layout containers, `boundingBox()` for geometry, and `toHaveScreenshot({ animations: 'disabled' })` for each expanded mode.
 
@@ -297,6 +297,47 @@ Give the owner this script:
 6. Cancel loop editing, seek, collapse, and expand. Confirm regular geometry returns and playback continues.
 
 Do not start Task 5 until the owner reports a manual pass.
+
+---
+
+### Task 4A: Raise the regular-player group after live review
+
+**Files:**
+- Modify: `music_app/static/css/runtime/non-album-and-player.css`
+- Modify: `tests/js/runtime/player-and-waveform.test.js`
+- Modify: `tests/components/playerViews.spec.js`
+- Regenerate: `tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png`
+
+**Interfaces:**
+- Consumes: the existing regular-mode presentation marker and 68px player box.
+- Produces: a 39px regular centerline, 10px metadata top, 11px timestamp top, 15px timeline top, and 5px bottom padding.
+
+- [ ] **Step 1: Change the source and rendered contracts to the revised measurements**
+
+Update the regular-mode assertions to require `39px`, `10px`, `11px`, `15px`, and a 5px player-bottom gap. Leave all waveform assertions unchanged.
+
+- [ ] **Step 2: Run the focused tests and confirm RED**
+
+Run the source test and one-worker component suite. Expected: regular-mode measurements fail against the former `43px`, `14px`, `15px`, and `19px` values; waveform, docked, and floating cases remain unchanged.
+
+- [ ] **Step 3: Apply the single 4px regular-mode offset**
+
+Change only the regular centerline and its three absolute top offsets:
+
+```css
+--player-regular-centerline: 39px;
+.global-player[data-player-seekbar-presentation="regular"] .player-meta { top: 10px; left: 0; }
+.global-player[data-player-seekbar-presentation="regular"] .player-time { top: 11px; }
+.global-player[data-player-seekbar-presentation="regular"] .player-timeline-wrap { top: 15px; height: 48px; }
+```
+
+- [ ] **Step 4: Verify GREEN and regenerate only the regular expanded snapshot**
+
+Run the focused source tests, update the regular snapshot, then rerun the full four-case component file without thresholds or masks. Expected: every geometry assertion and snapshot passes.
+
+- [ ] **Step 5: Commit the accepted correction**
+
+Stage only the four Task 4A paths and commit with `fix: add regular player bottom padding`.
 
 ---
 

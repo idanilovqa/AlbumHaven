@@ -4,6 +4,8 @@
 
 Align the library search field's outer left border with the main content panel's outer rounded edge. Tighten the visual gap between the browser-native clear control and the adjacent search button without allowing the controls to overlap.
 
+Remove the nested rounded focus outline between the browser-native clear control and the search button. The editable input and both actions must read as parts of one search component.
+
 ## Scope
 
 This is a CSS-only adjustment to the library app bar. It does not change search behavior, markup, keyboard handling, the native clear control, the search button's accessible name, or the placement of trailing app-bar controls.
@@ -14,6 +16,14 @@ On desktop, remove the library app bar search form's 24-pixel left inset. The se
 
 Within the app-bar search field, reduce the input's right-side padding next to the browser-native clear control. Keep the search action in its existing grid column and preserve its independent button target. Scope the spacing adjustment to the app bar so other shared search fields retain their current layout.
 
+The shared component places its focus indicator on `.search-field-control` with
+`:focus-within` and suppresses the nested input outline. The app bar's generic
+`:focus-visible` rule has greater selector specificity, so it restores an outline
+around the input and produces the unwanted rounded boundary. Add an app-bar-scoped
+input override with enough specificity to suppress that nested outline. Preserve
+the shared outer focus indicator and the search button's independent keyboard
+focus indicator.
+
 Existing responsive overrides remain unchanged. At widths up to 900 pixels the search form already removes its left inset, and at widths up to 720 pixels the app bar and main panel use their existing mobile margins.
 
 ## Verification
@@ -23,4 +33,5 @@ Add a focused stylesheet contract test that checks the desktop alignment rule an
 - the search field aligns with the main panel's outer rounded edge;
 - the clear and search controls are closer but do not overlap;
 - both controls remain usable with pointer and keyboard input; and
+- focusing the input draws one outline around the complete search component, with no inner rounded boundary between clear and search; and
 - the existing mobile layout remains intact.

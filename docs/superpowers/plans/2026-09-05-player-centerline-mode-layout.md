@@ -34,7 +34,7 @@
 - Consumes: `isWaveform: boolean` from the existing effective waveform decision.
 - Produces: `setPlayerSeekbarPresentation(isWaveform): void`, `.global-player[data-player-seekbar-presentation="waveform|regular"]`, and `html.has-waveform-player`.
 
-- [ ] **Step 1: Add a failing mode-publication test**
+- [x] **Step 1: Add a failing mode-publication test**
 
 Add a unit block that supplies a player element, timeline wrapper, canvas, and document root with observable `classList` and attribute doubles. Call `updateWaveformAppearance()` with default seekbar mode and assert:
 
@@ -46,7 +46,7 @@ assert.equal(wrap.classes.has('is-waveform'), false);
 
 Set `state.player.appearance.seekbarMode = 'waveform'`, call the function again, and assert all three waveform markers. Then set the preference to `default`, set `state.player.loopActive = true`, and require waveform markers again.
 
-- [ ] **Step 2: Run the Node test and confirm RED**
+- [x] **Step 2: Run the Node test and confirm RED**
 
 Run:
 
@@ -56,7 +56,7 @@ node --test --test-concurrency=1 tests/js/runtime/player-and-waveform.test.js
 
 Expected: FAIL because the player attribute and document-root class do not exist.
 
-- [ ] **Step 3: Add the publication helper**
+- [x] **Step 3: Add the publication helper**
 
 Add this helper beside `updateWaveformAppearance()`:
 
@@ -71,11 +71,11 @@ function setPlayerSeekbarPresentation(isWaveform) {
 
 Call `setPlayerSeekbarPresentation(isWaveform)` immediately after computing `isWaveform` and before toggling the timeline wrapper. Do not create another preference or playback state owner.
 
-- [ ] **Step 4: Rerun the Node test and confirm GREEN**
+- [x] **Step 4: Rerun the Node test and confirm GREEN**
 
 Run the Step 2 command. Expected: all tests pass.
 
-- [ ] **Step 5: Commit the mode publication**
+- [x] **Step 5: Commit the mode publication**
 
 ```powershell
 git add -- music_app/static/js/runtime/player-and-waveform.js tests/js/runtime/player-and-waveform.test.js
@@ -95,7 +95,7 @@ git commit -m "feat: publish effective player seekbar mode"
 - Consumes: `html.has-waveform-player` and `data-player-seekbar-presentation` from Task 1.
 - Produces: exact expanded-player box, text, control, and timeline geometry for both modes.
 
-- [ ] **Step 1: Replace the old layout assertions with failing mode-specific contracts**
+- [x] **Step 1: Replace the old layout assertions with failing mode-specific contracts**
 
 Require the stylesheet to encode these values:
 
@@ -110,7 +110,7 @@ assert.match(css, /data-player-seekbar-presentation="regular"[^}]*\.player-time[
 
 Keep assertions for the 56px canvas/range surface, compact dimensions, and component-owned controls.
 
-- [ ] **Step 2: Run the source contract and confirm RED**
+- [x] **Step 2: Run the source contract and confirm RED**
 
 Run:
 
@@ -120,7 +120,7 @@ node --test --test-concurrency=1 tests/js/runtime/player-and-waveform.test.js te
 
 Expected: FAIL on the old 92px base height and missing mode selectors.
 
-- [ ] **Step 3: Set mode height variables**
+- [x] **Step 3: Set mode height variables**
 
 Change the base root variable to `--player-height: 68px`. Add the waveform override before the existing compact override:
 
@@ -131,7 +131,7 @@ Change the base root variable to `--player-height: 68px`. Add the waveform overr
 
 The later compact rule must continue to win while either compact mode is active.
 
-- [ ] **Step 4: Replace the expanded vertical grid with measured positioning**
+- [x] **Step 4: Replace the expanded vertical grid with measured positioning**
 
 Keep the existing two columns and component ownership. Introduce these layout variables on `.global-player`:
 
@@ -168,11 +168,11 @@ Regular selectors must use:
 
 Set the expanded collapse button to a 48px alignment box with `line-height: 1`; keep its glyph and hit target inside `.player-controls`. The artwork and Play/Pause sizes remain 50px and 48px. Center tests use each rendered box center, so compensate for the artwork's 50px size through its top position rather than shrinking it.
 
-- [ ] **Step 5: Rerun the source contract and confirm GREEN**
+- [x] **Step 5: Rerun the source contract and confirm GREEN**
 
 Run the Step 2 command. Expected: all tests pass.
 
-- [ ] **Step 6: Commit the CSS geometry**
+- [x] **Step 6: Commit the CSS geometry**
 
 ```powershell
 git add -- music_app/static/css/runtime/base-layout.css music_app/static/css/runtime/non-album-and-player.css tests/js/runtime/player-and-waveform.test.js
@@ -193,11 +193,11 @@ git commit -m "feat: align expanded player by seekbar mode"
 - Consumes: Task 1 mode markers and Task 2 CSS geometry.
 - Produces: rendered geometry assertions and stable owner-approved visual baselines.
 
-- [ ] **Step 1: Split the old expanded fixture into waveform and regular states**
+- [x] **Step 1: Split the old expanded fixture into waveform and regular states**
 
 Make `mountPlayer(page, mode)` emit `data-player-seekbar-presentation="waveform"` plus `html.has-waveform-player` for waveform mode and `data-player-seekbar-presentation="regular"` for regular mode. Remove the fixture's stale `--player-height: 108px` override. Keep animations disabled and real CSS loaded through `page.addStyleTag()`.
 
-- [ ] **Step 2: Add failing rendered geometry assertions**
+- [x] **Step 2: Add failing rendered geometry assertions**
 
 For waveform mode, assert 92px height and compare center Y values for collapse, cover, Play/Pause, waveform, and player-relative `57px`. Assert the metadata left edge matches the player inner-left edge within 1px.
 
@@ -205,7 +205,7 @@ For regular mode, assert 68px height and compare collapse, cover, Play/Pause, ti
 
 Use `getByRole()` for buttons, stable component locators for layout containers, `boundingBox()` for geometry, and `toHaveScreenshot({ animations: 'disabled' })` for each expanded mode.
 
-- [ ] **Step 3: Run the component tests and confirm RED**
+- [x] **Step 3: Run the component tests and confirm RED**
 
 Run:
 
@@ -215,11 +215,11 @@ npx playwright test --config=playwright.component.config.js tests/components/pla
 
 Expected: geometry and snapshot assertions fail before the final fixture and CSS adjustments.
 
-- [ ] **Step 4: Make the smallest fixture or CSS corrections**
+- [x] **Step 4: Make the smallest fixture or CSS corrections**
 
 Correct only mismatches against the approved measurements. Do not add screenshot thresholds, masks, waits, retries, or alternate expectations. Keep docked and floating assertions unchanged.
 
-- [ ] **Step 5: Generate and verify the two approved expanded snapshots**
+- [x] **Step 5: Generate and verify the two approved expanded snapshots**
 
 Run:
 
@@ -230,7 +230,7 @@ npx playwright test --config=playwright.component.config.js tests/components/pla
 
 Expected: waveform, regular, docked, and floating component cases pass with animations disabled.
 
-- [ ] **Step 6: Commit the rendered contract**
+- [x] **Step 6: Commit the rendered contract**
 
 ```powershell
 git add -- tests/components/playerViews.spec.js tests/components/playerViews.spec.js-snapshots
@@ -250,11 +250,11 @@ git commit -m "test: cover player centerlines by seekbar mode"
 - Consumes: completed source and component changes.
 - Produces: bundle parity, focused verification evidence, and the manual-test checkpoint.
 
-- [ ] **Step 1: Regenerate the runtime bundle**
+- [x] **Step 1: Regenerate the runtime bundle**
 
 Run `npm run build:runtime`. Expected: the bundle contains the updated player runtime.
 
-- [ ] **Step 2: Run focused JavaScript tests in one serial process**
+- [x] **Step 2: Run focused JavaScript tests in one serial process**
 
 ```powershell
 node --test --test-concurrency=1 tests/js/runtime/player-and-waveform.test.js tests/js/runtime/playback-control-cluster.test.js tests/js/runtime/compact-player-helpers.test.js tests/js/runtime/player-loop-playback.test.js tests/js/runtime/app-loader-bundle.test.js
@@ -262,7 +262,7 @@ node --test --test-concurrency=1 tests/js/runtime/player-and-waveform.test.js te
 
 Expected: all tests pass.
 
-- [ ] **Step 3: Run the component player suite**
+- [x] **Step 3: Run the component player suite**
 
 ```powershell
 npx playwright test --config=playwright.component.config.js tests/components/playerViews.spec.js --workers=1
@@ -270,11 +270,13 @@ npx playwright test --config=playwright.component.config.js tests/components/pla
 
 Expected: all four player-view component cases pass.
 
-- [ ] **Step 4: Check generated parity and whitespace**
+- [x] **Step 4: Check generated parity and whitespace**
 
 Run `git diff --check` on the task files and confirm `tests/js/runtime/app-loader-bundle.test.js` passed in Step 2.
 
 - [ ] **Step 5: Record focused evidence and commit**
+
+Focused evidence is recorded. The generated bundle is current and passes parity, but its index entry already contains unrelated owner-staged generated changes. Keep this step open until those changes can be committed with their owning source work; committing the bundle here would absorb unrelated work into this slice.
 
 Mark Tasks 1 through 4 complete in this plan. Update the private v002 review history with exact commands and counts. Commit only the bundle and plan in the app repository:
 
@@ -283,7 +285,7 @@ git add -- music_app/static/js/runtime-bundle.js docs/superpowers/plans/2026-09-
 git commit -m "build: verify player centerline layouts"
 ```
 
-- [ ] **Step 6: Stop for owner manual acceptance**
+- [x] **Step 6: Stop for owner manual acceptance**
 
 Give the owner this script:
 

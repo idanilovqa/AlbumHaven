@@ -354,26 +354,26 @@ Stage only the four Task 4A paths and commit with `fix: add regular player botto
 - Produces: `GlobalPlayer.readExpandedGeometryCheckpoint(): object` and `GlobalPlayerActions.expectExpandedGeometry(mode): object`.
 - Consumes: existing visible Appearance actions, existing loop-editor actions, and the `FTC-PLAYER-019 / 020 / 021 / 022` isolated scenario.
 
-- [ ] **Step 1: Add geometry ownership to the POM and action layer**
+- [x] **Step 1: Add geometry ownership to the POM and action layer**
 
 `readExpandedGeometryCheckpoint()` reads bounding boxes for the player, collapse button, artwork, Play/Pause, metadata, timestamp, timeline, and waveform canvas. `expectExpandedGeometry(mode)` asserts the approved height, relative centerline, and metadata anchor for `regular` or `waveform` and returns the checkpoint. Keep selectors in `GlobalPlayer` and user-visible operations in `GlobalPlayerActions`.
 
-- [ ] **Step 2: Extend the existing player-view scenario**
+- [x] **Step 2: Extend the existing player-view scenario**
 
 Before the compact-player steps, use the visible Settings Appearance flow to select Default, close Settings, verify regular geometry and playback identity, select Waveform, verify waveform geometry, return to Default, open loop editing, verify loop-forced waveform geometry, cancel, and verify regular geometry returns. Keep the established compact, drag, persistence, and narrow-web steps unchanged.
 
-- [ ] **Step 3: Update the approved functional contract**
+- [x] **Step 3: Update the approved functional contract**
 
 Add `expanded-seekbar-mode-geometry` and `loop-forced-waveform-geometry` to the existing test-data matrix row. Add the approved geometry flow and expectations to FTC-PLAYER-019 without removing or weakening its existing compact-player expectations.
 
-- [ ] **Step 4: Run the focused functional E2E**
+- [x] **Step 4: Run the focused functional E2E**
 
 Use the repository's managed functional runner for `tests/e2e/specs/playerViewModes.spec.js`, one worker, with the production FastAPI/ASGI application and isolated Postgres profile. Expected: the unchanged playback-continuity assertions and new geometry assertions pass.
 
-- [ ] **Step 5: Run focused source and component regression**
+- [x] **Step 5: Run focused source and component regression**
 
 Rerun the Task 4 Node and component commands sequentially. Expected: all tests pass.
 
-- [ ] **Step 6: Commit the accepted functional contract**
+- [x] **Step 6: Commit the accepted functional contract**
 
 Stage only the Task 5 files and commit with `test: cover expanded player mode geometry`.

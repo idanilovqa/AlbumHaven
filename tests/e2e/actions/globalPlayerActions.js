@@ -65,6 +65,99 @@ export class GlobalPlayerActions {
     });
   }
 
+  async collapsePlayer(expectedStyle, options = {}) {
+    await expect(this.globalPlayer.collapse.root).toBeVisible({ timeout: options.timeout || 60000 });
+    await this.globalPlayer.collapse.root.click();
+    await expect(this.globalPlayer.player).toHaveClass(/\bis-compact\b/, { timeout: options.timeout || 60000 });
+    await expect(this.globalPlayer.compactPlayer.root).toHaveAttribute('aria-hidden', 'false');
+    if (expectedStyle === 'floating') {
+      await expect(this.globalPlayer.player).toHaveCSS('width', '96px', { timeout: options.timeout || 60000 });
+      await expect(this.globalPlayer.player).toHaveCSS('height', '96px', { timeout: options.timeout || 60000 });
+    } else if (expectedStyle === 'docked') {
+      await expect(this.globalPlayer.player).toHaveCSS('height', '76px', { timeout: options.timeout || 60000 });
+    }
+    const checkpoint = await this.globalPlayer.readViewCheckpoint();
+    expect(checkpoint.mode).toBe('compact');
+    expect(checkpoint.style).toBe(expectedStyle);
+    return checkpoint;
+  }
+
+  async expandPlayer(options = {}) {
+    await expect(this.globalPlayer.compactPlayer.expand.root).toBeVisible({ timeout: options.timeout || 60000 });
+    await this.globalPlayer.compactPlayer.expand.root.click();
+    await expect(this.globalPlayer.player).not.toHaveClass(/\bis-compact\b/, { timeout: options.timeout || 60000 });
+    await expect(this.globalPlayer.expandedShell).toHaveAttribute('aria-hidden', 'false');
+    const checkpoint = await this.globalPlayer.readViewCheckpoint();
+    expect(checkpoint.mode).toBe('expanded');
+    return checkpoint;
+  }
+
+  async readViewCheckpoint() {
+    return this.globalPlayer.readViewCheckpoint();
+  }
+
+  async expectExpandedGeometry(mode) {
+    const normalized = mode === 'waveform' ? 'waveform' : 'regular';
+    await expect(this.globalPlayer.player).toHaveAttribute(
+      'data-player-seekbar-presentation',
+      normalized,
+    );
+    const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
+    const expected = normalized === 'waveform'
+      ? { height: 92, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
+      : { height: 68, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+    const centerY = (bounds) => bounds.y + (bounds.height / 2);
+    const expectedCenterY = checkpoint.player.y + expected.centerline;
+
+    expect(checkpoint.presentation).toBe(normalized);
+    expect(checkpoint.player.height).toBe(expected.height);
+    for (const [name, bounds] of [
+      ['collapse', checkpoint.collapse],
+      ['cover', checkpoint.cover],
+      ['play', checkpoint.play],
+      ['timeline', checkpoint.timeline],
+    ]) {
+      expect.soft(Math.abs(centerY(bounds) - expectedCenterY), `${name} centerline offset`)
+        .toBeLessThanOrEqual(1);
+    }
+    expect(Math.abs(checkpoint.metadata.y - (checkpoint.player.y + expected.metadataTop)))
+      .toBeLessThanOrEqual(1);
+    expect(Math.abs(checkpoint.timestamp.y - (checkpoint.player.y + expected.timestampTop)))
+      .toBeLessThanOrEqual(1);
+    expect(checkpoint.timeline.height).toBe(expected.timelineHeight);
+
+    if (normalized === 'waveform') {
+      expect(checkpoint.waveform).not.toBeNull();
+      expect(Math.abs(centerY(checkpoint.waveform) - expectedCenterY)).toBeLessThanOrEqual(1);
+      expect(Math.abs(checkpoint.metadata.x - (checkpoint.player.x + checkpoint.paddingLeft)))
+        .toBeLessThanOrEqual(1);
+    } else {
+      expect(checkpoint.waveform).toBeNull();
+      expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
+      const bottomGap = (checkpoint.player.y + checkpoint.player.height)
+        - (checkpoint.timeline.y + checkpoint.timeline.height);
+      expect(Math.abs(bottomGap - 5)).toBeLessThanOrEqual(1);
+    }
+    return checkpoint;
+  }
+
+  async dragFloatingPlayerTo(viewportEdge = 'top-right') {
+    const before = await this.globalPlayer.readViewCheckpoint();
+    const cover = before.cover;
+    const viewport = this.globalPlayer.page.viewportSize();
+    if (!cover || !viewport) throw new Error('Floating player geometry is unavailable for dragging.');
+    const startX = cover.x + (cover.width / 2);
+    const startY = cover.y + (cover.height / 2);
+    const target = viewportEdge === 'top-right'
+      ? { x: viewport.width + 200, y: -200 }
+      : { x: -200, y: viewport.height + 200 };
+    await this.globalPlayer.page.mouse.move(startX, startY);
+    await this.globalPlayer.page.mouse.down();
+    await this.globalPlayer.page.mouse.move(target.x, target.y, { steps: 8 });
+    await this.globalPlayer.page.mouse.up();
+    return { before, after: await this.globalPlayer.readViewCheckpoint(), viewport };
+  }
+
   async expectForegroundPlayerAndToggle(surfaceName, expectedState, options = {}) {
     const surface = this.globalPlayer.foregroundSurface(surfaceName);
     await expect(surface).toBeVisible({ timeout: options.timeout || 60000 });

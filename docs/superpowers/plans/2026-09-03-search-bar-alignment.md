@@ -93,3 +93,61 @@ Expected: no output.
 git add music_app/static/css/app-chrome.css tests/js/app-chrome-search-layout.test.js
 git commit -m "fix: align library search bar"
 ```
+
+---
+
+### Task 2: Unified Search Focus Boundary
+
+**Files:**
+- Modify: `tests/js/app-chrome-search-layout.test.js`
+- Modify: `music_app/static/css/app-chrome.css`
+
+**Interfaces:**
+- Consumes: `.search-field-control:focus-within` as the shared component focus indicator and the app bar's generic nested-control focus rule.
+- Produces: one outer focus outline for the search component while the input is focused, with no nested rounded outline between the native clear control and the search action.
+
+- [ ] **Step 1: Write the failing stylesheet contract test**
+
+```js
+test('app-bar search input defers its focus outline to the shared field boundary', () => {
+  assert.match(
+    appChromeCss,
+    /\.app-bar \.search-field \.search-field-control\s*>\s*input\[type='search'\]:focus-visible\s*\{[^}]*outline:\s*none;/,
+  );
+});
+```
+
+- [ ] **Step 2: Run the test and verify the new assertion fails**
+
+Run: `node --test tests/js/app-chrome-search-layout.test.js`
+
+Expected: the two existing assertions pass and the new focus-boundary assertion fails because the app-bar-scoped `:focus-visible` override does not exist.
+
+- [ ] **Step 3: Implement the minimal CSS correction**
+
+Add this rule next to the existing app-bar search-field override:
+
+```css
+.app-bar .search-field .search-field-control > input[type='search']:focus-visible {
+  outline: none;
+}
+```
+
+- [ ] **Step 4: Run focused verification**
+
+Run: `node --test tests/js/app-chrome-search-layout.test.js tests/js/shared-account-menu-contract.test.js`
+
+Expected: all focused tests pass with no warnings or errors.
+
+- [ ] **Step 5: Inspect the final scoped diff**
+
+Run: `git diff --check -- music_app/static/css/app-chrome.css tests/js/app-chrome-search-layout.test.js`
+
+Expected: no whitespace errors. Confirm the diff contains only the new test and focus override in addition to pre-existing working-tree changes.
+
+- [ ] **Step 6: Commit only the focus correction**
+
+```bash
+git add -p music_app/static/css/app-chrome.css tests/js/app-chrome-search-layout.test.js
+git commit -m "fix: unify search focus boundary"
+```

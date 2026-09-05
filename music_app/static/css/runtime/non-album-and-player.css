@@ -456,7 +456,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
   align-items: center;
   justify-content: center;
   width: 22px;
-  height: 36px;
+  height: var(--player-controls-size);
   min-height: 0;
   aspect-ratio: auto;
   padding: 0;

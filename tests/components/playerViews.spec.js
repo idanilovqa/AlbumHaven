@@ -10,6 +10,14 @@ const playerCssPath = path.join(
   'runtime',
   'non-album-and-player.css',
 );
+const baseLayoutCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'base-layout.css',
+);
 const buttonCssPath = path.join(repositoryRoot, 'music_app', 'static', 'css', 'button-component.css');
 const componentUrl = 'http://player-component.test/player';
 
@@ -37,26 +45,37 @@ const compactControls = `
   </div>`;
 
 async function mountPlayer(page, mode) {
+  const isExpanded = mode === 'waveform' || mode === 'regular';
+  const isWaveform = mode === 'waveform';
+  const rootClasses = mode === 'docked'
+    ? 'has-compact-player has-docked-compact-player'
+    : mode === 'floating'
+      ? 'has-compact-player has-floating-compact-player'
+      : isWaveform
+        ? 'has-waveform-player'
+        : '';
   await page.route(componentUrl, (route) => route.fulfill({
-    contentType: 'text/html',
-    body: `<!doctype html><html class="${mode === 'docked' ? 'has-compact-player has-docked-compact-player' : mode === 'floating' ? 'has-compact-player has-floating-compact-player' : ''}">
+    contentType: 'text/html; charset=utf-8',
+    body: `<!doctype html><html class="${rootClasses}">
       <head><style>
         * { box-sizing: border-box; }
-        :root { --player-height: 108px; --app-sidebar-width: 280px; color-scheme: dark; }
+        :root { --app-sidebar-width: 280px; color-scheme: dark; }
         html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
         body { background: #08101d; color: #f0fdf4; font-family: Arial, sans-serif; }
         .global-player { --compact-docked-left: 0px; --compact-docked-width: 280px; --compact-player-x: 12px; --compact-player-y: 532px; }
-        .player-timeline-wrap { grid-column: 1 / -1; grid-row: 3; height: var(--player-waveform-height); position: relative; }
         .player-waveform-canvas { display: block; width: 100%; height: 100%; background: linear-gradient(to bottom, transparent 48%, #7cbaa4 49%, #7cbaa4 51%, transparent 52%); }
         *, *::before, *::after { animation: none !important; caret-color: transparent !important; transition: none !important; }
       </style></head>
       <body>
-        <div class="global-player shell-bottom-player ${mode === 'docked' ? 'is-compact is-docked-compact' : mode === 'floating' ? 'is-compact is-floating-compact' : ''}" data-player-view="${mode}">
-          <div class="player-shell" aria-hidden="${mode !== 'expanded'}">${expandedControls}
+        <div class="global-player shell-bottom-player ${mode === 'docked' ? 'is-compact is-docked-compact' : mode === 'floating' ? 'is-compact is-floating-compact' : ''}" data-player-view="${mode}" ${isExpanded ? `data-player-seekbar-presentation="${mode}"` : ''}>
+          <div class="player-shell" aria-hidden="${!isExpanded}">${expandedControls}
             <div class="player-main">
               <div class="player-meta"><div class="player-title">Transatlantic - We All Need Some Light</div><button class="player-album-link" type="button">/ SMPTe</button></div>
               <div class="player-time">3:13 / 5:46</div>
-              <div class="player-timeline-wrap"><canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"></canvas></div>
+              <div class="player-timeline-wrap${isWaveform ? ' is-waveform' : ''}">
+                <canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"${isWaveform ? '' : ' hidden'}></canvas>
+                <input class="player-timeline" type="range" min="0" max="346" value="193" aria-label="Seek">
+              </div>
             </div>
           </div>
           ${compactControls}
@@ -64,6 +83,7 @@ async function mountPlayer(page, mode) {
       </body></html>`,
   }));
   await page.goto(componentUrl);
+  await page.addStyleTag({ path: baseLayoutCssPath });
   await page.addStyleTag({ path: buttonCssPath });
   await page.addStyleTag({ path: playerCssPath });
 }
@@ -72,25 +92,56 @@ function centerY(box) {
   return box.y + (box.height / 2);
 }
 
-test('expanded player keeps controls centered while metadata owns the waveform offset', async ({ page }) => {
+test('expanded waveform player uses the approved centerline and player-edge metadata anchor', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 });
-  await mountPlayer(page, 'expanded');
+  await mountPlayer(page, 'waveform');
 
-  const player = page.locator('[data-player-view="expanded"]');
-  const controls = player.locator('.player-controls');
+  const player = page.locator('[data-player-view="waveform"]');
+  const collapse = player.getByRole('button', { name: 'Collapse player' });
   const cover = player.getByRole('button', { name: 'Open album details' }).first();
   const play = player.getByRole('button', { name: 'Pause' }).first();
   const waveform = player.locator('.player-timeline-wrap');
-  const [playerBox, controlsBox, coverBox, playBox, waveformBox] = await Promise.all([
-    player.boundingBox(), controls.boundingBox(), cover.boundingBox(), play.boundingBox(), waveform.boundingBox(),
+  const metadata = player.locator('.player-meta');
+  const [playerBox, collapseBox, coverBox, playBox, waveformBox, metadataBox] = await Promise.all([
+    player.boundingBox(), collapse.boundingBox(), cover.boundingBox(), play.boundingBox(),
+    waveform.boundingBox(), metadata.boundingBox(),
   ]);
+  const paddingLeft = Number.parseFloat(await player.evaluate((element) => getComputedStyle(element).paddingLeft));
+  const expectedCenterline = playerBox.y + 57;
 
-  expect(playerBox.height).toBe(108);
-  expect(Math.abs(centerY(controlsBox) - centerY(playerBox))).toBeLessThanOrEqual(1);
-  expect(Math.abs(centerY(coverBox) - centerY(playerBox))).toBeLessThanOrEqual(1);
-  expect(Math.abs(centerY(playBox) - centerY(playerBox))).toBeLessThanOrEqual(1);
-  expect(centerY(waveformBox)).toBeGreaterThan(centerY(playerBox));
-  await expect(player).toHaveScreenshot('expanded-player.png', { animations: 'disabled' });
+  expect(playerBox.height).toBe(92);
+  for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['waveform', waveformBox]]) {
+    expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(metadataBox.x - (playerBox.x + paddingLeft))).toBeLessThanOrEqual(1);
+  await expect(player).toHaveScreenshot('expanded-waveform-player.png', { animations: 'disabled' });
+});
+
+test('expanded regular player uses the approved centerline and seekbar-edge text anchors', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await mountPlayer(page, 'regular');
+
+  const player = page.locator('[data-player-view="regular"]');
+  const collapse = player.getByRole('button', { name: 'Collapse player' });
+  const cover = player.getByRole('button', { name: 'Open album details' }).first();
+  const play = player.getByRole('button', { name: 'Pause' }).first();
+  const timeline = player.getByRole('slider', { name: 'Seek' });
+  const metadata = player.locator('.player-meta');
+  const timestamp = player.locator('.player-time');
+  const [playerBox, collapseBox, coverBox, playBox, timelineBox, metadataBox, timestampBox] = await Promise.all([
+    player.boundingBox(), collapse.boundingBox(), cover.boundingBox(), play.boundingBox(),
+    timeline.boundingBox(), metadata.boundingBox(), timestamp.boundingBox(),
+  ]);
+  const expectedCenterline = playerBox.y + 43;
+
+  expect(playerBox.height).toBe(68);
+  for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['timeline', timelineBox]]) {
+    expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
+  }
+  expect(Math.abs(metadataBox.x - timelineBox.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(metadataBox.y - (playerBox.y + 14))).toBeLessThanOrEqual(1);
+  expect(Math.abs(timestampBox.y - (playerBox.y + 15))).toBeLessThanOrEqual(1);
+  await expect(player).toHaveScreenshot('expanded-regular-player.png', { animations: 'disabled' });
 });
 
 test('docked compact player balances expand, artwork, and transport without exposing expanded content', async ({ page }) => {

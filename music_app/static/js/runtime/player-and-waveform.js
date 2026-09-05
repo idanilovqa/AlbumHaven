@@ -66,6 +66,11 @@ function getPlayerPlaybackSnapshot() {
   return getStreamingPlaybackSnapshot();
 }
 
+function shapeWaveformPeak(value) {
+  const peak = Math.max(0, Math.min(1, Number(value) || 0));
+  return peak ** 2.2;
+}
+
 function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
   if (!canvas) return;
   const width = Math.max(1, canvas.clientWidth || canvas.width || 1);
@@ -96,25 +101,21 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
 
   const drawChannel = (peaks, centerY, fillAlpha) => {
     if (!peaks.length) return;
-    const smoothed = peaks.map((peak, index) => {
-      const prev = peaks[Math.max(0, index - 1)] || peak;
-      const next = peaks[Math.min(peaks.length - 1, index + 1)] || peak;
-      return ((prev * 0.25) + (peak * 0.5) + (next * 0.25));
-    });
+    const shaped = peaks.map(shapeWaveformPeak);
 
     ctx.beginPath();
-    smoothed.forEach((peak, index) => {
+    shaped.forEach((peak, index) => {
       const x = index * barWidth;
-      const amplitude = Math.max(1, peak * halfBand);
+      const amplitude = Math.max(0.35, peak * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY - amplitude);
       } else {
         ctx.lineTo(x, centerY - amplitude);
       }
     });
-    for (let index = smoothed.length - 1; index >= 0; index -= 1) {
+    for (let index = shaped.length - 1; index >= 0; index -= 1) {
       const x = index * barWidth;
-      const amplitude = Math.max(1, smoothed[index] * halfBand);
+      const amplitude = Math.max(0.35, shaped[index] * halfBand);
       ctx.lineTo(x, centerY + amplitude);
     }
     ctx.closePath();
@@ -124,9 +125,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
     ctx.globalAlpha = 1;
 
     ctx.beginPath();
-    smoothed.forEach((peak, index) => {
+    shaped.forEach((peak, index) => {
       const x = index * barWidth;
-      const amplitude = Math.max(1, peak * halfBand);
+      const amplitude = Math.max(0.35, peak * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY - amplitude);
       } else {
@@ -140,9 +141,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
     ctx.stroke();
 
     ctx.beginPath();
-    for (let index = 0; index < smoothed.length; index += 1) {
+    for (let index = 0; index < shaped.length; index += 1) {
       const x = index * barWidth;
-      const amplitude = Math.max(1, smoothed[index] * halfBand);
+      const amplitude = Math.max(0.35, shaped[index] * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY + amplitude);
       } else {
@@ -225,7 +226,7 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, 280, generation);
+  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   const playback = getPlayerPlaybackSnapshot();
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;
@@ -237,7 +238,7 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   }
   if (continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
-    await loadWaveformPeaks(continuityPath, 280, generation);
+    await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }
 }
 

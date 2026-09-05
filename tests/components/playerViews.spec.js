@@ -132,15 +132,16 @@ test('expanded regular player uses the approved centerline and seekbar-edge text
     player.boundingBox(), collapse.boundingBox(), cover.boundingBox(), play.boundingBox(),
     timeline.boundingBox(), metadata.boundingBox(), timestamp.boundingBox(),
   ]);
-  const expectedCenterline = playerBox.y + 43;
+  const expectedCenterline = playerBox.y + 39;
 
   expect(playerBox.height).toBe(68);
   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['timeline', timelineBox]]) {
     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
   }
   expect(Math.abs(metadataBox.x - timelineBox.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(metadataBox.y - (playerBox.y + 14))).toBeLessThanOrEqual(1);
-  expect(Math.abs(timestampBox.y - (playerBox.y + 15))).toBeLessThanOrEqual(1);
+  expect(Math.abs(metadataBox.y - (playerBox.y + 10))).toBeLessThanOrEqual(1);
+  expect(Math.abs(timestampBox.y - (playerBox.y + 11))).toBeLessThanOrEqual(1);
+  expect(Math.abs((playerBox.y + playerBox.height) - (timelineBox.y + timelineBox.height) - 5)).toBeLessThanOrEqual(1);
   await expect(player).toHaveScreenshot('expanded-regular-player.png', { animations: 'disabled' });
 });
 

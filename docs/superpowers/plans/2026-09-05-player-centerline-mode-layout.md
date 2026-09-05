@@ -312,15 +312,15 @@ Do not start Task 5 until the owner reports a manual pass.
 - Consumes: the existing regular-mode presentation marker and 68px player box.
 - Produces: a 39px regular centerline, 10px metadata top, 11px timestamp top, 15px timeline top, and 5px bottom padding.
 
-- [ ] **Step 1: Change the source and rendered contracts to the revised measurements**
+- [x] **Step 1: Change the source and rendered contracts to the revised measurements**
 
 Update the regular-mode assertions to require `39px`, `10px`, `11px`, `15px`, and a 5px player-bottom gap. Leave all waveform assertions unchanged.
 
-- [ ] **Step 2: Run the focused tests and confirm RED**
+- [x] **Step 2: Run the focused tests and confirm RED**
 
 Run the source test and one-worker component suite. Expected: regular-mode measurements fail against the former `43px`, `14px`, `15px`, and `19px` values; waveform, docked, and floating cases remain unchanged.
 
-- [ ] **Step 3: Apply the single 4px regular-mode offset**
+- [x] **Step 3: Apply the single 4px regular-mode offset**
 
 Change only the regular centerline and its three absolute top offsets:
 
@@ -331,11 +331,11 @@ Change only the regular centerline and its three absolute top offsets:
 .global-player[data-player-seekbar-presentation="regular"] .player-timeline-wrap { top: 15px; height: 48px; }
 ```
 
-- [ ] **Step 4: Verify GREEN and regenerate only the regular expanded snapshot**
+- [x] **Step 4: Verify GREEN and regenerate only the regular expanded snapshot**
 
 Run the focused source tests, update the regular snapshot, then rerun the full four-case component file without thresholds or masks. Expected: every geometry assertion and snapshot passes.
 
-- [ ] **Step 5: Commit the accepted correction**
+- [x] **Step 5: Commit the accepted correction**
 
 Stage only the four Task 4A paths and commit with `fix: add regular player bottom padding`.
 

@@ -548,7 +548,7 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   )?.[1] || '';
 
   assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
-  assert.match(playerRule, /--player-regular-centerline:\s*43px/);
+  assert.match(playerRule, /--player-regular-centerline:\s*39px/);
   assert.match(playerRule, /--player-controls-size:\s*48px/);
   assert.match(playerRule, /--player-leading-width:\s*114px/);
   assert.match(
@@ -565,7 +565,7 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   );
   assert.match(
     css,
-    /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*19px[^}]*height:\s*48px/s,
+    /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*15px[^}]*height:\s*48px/s,
   );
   assert.match(waveformRule, /bottom:\s*0/);
   assert.match(waveformRule, /height:\s*56px/);
@@ -589,8 +589,8 @@ test('persistent-player metadata and timestamps use approved mode offsets', () =
 
   assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-meta\s*\{[^}]*top:\s*7px[^}]*left:\s*calc\(-1\s*\*\s*var\(--player-leading-width\)\)/s);
   assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-time\s*\{[^}]*top:\s*8px/s);
-  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-meta\s*\{[^}]*top:\s*14px[^}]*left:\s*0/s);
-  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-time\s*\{[^}]*top:\s*15px/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-meta\s*\{[^}]*top:\s*10px[^}]*left:\s*0/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-time\s*\{[^}]*top:\s*11px/s);
 });
 
 test('persistent player restores the compact unclipped player and stereo waveform geometry', () => {

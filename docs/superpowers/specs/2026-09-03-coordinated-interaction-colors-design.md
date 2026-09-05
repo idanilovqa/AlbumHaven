@@ -1,5 +1,10 @@
 # Coordinated Interaction Colors Design
 
+> Superseded on September 4, 2026 by
+> [Player-aware hover and focus outline design](2026-09-04-player-aware-hover-focus-outline-design.md).
+> The later design combines Item hover border and Keyboard focus and records
+> the owner-approved player-aware source behavior.
+
 ## Scope
 
 Simplify the Appearance **Selection & Hover** interaction controls and make

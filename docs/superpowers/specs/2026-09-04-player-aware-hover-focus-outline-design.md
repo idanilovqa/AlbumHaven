@@ -43,6 +43,11 @@ swatch creates one fixed custom outline color. The row also contains **Use
 player colors**. That action links the outline to the effective player control
 border and updates when the player colors change.
 
+The combined swatches use the brighter former Keyboard focus shades because
+the color must remain visible outside the control edge: Blue `#86B7EF`, Steel
+`#91B7C4`, Green `#86B6A1`, Olive `#AAAC70`, Plum `#B98AA3`, Clay `#C7937D`,
+and Neutral `#A1A8B0`.
+
 The section-level **Revert to theme defaults** action becomes **Use theme**. It
 clears Navigation hover, Navigation selected, Item hover background, Item
 pressed, and any fixed outline color, then links the combined outline to the

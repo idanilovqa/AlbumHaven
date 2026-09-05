@@ -50,6 +50,64 @@ test('waveform peak shaping preserves silence and separates hits from quieter ma
   assert.ok(context.shapeWaveformPeak(0.8) < 0.65);
 });
 
+test('updateWaveformAppearance publishes the effective seekbar presentation', async () => {
+  const player = {
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+  };
+  const wrapClasses = new Set();
+  const documentRootClasses = new Set();
+  const classList = (classes) => ({
+    toggle(name, force) {
+      if (force) classes.add(name);
+      else classes.delete(name);
+    },
+  });
+  const wrap = { classList: classList(wrapClasses) };
+  const timeline = { parentElement: wrap };
+  const waveformCanvas = { hidden: false, getContext: () => null };
+  const documentRoot = { classList: classList(documentRootClasses) };
+  const { context } = loadRuntime({
+    document: {
+      documentElement: documentRoot,
+      getElementById(id) {
+        if (id === 'player-timeline') return timeline;
+        if (id === 'player-waveform-canvas') return waveformCanvas;
+        return null;
+      },
+      querySelector(selector) {
+        return selector === '.global-player' ? player : null;
+      },
+      querySelectorAll() { return []; },
+      addEventListener() {},
+    },
+  });
+
+  context.state.player.appearance.seekbarMode = 'default';
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'regular');
+  assert.equal(documentRootClasses.has('has-waveform-player'), false);
+  assert.equal(wrapClasses.has('is-waveform'), false);
+
+  context.state.player.appearance.seekbarMode = 'waveform';
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'waveform');
+  assert.equal(documentRootClasses.has('has-waveform-player'), true);
+  assert.equal(wrapClasses.has('is-waveform'), true);
+
+  context.state.player.appearance.seekbarMode = 'default';
+  context.state.player.loopActive = true;
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'waveform');
+  assert.equal(documentRootClasses.has('has-waveform-player'), true);
+  assert.equal(wrapClasses.has('is-waveform'), true);
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     state: {

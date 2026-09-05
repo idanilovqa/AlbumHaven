@@ -192,12 +192,20 @@ function clearWaveformCanvas() {
   ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+function setPlayerSeekbarPresentation(isWaveform) {
+  const mode = isWaveform ? 'waveform' : 'regular';
+  const player = getPlayerElements().player;
+  player?.setAttribute('data-player-seekbar-presentation', mode);
+  document.documentElement?.classList.toggle('has-waveform-player', isWaveform);
+}
+
 async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
   const path = String(state.player.current?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
+  setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
   if (els.waveformCanvas) {
     els.waveformCanvas.hidden = !isWaveform;

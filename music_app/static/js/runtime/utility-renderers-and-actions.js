@@ -3,8 +3,14 @@
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
 
   const items = getFilteredProblematicAlbums();
+  const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
+    ? state.utility.libraryWatchHealthProblems
+    : [];
+  const operationalHtml = operationalItems
+    .map((problem) => buildLibraryWatchHealthProblemRow(problem))
+    .join('');
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  els.count.textContent = String(items.length + operationalItems.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -32,13 +38,13 @@
   els.detail.removeAttribute?.('inert');
 
   if (state.utility.loading) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Loading...</div>';
+    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`;
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">No matching problematic albums found.</div>';
+    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`;
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -46,7 +52,7 @@
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
+    els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -73,7 +79,7 @@
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
+  els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;
@@ -381,7 +387,7 @@ function renderUtilityAppearance() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
-  els.count.textContent = '3';
+  els.count.textContent = '5';
   if (els.search) {
     els.search.value = '';
     els.search.disabled = true;
@@ -393,21 +399,27 @@ function renderUtilityAppearance() {
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  const appearanceKeys = ['seekbar', 'backgrounds', 'selection-accent'];
-  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'seekbar';
+  const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
   const selectedKey = state.utility.appearanceKey;
-  els.list.innerHTML = [
-    buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', selectedKey === 'seekbar'),
-    buildUtilityAppearanceListItem('backgrounds', 'Backgrounds', 'Main surface, app bar, and panels', selectedKey === 'backgrounds'),
-    buildUtilityAppearanceListItem('selection-accent', 'Selection accent', 'Color on the left of selected items', selectedKey === 'selection-accent'),
-  ].join('');
+  const navigationTree = typeof window !== 'undefined' ? window.NavigationTree : null;
+  const labels = { backgrounds: 'Main elements', seekbar: 'Player & Seekbar', 'selection-accent': 'Selection & Hover', alerts: 'Alerts', 'album-page': 'Album page' };
+  els.list.innerHTML = appearanceKeys.map(key => navigationTree?.renderItem
+    ? navigationTree.renderItem({ key, label: labels[key], variant: 'panel', action: true, selected: selectedKey === key, attributes: { 'data-utility-appearance-key': key } })
+    : buildUtilityAppearanceListItem(key, labels[key], '', selectedKey === key)).join('');
   if (selectedKey === 'backgrounds') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
   } else if (selectedKey === 'selection-accent') {
-    if (typeof getBackgroundAppearanceEditor === 'function') getBackgroundAppearanceEditor()?.unmount();
-    if (typeof window !== 'undefined' && window.AlbumHavenSelectionAccent?.mount) window.AlbumHavenSelectionAccent.mount(els.detail);
-    else els.detail.innerHTML = '<div class="utility-empty-state">Selection accent could not be loaded. Reload this page to try again.</div>';
+    const appearance = typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
+    if (appearance?.mountSelectionAccent) appearance.mountSelectionAccent(els.detail);
+    else els.detail.innerHTML = '<div class="utility-empty-state">Selection &amp; Hover could not be loaded. Reload this page to try again.</div>';
+  } else if (selectedKey === 'alerts') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlertsAppearanceEditor === 'function') mountAlertsAppearanceEditor(els.detail);
+  } else if (selectedKey === 'album-page') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlbumPageAppearanceEditor === 'function') mountAlbumPageAppearanceEditor(els.detail);
   } else {
     if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
     els.detail.innerHTML = buildUtilityAppearanceDetail();

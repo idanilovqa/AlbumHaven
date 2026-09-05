@@ -16,9 +16,48 @@ from tests.py.asgi_testing import decode_json, run_asgi_request
 
 
 DEFAULTS = {"main_surface_color": None, "panel_background_color": None}
-EXTENDED_DEFAULTS = {"palette_id": None, "panel_index": 0, "player_override": None, "waveform_recent_colors": [], "compact_player_style": "docked"}
+EXTENDED_DEFAULTS = {
+    "palette_id": None,
+    "panel_index": 0,
+    "player_override": None,
+    "waveform_recent_colors": [],
+    "compact_player_style": "docked",
+    "album_details_layout": "classic_bar",
+    "album_playing_row_animation": "enabled",
+    "alert_family": "ember",
+}
 CUSTOM = {"main_surface_color": "#12ABCD", "panel_background_color": "#FE019A"}
 SESSION = "s" * 43
+
+CLASSIC_GREEN_PLAYER_STYLE = {
+    "surface": {
+        "mode": "layered_gradient",
+        "angle": 135,
+        "start": "#0A2F24",
+        "end": "#0A1422",
+    },
+    "controls": {"fill": "#24B86B", "border": "#AFD8C2"},
+    "waveform": {"fill": "#387F68", "edge": "#AFD8C2"},
+    "handles": {"color": "#AFD8C2"},
+}
+ITEM_OUTLINE = {"source": "automatic", "color": None}
+INTERACTION_OVERRIDES = {
+    "item_hover": None,
+    "item_selected": None,
+    "button_hover_background": "#27384B",
+    "button_pressed": None,
+    "item_outline": ITEM_OUTLINE,
+}
+SELECTION_ACCENT = {"enabled": True, "color": "#6E9BD0"}
+AGGREGATE_APPEARANCE = {
+    **DEFAULTS,
+    **EXTENDED_DEFAULTS,
+    "revision": 7,
+    "interaction_overrides": INTERACTION_OVERRIDES,
+    "selection_accent": SELECTION_ACCENT,
+    "player_style_override": CLASSIC_GREEN_PLAYER_STYLE,
+    "player_recent_sets": [CLASSIC_GREEN_PLAYER_STYLE],
+}
 
 
 class Repository:
@@ -248,7 +287,151 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
     html = body.decode("utf-8")
     bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
     assert bootstrap is not None
-    assert json.loads(bootstrap.group(1)) == {**CUSTOM, **EXTENDED_DEFAULTS, "load_error": False}
+    assert json.loads(bootstrap.group(1)) == {
+        **CUSTOM,
+        **EXTENDED_DEFAULTS,
+        "revision": 0,
+        "interaction_overrides": {
+            "item_hover": None,
+            "item_selected": None,
+            "button_hover_background": None,
+            "button_pressed": None,
+            "item_outline": {"source": "automatic", "color": None},
+        },
+        "selection_accent": {"enabled": True, "color": "#34CA78"},
+        "player_style_override": None,
+        "player_recent_sets": [],
+        "load_error": False,
+    }
     assert bootstrap.end() < html.index("<body")
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]
+
+
+def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor_can_save():
+    from music_app.routes.account_asgi import router as account_router
+    from music_app.services.auth_profile_password_postgres import ProfileAccountView
+
+    app, repository, _resolver = _app()
+    app.include_router(account_router)
+    repository.rows[41] = AGGREGATE_APPEARANCE
+    app.state.profile_password_service = SimpleNamespace(load_profile=lambda **_kwargs: ProfileAccountView(
+        username="appearance.member", administrator_set_suggestion=False, sessions=(),
+    ))
+
+    status, _headers, body = run_asgi_request(
+        app, "GET", "/account", headers={"cookie": f"__Host-album_haven_session={SESSION}"},
+    )
+
+    assert status == 200
+    html = body.decode("utf-8")
+    bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
+    assert bootstrap is not None
+    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "load_error": False}
+
+
+def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
+    app, repository, _resolver = _app()
+    repository.rows[41] = AGGREGATE_APPEARANCE
+
+    status, headers, body = _request(app)
+
+    assert status == 200
+    assert decode_json(body) == {
+        **AGGREGATE_APPEARANCE,
+        "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+    }
+    assert "no-store" in headers["cache-control"]
+    assert repository.reads == [41]
+
+
+def test_put_accepts_one_complete_snapshot_and_forwards_expected_revision_atomically():
+    app, repository, _resolver = _app()
+    submitted = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7,
+        "applied_player_set": CLASSIC_GREEN_PLAYER_STYLE,
+    }
+    saved = {**AGGREGATE_APPEARANCE, "revision": 8}
+    captured = []
+
+    def save_preferences(*, account_id, preferences, expected_revision, client_profile="desktop"):
+        captured.append((account_id, client_profile, expected_revision, preferences))
+        return saved
+
+    repository.save_preferences = save_preferences
+
+    status, headers, body = _request(app, "PUT", submitted)
+
+    assert status == 200
+    assert decode_json(body) == saved
+    assert "no-store" in headers["cache-control"]
+    assert captured == [(41, "desktop", 7, {
+        key: value for key, value in submitted.items() if key != "expected_revision"
+    })]
+
+
+def test_stale_put_returns_authoritative_snapshot_without_mutating_any_section():
+    from music_app.services.appearance_preferences_postgres import AppearanceRevisionConflict
+
+    app, repository, _resolver = _app()
+    current = {**AGGREGATE_APPEARANCE, "revision": 9}
+    submitted = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7,
+        "selection_accent": {"enabled": True, "color": "#855F4F"},
+    }
+
+    def conflict(**_kwargs):
+        raise AppearanceRevisionConflict(current=current)
+
+    repository.save_preferences = conflict
+
+    status, headers, body = _request(app, "PUT", submitted)
+
+    assert status == 409
+    assert decode_json(body) == {"error": "appearance_conflict", "appearance": current}
+    assert "no-store" in headers["cache-control"]
+    assert repository.rows == {}
+
+
+@pytest.mark.parametrize("invalid", [
+    {"player_style_override": {**CLASSIC_GREEN_PLAYER_STYLE, "css": "display:none"}},
+    {"player_style_override": {
+        **CLASSIC_GREEN_PLAYER_STYLE,
+        "surface": {**CLASSIC_GREEN_PLAYER_STYLE["surface"], "angle": 361},
+    }},
+    {"player_style_override": {
+        **CLASSIC_GREEN_PLAYER_STYLE,
+        "controls": {"fill": "#24B86B", "border": "green"},
+    }},
+    {"interaction_overrides": {**INTERACTION_OVERRIDES, "button_hover_background": "#FFF"}},
+    {"interaction_overrides": {
+        **INTERACTION_OVERRIDES,
+        "item_outline": {"source": "player", "color": "#86B7EF"},
+    }},
+    {"interaction_overrides": {
+        **INTERACTION_OVERRIDES,
+        "item_outline": {"source": "custom", "color": None},
+    }},
+    {"selection_accent": {"enabled": 1, "color": "#6E9BD0"}},
+    {"selection_accent": {"enabled": True, "color": "#6E9BD0", "account_id": 52}},
+    {"player_recent_sets": []},
+])
+def test_aggregate_put_rejects_invalid_or_server_owned_nested_state_before_write(invalid):
+    app, repository, _resolver = _app()
+    submitted = {
+        **{key: value for key, value in AGGREGATE_APPEARANCE.items()
+           if key not in {"revision", "player_recent_sets"}},
+        "expected_revision": 7,
+        **invalid,
+    }
+
+    status, headers, body = _request(app, "PUT", submitted)
+
+    assert status == 400
+    assert decode_json(body) == {"error": "invalid_appearance"}
+    assert "no-store" in headers["cache-control"]
+    assert repository.writes == []

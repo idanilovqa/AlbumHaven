@@ -72,6 +72,28 @@ def test_legacy_compact_write_persists_style_without_replacing_other_appearance_
     assert tuple(params) == (41, "desktop", "#123456", None, "floating")
 
 
+def test_canonical_compact_write_inserts_only_columns_supplied_by_the_legacy_statement():
+    row = {
+        "main_surface_color": None, "panel_background_color": None,
+        "palette_id": None, "panel_index": 0,
+        "player_background_color": None, "player_waveform_fill_color": None,
+        "player_waveform_edge_color": None, "waveform_recent_colors": [],
+        "compact_player_style": "floating",
+    }
+    connection = Connection(row)
+
+    _repository(connection).save_preferences(account_id=41, preferences={
+        "main_surface_color": None, "panel_background_color": None,
+        "palette_id": None, "panel_index": 0, "player_override": None,
+        "compact_player_style": "floating",
+    })
+
+    sql, _params = connection.operations[0]
+    insert_columns = sql.split("select account_id", 1)[0]
+    assert "revision" not in insert_columns
+    assert "interaction_overrides" not in insert_columns
+
+
 def test_appearance_http_boundary_uses_only_the_server_policy_classification():
     from types import SimpleNamespace
     from music_app.routes.appearance_asgi import _client_profile

@@ -1,5 +1,6 @@
+{% from "partials/button.html" import action_button %}
 <div class="account-menu-component" data-account-menu-component>
-  <button class="icon-button" type="button" id="settings-button" data-account-menu-trigger title="Settings" aria-label="Settings" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu">&#9881;</button>
+  {% call action_button('Settings', id='settings-button', title='Settings', attributes={'data-account-menu-trigger': true, 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'account-menu'}) %}&#9881;{% endcall %}
   <div class="account-menu" id="account-menu" data-account-menu role="menu" aria-label="Account actions" hidden>
     <button class="account-menu-item" type="button" role="menuitem" tabindex="-1" data-account-menu-settings data-open-utilities="1">
       <span class="account-menu-icon" aria-hidden="true">&#9881;</span><span>Settings</span>

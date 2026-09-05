@@ -31,13 +31,27 @@ function loadPeaksRuntime(fetchImpl, overrides = {}) {
   return context;
 }
 
-function peakPayload(seed) {
+function peakPayload(seed, sampleCount = 280) {
   return {
-    sampleCount: 280,
-    left: Array.from({ length: 280 }, () => seed),
-    right: Array.from({ length: 280 }, () => seed / 2),
+    sampleCount,
+    left: Array.from({ length: sampleCount }, () => seed),
+    right: Array.from({ length: sampleCount }, () => seed / 2),
   };
 }
+
+test('loadWaveformPeaks accepts the higher-detail player waveform density', async () => {
+  const requests = [];
+  const context = loadPeaksRuntime(async (url) => {
+    requests.push(String(url));
+    return { ok: true, json: async () => peakPayload(0.5, 720) };
+  });
+
+  const peaks = await context.loadWaveformPeaks('C:/Music/Album/01.flac', 720, 7);
+
+  assert.equal(peaks.sampleCount, 720);
+  assert.equal(peaks.left.length, 720);
+  assert.match(requests[0], /bins=720/);
+});
 
 test('loadWaveformPeaks requests 280 compact bins by raw path and generation', async () => {
   const requests = [];
@@ -163,7 +177,7 @@ test('foreground view work suspends optional peaks and resumes the current wavef
   const resumed = context.resumePlayerWaveformPeakLoadsAfterForegroundView(suspension);
   assert.equal(pending.length, 2, 'foreground completion retries the still-current optional waveform');
   assert.equal(pending[1].options.signal.aborted, false);
-  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75, 720) });
 
   assert.equal((await resumed).left[0], 0.75);
   assert.equal(context.state.player.waveform.compactPeaks.path, 'C:/Music/current.flac');
@@ -173,7 +187,7 @@ test('foreground suspension prevents a new optional waveform request until navig
   const requests = [];
   const context = loadPeaksRuntime(async (url) => {
     requests.push(String(url));
-    return { ok: true, json: async () => peakPayload(0.65) };
+    return { ok: true, json: async () => peakPayload(0.65, 720) };
   });
   context.state.player.current = { path: 'C:/Music/current.flac' };
   context.state.player.waveform.compactPeaks = null;
@@ -286,12 +300,12 @@ test('boundary promotion publishes prefetched current peaks and evicts the compl
   const requests = [];
   const context = loadPeaksRuntime(async (url) => {
     requests.push(String(url));
-    return { ok: true, json: async () => peakPayload(requests.length / 10) };
+    return { ok: true, json: async () => peakPayload(requests.length / 10, 720) };
   });
   context.state.player.waveform.compactPeaks = null;
 
-  await context.loadWaveformPeaks('C:/Music/outgoing.flac', 280, 7);
-  await context.loadWaveformPeaks('C:/Music/incoming.flac', 280, 7);
+  await context.loadWaveformPeaks('C:/Music/outgoing.flac', 720, 7);
+  await context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
   const promoted = await context.promoteWaveformPeaks(
     'C:/Music/outgoing.flac',
     'C:/Music/incoming.flac',
@@ -302,12 +316,12 @@ test('boundary promotion publishes prefetched current peaks and evicts the compl
   assert.equal(context.state.player.waveform.compactPeaks.path, 'C:/Music/incoming.flac');
   assert.equal(context.state.player.waveform.compactPeaks.generation, 7);
   assert.equal(context.state.player.waveform.compactPeaks.data, promoted);
-  await context.loadWaveformPeaks('C:/Music/incoming.flac', 280, 7);
+  await context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
   assert.equal(requests.length, 2, 'the promoted current peaks remain cached');
-  await context.loadWaveformPeaks('C:/Music/outgoing.flac', 280, 7);
+  await context.loadWaveformPeaks('C:/Music/outgoing.flac', 720, 7);
   assert.equal(requests.length, 3, 'the completed source is evicted at promotion');
-  await context.loadWaveformPeaks('C:/Music/next.flac', 280, 7);
-  await context.loadWaveformPeaks('C:/Music/incoming.flac', 280, 7);
+  await context.loadWaveformPeaks('C:/Music/next.flac', 720, 7);
+  await context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
   assert.equal(requests.length, 4, 'the cache remains bounded to promoted current plus next');
 });
 
@@ -318,11 +332,11 @@ test('boundary promotion retries a cancelled incoming preload with a fresh contr
   }));
   context.state.player.waveform.compactPeaks = null;
 
-  const cancelledPreload = context.loadWaveformPeaks('C:/Music/incoming.flac', 280, 7);
+  const cancelledPreload = context.loadWaveformPeaks('C:/Music/incoming.flac', 720, 7);
   assert.equal(pending.length, 1);
   context.cancelWaveformPeakLoads(7);
   assert.equal(pending[0].options.signal.aborted, true);
-  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125) });
+  pending[0].resolve({ ok: true, json: async () => peakPayload(0.125, 720) });
   assert.equal(await cancelledPreload, null);
 
   const promotion = context.promoteWaveformPeaks(
@@ -333,7 +347,7 @@ test('boundary promotion retries a cancelled incoming preload with a fresh contr
 
   assert.equal(pending.length, 2, 'promotion must retry the now-current missing identity once');
   assert.equal(pending[1].options.signal.aborted, false);
-  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75) });
+  pending[1].resolve({ ok: true, json: async () => peakPayload(0.75, 720) });
   const promoted = await promotion;
 
   assert.equal(promoted.left[0], 0.75);

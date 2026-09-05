@@ -128,7 +128,7 @@ test('malformed persisted response is not applied or treated as loaded', async (
 
 
 
-test('editor disables both color inputs when off and discards drafts and listeners on unmount', async () => {
+test('editor disables both color inputs when off and preserves the aggregate draft on unmount', async () => {
   const app = harness();
   const saved={enabled:true,color:'#34ca78'};
   app.respond(saved);
@@ -159,7 +159,7 @@ test('editor disables both color inputs when off and discards drafts and listene
   assert.equal(first.node('[data-selection-accent-enabled]').disabled,false);
   dispose();
   assert.equal(first.listeners.size,0);
-  assert.deepEqual(plain(app.controller.getState().draft),saved);
+  assert.deepEqual(plain(app.controller.getState().draft),{enabled:false,color:'#abcdef'});
   const oldValue=first.node('[data-selection-accent-color]').value;
   app.controller.setDraft({color:'#112233'});
   assert.equal(first.node('[data-selection-accent-color]').value,oldValue);
@@ -171,4 +171,34 @@ test('editor disables both color inputs when off and discards drafts and listene
   assert.equal(second.node('[data-selection-accent-hex]').disabled,false);
   disposeSecond();
   assert.equal(second.listeners.size,0);
+});
+
+test('Appearance uses the aggregate controller for Selection accent instead of a section-level Save', () => {
+  const appearance = require('../../../music_app/static/js/appearance-backgrounds.js');
+  assert.ok(appearance.selectionAccentColors.includes('#34CA78'), 'the original green accent remains a curated option');
+  const initial = {
+    main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,
+    player_override:null,compact_player_style:'docked',revision:2,interaction_overrides:{
+      item_hover:null,item_selected:null,button_hover_background:null,button_pressed:null,
+      item_outline:{source:'automatic',color:null},
+    },
+    selection_accent:{enabled:true,color:'#6E9BD0'},player_style_override:null,player_recent_sets:[],
+  };
+  const controller = appearance.createController({initial,request:async()=>initial});
+  assert.equal(typeof controller.setSelectionAccent,'function','Selection accent must be part of the aggregate Appearance draft');
+  controller.setSelectionAccent({enabled:true,color:'#526B8B'});
+  assert.deepEqual(plain(controller.getState().draft.selection_accent),{enabled:true,color:'#526B8B'});
+  assert.equal(controller.getState().dirty,true);
+});
+
+test('aggregate Appearance bootstrap suppresses the legacy selection-accent request', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '../../../music_app/static/js/selection-accent.js'),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /!document\.getElementById\('appearance-bootstrap'\)/,
+    'the compatibility controller must not issue a second request when aggregate Appearance owns the page',
+  );
 });

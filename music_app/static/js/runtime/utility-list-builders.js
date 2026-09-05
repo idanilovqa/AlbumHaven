@@ -88,12 +88,11 @@ function buildUtilityLoopEntry(loop) {
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
-        <div class="loop-play-control-cluster utility-loop-play-cluster">
-          <button class="loop-play-control-button utility-loop-play" type="button" data-loop-play="${escapeHtml(loop.id || '')}" aria-label="Play or pause">&#9654;</button>
-          <span class="loop-play-control-actions utility-loop-actions">
-            ${buildLoopEditActionControl({ ownerId: `saved-loop-${loopId}`, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
-          </span>
-        </div>
+        ${renderPlaybackControlCluster({
+          variant: 'saved-loop',
+          ownerId: `saved-loop-${String(loop.id || '')}`,
+          loopId: String(loop.id || ''),
+        })}
         <div class="utility-loop-main" data-saved-loop-main-surface="${loopId}">
           <div class="utility-loop-player-top-row" data-loop-player-top-row>
             <div class="utility-loop-control utility-loop-pitch-control" data-loop-pitch-control="${loopId}" data-loop-pitch-controls="${loopId}" aria-label="Pitch shift">
@@ -179,23 +178,8 @@ function buildUtilityAppearanceListItem(key, title, subtitle, selected) {
 }
 
 function buildUtilityAppearanceDetail() {
-  const appearance = state.player.appearance || getDefaultPlayerAppearance();
-  const waveformSelected = appearance.seekbarMode === 'waveform';
   return `
     <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">Seekbar</h3>
-      <p class="utility-rule-description">Choose the player seekbar style. Waveform keeps loop selection and seek behavior intact.</p>
-      <div class="appearance-section">
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default">
-          <span>Default seekbar</span>
-        </label>
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform">
-          <span>Waveform seekbar</span>
-        </label>
-      </div>
-      <p class="utility-rule-description">Display mode applies immediately on this browser. Save color changes to your account below.</p>
       <div data-appearance-seekbar-editor></div>
     </div>
   `;
@@ -565,6 +549,24 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
 }
 
 function buildDetectedProblemsHtml(album) {
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
+  if (albumMissing) {
+    const canRemove = Boolean(album?.allowed_actions?.['library.inventory.manage']);
+    return `
+      <div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
+      <div class="utility-album-problem-list">
+        <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
+        <div class="utility-album-problem-content">
+          <span class="utility-track-problem-chip">Album not found</span>
+        </div>
+      </div>
+      <div class="utility-detected-actions utility-missing-album-actions">
+        ${canRemove
+          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
+          : '<p>Ask an owner or administrator to remove it.</p>'}
+      </div>
+    `;
+  }
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const albumRows = Array.isArray(album?.album_problem_rows)
     ? album.album_problem_rows
@@ -3060,3 +3062,15 @@ function getSelectedSeparateReleaseKeys() {
     .map(([key]) => key);
 }
 
+function buildLibraryWatchHealthProblemRow(problem = {}) {
+  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
+  return `
+    <div class="utility-list-item utility-operational-problem" role="status">
+      <div class="utility-operational-problem-copy">
+        <strong>Library watcher needs attention</strong>
+        <span>${escapeHtml('Some library changes may have been missed.')}</span>
+      </div>
+      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
+    </div>
+  `;
+}

@@ -140,6 +140,7 @@ const state = {
   utility: {
     activeTab: 'problematic-files',
     problematicFiles: [],
+    libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',
     pendingRepairAction: '',
@@ -247,7 +248,7 @@ const state = {
       saveBusy: false,
       error: '',
     },
-    appearanceKey: 'seekbar',
+    appearanceKey: 'backgrounds',
   },
   player: {
     streaming: {

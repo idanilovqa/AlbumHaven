@@ -43,6 +43,10 @@ function renderTrackModalLoadingState(album) {
       <div class="cover-placeholder">Loading cover art...</div>
     </div>
   `;
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
+  }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
     els.duplicateWarning.innerHTML = '';
@@ -73,6 +77,10 @@ function clearTrackModalRenderedState() {
   }
   if (els.cover) {
     els.cover.innerHTML = '';
+  }
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
   }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
@@ -203,7 +211,12 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   trackModalHydratedAlbumDetailsLru.delete(resolvedAlbum);
   trackModalHydratedAlbumDetailsLru.set(
     resolvedAlbum,
-    { aliases, previewAlbumsByAlias, trustedAliases },
+    {
+      aliases,
+      previewAlbumsByAlias,
+      trustedAliases,
+      inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+    },
   );
   while (trackModalHydratedAlbumDetailsLru.size > TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) {
     const oldestAlbum = trackModalHydratedAlbumDetailsLru.keys().next().value;
@@ -257,6 +270,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
   return invalidatedAlbums.size;
 }
 
+function invalidateAllHydratedTrackModalAlbumDetails() {
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  if (!cachedAlbums.length) return 0;
+  return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
+}
+
 function getTrackModalAlbumKeyAliases(albumKey, album = null) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   const indexedAlbum = album || getIndexedAlbum(normalizedAlbumKey);
@@ -305,6 +324,12 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
+    const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+    if (cachedInventoryRevision !== currentInventoryRevision) {
+      invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+      return null;
+    }
     const trustedAlias = cachedEntry?.trustedAliases?.has(normalizedAlbumKey);
     if (
       indexedAlbum

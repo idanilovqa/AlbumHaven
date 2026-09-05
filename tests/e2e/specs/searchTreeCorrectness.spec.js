@@ -15,8 +15,13 @@ const DEEP_LINK_SCOPE_URL = '/?surface=albums&gallery_scope=all&category=main_li
 const DEEP_LINK_SELECTED_URL = `/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
 const DEEP_LINK_URL = `/?surface=albums&q=${encodeURIComponent(DEEP_LINK_QUERY)}&artist=${encodeURIComponent(FAMILY_ARTIST)}&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals`;
 const RESONANCE_ARTIST = 'Neal Morse & The Resonance';
+const TRANSATLANTIC_QUERY = 'transatlantic';
+const TRANSATLANTIC_ARTIST = 'Transatlantic';
+const TRANSATLANTIC_NEAL_ALBUM = 'The Transatlantic Demos';
+const NEAL_SCOPE_TRACK_QUERY = 'family scope beacon';
 const EXPECTED_NEAL_FAMILY_ARTISTS = [
   FAMILY_ARTIST,
+  TRANSATLANTIC_ARTIST,
   'The Neal Morse Band',
   RESONANCE_ARTIST,
 ];
@@ -168,6 +173,81 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
     ).toEqual(EXPECTED_FLOWER_KINGS_SIDEBAR_ARTISTS);
     expect(await galleryActions.readAlbumNamesByHeading(FLOWER_KINGS_ARTIST))
       .not.toHaveLength(0);
+  });
+});
+
+test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete', async ({
+  galleryActions,
+  navigationPanelActions,
+  searchToolbarActions,
+  stepLogger,
+}) => {
+  const completeTransatlanticView = await stepLogger.step(
+    'Capture the complete Transatlantic artist-name gallery',
+    async () => {
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}`);
+      await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST);
+      const albums = await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST);
+      expect(albums.length).toBeGreaterThan(1);
+      return {
+        albums,
+        headings: await galleryActions.readArtistHeadings(),
+      };
+    },
+  );
+
+  await stepLogger.step('Search for Transatlantic from Neal Morse', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}`);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
+    await searchToolbarActions.search(TRANSATLANTIC_QUERY, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+  });
+
+  await stepLogger.step('Select Neal Morse and show only its album-title match', async () => {
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
+      queryValue: TRANSATLANTIC_QUERY,
+    });
+    await expect.poll(
+      async () => ({
+        headings: await galleryActions.readArtistHeadings(),
+        nealAlbums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
+      }),
+      { message: 'Neal Morse should settle on only its directly matching album and no family gallery groups' },
+    ).toEqual({
+      headings: [FAMILY_ARTIST],
+      nealAlbums: [TRANSATLANTIC_NEAL_ALBUM],
+    });
+  });
+
+  await stepLogger.step('Select Transatlantic and keep its full artist-name match', async () => {
+    await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
+    await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, {
+      queryValue: TRANSATLANTIC_QUERY,
+    });
+    expect(await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST))
+      .toEqual(completeTransatlanticView.albums);
+    expect(await galleryActions.readArtistHeadings())
+      .toEqual(completeTransatlanticView.headings);
+  });
+
+  await stepLogger.step('Search by a Neal Morse track title and keep the same record-only scope', async () => {
+    await searchToolbarActions.search(NEAL_SCOPE_TRACK_QUERY, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(NEAL_SCOPE_TRACK_QUERY);
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
+      queryValue: NEAL_SCOPE_TRACK_QUERY,
+    });
+    await expect.poll(
+      async () => ({
+        headings: await galleryActions.readArtistHeadings(),
+        nealAlbums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
+      }),
+      { message: 'A track-title-only match should show its album without any family gallery groups' },
+    ).toEqual({
+      headings: [FAMILY_ARTIST],
+      nealAlbums: [TRANSATLANTIC_NEAL_ALBUM],
+    });
   });
 });
 

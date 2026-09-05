@@ -61,6 +61,11 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0054_add_appearance_palettes_and_player_colors.sql
 0055_waveform_recent_colors.sql
 0056_compact_player_appearance_profiles.sql
+0057_aggregate_appearance_workspace.sql
+0058_album_details_appearance.sql
+0059_alert_appearance_family.sql
+0060_player_aware_interaction_outline.sql
+0061_create_missing_album_removal_function.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -108,5 +113,15 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0055_waveform_recent_colors.sql` adds a per-account newest-first history of up to five distinct waveform colors. It seeds only persisted custom fill and edge values when adding the column. A bounded immutable helper deduplicates ordered candidates during the same account upsert; explicit selections merge with current server history instead of replacing it with a client snapshot. Constraints reject invalid RGB, null members, duplicates, oversized or multidimensional arrays. Only app and migration roles receive helper execution privileges; existing table grants remain sufficient.
 
 `0056_compact_player_appearance_profiles.sql` adds the Docked/Floating Compact Player choice and scopes Appearance rows by trusted client profile. Existing account rows become `desktop` without changing their saved colors, palette, player group, or waveform history; web desktop and Tauri share that profile. Composite account/profile ownership prevents cross-profile collisions, while constraints reserve independent `mobile`, `tv`, and `apple` rows for future clients. Existing table grants remain sufficient and no client-controlled account or profile field is introduced.
+
+`0057_aggregate_appearance_workspace.sql` stores the revisioned Main elements, Player & Seekbar, and Selection accent workspace in one account/profile row. It migrates the legacy accent and custom player colors, bounds complete player history to five sets, and supplies the conditional-save revision used to prevent lost updates.
+
+`0058_album_details_appearance.sql` adds the account-owned Album Details layout and currently-playing perimeter-animation choices to that same revisioned appearance row. Closed constraints preserve the three approved layouts and enabled/disabled motion choices; no separate preference store or client-selected owner/profile key is introduced.
+
+`0059_alert_appearance_family.sql` adds the account-owned curated alert-family choice to the revisioned appearance row. The closed `ember`, `signal`, and `quiet` values coordinate Error, Warning, and Info treatments; `ember` preserves the approved default red-black alert style.
+
+`0060_player_aware_interaction_outline.sql` replaces the legacy Item hover border and Keyboard focus keys with one source-aware `item_outline` object. Existing rows preserve the visible focus color first, fall back to the hover-border color, and otherwise use the automatic source. Reruns rewrite only rows that still carry either legacy key. The replacement constraint accepts the four retained interaction colors plus the closed automatic, theme, player, or custom outline contract.
+
+`0061_create_missing_album_removal_function.sql` moves confirmed missing-album deletion behind a bounded security-definer function. The application role can execute the function without receiving direct delete privileges on library inventory tables.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

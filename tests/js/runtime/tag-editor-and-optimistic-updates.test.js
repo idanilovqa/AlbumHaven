@@ -16,6 +16,36 @@ const helperPath = path.join(
   'tag-editor-and-optimistic-updates.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const albumUiComponentSources = [
+  'alert-components.js',
+  'album-artbox.js',
+  'album-details-components.js',
+  'compact-data-table.js',
+  'album-track-table.js',
+].map((filename) => ({
+  filename,
+  source: fs.readFileSync(path.join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    'music_app',
+    'static',
+    'js',
+    'runtime',
+    filename,
+  ), 'utf8'),
+}));
+const primaryModalsTemplate = fs.readFileSync(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'templates',
+  'partials',
+  'primary-modals.html',
+), 'utf8');
 
 function loadHelper(albums, overrides = {}) {
   const context = {
@@ -121,11 +151,17 @@ test('track modal playback refresh preserves generic Play track and Pause track 
     getAttribute(name) { return attributes.get(name) || ''; },
     setAttribute(name, value) { attributes.set(name, String(value)); },
   };
+  const durationEl = {
+    dataset: { originalDuration: '3:00' },
+    innerHTML: '',
+  };
   const row = {
     classList: { toggle() {} },
     getAttribute(name) { return attributes.get(name) || ''; },
     querySelector(selector) {
-      return selector === '.play-track-button' ? button : null;
+      if (selector === '.play-track-button') return button;
+      if (selector === '[data-track-duration-path]') return durationEl;
+      return null;
     },
   };
   const playback = { currentTime: 0, duration: 180, ended: false, paused: false };
@@ -139,10 +175,13 @@ test('track modal playback refresh preserves generic Play track and Pause track 
     },
     formatTrackDuration: () => '0:00',
     getPlayerPlaybackSnapshot: () => playback,
+    escapeHtml: (value) => String(value ?? ''),
   });
 
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Pause track');
+  assert.equal(durationEl.innerHTML, '0:00 / 0:00');
+  assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
   playback.paused = true;
   context.refreshTrackModalPlaybackState();
@@ -611,6 +650,36 @@ test('Album Details separates exact main and bonus durations for mixed explicit 
     [
       { isBonus: false, durationSeconds: 180 },
       { isBonus: true, durationSeconds: 245 },
+    ],
+  );
+});
+
+test('Album Details passes main and bonus group semantics into AlbumTrackTable', () => {
+  let renderedConfig = null;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    escapeHtml: (value) => String(value ?? ''),
+    formatAlbumDuration: () => '',
+    formatTrackDuration: () => '3:00',
+    formatLoopTime: () => '0:00',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(config) {
+      renderedConfig = config;
+      return '<div>table</div>';
+    },
+  });
+
+  context.buildTrackListHtml([
+    { path: 'main.flac', title: 'Main', disc_number: 1, disc_number_raw: '1', track_number: 1 },
+    { path: 'bonus.flac', title: 'Bonus', disc_number: 2, disc_number_raw: 'Bonus Disc', track_number: 1 },
+  ]);
+
+  assert.deepEqual(
+    Array.from(renderedConfig.groups, (group) => ({ discLabel: group.discLabel, isBonus: group.isBonus })),
+    [
+      { discLabel: 'CD 1', isBonus: false },
+      { discLabel: 'Bonus Disc', isBonus: true },
     ],
   );
 });
@@ -2550,6 +2619,7 @@ function createTrackModalCoverContext(options = {}) {
     list: new TrackModalTestElement('div'),
     footer: new TrackModalTestElement('div'),
     tabs: new TrackModalTestElement('div'),
+    missingWarning: new TrackModalTestElement('div'),
     duplicateWarning: new TrackModalTestElement('div'),
     duplicateTabs: new TrackModalTestElement('div'),
     folder: new TrackModalTestElement('button'),
@@ -2644,6 +2714,9 @@ function createTrackModalCoverContext(options = {}) {
     refreshTrackModalPlaybackState() {},
   };
   vm.createContext(context);
+  albumUiComponentSources.forEach(({ filename, source }) => {
+    vm.runInContext(source, context, { filename });
+  });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, cover, elements, loaderCalls, directFetchCalls };
 }
@@ -2691,6 +2764,258 @@ test('track-modal cover exposes gallery navigation only for gallery-enabled moda
   galleryEnabled.context.state.ui.trackModalCoverLightboxGallery = true;
   galleryEnabled.context.renderTrackModalRelease(galleryEnabled.context.state.modalReleases[0]);
   assert.match(galleryEnabled.cover.innerHTML, /data-lightbox-gallery="visible"/);
+});
+
+test('missing album details lead with the warning and expose only the authorized removal action', () => {
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    allowed_actions: { 'library.inventory.manage': true },
+    tracks: [],
+  };
+  const { context, elements, cover } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: '', cached: false }),
+  });
+
+  context.renderTrackModalRelease(album);
+
+  assert.ok(
+    primaryModalsTemplate.indexOf('id="track-modal-missing-warning"')
+      < primaryModalsTemplate.indexOf('id="track-modal-list"'),
+    'the missing warning must precede the track table in Album Details',
+  );
+  assert.equal(elements.missingWarning.hidden, false);
+  assert.match(
+    elements.missingWarning.innerHTML,
+    /This album cannot be found under the current libraries\. Its library entry is still saved\./,
+  );
+  assert.match(elements.missingWarning.innerHTML, /data-remove-missing-album="1"/);
+  assert.match(elements.missingWarning.innerHTML, />Remove from library</);
+  assert.match(elements.missingWarning.innerHTML, />Keep as missing</);
+  assert.equal(elements.folder.hidden, false);
+  assert.equal(elements.editTags.hidden, false);
+  assert.doesNotMatch(
+    cover.innerHTML,
+    /data-open-lightbox|data-open-track-modal-cover-lookup|data-track-modal-fast-cover-fetch/,
+  );
+  assert.doesNotMatch(elements.list.innerHTML, /play-track-button|data-track-row-path/);
+});
+
+test('missing album details tell read-only reviewers to ask an owner or administrator', () => {
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    allowed_actions: { 'library.inventory.manage': false },
+    tracks: [],
+  };
+  const { context, elements } = createTrackModalCoverContext({
+    albums: [album],
+    resolvePreview: async () => ({ displayUrl: '', cached: false }),
+  });
+
+  context.renderTrackModalRelease(album);
+
+  assert.match(
+    elements.missingWarning.innerHTML,
+    /Ask an owner or administrator to remove it\./,
+  );
+  assert.doesNotMatch(elements.missingWarning.innerHTML, /data-remove-missing-album/);
+});
+
+test('missing album removal confirmation uses the approved destructive copy', () => {
+  const context = loadHelper([]);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(context.buildMissingAlbumRemovalConfirmation({
+      name: 'SMPTe - The Roine Stolt Mixes',
+    }))),
+    {
+      title: 'Remove album?',
+      message: 'Remove “SMPTe - The Roine Stolt Mixes” from Album Haven? Its local files are already missing. This removes the album and its Album Haven data. It does not delete files from disk.',
+      cancelLabel: 'Cancel',
+      acceptLabel: 'Remove album',
+      danger: true,
+    },
+  );
+});
+
+test('confirmed missing album removal immediately updates gallery counts and removes an empty artist', () => {
+  const missingAlbum = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+  };
+  const survivingAlbum = {
+    key: 'king-crimson-red',
+    name: 'Red',
+    album_artist: 'King Crimson',
+  };
+  const renders = [];
+  const context = loadHelper([], {
+    state: {
+      view: {
+        artist_groups: [{ artist: 'Transatlantic', albums: [missingAlbum] }, { artist: 'King Crimson', albums: [survivingAlbum] }],
+        primary_artist_groups: [{ artist: 'Transatlantic', albums: [missingAlbum] }],
+        family_artist_groups: [{ artist: 'King Crimson', albums: [survivingAlbum] }],
+        artists_sidebar: [{ artist: 'Transatlantic', count: 1 }, { artist: 'King Crimson', count: 1 }],
+        artist_count: 2,
+        album_count: 2,
+      },
+      gallery: { albumIndex: new Map([[missingAlbum.key, missingAlbum], [survivingAlbum.key, survivingAlbum]]) },
+      utility: {
+        problematicFiles: [missingAlbum],
+        selectedProblematicKey: missingAlbum.key,
+      },
+    },
+    renderView(options) {
+      renders.push(options);
+    },
+    rebuildAlbumIndex(groups) {
+      context.state.gallery.albumIndex = new Map(
+        groups.flatMap((group) => group.albums).map((album) => [album.key, album]),
+      );
+    },
+  });
+
+  context.applyMissingAlbumRemovalToView(missingAlbum.key, {
+    album_count: 1,
+    artist_count: 1,
+  });
+
+  assert.deepEqual(
+    Array.from(context.state.view.artist_groups, (group) => group.artist),
+    ['King Crimson'],
+  );
+  assert.deepEqual(Array.from(context.state.view.primary_artist_groups), []);
+  assert.deepEqual(
+    Array.from(context.state.view.family_artist_groups, (group) => group.artist),
+    ['King Crimson'],
+  );
+  assert.deepEqual(
+    Array.from(context.state.view.artists_sidebar, (artist) => artist.artist),
+    ['King Crimson'],
+  );
+  assert.equal(context.state.view.album_count, 1);
+  assert.equal(context.state.view.artist_count, 1);
+  assert.equal(context.state.gallery.albumIndex.has(missingAlbum.key), false);
+  assert.deepEqual(Array.from(context.state.utility.problematicFiles), []);
+  assert.equal(context.state.utility.selectedProblematicKey, '');
+  assert.deepEqual(renders, [{ preserveScroll: true }]);
+});
+
+test('missing album conflict keeps the card and refreshes both server-owned surfaces', async () => {
+  const album = {
+    key: 'transatlantic::smpte - the roine stolt mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    allowed_actions: { 'library.inventory.manage': true },
+  };
+  const calls = {
+    dialogs: [],
+    fetches: [],
+    galleryRefreshes: [],
+    problematicRefreshes: [],
+    toasts: [],
+  };
+  const context = loadHelper([album], {
+    async showAppConfirmDialog(options) {
+      calls.dialogs.push(options);
+      return true;
+    },
+    async fetch(url, options) {
+      calls.fetches.push([url, options]);
+      return {
+        ok: false,
+        status: 409,
+        async json() { return { error: 'Album Haven found this album again.' }; },
+      };
+    },
+    buildUrl() {
+      return '/view-data?artist=Transatlantic';
+    },
+    async fetchAndRender(...args) {
+      calls.galleryRefreshes.push(args);
+    },
+    async loadProblematicFiles(...args) {
+      calls.problematicRefreshes.push(args);
+    },
+    showToast(...args) {
+      calls.toasts.push(args);
+    },
+  });
+
+  const result = await context.confirmMissingAlbumRemoval(album);
+
+  assert.equal(result, false);
+  assert.equal(context.state.view.artist_groups[0].albums[0], album);
+  assert.deepEqual(calls.dialogs, [context.buildMissingAlbumRemovalConfirmation(album)]);
+  assert.equal(
+    calls.fetches[0][0],
+    '/api/library/albums/transatlantic%3A%3Asmpte%20-%20the%20roine%20stolt%20mixes/confirm-removal',
+  );
+  assert.equal(calls.fetches[0][1].method, 'POST');
+  assert.deepEqual(calls.galleryRefreshes, [[
+    '/view-data?artist=Transatlantic',
+    false,
+    { preserveScroll: true },
+  ]]);
+  assert.deepEqual(calls.problematicRefreshes, [[true]]);
+  assert.deepEqual(calls.toasts, [[
+    'Album Haven found this album again.',
+    'info',
+    3200,
+  ]]);
+});
+
+test('successful missing album confirmation closes details and refreshes Problematic Files', async () => {
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    allowed_actions: { 'library.inventory.manage': true },
+  };
+  const calls = { applied: [], closed: 0, problematicRefreshes: [] };
+  const context = loadHelper([album], {
+    async showAppConfirmDialog() { return true; },
+    async fetch() {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { removed_album_key: album.key, album_count: 0, artist_count: 0 };
+        },
+      };
+    },
+    applyMissingAlbumRemovalToView(albumKey, payload) {
+      calls.applied.push([albumKey, payload]);
+    },
+    closeTrackModal() { calls.closed += 1; },
+    async loadProblematicFiles(...args) { calls.problematicRefreshes.push(args); },
+    showToast() {},
+  });
+
+  const removed = await context.confirmMissingAlbumRemoval(album);
+
+  assert.equal(removed, true);
+  assert.deepEqual(calls.applied, [[album.key, {
+    removed_album_key: album.key,
+    album_count: 0,
+    artist_count: 0,
+  }]]);
+  assert.equal(calls.closed, 1);
+  assert.deepEqual(calls.problematicRefreshes, [[true]]);
 });
 
 test('track-modal cover gallery icon exposes only unseen automatic improvements', () => {

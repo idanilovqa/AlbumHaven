@@ -98,6 +98,7 @@ class ScanCacheAdapter(Protocol):
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
+        observed_library_root_ids: set[str] | None = None,
     ) -> dict[str, object] | None:
         ...
 
@@ -105,6 +106,17 @@ class ScanCacheAdapter(Protocol):
         ...
 
     def load_inventory_mutation_revision(self) -> int:
+        ...
+
+    def persist_targeted_inventory_mutation(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        deleted_paths: tuple[str, ...] = (),
+        deleted_subtrees: tuple[str, ...] = (),
+        moves: tuple[dict[str, object], ...] = (),
+    ) -> dict[str, object]:
         ...
 
     def persist_cover_selection(
@@ -183,6 +195,111 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
+
+    def persist_targeted_inventory_mutation(
+        self,
+        *,
+        root_id: str,
+        active_file_entries: dict[str, dict[str, object]],
+        deleted_paths: tuple[str, ...] = (),
+        deleted_subtrees: tuple[str, ...] = (),
+        moves: tuple[dict[str, object], ...] = (),
+    ) -> dict[str, object]:
+        normalized_root_id = str(root_id or "").strip()
+        if not normalized_root_id:
+            raise ValueError("Targeted inventory mutation requires a root id.")
+        file_cache = {
+            str(path): dict(entry)
+            for path, entry in active_file_entries.items()
+            if str(path).strip() and isinstance(entry, dict)
+        }
+        albums = self._build_albums(
+            _file_cache_with_inferred_blank_album_memberships(file_cache),
+            set(),
+        )
+        (
+            artist_rows,
+            album_rows,
+            featured_artist_rows,
+            track_rows,
+            track_file_rows,
+        ) = _inventory_rows_from_albums(file_cache, albums)
+        affected_album_keys = {
+            str(row.get("album_key") or "").strip()
+            for row in album_rows
+            if str(row.get("album_key") or "").strip()
+        }
+        stale_by_root: dict[str, dict[str, set[str]]] = {
+            normalized_root_id: {
+                "paths": {str(path) for path in deleted_paths if str(path)},
+                "subtrees": {
+                    str(path) for path in deleted_subtrees if str(path)
+                },
+            }
+        }
+        for move in moves:
+            source_root_id = str(
+                move.get("source_root_id") or normalized_root_id
+            ).strip()
+            source_path = str(move.get("source_path") or "").strip()
+            if not source_root_id or not source_path:
+                continue
+            target = stale_by_root.setdefault(
+                source_root_id,
+                {"paths": set(), "subtrees": set()},
+            )
+            target["subtrees" if move.get("is_directory") else "paths"].add(
+                source_path
+            )
+
+        with self._connect_to_database() as connection:
+            connection.execute(_inventory_publication_advisory_lock_sql())
+            _ensure_bootstrap_context(connection)
+            _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
+            _execute_pipeline_batches(connection, _upsert_local_album_sql(), album_rows)
+            _execute_pipeline_batches(
+                connection,
+                _upsert_local_album_featured_artist_sql(),
+                featured_artist_rows,
+            )
+            _execute_set_based_batches(connection, _upsert_local_track_sql(), track_rows)
+            _execute_set_based_batches(
+                connection,
+                _upsert_local_track_file_sql(),
+                track_file_rows,
+            )
+            for stale_root_id, stale_targets in sorted(stale_by_root.items()):
+                paths = sorted(stale_targets["paths"])
+                subtrees = sorted(stale_targets["subtrees"])
+                if not paths and not subtrees:
+                    continue
+                stale_rows = connection.execute(
+                    _mark_targeted_track_files_stale_sql(),
+                    {
+                        "root_id": stale_root_id,
+                        "deleted_paths": paths,
+                        "deleted_subtrees": subtrees,
+                        "source": _SOURCE,
+                    },
+                ).fetchall()
+                affected_album_keys.update(
+                    str(_row_mapping(row).get("affected_album_key") or "").strip()
+                    for row in stale_rows
+                    if str(
+                        _row_mapping(row).get("affected_album_key") or ""
+                    ).strip()
+                )
+            revision_row = _first_row(
+                connection.execute(_increment_inventory_mutation_revision_sql())
+            )
+            revision = int(
+                _row_mapping(revision_row).get("inventory_mutation_revision") or 0
+            )
+            connection.commit()
+        return {
+            "inventory_mutation_revision": revision,
+            "affected_album_keys": sorted(affected_album_keys),
+        }
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         del cache_path
@@ -1056,6 +1173,7 @@ class PostgresScanCacheAdapter:
         expected_cover_mutation_revision: int | None = None,
         expected_inventory_mutation_revision: int | None = None,
         rebuild_relation_projection: bool = False,
+        observed_library_root_ids: set[str] | None = None,
     ) -> dict[str, object] | None:
         publication_started_at = perf_counter()
         del cache_path
@@ -1189,6 +1307,7 @@ class PostgresScanCacheAdapter:
                     "current_paths": current_private_paths,
                     "current_path_count": len(current_private_paths),
                     "source": _SOURCE,
+                    "observed_root_ids": sorted(observed_library_root_ids or set()),
                     "stale_metadata": _jsonb(
                         {
                             "scan_cache": {
@@ -2317,6 +2436,48 @@ def _load_inventory_mutation_revision_sql() -> str:
         ) as inventory_mutation_revision
         from library.libraries
         join bootstrap_context on bootstrap_context.library_id = library.libraries.id
+        limit 1;
+    """
+
+
+def _increment_inventory_mutation_revision_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        updated_library as (
+          update library.libraries
+             set metadata = coalesce(library.libraries.metadata, '{}'::jsonb)
+               || jsonb_build_object(
+                    'inventory_mutation_revision',
+                    coalesce(
+                      nullif(
+                        library.libraries.metadata ->> 'inventory_mutation_revision',
+                        ''
+                      )::bigint,
+                      0
+                    ) + 1
+                  ),
+                 updated_at = now()
+          from bootstrap_context
+          where library.libraries.id = bootstrap_context.library_id
+          returning coalesce(
+            nullif(
+              library.libraries.metadata ->> 'inventory_mutation_revision',
+              ''
+            )::bigint,
+            0
+          ) as inventory_mutation_revision
+        )
+        select inventory_mutation_revision
+        from updated_library
         limit 1;
     """
 
@@ -4815,7 +4976,9 @@ def _upsert_local_track_file_sql() -> str:
               file_size_bytes = excluded.file_size_bytes,
               modified_at = excluded.modified_at,
               last_seen_at = now(),
-              metadata = library.local_track_files.metadata || excluded.metadata
+              metadata = (
+                library.local_track_files.metadata || excluded.metadata
+              ) #- '{scan_cache,stale_marked_at}'
           where (
             library.local_track_files.track_id,
             library.local_track_files.library_root_id,
@@ -4829,13 +4992,15 @@ def _upsert_local_track_file_sql() -> str:
             excluded.relative_path,
             excluded.file_size_bytes,
             excluded.modified_at,
-            library.local_track_files.metadata || excluded.metadata
+            (library.local_track_files.metadata || excluded.metadata)
+              #- '{scan_cache,stale_marked_at}'
           );
     """
 
 
 def _mark_stale_track_files_sql() -> str:
     return """
+        -- stale_marked_at is written only on the first active-to-stale transition.
         with bootstrap_context as (
           select library.libraries.id as library_id
           from app.bootstrap_owners
@@ -4847,14 +5012,108 @@ def _mark_stale_track_files_sql() -> str:
           limit 1
         )
         update library.local_track_files
-           set metadata = library.local_track_files.metadata || %(stale_metadata)s::jsonb,
+           set metadata = jsonb_set(
+                 coalesce(library.local_track_files.metadata, '{}'::jsonb),
+                 '{scan_cache}',
+                 coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
+                   || jsonb_build_object(
+                   'source', %(source)s,
+                   'stale', true,
+                   'stale_marked_at', coalesce(
+                     library.local_track_files.metadata
+                       #>> '{scan_cache,stale_marked_at}',
+                     now()::text
+                   )
+                 ),
+                 true
+               ),
                last_seen_at = now()
         from library.local_tracks
         join bootstrap_context on bootstrap_context.library_id = library.local_tracks.library_id
+        join library.library_roots
+          on library.library_roots.library_id = bootstrap_context.library_id
         where library.local_track_files.track_id = library.local_tracks.id
+          and library.library_roots.id = library.local_track_files.library_root_id
           and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
+          and library.local_track_files.scan_cache_stale is false
+          and coalesce(
+            nullif(library.library_roots.metadata ->> 'root_id', ''),
+            library.local_track_files.metadata ->> 'library_root_id'
+          ) = any(%(observed_root_ids)s::text[])
           and (
             %(current_path_count)s = 0
             or library.local_track_files.private_path <> all(%(current_paths)s::text[])
           );
+    """
+
+
+def _mark_targeted_track_files_stale_sql() -> str:
+    return r"""
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        matched_files as (
+          select library.local_track_files.id
+          from library.local_track_files
+          join library.local_tracks
+            on library.local_tracks.id = library.local_track_files.track_id
+          join bootstrap_context
+            on bootstrap_context.library_id = library.local_tracks.library_id
+          join library.library_roots
+            on library.library_roots.id = library.local_track_files.library_root_id
+           and library.library_roots.library_id = bootstrap_context.library_id
+          where coalesce(
+                  nullif(library.library_roots.metadata ->> 'root_id', ''),
+                  library.local_track_files.metadata ->> 'library_root_id'
+                ) = %(root_id)s
+            and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
+            and library.local_track_files.scan_cache_stale is false
+            and (
+              library.local_track_files.private_path = any(%(deleted_paths)s::text[])
+              or exists (
+                select 1
+                from unnest(%(deleted_subtrees)s::text[]) as deleted_subtree(path)
+                where starts_with(
+                  replace(library.local_track_files.private_path, E'\\', '/'),
+                  rtrim(replace(deleted_subtree.path, E'\\', '/'), '/') || '/'
+                )
+              )
+            )
+        ),
+        updated_files as (
+          update library.local_track_files
+             set metadata = jsonb_set(
+                   coalesce(library.local_track_files.metadata, '{}'::jsonb),
+                   '{scan_cache}',
+                   coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)
+                     || jsonb_build_object(
+                     'source', %(source)s,
+                     'stale', true,
+                     'stale_marked_at', coalesce(
+                       library.local_track_files.metadata
+                         #>> '{scan_cache,stale_marked_at}',
+                       now()::text
+                     )
+                   ),
+                   true
+                 ),
+                 last_seen_at = now()
+          from matched_files
+          where library.local_track_files.id = matched_files.id
+          returning library.local_track_files.track_id
+        )
+        select distinct library.local_albums.album_key as affected_album_key
+        from updated_files
+        join library.local_tracks
+          on library.local_tracks.id = updated_files.track_id
+        join library.local_albums
+          on library.local_albums.id = library.local_tracks.album_id
+        where library.local_albums.album_key is not null;
     """

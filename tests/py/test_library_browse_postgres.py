@@ -4164,6 +4164,76 @@ def test_postgres_selected_artist_query_context_rebuilds_filtered_family_sidebar
     assert search_calls == ["neal morse"]
 
 
+def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(monkeypatch):
+    from music_app.services import library_browse_postgres as browse_module
+
+    matching_primary_row = _browse_album_row(
+        artist="Neal Morse",
+        album_id=1,
+        album_key="neal-morse-transatlantic-demos",
+        title="The Transatlantic Demos",
+    )
+    matching_family_row = _browse_album_row(
+        artist="Transatlantic",
+        album_id=2,
+        album_key="transatlantic-smpte",
+        title="SMPTe",
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {
+            "family_artists": ["Transatlantic"],
+            "alias_to_canonical": {
+                "Neal Morse": "Neal Morse",
+                "Transatlantic": "Transatlantic",
+            },
+            "canonical_to_aliases": {
+                "Neal Morse": ["Neal Morse"],
+                "Transatlantic": ["Transatlantic"],
+            },
+        },
+    )
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_support_state",
+        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_search_rows",
+        lambda *_args, **_kwargs: [matching_primary_row, matching_family_row],
+    )
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+
+    payload = repository.build_selected_artist_payload(
+        query_params={
+            "surface": "albums",
+            "q": "transatlantic",
+            "artist": "Neal Morse",
+            "omit_sidebar": "1",
+        },
+        library_state={},
+    )
+
+    assert [
+        album["name"]
+        for group in payload["primary_artist_groups"]
+        for album in group["albums"]
+    ] == ["The Transatlantic Demos"]
+    assert payload["family_artist_groups"] == []
+    assert [item["display_name"] for item in payload["artist_family_filters"]] == [
+        "Neal Morse",
+        "Transatlantic",
+    ]
+
+
 def test_postgres_selected_artist_query_context_preserves_explicit_collaboration_selection(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -6748,6 +6818,21 @@ def test_album_detail_sql_scopes_ignored_repairs_to_requested_album_paths():
     assert "library.ignored_repairs.metadata ->> 'album_key'" in structural_rollup
     assert "library.local_track_files.library_id" not in structural_rollup
     assert "matched_album_ids.album_id = library.local_albums.id" in structural_rollup
+
+
+def test_album_detail_sql_excludes_tracks_without_an_active_file():
+    from music_app.services.library_browse_postgres import _album_detail_sql
+
+    sql = " ".join(_album_detail_sql().split()).lower()
+    detail_joins = sql.split("from library.local_albums", 1)[1]
+
+    assert "join library.local_tracks" in detail_joins
+    assert "left join library.local_tracks" not in detail_joins
+    assert (
+        "join library.local_track_files on library.local_track_files.track_id = "
+        "library.local_tracks.id and library.local_track_files.scan_cache_stale is false"
+    ) in detail_joins
+    assert "metadata #>> '{{scan_cache,stale}}'" not in detail_joins
 
 
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):

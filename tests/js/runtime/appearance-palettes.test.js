@@ -1,15 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
+
+const appearanceCss = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
 
 const runtime = () => require(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'));
 const defaults = () => ({
   main_surface_color: null, panel_background_color: null,
   palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked',
+  album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled',
+  alert_family: 'ember',
 });
 const green = () => ({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' });
 const steel = () => ({ background: '#14283B', fill: '#8BAED1', edge: '#B9CADD' });
 const powder = () => ({ background: '#CBDEED', fill: '#4F7398', edge: '#395571' });
+const playerStyle = () => ({
+  surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
+  controls: { fill: '#24B86B', border: '#86EFAC' },
+  waveform: { fill: '#387F68', edge: '#AFD8C2' },
+  handles: { color: '#AFD8C2' },
+});
+const interactions = source => ({
+  item_hover: null,
+  item_selected: null,
+  button_hover_background: null,
+  button_pressed: null,
+  item_outline: { source, color: source === 'custom' ? '#86B7EF' : null },
+});
 
 function setup(overrides = {}) {
   const requests = [], applied = [];
@@ -21,6 +39,27 @@ function setup(overrides = {}) {
   });
   return { controller, requests, applied };
 }
+
+test('empty cover artwork follows the active main-elements palette', () => {
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.track-modal-cover-shell \.cover-placeholder/);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.utility-detail-cover-placeholder/);
+  assert.match(appearanceCss, /background:\s*linear-gradient\([^;]*var\(--appearance-card\)[^;]*var\(--appearance-main-surface\)[^;]*var\(--appearance-control\)/s);
+  assert.match(appearanceCss, /color:\s*var\(--appearance-muted\)/);
+  assert.match(appearanceCss, /border-color:\s*var\(--appearance-line\)/);
+});
+
+test('Artist Family filters and gallery options follow the active palette interaction tokens', () => {
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.gallery-options-floating-button\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*color:\s*var\(--appearance-ink\)[^}]*border-color:\s*var\(--appearance-line\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-box\s*\{[^}]*background:\s*var\(--appearance-card\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip:hover\s*\{[^}]*background:\s*var\(--appearance-item-hover,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\.active\s*\{[^}]*background:\s*var\(--appearance-item-selected,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
+});
+
+test('light palettes render the notification glyph with contrast-safe palette ink', () => {
+  assert.match(appearanceCss, /:root\[data-appearance-mode='light'\] \.cover-lookup-drawer-glyph img\s*\{[^}]*opacity:\s*0/s);
+  assert.match(appearanceCss, /:root\[data-appearance-mode='light'\] \.cover-lookup-drawer-glyph::before\s*\{[^}]*background:\s*var\(--appearance-ink\)[^}]*mask-image:\s*url\('\/static\/images\/cover-lookup-notification-icon-offwhite\.png'\)/s);
+});
 
 test('the approved eleven palettes expose three panel companions and coordinated player colors', () => {
   assert.deepEqual(runtime().palettes.map(palette => palette.id), [
@@ -40,6 +79,22 @@ test('the approved eleven palettes expose three panel companions and coordinated
   }
   assert.deepEqual(runtime().resolveAppearance({ ...defaults(), palette_id: 'steelblue' }).player, steel());
   assert.deepEqual(runtime().resolveAppearance({ ...defaults(), palette_id: 'powderblue' }).player, powder());
+});
+
+test('every Main elements palette provides a coordinated selection accent', () => {
+  assert.deepEqual(Object.fromEntries(runtime().palettes.map(palette => [palette.id, palette.selectionAccent])), {
+    steelblue: '#8BAED1',
+    navy: '#91B4E3',
+    powderblue: '#4F7398',
+    graphite: '#8A96A3',
+    slate: '#7896B4',
+    midnight: '#8297CC',
+    black: '#1DB954',
+    blackgray: '#BDBDBD',
+    paper: '#596775',
+    silver: '#596775',
+    coollight: '#526E8B',
+  });
 });
 
 test('palette and companion edits stay in the preview and save one complete preference', async () => {
@@ -190,4 +245,83 @@ test('session clear discards palette and custom waveform group and rejects a lat
   assert.deepEqual(controller.getState().draft, defaults());
   assert.equal(controller.getState().canSave, false);
   assert.deepEqual(applied, []);
+});
+
+test('aggregate palette edits coordinate selection accent while preserving interaction and player sections', () => {
+  const customPlayerStyle = playerStyle();
+  const initial = {
+    ...defaults(),
+    revision: 9,
+    interaction_overrides: interactions('automatic'),
+    selection_accent: { enabled: true, color: '#526B8B' },
+    player_style_override: customPlayerStyle,
+    player_recent_sets: [customPlayerStyle],
+  };
+  const { controller } = setup({ initial });
+  controller.setPalette('slate');
+  const state = controller.getState();
+
+  assert.equal(state.revision, 9);
+  assert.deepEqual(state.draft.interaction_overrides, initial.interaction_overrides);
+  assert.deepEqual(state.draft.selection_accent, { enabled: true, color: '#7896B4' });
+  assert.deepEqual(state.draft.player_style_override, customPlayerStyle);
+  assert.deepEqual(state.playerRecentSets, [customPlayerStyle]);
+});
+
+test('automatic, theme, player, and custom outline sources resolve against the effective Appearance', () => {
+  const api = runtime();
+  assert.equal(typeof api.resolveInteractionOutline, 'function');
+  const base = { ...defaults(), palette_id: 'steelblue', panel_index: 0 };
+  const themeEffective = api.resolveAppearance(base);
+  const customPlayer = playerStyle();
+  const playerEffective = api.resolveAppearance({ ...base, player_override: customPlayer });
+
+  assert.equal(api.resolveInteractionOutline({
+    ...base,
+    interaction_overrides: interactions('automatic'),
+    player_style_override: null,
+  }, themeEffective), themeEffective.tokens.accent);
+  assert.equal(api.resolveInteractionOutline({
+    ...base,
+    interaction_overrides: interactions('automatic'),
+    player_style_override: customPlayer,
+  }, playerEffective), customPlayer.controls.border);
+  assert.equal(api.resolveInteractionOutline({
+    ...base,
+    interaction_overrides: interactions('theme'),
+    player_style_override: customPlayer,
+  }, playerEffective), playerEffective.tokens.accent);
+  assert.equal(api.resolveInteractionOutline({
+    ...base,
+    interaction_overrides: interactions('player'),
+    player_style_override: customPlayer,
+  }, playerEffective), customPlayer.controls.border);
+  assert.equal(api.resolveInteractionOutline({
+    ...base,
+    interaction_overrides: interactions('custom'),
+    player_style_override: customPlayer,
+  }, playerEffective), '#86B7EF');
+});
+
+test('saved theme application publishes the resolved player-aware interaction outline token', () => {
+  const properties = new Map();
+  const root = {
+    style: {
+      setProperty(name, value) { properties.set(name, value); },
+      removeProperty(name) { properties.delete(name); },
+    },
+    setAttribute() {},
+    removeAttribute() {},
+  };
+  const customPlayer = playerStyle();
+
+  runtime().applyTheme({
+    ...defaults(),
+    palette_id: 'steelblue',
+    interaction_overrides: interactions('automatic'),
+    selection_accent: { enabled: true, color: '#8BAED1' },
+    player_style_override: customPlayer,
+  }, root);
+
+  assert.equal(properties.get('--appearance-interaction-outline'), customPlayer.controls.border);
 });

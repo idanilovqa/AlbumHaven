@@ -2,8 +2,22 @@
 function getBackgroundAppearanceEditor() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
 }
-function confirmBackgroundAppearanceLeave() {
-  return getBackgroundAppearanceEditor()?.allowLeave(message => showBrowserConfirm(message)) !== false;
+let pendingBackgroundAppearanceLeave = null;
+function confirmBackgroundAppearanceLeave(onDiscard = null) {
+  const editor = getBackgroundAppearanceEditor();
+  if (!editor || editor.allowLeave(() => false) !== false) return true;
+  if (!pendingBackgroundAppearanceLeave && typeof showAppConfirmDialog === 'function') {
+    pendingBackgroundAppearanceLeave = showAppConfirmDialog({
+      title: 'Discard appearance changes?',
+      message: 'Your unsaved Appearance changes will be lost.',
+      cancelLabel: 'Keep editing',
+      acceptLabel: 'Discard changes',
+      danger: true,
+    }).then(accepted => {
+      if (accepted && editor.allowLeave(() => true) !== false) onDiscard?.();
+    }).finally(() => { pendingBackgroundAppearanceLeave = null; });
+  }
+  return false;
 }
 function unmountAppearanceEditors() {
   getBackgroundAppearanceEditor()?.unmount();
@@ -43,6 +57,21 @@ function mountSeekbarAppearanceEditor(detail) {
   const host = detail.querySelector('[data-appearance-seekbar-editor]');
   if (!host) return;
   const editor = getBackgroundAppearanceEditor();
-  if (editor?.mountSeekbar) editor.mountSeekbar(host, { getLegacyColors: getPreviousBrowserWaveformColors });
+  if (editor?.mountSeekbar) editor.mountSeekbar(host, {
+    getLegacyColors: getPreviousBrowserWaveformColors,
+    getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+  });
   else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+}
+
+function mountAlbumPageAppearanceEditor(detail) {
+  const editor = getBackgroundAppearanceEditor();
+  if (editor?.mountAlbumPage) editor.mountAlbumPage(detail);
+  else detail.innerHTML = '<div class="utility-empty-state">Album page appearance could not be loaded. Reload this page to try again.</div>';
+}
+
+function mountAlertsAppearanceEditor(detail) {
+  const editor = getBackgroundAppearanceEditor();
+  if (editor?.mountAlerts) editor.mountAlerts(detail);
+  else detail.innerHTML = '<div class="utility-empty-state">Alert appearance could not be loaded. Reload this page to try again.</div>';
 }

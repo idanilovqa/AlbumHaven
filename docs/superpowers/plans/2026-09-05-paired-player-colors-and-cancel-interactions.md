@@ -29,7 +29,7 @@
 - Produces: `derivePairedPlayerColor(sourceRole, color) -> { role, color }`.
 - Consumes: `normalizeColor`, `setPlayerStylePath`, and `controller.setWaveformColor`.
 
-- [ ] **Step 1: Add failing tests**
+- [x] **Step 1: Add failing tests**
 
 Assert that each Classic green reference color maps to its paired reference,
 that all four edit directions retain the selected field exactly, that waveform
@@ -37,7 +37,7 @@ edge edits also update an untouched matching handle, and that a separately
 edited handle stays independent. Assert theme and recent-set restoration remain
 atomic.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' --test --test-concurrency=1 tests/js/runtime/appearance-waveform-recents.test.js tests/js/runtime/appearance-palettes.test.js
@@ -45,7 +45,7 @@ atomic.
 
 Expected: the new pairing assertions fail because direct edits update one field.
 
-- [ ] **Step 3: Implement the pure pair conversion and direct-edit wiring**
+- [x] **Step 3: Implement the pure pair conversion and direct-edit wiring**
 
 Add these reference pairs:
 
@@ -70,7 +70,7 @@ derived path before calling `controller.setPlayerStyle(style)`. Change
 set `handles.color` to the new edge only if it equaled the previous edge. Do not
 call the helper from `setPlayerStyle` or `restorePlayerSet`.
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
+- [x] **Step 4: Run the focused tests and verify GREEN**
 
 Run the Step 2 command. Expected: all selected tests pass.
 
@@ -90,7 +90,7 @@ Run the Step 2 command. Expected: all selected tests pass.
 - `.ui-button` consumes `--appearance-interaction-outline`, hover-background,
   pressed-background, and existing surface tokens.
 
-- [ ] **Step 1: Add failing unit and component assertions**
+- [x] **Step 1: Add failing unit and component assertions**
 
 Require the generic Button CSS to own hover border/outline, active feedback,
 keyboard-focus outline, and disabled exclusions. Load only base and Button CSS
@@ -98,7 +98,7 @@ in the component fixture. Assert Cancel renders `ui-button--quiet`, retains its
 base background on hover/active apart from a faint translucent tint, and uses
 the semantic outline color.
 
-- [ ] **Step 2: Run unit tests and verify RED**
+- [x] **Step 2: Run unit tests and verify RED**
 
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' --test --test-concurrency=1 tests/js/runtime/button-component.test.js
@@ -107,7 +107,7 @@ the semantic outline color.
 Expected: assertions fail because `.ui-button` owns layout only and the renderer
 does not expose the quiet modifier.
 
-- [ ] **Step 3: Implement shared interactions**
+- [x] **Step 3: Implement shared interactions**
 
 In `renderButtonMarkup`, append `ui-button--quiet` when `options.quiet === true`.
 Render the EditorFooter secondary Cancel action with `quiet: true`.
@@ -141,11 +141,11 @@ Add these component-owned states, retaining the existing ActionButton rules:
 }
 ```
 
-- [ ] **Step 4: Run unit tests and verify GREEN**
+- [x] **Step 4: Run unit tests and verify GREEN**
 
 Run the Step 2 command. Expected: all Button unit tests pass.
 
-- [ ] **Step 5: Run the focused component test**
+- [x] **Step 5: Run the focused component test**
 
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' scripts/run-playwright-component.cjs test tests/components/buttonInteractionOutline.spec.js --workers=1
@@ -165,15 +165,15 @@ and player-excluded controls remain inert.
 - Consumes both completed slices.
 - Produces fresh focused test evidence and a manual test script.
 
-- [ ] **Step 1: Run focused JavaScript verification**
+- [x] **Step 1: Run focused JavaScript verification**
 
 ```powershell
 & 'C:\Program Files\nodejs\node.exe' --test --test-concurrency=1 tests/js/runtime/appearance-waveform-recents.test.js tests/js/runtime/appearance-palettes.test.js tests/js/runtime/appearance-workspace.test.js tests/js/runtime/button-component.test.js
 ```
 
-- [ ] **Step 2: Run `git diff --check` on the changed files**
+- [x] **Step 2: Run `git diff --check` on the changed files**
 
-- [ ] **Step 3: Report the exact manual checks**
+- [x] **Step 3: Report the exact manual checks**
 
 Edit both sides of each player pair, select **Use player colors**, verify Cancel
 hover/press/focus treatment, choose a custom outline, and confirm later player

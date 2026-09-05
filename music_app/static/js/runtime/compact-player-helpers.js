@@ -23,20 +23,20 @@ function didCompactPlayerDrag({ startX, startY, currentX, currentY, threshold = 
 
 function clampCompactPlayerPosition(options = {}) {
   const margin = Math.max(0, Number(options.margin) || 0);
-  const maximumX = Math.max(margin, Number(options.viewportWidth) - Number(options.playerWidth) - margin);
+  const leftMargin = Math.max(margin, Number(options.leftMargin) || 0);
+  const maximumX = Math.max(leftMargin, Number(options.viewportWidth) - Number(options.playerWidth) - margin);
   const maximumY = Math.max(margin, Number(options.viewportHeight) - Number(options.playerHeight) - margin);
   return {
-    x: Math.max(margin, Math.min(Number(options.x) || 0, maximumX)),
+    x: Math.max(leftMargin, Math.min(Number(options.x) || 0, maximumX)),
     y: Math.max(margin, Math.min(Number(options.y) || 0, maximumY)),
   };
 }
 
 function createCompactPlayerSessionPosition(options = {}) {
-  const tree = options.treeRect || {};
   return clampCompactPlayerPosition({
     ...options,
-    x: Number(tree.left) + Number(options.margin || 0),
-    y: Number(tree.top) + Number(tree.height) - Number(options.playerHeight) - Number(options.margin || 0),
+    x: Number(options.leftMargin ?? options.margin ?? 0),
+    y: Number(options.viewportHeight) - Number(options.playerHeight) - Number(options.margin || 0),
   });
 }
 
@@ -56,6 +56,12 @@ function resolveCompactQueueControls({ queueLength, currentIndex } = {}) {
   };
 }
 
+function shouldOpenCompactPlayerAlbum({ style, eventType, detail = 0 } = {}) {
+  if (eventType === 'dblclick') return style === 'floating';
+  if (eventType === 'click') return style !== 'floating' || Number(detail) === 0;
+  return false;
+}
+
 if (typeof module !== 'undefined' && module.exports) module.exports = {
   COMPACT_PLAYER_MODE_STORAGE_KEY,
   isCompactPlayerEligible,
@@ -67,4 +73,5 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   createCompactPlayerSessionPosition,
   resolveDockedCompactGeometry,
   resolveCompactQueueControls,
+  shouldOpenCompactPlayerAlbum,
 };

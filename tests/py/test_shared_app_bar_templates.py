@@ -147,6 +147,11 @@ def test_library_actions_retain_handlers_and_server_filtered_admin_entry(render,
     notifications = bar.one("button", id="cover-lookup-drawer-button")
     status = bar.one("button", id="scan-indicator")
     settings = bar.one("button", id="settings-button")
+    for action in (notifications, status, settings):
+        classes = (action.attrs.get("class") or "").split()
+        assert "action-button" in classes
+        assert "ui-button--icon" in classes
+        assert "ui-button--medium" in classes
     assert notifications.attrs["data-toggle-cover-lookup-drawer"] == "1"
     assert status.attrs["aria-label"] == "Library status"
     assert "data-account-menu-trigger" in settings.attrs

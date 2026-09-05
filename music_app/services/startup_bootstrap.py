@@ -130,6 +130,8 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "album_display_metadata": source_album.get("album_display_metadata"),
         "total_duration_seconds": source_album.get("total_duration_seconds"),
         "total_duration_display": source_album.get("total_duration_display"),
+        "inventory_status": source_album.get("inventory_status"),
+        "missing_since": source_album.get("missing_since"),
         "track_count_preview": track_count_preview,
         "tracks": [],
         "has_duplicate_files": bool(source_album.get("has_duplicate_files")),

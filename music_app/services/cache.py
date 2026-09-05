@@ -283,6 +283,7 @@ def save_cache_to_disk_for_config(
     expected_cover_mutation_revision: int | None = None,
     expected_inventory_mutation_revision: int | None = None,
     rebuild_relation_projection: bool = False,
+    observed_library_root_ids: set[str] | None = None,
 ) -> dict[str, object] | None:
     snapshot_options: dict[str, object] = {
         "relation_views": relation_views,
@@ -310,6 +311,12 @@ def save_cache_to_disk_for_config(
         snapshot_options["before_commit"] = before_commit
     if rebuild_relation_projection:
         snapshot_options["rebuild_relation_projection"] = True
+    if observed_library_root_ids is not None:
+        snapshot_options["observed_library_root_ids"] = {
+            str(root_id).strip()
+            for root_id in observed_library_root_ids
+            if str(root_id).strip()
+        }
     return _select_runtime_scan_cache_adapter(config).save_snapshot(
         cache_path,
         file_cache,

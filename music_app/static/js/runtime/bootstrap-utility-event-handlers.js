@@ -1,4 +1,13 @@
 ﻿async function handleUtilityBootstrapClick(event) {
+  const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
+  if (removeMissingAlbumButton) {
+    event.preventDefault();
+    const album = getSelectedProblematicAlbum();
+    const runtimeOptions = typeof album?.constructor === 'function' ? new album.constructor() : {};
+    runtimeOptions.source = 'problematic-files';
+    void confirmMissingAlbumRemoval(album, runtimeOptions);
+    return;
+  }
   const repairAlertDismiss = event.target.closest('[data-dismiss-repair-alert="1"]');
   if (repairAlertDismiss) {
     event.preventDefault();
@@ -179,8 +188,12 @@
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
-    const sharedAppearanceDraft = ['backgrounds', 'seekbar'].includes(state.utility.appearanceKey) && ['backgrounds', 'seekbar'].includes(nextAppearanceKey);
-    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+    const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
+    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
+      state.utility.appearanceKey = nextAppearanceKey;
+      renderUtilityModalContent();
+    })) return;
     state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;

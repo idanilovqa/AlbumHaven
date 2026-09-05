@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from threading import Event
 from time import perf_counter
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -42,6 +43,13 @@ from music_app.services.ignored_repairs import load_ignored_repair_keys, save_ig
 from music_app.services.ignored_versions import load_ignored_version_keys, save_ignored_version_keys
 from music_app.services.library import _album_key, album_to_dict
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.missing_album_removal_postgres import (
+    MissingAlbumNotFound,
+    MissingAlbumReappeared,
+    MissingAlbumRootUnavailable,
+    PostgresMissingAlbumRemovalService,
+)
+from music_app.services.policy_asgi import require_action
 from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
@@ -101,6 +109,61 @@ from music_app.services.edit_state import find_album_dicts_by_track_paths
 
 
 router = APIRouter()
+
+
+@router.post("/api/library/albums/{album_key}/confirm-removal")
+async def confirm_missing_album_removal(request: Request, album_key: str) -> JSONResponse:
+    await require_action("library.inventory.manage")(request)
+    normalized_key = unquote(str(album_key or "")).strip()
+    if not normalized_key:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    try:
+        result = await run_in_threadpool(
+            PostgresMissingAlbumRemovalService(_app_config(request)).confirm_removal,
+            normalized_key,
+        )
+    except MissingAlbumReappeared:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Album was found again. Refresh the library before removing it.",
+                "code": "album_reappeared",
+            },
+            status_code=409,
+        )
+    except MissingAlbumRootUnavailable:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "The album's library root is unavailable. Reconnect it before removing the album.",
+                "code": "library_root_unavailable",
+            },
+            status_code=409,
+        )
+    except MissingAlbumNotFound:
+        return JSONResponse(
+            {"ok": False, "error": "Album not found", "code": "album_not_found"},
+            status_code=404,
+        )
+    library_state = _library_state(request)
+    albums = library_state.get("albums")
+    if isinstance(albums, list):
+        library_state["albums"] = [
+            album
+            for album in albums
+            if str(
+                album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
+            ).strip()
+            != normalized_key
+        ]
+    from music_app.services.problematic_albums import (
+        invalidate_problematic_albums_payload_cache,
+    )
+    from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
+
+    invalidate_problematic_albums_payload_cache(library_state)
+    invalidate_utility_rules_payload_cache(library_state)
+    return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
 _STRUCTURAL_EDIT_FIELDS = {"album", "album_artist", "year", "edition", "exception_type"}
@@ -407,12 +470,22 @@ async def library_settings_write(request: Request) -> JSONResponse:
         )
 
     try:
+        replace_live_watch_roots = getattr(
+            request.app.state,
+            "replace_library_watch_roots",
+            None,
+        )
         result = save_library_settings_and_start_refresh(
             _app_config(request),
             settings_payload,
             library_state=_library_state(request),
             start_background_refresh=_start_background_refresh_for_asgi_request(request),
             build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
+            replace_watch_roots=(
+                replace_live_watch_roots
+                if callable(replace_live_watch_roots)
+                else (lambda _roots: None)
+            ),
         )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))

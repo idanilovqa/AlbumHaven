@@ -460,6 +460,10 @@ function normalizeRuntimeSearchContext(searchContext, fallback = null) {
     },
     result_groups: normalizedResultGroups,
     search_filters: normalizeRuntimeSearchFilters(source.search_filters, base.search_filters),
+    artist_name_match_artists: normalizeRuntimeStringList(
+      source.artist_name_match_artists,
+      Array.isArray(base.artist_name_match_artists) ? base.artist_name_match_artists : [],
+    ),
   };
 }
 

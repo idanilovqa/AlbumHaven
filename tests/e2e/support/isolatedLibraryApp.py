@@ -440,6 +440,9 @@ LASTFM_SCROBBLE_ARTIST = "Album Haven Last.fm Fixture"
 LASTFM_SCROBBLE_ALBUM = "Signed Scrobble Journey"
 LASTFM_SCROBBLE_TRACK = "Fake Loop Source"
 LASTFM_SCROBBLE_YEAR = 2026
+TRANSATLANTIC_ARTIST = "Transatlantic"
+TRANSATLANTIC_NEAL_ALBUM = "The Transatlantic Demos"
+NEAL_SCOPE_TRACK_TITLE = "Family Scope Beacon"
 NEAL_MORSE_FAMILY_ARTISTS = (
     JOSEPH_ARTIST,
     "The Neal Morse Band",
@@ -1642,6 +1645,8 @@ def build_file_cache(
             if artist_index == cover_matching_fixture_artist_index
             else artist_family_fixture_indices[artist_index][1]
             if artist_index in artist_family_fixture_indices
+            else TRANSATLANTIC_ARTIST
+            if artist_index == alias_overflow_artist_index
             else alias_artist_by_index.get(
                 artist_index,
                 search_family_artist_by_index.get(
@@ -1813,6 +1818,8 @@ def build_file_cache(
                 if is_lastfm_scrobble_fixture
                 else JOSEPH_ALBUM
                 if is_joseph_fixture
+                else TRANSATLANTIC_NEAL_ALBUM
+                if artist == JOSEPH_ARTIST and album_index == 2
                 else PROBLEMATIC_TRACK_ALBUM
                 if is_problematic_track_navigation_fixture
                 else f"Comfortably Numb Sidebar Fixture {problematic_sidebar_fixture_number:02d}"
@@ -1932,7 +1939,11 @@ def build_file_cache(
                 if artist == SNOW_WHITE_RAW_ARTIST
                 else artist
             )
-            if artist in MORSE_ALIAS_FIXTURES or artist in NEAL_MORSE_FAMILY_ARTISTS:
+            if (
+                artist in MORSE_ALIAS_FIXTURES
+                or artist in NEAL_MORSE_FAMILY_ARTISTS
+                or artist == TRANSATLANTIC_ARTIST
+            ):
                 album_dir = (
                     library_root
                     / "Progressive Projects"
@@ -2070,6 +2081,12 @@ def build_file_cache(
                 title = f"{album} Track {track_number}"
                 track_artist = artist
                 track_path = album_dir / f"{track_number:02d} - Track {track_number}.mp3"
+                if (
+                    artist == JOSEPH_ARTIST
+                    and album == TRANSATLANTIC_NEAL_ALBUM
+                    and track_index == 0
+                ):
+                    title = NEAL_SCOPE_TRACK_TITLE
                 if is_rarity_fixture:
                     rarity_track = RARITY_FIXTURE_TRACKS[track_index]
                     title = str(rarity_track["title"])

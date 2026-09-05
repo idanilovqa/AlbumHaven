@@ -143,10 +143,10 @@ test.describe(`${RULES_CASE_ID} synthetic-large utilities rules and sibling-tab 
           memoryKey: 'appearance-memory',
           memoryLabel: 'Appearance idle memory after ready',
           assertSummary(summary) {
-            expect(summary.itemCount, 'Expected the Appearance tab to show its seekbar entry.').toBeGreaterThan(0);
-            expect(summary.seekbarModeCount, 'Expected both Appearance seekbar mode radios to render.').toBeGreaterThanOrEqual(2);
-            expect(summary.colorInputCount, 'Expected Appearance waveform color inputs to render.').toBeGreaterThanOrEqual(2);
-            expect(summary.detailTitle).toBe('Seekbar');
+            expect(summary.itemCount, 'Expected all three Appearance pages.').toBe(3);
+            expect(summary.sectionLabels).toEqual(['Main elements', 'Player & Seekbar', 'Selection & Hover']);
+            expect(summary.seekbarModeCount, 'Player controls stay unmounted on the Main elements page.').toBe(0);
+            expect(summary.detailTitle).toBe('Main elements');
           },
         },
       ];

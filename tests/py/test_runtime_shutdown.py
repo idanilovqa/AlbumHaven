@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.thread import _threads_queues
 import threading
 from pathlib import Path
 
@@ -35,6 +36,35 @@ def test_runtime_shutdown_tests_do_not_use_flask_fixtures_or_app_context():
     assert not [pattern for pattern in forbidden if pattern in source]
 
 
+def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation():
+    from music_app import _stop_library_watch_runtime
+
+    calls: list[object] = []
+
+    class Stoppable:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def stop(self) -> None:
+            calls.append(self.name)
+
+    class Executor:
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            calls.append(("executor", wait, cancel_futures))
+
+    _stop_library_watch_runtime(
+        watch_service=Stoppable("watcher"),
+        event_coordinator=Stoppable("coordinator"),
+        targeted_executor=Executor(),
+    )
+
+    assert calls == [
+        "watcher",
+        "coordinator",
+        ("executor", False, True),
+    ]
+
+
 def test_create_daemon_executor_uses_daemon_worker_threads():
     executor = runtime_shutdown.create_daemon_executor(
         max_workers=1,
@@ -47,6 +77,10 @@ def test_create_daemon_executor_uses_daemon_worker_threads():
     assert started_event.wait(timeout=2)
     assert executor._threads
     assert all(thread.daemon for thread in executor._threads)
+    assert all(
+        thread not in _threads_queues
+        for thread in executor._threads
+    )
 
     release_event.set()
     assert future.result(timeout=2) is True

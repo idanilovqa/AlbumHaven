@@ -30,10 +30,10 @@
 **Interfaces:**
 - Produces: `ButtonComponent.renderButton(options): string`, Jinja `ui_button(...)`, `.ui-button` variants.
 
-- [ ] Add failing source and renderer tests for escaping, variants, action attributes, and centered layout.
-- [ ] Run `node --test --test-concurrency=1 tests/js/runtime/button-component.test.js` and confirm failure.
-- [ ] Implement the JavaScript renderer, Jinja macro, shared CSS, asset loading, and EditorFooter migration.
-- [ ] Rerun the focused test and confirm it passes.
+- [x] Add failing source and renderer tests for escaping, variants, action attributes, and centered layout.
+- [x] Run `node --test --test-concurrency=1 tests/js/runtime/button-component.test.js` and confirm failure.
+- [x] Implement the JavaScript renderer, Jinja macro, shared CSS, asset loading, and EditorFooter migration.
+- [x] Rerun the focused test and confirm it passes.
 
 ### Task 2: Restore component-owned player mode controls
 
@@ -47,10 +47,10 @@
 - Consumes: Jinja `ui_button` with `data-ui-button-action`.
 - Produces: `player-collapse` inside `.player-shell`, `player-expand` inside `.compact-player-shell`.
 
-- [ ] Add failing ownership and placement assertions; remove expectations for `.player-mode-toggle`.
-- [ ] Run the compact-player focused test and confirm failure.
-- [ ] Move controls into their shells, bind both controller actions, and restore the floating top-left circular placement.
-- [ ] Rerun the focused test and confirm it passes.
+- [x] Add failing ownership and placement assertions; remove expectations for `.player-mode-toggle`.
+- [x] Run the compact-player focused test and confirm failure.
+- [x] Move controls into their shells, bind both controller actions, and restore the floating top-left circular placement.
+- [x] Rerun the focused test and confirm it passes.
 
 ### Task 3: Confine Appearance draft tokens to previews
 
@@ -62,10 +62,10 @@
 - Consumes: `applyDraftEditorTheme(draft, previewHost)`.
 - Produces: exactly three preview-scoped draft-token calls and no editor/footer draft-token calls.
 
-- [ ] Add a failing contract test for the three preview hosts and stable footer/editor chrome.
-- [ ] Run the Appearance workspace test and confirm failure.
-- [ ] Move draft-token application to `.background-preview`, `.player-live-preview`, and `.selection-hover-preview`; move draft accent variables to the Selection preview.
-- [ ] Rerun the focused test and confirm it passes.
+- [x] Add a failing contract test for the three preview hosts and stable footer/editor chrome.
+- [x] Run the Appearance workspace test and confirm failure.
+- [x] Move draft-token application to `.background-preview`, `.player-live-preview`, and `.selection-hover-preview`; move draft accent variables to the Selection preview.
+- [x] Rerun the focused test and confirm it passes.
 
 ### Task 4: Registry, bundle, and aggregate verification
 
@@ -77,7 +77,7 @@
 **Interfaces:**
 - Produces: registered current-web Button extension and browser bundle parity.
 
-- [ ] Record the approved component, variants, consumers, accessibility, client support, and verification contract.
-- [ ] Run `npm run build:runtime`.
-- [ ] Run the Button, compact-player, bundle, Appearance, palette, selection, and navigation JavaScript tests in one serial Node process.
-- [ ] Run `git diff --check` for all changed files.
+- [x] Record the approved component, variants, consumers, accessibility, client support, and verification contract.
+- [x] Run `npm run build:runtime`.
+- [x] Run the Button, compact-player, bundle, Appearance, palette, selection, and navigation JavaScript tests in one serial Node process.
+- [x] Run `git diff --check` for all changed files.

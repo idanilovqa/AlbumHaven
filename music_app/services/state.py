@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from music_app.services.app_logging import log_app_event
 from music_app.services.cover_refresh_execution import run_cover_jobs
@@ -27,6 +28,13 @@ from music_app.services.library_hydration import (
 )
 from music_app.services.library_indexing import ScanCancelled, scan_library_file_cache
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.library_browse_postgres import (
+    invalidate_postgres_utility_projection_cache,
+)
+from music_app.services.problematic_albums import (
+    invalidate_problematic_albums_payload_cache,
+)
+from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
 from music_app.services.ignored_repairs import migrate_legacy_album_exclusions
 from music_app.services.startup_bootstrap import library_browse_postgres_is_effective
 from music_app.services.cache import save_cache_to_disk_for_config
@@ -64,6 +72,27 @@ def run_runtime_state_mutation_for_state(
     """Serialize a live-state mutation without changing scan generations."""
     with _CACHE_LOCK:
         return mutation_action()
+
+
+def invalidate_targeted_library_projections(
+    library_state: dict[str, object],
+    config: dict[str, object],
+    *,
+    revision: int,
+    affected_album_keys: tuple[str, ...],
+) -> None:
+    """Invalidate only live projections affected by a committed watcher event."""
+    browse_cache = library_state.get("_view_payload_root_browse_cache")
+    if isinstance(browse_cache, dict):
+        browse_cache.clear()
+    library_state["inventory_mutation_revision"] = max(0, int(revision or 0))
+    library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    invalidate_problematic_albums_payload_cache(library_state)
+    invalidate_utility_rules_payload_cache(library_state)
+    invalidate_postgres_utility_projection_cache(
+        database_url=config.get("ALBUM_HAVEN_APP_DATABASE_URL"),
+        kinds=("problematic-files", "rules"),
+    )
 
 
 def _bounded_file_error_history_recorder(
@@ -398,6 +427,13 @@ def refresh_relation_views_for_state(
             target_state.get("separate_release_keys") or set()
         ),
     }
+    observed_library_root_ids = target_state.get("observed_library_root_ids")
+    if isinstance(observed_library_root_ids, (set, list, tuple)):
+        snapshot_options["observed_library_root_ids"] = {
+            str(root_id).strip()
+            for root_id in observed_library_root_ids
+            if str(root_id).strip()
+        }
     if postgres_relation_projection:
         snapshot_options["rebuild_relation_projection"] = True
     else:
@@ -533,17 +569,54 @@ def scan_music_incremental(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
+    root_definitions = get_library_roots(cfg)
+    available_paths = {
+        str(Path(root).resolve(strict=False)).casefold()
+        for root in scan_roots
+    }
+    observed_roots = {
+        str(root.get("id") or "").strip(): Path(str(root.get("path") or "")).resolve(
+            strict=False
+        )
+        for root in root_definitions
+        if str(root.get("id") or "").strip()
+        and str(Path(str(root.get("path") or "")).resolve(strict=False)).casefold()
+        in available_paths
+    }
+    if publication_state is not None:
+        publication_state["observed_library_root_ids"] = set(observed_roots)
     counter_state = library_state.get("_file_error_history_counts")
     if not isinstance(counter_state, dict):
         counter_state = {}
         library_state["_file_error_history_counts"] = counter_state
-    record_file_error = _bounded_file_error_history_recorder(
+    base_record_file_error = _bounded_file_error_history_recorder(
         cfg,
         logger,
         scan_generation=int(expected_scan_generation or 0),
         counter_state=counter_state,
     )
-    return scan_library_file_cache(
+    traversal_failed_root_ids: set[str] = set()
+
+    def record_file_error(action: str, **fields: object) -> None:
+        if action in {
+            "Library directory read failed",
+            "Library directory entry inspection failed",
+        }:
+            failed_path = Path(str(fields.get("path") or "")).resolve(strict=False)
+            for root_id, root_path in observed_roots.items():
+                try:
+                    failed_path.relative_to(root_path)
+                except ValueError:
+                    continue
+                traversal_failed_root_ids.add(root_id)
+                if publication_state is not None:
+                    observed_root_ids = publication_state.get("observed_library_root_ids")
+                    if isinstance(observed_root_ids, set):
+                        observed_root_ids.discard(root_id)
+                break
+        base_record_file_error(action, **fields)
+
+    result = scan_library_file_cache(
         library_state,
         roots=scan_roots,
         supported_extensions=cfg["SUPPORTED_EXTENSIONS"],
@@ -551,11 +624,16 @@ def scan_music_incremental(
         exception_overrides=load_exception_overrides(cfg),
         use_existing_cache=use_existing_cache,
         expected_scan_generation=expected_scan_generation,
-        root_definitions=get_library_roots(cfg),
+        root_definitions=root_definitions,
         publication_state=publication_state,
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
     )
+    if publication_state is not None and traversal_failed_root_ids:
+        observed_root_ids = publication_state.get("observed_library_root_ids")
+        if isinstance(observed_root_ids, set):
+            observed_root_ids.difference_update(traversal_failed_root_ids)
+    return result
 
 
 def refresh_cover_artwork_for_track_paths_for_state(
@@ -779,6 +857,9 @@ def refresh_library_for_state(
                 logger,
                 kwargs,
             ),
+        ),
+        recover_library_watch_health=config.get(
+            "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
         ),
     )
 

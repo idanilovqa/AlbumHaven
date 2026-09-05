@@ -1,0 +1,83 @@
+/* Shared current-web Button primitive. Consumer variants own colors and dimensions. */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+  vertical-align: middle;
+  cursor: pointer;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
+}
+.ui-button[hidden] { display: none !important; }
+.ui-button__content { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.ui-button--medium { min-height: 34px; }
+.ui-button--small { min-height: 26px; }
+.ui-button--icon { padding: 0; aspect-ratio: 1; }
+.ui-button:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
+}
+.ui-button:active:not(:disabled):not([aria-disabled='true']) {
+  background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)));
+}
+.ui-button:focus-visible {
+  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+}
+.ui-button--quiet:hover:not(:disabled):not([aria-disabled='true']) {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+.ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: default; }
+
+/* Shared app-bar-style specialization for compact icon actions. */
+.action-button {
+  box-sizing: border-box;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  flex: 0 0 34px;
+  padding: 0;
+  border: 1px solid var(--appearance-line, #ffffff04);
+  border-radius: 8px;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  background: var(--appearance-control, var(--app-control, var(--panel, #1e2c3e)));
+  color: var(--appearance-ink, var(--app-ink, var(--text, #f3f6fa)));
+  font: inherit;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
+}
+.action-button__content,
+.action-button__icon {
+  width: 18px;
+  height: 18px;
+}
+.action-button__content { display: grid; place-items: center; }
+.action-button__icon { display: block; }
+.action-button:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+  background: var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50));
+}
+.action-button:active:not(:disabled):not([aria-disabled='true']) {
+  background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-hover, #293a50)));
+}
+.action-button:focus-visible {
+  outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+}
+.action-button:disabled,
+.action-button[aria-disabled='true'] {
+  opacity: 0.38;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button, .action-button { transition: none; }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from music_app.services import library as library_module
 from music_app.services import library_roots as library_roots_module
 from music_app.services import view_payloads as view_payloads_module
 from music_app.services.state import format_timestamp
+from music_app.services.allowed_actions import AllowedActions
 from music_app.services.view_payloads import (
     _build_live_selected_artist_group_payloads,
     _build_full_selected_artist_group_cache_key,
@@ -320,6 +322,8 @@ def test_build_status_payload_reflects_current_state_counters(app):
         "last_scan_display": format_timestamp(1716000000.0),
         "last_error": "scan warning",
         "album_total": 1,
+        "inventory_mutation_revision": 0,
+        "watcher_health": {"state": "healthy", "problems": []},
         "relation_projection": {
             "ready": False,
             "builder_version": "",
@@ -353,6 +357,80 @@ def test_build_status_payload_uses_provided_state_without_flask_context():
 def test_build_status_payload_requires_explicit_state_without_flask_context():
     with pytest.raises(ValueError, match="library_state is required"):
         build_status_payload()
+
+
+def test_watch_health_projection_is_path_free_and_uses_canonical_manual_scan_action():
+    problem = {
+        "state": "overflow",
+        "root_id": "C:/Private Music/Main Library",
+        "detected_at": "2026-09-04T12:00:00+00:00",
+        "message": "Some library changes may have been missed.",
+        "path": "C:/Private Music/Main Library/Artist/Album/01.flac",
+    }
+
+    projected = view_payloads_module.project_library_watch_health(
+        [problem],
+        AllowedActions(("library.refresh",)),
+    )
+
+    assert projected["state"] == "warning"
+    assert projected["problems"] == [
+        {
+            "state": "overflow",
+            "root_key": projected["problems"][0]["root_key"],
+            "detected_at": "2026-09-04T12:00:00+00:00",
+            "message": "Some library changes may have been missed.",
+            "allowed_actions": {"library.refresh": True},
+        }
+    ]
+    assert projected["problems"][0]["root_key"].startswith("root_")
+    assert "Private Music" not in json.dumps(projected)
+    assert "path" not in projected["problems"][0]
+    assert "root_id" not in projected["problems"][0]
+
+
+def test_watch_health_projection_keeps_read_only_message_without_manual_scan_action():
+    projected = view_payloads_module.project_library_watch_health(
+        [
+            {
+                "state": "root_unavailable",
+                "root_id": "archive-root",
+                "detected_at": "2026-09-04T12:00:00+00:00",
+                "message": "Some library changes may have been missed.",
+            }
+        ],
+        AllowedActions(()),
+    )
+
+    assert projected["state"] == "warning"
+    assert projected["problems"][0]["message"] == (
+        "Some library changes may have been missed."
+    )
+    assert projected["problems"][0]["allowed_actions"] == {}
+
+
+def test_status_payload_includes_watcher_health_without_local_paths():
+    watcher_health = {
+        "state": "warning",
+        "problems": [
+            {
+                "state": "overflow",
+                "root_key": "root_1234567890abcdef",
+                "detected_at": "2026-09-04T12:00:00+00:00",
+                "message": "Some library changes may have been missed.",
+                "allowed_actions": {},
+            }
+        ],
+    }
+
+    payload = build_status_payload(
+        library_state={"albums": [], "inventory_mutation_revision": 42},
+        watcher_health=watcher_health,
+    )
+
+    assert payload["watcher_health"] == watcher_health
+    assert payload["inventory_mutation_revision"] == 42
+    assert "Private Music" not in json.dumps(payload)
 
 
 def test_resolve_view_payload_request_normalizes_query_arguments(app):
@@ -1099,6 +1177,98 @@ def test_build_view_payload_search_sidebar_stays_limited_to_artist_name_matches(
     assert [item["artist"] for item in payload["artists_sidebar"]] == ["Neal Morse"]
     assert payload["artist_count"] == 1
     assert [group["artist"] for group in payload["artist_groups"]] == ["Neal Morse"]
+
+
+def test_build_view_payload_scopes_content_matched_artist_without_narrowing_artist_name_match(app):
+    albums = [
+        {
+            "key": "neal-one",
+            "name": "One",
+            "album_artist": "Neal Morse",
+            "artists": ["Neal Morse"],
+        },
+        {
+            "key": "neal-transatlantic-demos",
+            "name": "The Transatlantic Demos",
+            "album_artist": "Neal Morse",
+            "artists": ["Neal Morse"],
+        },
+        {
+            "key": "transatlantic-smpte",
+            "name": "SMPTe",
+            "album_artist": "Transatlantic",
+            "artists": ["Transatlantic"],
+        },
+        {
+            "key": "transatlantic-bridge",
+            "name": "Bridge Across Forever",
+            "album_artist": "Transatlantic",
+            "artists": ["Transatlantic"],
+        },
+    ]
+    relation_views = {
+        "alias_to_canonical": {},
+        "canonical_to_aliases": {},
+        "folder_related": {
+            "Neal Morse": {"Transatlantic"},
+            "Transatlantic": {"Neal Morse"},
+        },
+    }
+    selected_artist_family_projections = {
+        "Neal Morse": {
+            "family_artists": ["Transatlantic"],
+            "relations_last_built": 0.0,
+            "loaded": True,
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+        "Transatlantic": {
+            "family_artists": ["Neal Morse"],
+            "relations_last_built": 0.0,
+            "loaded": True,
+            "alias_to_canonical": {},
+            "canonical_to_aliases": {},
+        },
+    }
+    _seed_artist_family_payload_state(
+        app,
+        albums,
+        relation_views,
+        selected_artist_family_projections=selected_artist_family_projections,
+    )
+
+    neal_payload = build_view_payload(
+        app=app,
+        query_args=_query_args_from_url(
+            "/view-data?q=transatlantic&artist=Neal+Morse"
+        ),
+    )
+    transatlantic_payload = build_view_payload(
+        app=app,
+        query_args=_query_args_from_url(
+            "/view-data?q=transatlantic&artist=Transatlantic"
+        ),
+    )
+
+    assert [
+        album["name"]
+        for group in neal_payload["primary_artist_groups"]
+        for album in group["albums"]
+    ] == ["The Transatlantic Demos"]
+    assert neal_payload["family_artist_groups"] == []
+    assert [group["artist"] for group in neal_payload["artist_groups"]] == [
+        "Neal Morse"
+    ]
+    assert {
+        album["name"]
+        for group in transatlantic_payload["primary_artist_groups"]
+        for album in group["albums"]
+    } == {"SMPTe", "Bridge Across Forever"}
+    assert {
+        album["name"]
+        for group in transatlantic_payload["family_artist_groups"]
+        for album in group["albums"]
+    } == {"One", "The Transatlantic Demos"}
 
 
 def test_build_view_payload_merges_case_only_variants_for_shared_artist_groups(app):

@@ -102,6 +102,7 @@ function loadHelper(options = {}) {
   const trackModalTitle = new FakeElement('track-modal-title');
   const trackModalSubtitle = new FakeElement('track-modal-subtitle');
   const trackModalCover = new FakeElement('track-modal-cover');
+  const trackModalMissingWarning = new FakeElement('track-modal-missing-warning');
   const trackModalDuplicateWarning = new FakeElement('track-modal-duplicate-warning');
   const trackModalDuplicateTabs = new FakeElement('track-modal-duplicate-tabs');
   const trackModalList = new FakeElement('track-modal-list');
@@ -152,6 +153,7 @@ function loadHelper(options = {}) {
     'track-modal-title': trackModalTitle,
     'track-modal-subtitle': trackModalSubtitle,
     'track-modal-cover': trackModalCover,
+    'track-modal-missing-warning': trackModalMissingWarning,
     'track-modal-duplicate-warning': trackModalDuplicateWarning,
     'track-modal-duplicate-tabs': trackModalDuplicateTabs,
     'track-modal-list': trackModalList,
@@ -196,6 +198,9 @@ function loadHelper(options = {}) {
       },
     },
     state: {
+      status: {
+        inventory_mutation_revision: Number(options.inventoryMutationRevision || 0),
+      },
       modalReleases: [],
       modalReleaseIndex: 0,
       ui: {
@@ -229,6 +234,7 @@ function loadHelper(options = {}) {
         title: trackModalTitle,
         subtitle: trackModalSubtitle,
         cover: trackModalCover,
+        missingWarning: trackModalMissingWarning,
         duplicateWarning: trackModalDuplicateWarning,
         duplicateTabs: trackModalDuplicateTabs,
         list: trackModalList,
@@ -877,6 +883,10 @@ async function run() {
         });
       },
     });
+    const staleMissingWarning = context.getTrackModalElements().missingWarning;
+    staleMissingWarning.hidden = false;
+    staleMissingWarning.innerHTML = '<div role="alert">Album details unavailable</div>';
+
     context.openTrackModal({
       key: 'alpha',
       name: 'Album Alpha',
@@ -894,6 +904,8 @@ async function run() {
     assert.match(elements.subtitle.textContent, /Loading album details/);
     assert.match(elements.list.innerHTML, /Loading album details/);
     assert.match(elements.cover.innerHTML, /Loading cover art/);
+    assert.equal(elements.missingWarning.hidden, true);
+    assert.equal(elements.missingWarning.innerHTML, '');
     assert.doesNotMatch(elements.cover.innerHTML, /<img/);
     assert.doesNotMatch(elements.cover.innerHTML, /\/cover(?:\?|\.)/);
     assert.deepEqual(context.buildAlbumDisplayCoverUrlCalls, []);
@@ -923,6 +935,8 @@ async function run() {
     assert.equal(context.state.ui.pendingTrackModalLoadAlbumKey, '');
     assert.equal(elements.title.textContent, '');
     assert.equal(elements.cover.innerHTML, '');
+    assert.equal(elements.missingWarning.hidden, true);
+    assert.equal(elements.missingWarning.innerHTML, '');
     assert.equal(elements.list.innerHTML, '');
     assert.equal(elements.folder.dataset.album, '');
     assert.equal(elements.folder.dataset.albumKey, '');
@@ -1513,6 +1527,85 @@ async function run() {
       true,
       'reopening a structurally edited source must use authoritative problem annotations',
     );
+  }
+
+  {
+    const albumAlias = 'watcher::retagged-album';
+    const compactAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Retagged Album',
+      album_artist: 'Watcher Artist',
+      year: 2004,
+      preview_only: true,
+      track_count_preview: 1,
+      tracks: [],
+    };
+    const staleHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Retagged Album\\01 Old title.mp3', title: 'Old title' }],
+    };
+    const freshHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Retagged Album\\01 Old title.mp3', title: 'New title' }],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      fetchedAlbum: freshHydratedAlbum,
+    });
+
+    context.cacheHydratedTrackModalAlbum(albumAlias, staleHydratedAlbum, {
+      aliases: [albumAlias],
+    });
+    context.state.gallery.albumIndex.set(albumAlias, staleHydratedAlbum);
+
+    assert.equal(context.invalidateAllHydratedTrackModalAlbumDetails(), 1);
+    assert.strictEqual(context.state.gallery.albumIndex.get(albumAlias), compactAlbum);
+    const resolvedAlbum = await context.loadTrackModalAlbumDetails(albumAlias);
+    assert.strictEqual(resolvedAlbum, freshHydratedAlbum);
+    assert.equal(resolvedAlbum.tracks[0].title, 'New title');
+  }
+
+  {
+    const albumAlias = 'watcher::revision-aware-album';
+    const compactAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Revision-aware Album',
+      album_artist: 'Watcher Artist',
+      year: 2005,
+      preview_only: true,
+      track_count_preview: 1,
+      tracks: [],
+    };
+    const staleHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Revision-aware Album\\01 Old.mp3', title: 'Old' }],
+    };
+    const freshHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Revision-aware Album\\01 Fresh.mp3', title: 'Fresh' }],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      fetchedAlbum: freshHydratedAlbum,
+      inventoryMutationRevision: 7,
+    });
+    context.cacheHydratedTrackModalAlbum(albumAlias, staleHydratedAlbum, {
+      aliases: [albumAlias],
+    });
+
+    context.state.status.inventory_mutation_revision = 8;
+    const resolvedAlbum = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(resolvedAlbum, freshHydratedAlbum);
+    assert.equal(context.fetchCalls.length, 1);
   }
 
   {

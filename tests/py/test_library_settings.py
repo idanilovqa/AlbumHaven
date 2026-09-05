@@ -12,6 +12,7 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
     seen = []
     library_state: dict[str, object] = {}
     refresh_calls = []
+    watcher_root_calls = []
 
     result = save_library_settings_and_start_refresh(
         {"MUSIC_DIR": "C:\\Music"},
@@ -20,6 +21,7 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
         start_background_refresh=lambda **kwargs: refresh_calls.append(kwargs),
         build_status_payload=lambda: {"scan_in_progress": True},
         save_root_settings=lambda config, payload: seen.append((config, payload)) or {"normalized": True},
+        replace_watch_roots=lambda roots: watcher_root_calls.append(roots),
     )
 
     assert seen == [({"MUSIC_DIR": "C:\\Music"}, {"settings": True})]
@@ -27,11 +29,43 @@ def test_save_library_settings_workflow_uses_injected_root_settings_writer():
     assert library_state["pending_cover_refresh_after_scan"] is True
     assert library_state["pending_cover_refresh_force_search"] is False
     assert refresh_calls == [{"force": True, "scan_mode": "library_settings_update"}]
+    assert watcher_root_calls == [[]]
     assert result == {
         "settings": {"normalized": True},
         "status": {"scan_in_progress": True},
         "refresh_started": True,
     }
+
+
+def test_save_library_settings_replaces_live_watcher_roots_before_refresh():
+    sequence = []
+    normalized = {
+        "main_library_roots": [{"id": "main", "path": "C:\\Music"}],
+        "hoarding_library_roots": [{"id": "hoard", "path": "D:\\Hoard"}],
+        "new_arrivals_roots": [{"id": "new", "path": "E:\\Incoming"}],
+    }
+
+    save_library_settings_and_start_refresh(
+        {},
+        normalized,
+        library_state={},
+        start_background_refresh=lambda **kwargs: sequence.append(("refresh", kwargs)),
+        build_status_payload=lambda: {},
+        save_root_settings=lambda _config, _payload: normalized,
+        replace_watch_roots=lambda roots: sequence.append(("watch", roots)),
+    )
+
+    assert sequence == [
+        (
+            "watch",
+            [
+                {"id": "main", "path": "C:\\Music", "category": "main_library_roots"},
+                {"id": "hoard", "path": "D:\\Hoard", "category": "hoarding_library_roots"},
+                {"id": "new", "path": "E:\\Incoming", "category": "new_arrivals_roots"},
+            ],
+        ),
+        ("refresh", {"force": True, "scan_mode": "library_settings_update"}),
+    ]
 
 
 def test_save_library_settings_workflow_rejects_running_scan_before_write():

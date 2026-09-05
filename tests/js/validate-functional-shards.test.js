@@ -16,10 +16,10 @@ const validatorExists = fs.existsSync(validatorPath);
 const validatorTest = validatorExists ? test : test.skip;
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 35],
+  ['gallery-search-visual', 36],
   ['cover-providers', 18],
   ['metadata-mutations', 13],
-  ['playback-utilities', 25],
+  ['playback-utilities', 30],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -84,7 +84,7 @@ function parseFunctionalMatrix(job) {
     });
 }
 
-test('functional shard contract pins the approved four-way 91-case assignment', () => {
+test('functional shard contract pins the approved four-way 97-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -98,7 +98,7 @@ test('functional shard contract pins the approved four-way 91-case assignment', 
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 91);
+  assert.equal(total, 97);
 
   const autoplayOwners = contract.shards.filter((shard) => shard.invocations.some(
     (invocation) => invocation.config === 'playwright.autoplay-allowed.config.js',
@@ -582,7 +582,7 @@ validatorTest('cover baseline-sensitive cases use fresh app processes after shar
   assert.equal(secondWave.invocations.at(-1).baselineMode, 'global-mutation');
 });
 
-validatorTest('gallery startup projections share one early app process and DDT Studio runs after shared cases', () => {
+validatorTest('gallery startup projections share one early app process before isolated Appearance and DDT mutations', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
@@ -600,6 +600,7 @@ validatorTest('gallery startup projections share one early app process and DDT S
       'isolated-app-process',
       'isolated-app-process',
       'isolated-app-process',
+      'shared-setup',
       'isolated-app-process',
     ],
   );
@@ -626,6 +627,10 @@ validatorTest('gallery startup projections share one early app process and DDT S
   );
   assert.deepEqual(
     waves[1].invocations[0].cases.map((ownedCase) => ownedCase.case),
+    ['FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale'],
+  );
+  assert.deepEqual(
+    waves[1].invocations[1].cases.map((ownedCase) => ownedCase.case),
     ['FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores'],
   );
 });
@@ -649,7 +654,10 @@ validatorTest('playback uses three shared baselines and isolates conflicting exc
   );
   assert.deepEqual(
     waves[2].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
-    ['FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion'],
+    [
+      'FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal',
+      'FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+    ],
   );
   const ordinaryInvocationIndex = waves[1].invocations.findIndex(
     (invocation) => invocation.config === 'playwright.config.js'
@@ -707,10 +715,10 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 35, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 36, waves: [1, 2] }],
     ['cover-providers', { cases: 18, waves: [1, 2] }],
     ['metadata-mutations', { cases: 13, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 25, waves: [1, 2, 3] }],
+    ['playback-utilities', { cases: 30, waves: [1, 2, 3] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

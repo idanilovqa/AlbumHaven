@@ -5,6 +5,7 @@ export { CoverLookupActions } from './coverLookupActions.js';
 export { GalleryActions } from './galleryActions.js';
 export { GlobalPlayerActions } from './globalPlayerActions.js';
 export { LibrarySettingsActions } from './librarySettingsActions.js';
+export { LibraryFilesystemWatcherActions } from './libraryFilesystemWatcherActions.js';
 export { NavigationPanelActions } from './navigationPanelActions.js';
 export { ScanPageActions } from './scanPageActions.js';
 export { SettingsModalAppBarActions } from './settingsModalAppBarActions.js';

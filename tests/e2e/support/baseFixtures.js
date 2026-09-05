@@ -11,6 +11,7 @@ import {
   GalleryActions,
   GlobalPlayerActions,
   LibrarySettingsActions,
+  LibraryFilesystemWatcherActions,
   NavigationPanelActions,
   ScanPageActions,
   SettingsModalAppBarActions,
@@ -33,6 +34,7 @@ import {
   GalleryPage,
   GlobalPlayer,
   LibrarySettings,
+  LibraryWatchStatus,
   NavigationPanel,
   ScanPage,
   SettingsModalAppBar,
@@ -516,6 +518,10 @@ export const test = base.extend({
 
   librarySettingsActions: async ({ page }, use, testInfo) => {
     await use(new LibrarySettingsActions(new LibrarySettings(page, testInfo)));
+  },
+
+  libraryFilesystemWatcherActions: async ({ page }, use, testInfo) => {
+    await use(new LibraryFilesystemWatcherActions(new LibraryWatchStatus(page, testInfo)));
   },
 
   navigationPanelActions: async ({ page }, use, testInfo) => {

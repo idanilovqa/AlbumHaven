@@ -639,9 +639,13 @@ async function openAlbumInExplorer(album) {
 function getTrackModalElements() {
   return {
     overlay: document.getElementById('track-modal'),
+    header: typeof document.querySelector === 'function'
+      ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
+      : null,
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),
+    missingWarning: document.getElementById('track-modal-missing-warning'),
     duplicateWarning: document.getElementById('track-modal-duplicate-warning'),
     duplicateTabs: document.getElementById('track-modal-duplicate-tabs'),
     list: document.getElementById('track-modal-list'),

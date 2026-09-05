@@ -34,6 +34,7 @@ function createContext() {
     familyPrefetchPending: false,
     familyForegroundIdleChecks: [],
     speculativeDetailPrewarmCancels: 0,
+    hydratedAlbumDetailInvalidations: 0,
     waveformPeakLoadSuspensions: [],
     waveformPeakLoadResumptions: [],
     prependUtilityLogHistoryEntries: [],
@@ -155,6 +156,9 @@ function createContext() {
     },
     cancelTrackModalAlbumDetailsPrewarms() {
       calls.speculativeDetailPrewarmCancels += 1;
+    },
+    invalidateAllHydratedTrackModalAlbumDetails() {
+      calls.hydratedAlbumDetailInvalidations += 1;
     },
     suspendPlayerWaveformPeakLoadsForForegroundView() {
       const suspension = { id: calls.waveformPeakLoadSuspensions.length + 1 };
@@ -3084,6 +3088,79 @@ test('pollStatus refreshes the current loaded gallery when a background scan com
     level: 'success',
     durationMs: 3200,
   }]);
+});
+
+test('pollStatus refreshes the loaded gallery when targeted inventory revision advances', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+
+  const statusPromise = context.pollStatus();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  pendingRequests[1].resolveWith({
+    artist_groups: [{
+      artist: 'Broadcast',
+      albums: [{ key: 'tender-buttons', missing_from_library: true }],
+    }],
+    album_count: 1,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
+  assert.equal(context.state.view.artist_groups[0].albums[0].missing_from_library, true);
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
+    '/status',
+    '/view-data?surface=albums',
+  ]);
+  assert.equal(
+    calls.hydratedAlbumDetailInvalidations,
+    2,
+    'inventory refresh invalidates before dispatch and again after applying the canonical payload',
+  );
+  assert.deepEqual(calls.showToast, []);
+});
+
+test('pollStatus treats the first inventory revision observation as a baseline', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
 });
 
 test('pollStatus does not launch the awaited root refresh while a sidebar selection is pending', async () => {

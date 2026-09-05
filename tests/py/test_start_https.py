@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import importlib
+import logging
 from pathlib import Path
 import ssl
 
@@ -10,6 +11,35 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 import pytest
+
+
+def test_windows_proactor_connection_reset_filter_is_narrow():
+    module = importlib.import_module("start_https")
+    reset = ConnectionResetError(10054, "connection reset")
+    reset.winerror = 10054
+    expected = logging.LogRecord(
+        "asyncio",
+        logging.ERROR,
+        __file__,
+        1,
+        "Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)",
+        (),
+        (ConnectionResetError, reset, None),
+    )
+    unrelated = logging.LogRecord(
+        "asyncio",
+        logging.ERROR,
+        __file__,
+        1,
+        "unrelated callback failed",
+        (),
+        (RuntimeError, RuntimeError("failed"), None),
+    )
+
+    log_filter = module._WindowsProactorConnectionResetFilter()
+
+    assert log_filter.filter(expected) is False
+    assert log_filter.filter(unrelated) is True
 
 
 @pytest.fixture

@@ -60,7 +60,7 @@ class Connection:
         pass
 
 
-def test_store_load_preserves_unconfigured_baseline_and_scopes_account():
+def test_store_load_projects_selection_accent_from_the_aggregate_appearance_row():
     connection = Connection()
     store = service_module().PostgresSelectionAccentStore(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/test"},
@@ -71,9 +71,11 @@ def test_store_load_preserves_unconfigured_baseline_and_scopes_account():
     assert 41 in params
     assert "%s" in query
     assert "account_id" in query.lower()
+    assert "app.user_appearance_preferences" in query.lower()
+    assert "appearance_selection_accent_v1" not in query
 
 
-def test_store_save_updates_only_nested_preference_without_overwriting_other_metadata():
+def test_store_save_projects_through_revisioned_appearance_without_updating_account_metadata():
     connection = Connection(PREFERENCE)
     store = service_module().PostgresSelectionAccentStore(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://unused/test"},
@@ -84,9 +86,12 @@ def test_store_save_updates_only_nested_preference_without_overwriting_other_met
     assert len(updates) == 1
     sql, params = updates[0]
     assert 41 in params
-    assert "jsonb_set" in sql.lower()
+    assert "app.user_appearance_preferences" in sql.lower()
     assert "selection_accent" in sql
-    assert "is_active" in sql.lower()
+    assert "revision" in sql.lower()
+    assert "revision + 1" in sql.lower() or "revision+1" in sql.lower()
+    assert "app.accounts" not in sql.lower()
+    assert "appearance_selection_accent_v1" not in sql
 
 
 class MemoryStore:

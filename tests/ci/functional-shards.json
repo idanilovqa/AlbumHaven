@@ -177,6 +177,12 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
+              "case": "FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match"
             },
             {
@@ -601,8 +607,38 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/appearanceControls.spec.js",
+              "case": "FTC-APPEARANCE-001 applies every Appearance control family to real UI and preserves it across reload"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
+              "case": "FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
+              "case": "FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
               "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/playerViewModes.spec.js",
+              "case": "FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state"
             },
             {
               "config": "playwright.config.js",

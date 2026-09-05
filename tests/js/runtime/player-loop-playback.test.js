@@ -2691,11 +2691,15 @@ test('bottom player mounts shared scissors and range controllers instead of the 
   const playerMarkup = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'templates', 'index.html',
   ), 'utf8');
+  const playbackControlMacro = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'playback-control-cluster.html',
+  ), 'utf8');
   const elementLookupSource = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'player-and-waveform.js',
   ), 'utf8');
 
-  assert.match(playerMarkup, /data-loop-action-owner="global-player"/);
+  assert.match(`${playerMarkup}\n${playbackControlMacro}`, /data-loop-action-owner="\{\{ owner_id \}\}"/);
+  assert.match(playerMarkup, /playback_control_cluster\('expanded-player', owner_id='global-player'\)/);
   assert.match(playerMarkup, /data-loop-range-owner="global-player"/);
   assert.doesNotMatch(playerMarkup, /id="player-loop-button"|id="loop-popup"/);
   assert.match(helperSource, /mountLoopEditActionControl\s*\(/);
@@ -3004,13 +3008,16 @@ test('bottom player owns one runtime-built pod and one visible time output', () 
   const playerMarkup = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'templates', 'index.html',
   ), 'utf8');
+  const playbackControlMacro = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'playback-control-cluster.html',
+  ), 'utf8');
   assert.equal((playerMarkup.match(/id="player-time"/g) || []).length, 1);
   assert.doesNotMatch(playerMarkup, /data-loop-range-time=/);
   assert.match(
-    playerMarkup,
-    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="global-player"[^>]*>\s*<\/span>/,
+    `${playerMarkup}\n${playbackControlMacro}`,
+    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="\{\{ owner_id \}\}"[^>]*>\s*<\/span>/,
   );
-  assert.doesNotMatch(playerMarkup, /data-loop-action-owner="global-player"[^]*data-loop-action="enter"/);
+  assert.doesNotMatch(`${playerMarkup}\n${playbackControlMacro}`, /data-loop-action-owner="\{\{ owner_id \}\}"[^]*data-loop-action="enter"/);
   assert.match(helperSource, /buildLoopEditActionControl\s*\([^]*ownerId:\s*['"]global-player['"]/);
 });
 

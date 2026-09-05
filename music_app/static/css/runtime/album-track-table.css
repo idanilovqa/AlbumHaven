@@ -1,0 +1,136 @@
+.album-track-table {
+  --album-track-accent: var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff)));
+  --album-track-play-hover: var(--appearance-play, var(--appearance-player-accent, var(--album-track-accent)));
+  --album-track-playing-period: 3.6s;
+  min-width: 0;
+}
+
+.album-track-table__frame { min-width: 0; }
+.album-track-table__disc { min-width: 0; }
+.album-track-table__disc + .album-track-table__disc { margin-top: 14px; }
+.album-track-table__disc-heading { display: block; margin: 0 0 7px; color: var(--album-track-accent); font-size: 0.86rem; font-weight: 750; }
+.album-track-table .compact-data-table {
+  border-color: color-mix(in srgb, var(--appearance-line, var(--border)) 72%, transparent);
+  border-radius: 9px;
+  overflow: visible;
+  background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 72%, transparent);
+  color: var(--appearance-ink, var(--text));
+}
+.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table {
+  position: relative;
+  border-bottom-right-radius: 0;
+}
+.album-track-table__frame:has(.album-track-table__total) .album-track-table__disc:last-of-type .compact-data-table::after {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
+  right: -1px;
+  bottom: -1px;
+  width: 1px;
+  height: min(108px, 50%);
+  background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--album-track-accent) 10%, transparent) 36%, color-mix(in srgb, var(--album-track-accent) 38%, transparent) 70%, color-mix(in srgb, var(--album-track-accent) 75%, transparent) 100%);
+}
+.album-track-table .compact-data-table-header { border-radius: 8px 8px 0 0; background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 88%, transparent); }
+.album-track-table [role="columnheader"] { color: var(--appearance-muted, var(--muted)); }
+.album-track-table .compact-data-table-row { position: relative; isolation: isolate; }
+.album-track-table .compact-data-table-row:hover { background: color-mix(in srgb, var(--appearance-ink, white) 5%, transparent); }
+.album-track-table__row--search-match {
+  background: color-mix(in srgb, var(--album-track-accent) 11%, transparent);
+  box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
+}
+.album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+.album-track-table__row--playing {
+  border-radius: 8px;
+  outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);
+  outline-offset: -1px;
+  background: color-mix(in srgb, var(--album-track-accent) 7%, transparent);
+  box-shadow: inset 0 0 18px color-mix(in srgb, var(--album-track-accent) 7%, transparent), 0 0 14px color-mix(in srgb, var(--album-track-accent) 20%, transparent);
+}
+.album-track-table__row--playing::before,
+.album-track-table__row--playing::after {
+  --album-track-spectrum-offset: 0turn;
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  background: conic-gradient(from calc(var(--album-track-spectrum-angle, 0turn) + var(--album-track-spectrum-offset)), transparent 0turn, transparent .018turn, color-mix(in srgb, var(--album-track-accent) 10%, transparent) .045turn, color-mix(in srgb, var(--album-track-accent) 48%, transparent) .074turn, var(--album-track-accent) .096turn, color-mix(in srgb, white 78%, var(--album-track-accent)) .104turn, var(--album-track-accent) .112turn, color-mix(in srgb, var(--album-track-accent) 34%, transparent) .14turn, transparent .19turn, transparent 1turn);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  opacity: 0;
+}
+.album-track-table__row--playing::after { --album-track-spectrum-offset: 0.5turn; }
+@property --album-track-spectrum-angle { syntax: '<angle>'; initial-value: 0turn; inherits: false; }
+.album-track-table[data-playing-animation="enabled"] .album-track-table__row--playing.album-track-table__row--animated::before,
+.album-track-table[data-playing-animation="enabled"] .album-track-table__row--playing.album-track-table__row--animated::after {
+  opacity: .84;
+  animation-name: album-track-perimeter-spectrum;
+  animation-duration: var(--album-track-playing-period);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes album-track-perimeter-spectrum { to { --album-track-spectrum-angle: 1turn; } }
+.album-track-table__play { position: relative; display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid color-mix(in srgb, var(--appearance-ink, white) 58%, transparent); border-radius: 999px; background: color-mix(in srgb, var(--appearance-card, var(--panel, #101a29)) 80%, transparent); color: var(--appearance-ink, var(--text)); cursor: pointer; }
+.album-track-table__play:hover:not(:disabled) {
+  border-color: var(--album-track-play-hover);
+  outline: 2px solid var(--album-track-play-hover);
+  outline-offset: 2px;
+}
+.album-track-table__row--playing .album-track-table__play { border-color: var(--album-track-accent); color: var(--album-track-accent); box-shadow: 0 0 10px color-mix(in srgb, var(--album-track-accent) 42%, transparent); }
+.album-track-table__play::before,
+.album-track-table__play::after {
+  --album-track-play-offset: 0turn;
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  inset: -4px;
+  padding: 2px;
+  border-radius: 50%;
+  background: conic-gradient(from var(--album-track-play-offset), transparent 0turn, color-mix(in srgb, var(--album-track-accent) 8%, transparent) .05turn, color-mix(in srgb, var(--album-track-accent) 30%, transparent) .11turn, var(--album-track-accent) .16turn, color-mix(in srgb, white 76%, var(--album-track-accent)) .175turn, transparent .19turn, transparent 1turn);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+}
+.album-track-table__play::after { --album-track-play-offset: 0.5turn; }
+.album-track-table__play--activating::before,
+.album-track-table__play--activating::after { animation: album-track-play-activation 680ms ease-out 1; }
+@keyframes album-track-play-activation {
+  0% { opacity: 0; transform: rotate(0turn) scale(.9); }
+  16% { opacity: 1; }
+  74% { opacity: .9; }
+  100% { opacity: 0; transform: rotate(1turn) scale(1); }
+}
+.album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
+.album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
+.album-track-table [data-cdt-column="duration"] { text-align: right; font-variant-numeric: tabular-nums; }
+.album-track-table__total {
+  width: min(54%, 390px);
+  margin: -1px 0 0 auto;
+  padding: 12px 12px 10px 28px;
+  border-right: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-left: 0;
+  border-top: 0;
+  border-radius: 0 0 9px 0;
+  background: linear-gradient(to left, color-mix(in srgb, var(--album-track-accent) 10%, var(--panel, #101a29)) 0%, color-mix(in srgb, var(--album-track-accent) 5%, transparent) 34%, transparent 72%);
+  color: var(--appearance-ink, var(--text));
+  text-align: right;
+  font-weight: 700;
+  -webkit-mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
+  mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .album-track-table__row--playing::before,
+  .album-track-table__row--playing::after,
+  .album-track-table__play--activating::before,
+  .album-track-table__play--activating::after { display: none; animation: none; }
+}

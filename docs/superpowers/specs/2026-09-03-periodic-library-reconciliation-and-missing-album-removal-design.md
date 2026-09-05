@@ -7,6 +7,12 @@ overrode the mockup gate for this web/server slice. Tauri remains a required
 product client, but its implementation is deferred because no desktop
 repository exists yet.
 
+The September 4
+[targeted filesystem watcher design](2026-09-04-targeted-library-filesystem-watcher-design.md)
+supersedes this document's periodic scheduling, native-watcher rejection,
+performance, E2E timing, and manual-acceptance sections. The missing-album
+state, protected removal transaction, and shared UI adoption remain applicable.
+
 ## Problem
 
 Album Haven does not schedule recurring library scans. It scans an empty
@@ -121,10 +127,9 @@ the album in normal browse; later work may add track-level missing-file review.
 
 Browse payloads expose server-owned fields:
 
-- `missing_from_library`
-- `missing_reason = "album_not_found"`
-- `missing_detected_at`
-- `allowed_actions.confirm_missing_album_removal`
+- `inventory_status = "missing"`
+- `missing_since`
+- `allowed_actions["library.inventory.manage"]`
 
 Clients do not receive raw file paths.
 

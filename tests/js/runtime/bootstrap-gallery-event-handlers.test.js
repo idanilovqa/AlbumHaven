@@ -58,6 +58,7 @@ function createContext(options = {}) {
     waveformPeakLoadResumptions: [],
     albumDetailPrewarms: [],
     galleryFocusGlows: [],
+    missingAlbumRemovalConfirms: [],
   };
   const cachedRootView = options.cachedRootView || null;
   const cachedSelectedArtistView = options.cachedSelectedArtistView || null;
@@ -158,6 +159,10 @@ function createContext(options = {}) {
     },
     openNonAlbumTagEditor() {
       calls.openNonAlbumTagEditor += 1;
+    },
+    confirmMissingAlbumRemoval(album, runtimeOptions) {
+      calls.missingAlbumRemovalConfirms.push({ album, runtimeOptions });
+      return Promise.resolve(true);
     },
     renderGalleryOptionsMenu() {
       calls.renderGalleryOptionsMenu += 1;
@@ -475,8 +480,8 @@ test('unselecting the last related artist leaves primary-filter ownership to loc
 test('openNonAlbumTagEditor hands every displayed loose track to Edit Tags', () => {
   const { context } = createContext();
   const tracks = [
-    { path: 'C:/Music/A/one.mp3', title: 'One', exception_type: 'Non-album rarity' },
-    { path: 'C:/Music/A/two.mp3', title: 'Two', exception_type: 'Interview' },
+    { path: 'C:/Music/A/one.mp3', title: 'One', album_artist: 'A', exception_type: 'Non-album rarity' },
+    { path: 'C:/Music/A/two.mp3', title: 'Two', album_artist: 'A', exception_type: 'Interview' },
   ];
   const calls = [];
   context.state.view.non_album_tracks = tracks;
@@ -1387,6 +1392,76 @@ test('handleSidebarArtistSelectionClick does not reconcile a complete cached sel
   assert.equal(context.state.view.primary_artist_groups[0].albums.length, 10);
   assert.deepEqual(calls.fetchAndRender, []);
   assert.deepEqual(calls.scheduledSearchCommits, []);
+});
+
+test('Album Details removal action opens the shared missing-album confirmation', () => {
+  const { context, calls } = createContext();
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+  };
+  context.resolveTrackModalActionAlbum = () => album;
+  let prevented = false;
+  const button = {};
+
+  context.handleGalleryBootstrapClick({
+    preventDefault() { prevented = true; },
+    target: {
+      closest(selector) {
+        return selector === '[data-remove-missing-album="1"]' ? button : null;
+      },
+    },
+  });
+
+  assert.equal(prevented, true);
+  assert.deepEqual(calls.missingAlbumRemovalConfirms, [{
+    album,
+    runtimeOptions: { source: 'album-details' },
+  }]);
+});
+
+test('handleSidebarArtistSelectionClick reconciles a family artist that matched only search content', () => {
+  const { context, calls } = createContext();
+  context.state.view = {
+    ...context.state.view,
+    query: 'transatlantic',
+    selected_artist: 'Transatlantic',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    search_context: {
+      selected_artist: 'Transatlantic',
+      selected_artist_source: 'auto_top_match',
+      artist_name_match_artists: ['Transatlantic'],
+    },
+    related_artists: ['Neal Morse'],
+    primary_artist_groups: [{
+      artist: 'Transatlantic',
+      albums: [{ key: 'transatlantic-smpte' }],
+    }],
+    family_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [
+        { key: 'neal-one' },
+        { key: 'neal-transatlantic-demos' },
+      ],
+    }],
+    artist_groups: [],
+    artists_sidebar: [
+      { artist: 'Transatlantic', count: 1 },
+      { artist: 'Neal Morse', count: 1 },
+    ],
+  };
+  const { event } = createSidebarArtistEvent('Neal Morse');
+
+  context.handleSidebarArtistSelectionClick(event);
+
+  assert.equal(context.state.view.selected_artist, 'Neal Morse');
+  assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(calls.pushBrowserViewState[0].query, 'transatlantic');
+  assert.equal(calls.pushBrowserViewState[0].selected_artist, 'Neal Morse');
 });
 
 test('handleSidebarArtistSelectionClick promotes an already visible family group into the primary selected-artist view before the fetch returns', () => {

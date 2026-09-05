@@ -393,6 +393,18 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
         in body
     )
     assert (
+        b'<link rel="stylesheet" href="/static/css/runtime/alert-components.css?v='
+        + encoded_runtime_asset_version
+        + b'"'
+        in body
+    )
+    assert (
+        b'<link rel="stylesheet" href="/static/css/runtime/album-artbox-and-gallery-card.css?v='
+        + encoded_runtime_asset_version
+        + b'"'
+        in body
+    )
+    assert (
         f'window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {json.dumps(runtime_asset_version)};'.encode(
             "utf-8"
         )
@@ -969,6 +981,39 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert preview_album["track_count_preview"] == 16
     assert preview_album["tracks"] == []
     assert "16 tracks" in markup
+
+
+def test_build_initial_view_preview_preserves_missing_album_state_for_gallery_alert():
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [],
+            "primary_artist_groups": [
+                {
+                    "artist": "Transatlantic",
+                    "artist_display": "Transatlantic",
+                    "albums": [
+                        {
+                            "key": "transatlantic::smpte-the-roine-stolt-mixes",
+                            "name": "SMPTe - The Roine Stolt Mixes",
+                            "album_artist": "Transatlantic",
+                            "year": 2003,
+                            "inventory_status": "missing",
+                            "missing_since": "2026-09-04T18:45:00+00:00",
+                            "tracks": [],
+                            "preview_only": True,
+                        }
+                    ],
+                }
+            ],
+            "family_artist_groups": [],
+            "artists_sidebar": [],
+        }
+    )
+
+    preview_album = preview["primary_artist_groups"][0]["albums"][0]
+
+    assert preview_album["inventory_status"] == "missing"
+    assert preview_album["missing_since"] == "2026-09-04T18:45:00+00:00"
 
 
 def test_startup_sidebar_artist_links_keep_album_surface_contract():

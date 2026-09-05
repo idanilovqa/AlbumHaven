@@ -9,6 +9,8 @@ import {
 
 const ARTIST = 'Album Rating Contract';
 const RATED_ALBUM = 'Rating Numeric Authority';
+const COVERLESS_ARTIST = 'ДДТ';
+const COVERLESS_ALBUM = 'Студийные записи';
 const GALLERY_SCALE_PERCENT = 125;
 const BASE_CARD_WIDTH_PX = 240;
 const SELECTED_SCALE_CARD_CEILING_PX = resolveSelectedScaleCardCeiling(
@@ -22,8 +24,11 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
   galleryActions,
   page,
   searchToolbarActions,
+  settingsModalAppBarActions,
   stepLogger,
   testArtifacts,
+  utilityAppearanceActions,
+  utilityTabBarActions,
 }) => {
   let wideLayout;
   let narrowLayout;
@@ -34,6 +39,12 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       `/?surface=albums&gallery_display=cards&gallery_scale_percent=${GALLERY_SCALE_PERCENT}`,
     );
     await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.choosePalette('paper', 1);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
     await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(ARTIST);
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, RATED_ALBUM);
@@ -47,11 +58,7 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
     });
-    await galleryActions.waitForVisibleGalleryCoversLoaded({
-      minimumCount: 3,
-      allowPlaceholder: true,
-      placeholderScenario: 'Rating Scan Discovery intentionally has no cover art',
-    });
+    await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 3 });
     await captureResponsiveGalleryScreenshot(
       galleryActions.galleryPage,
       testArtifacts,
@@ -66,11 +73,7 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
     });
-    await galleryActions.waitForVisibleGalleryCoversLoaded({
-      minimumCount: 2,
-      allowPlaceholder: true,
-      placeholderScenario: 'Rating Scan Discovery intentionally has no cover art',
-    });
+    await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 2 });
     await captureResponsiveGalleryScreenshot(
       galleryActions.galleryPage,
       testArtifacts,
@@ -86,5 +89,24 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
     expect(narrowLayout.maxCardWidth).toBeLessThanOrEqual(wideLayout.maxCardWidth + 1);
     expectResponsiveRatingSingleLine(expect, wideLayout);
     expectResponsiveRatingSingleLine(expect, narrowLayout);
+  });
+
+  await stepLogger.step('Apply the Paper palette to an exact projected coverless album card', async () => {
+    await searchToolbarActions.search(COVERLESS_ARTIST, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(COVERLESS_ARTIST);
+    await galleryActions.scrollToAlbumUnderHeading(COVERLESS_ARTIST, COVERLESS_ALBUM);
+    await galleryActions.waitForVisibleGalleryCoversLoaded({
+      minimumCount: 1,
+      allowPlaceholder: true,
+      placeholderScenario: `${COVERLESS_ARTIST} / ${COVERLESS_ALBUM} is the projected coverless fixture`,
+    });
+    const coverPlaceholder = galleryActions.galleryPage.albumCard
+      .coverPlaceholderByAlbumName(COVERLESS_ALBUM);
+    await expect(coverPlaceholder).toBeVisible();
+    const placeholder = await galleryActions.galleryPage.albumCard
+      .readCoverPlaceholderAppearance(COVERLESS_ALBUM);
+    expect(placeholder.backgroundImage).toContain('linear-gradient');
+    expect(placeholder.borderColor).toBe('rgb(184, 189, 197)');
+    expect(placeholder.color).toBe('rgb(80, 87, 98)');
   });
 });

@@ -1,4 +1,5 @@
 import { BasePage } from './basePage.js';
+import { SmallAlert } from './components/smallAlert.js';
 
 function exactNormalizedText(value) {
   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -11,6 +12,8 @@ export class AlbumCard extends BasePage {
     this.cards = page.locator(this.cardSelector);
     this.detailsButtons = page.locator(this.detailsButtonSelector);
     this.coverImages = page.locator(this.coverImageSelector);
+    this.visibleCoverPlaceholders = page.locator(`${this.cardSelector} ${this.coverPlaceholderWithinCardSelector}:visible`);
+    this.visibleTitles = page.locator(`${this.cardSelector}:visible ${this.titleButtonSelector}`);
   }
 
   get cardSelector() {
@@ -139,6 +142,46 @@ export class AlbumCard extends BasePage {
     return this.page.locator('#artist-groups .album-card:visible').filter({
       has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),
     }).locator(this.coverImageWithinCardSelector).first();
+  }
+
+  coverPlaceholderByAlbumName(albumName) {
+    return this.page.locator('#artist-groups .album-card:visible').filter({
+      has: this.page.locator(this.titleButtonSelector).filter({ hasText: exactNormalizedText(albumName) }),
+    }).locator(this.coverPlaceholderWithinCardSelector).first();
+  }
+
+  artboxByAlbumName(albumName) {
+    return this.cardByAlbumName(albumName).locator('.album-artbox').first();
+  }
+
+  missingAlertByAlbumName(albumName) {
+    return new SmallAlert(this.cardByAlbumName(albumName).locator('[data-small-alert="error"]').first());
+  }
+
+  async readCoverPlaceholderAppearance(albumName) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect a real coverless card's palette treatment
+    return this.coverPlaceholderByAlbumName(albumName).evaluate((placeholder) => {
+      const style = getComputedStyle(placeholder);
+      return {
+        backgroundImage: style.backgroundImage,
+        borderColor: style.borderColor,
+        color: style.color,
+      };
+    });
+  }
+
+  async readFirstVisibleCoverPlaceholderAppearance() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect a rendered coverless card's palette treatment
+    return this.visibleCoverPlaceholders.first().evaluate((placeholder) => {
+      const style = getComputedStyle(placeholder);
+      const card = placeholder.closest('.album-card');
+      return {
+        album: String(card?.querySelector('.album-title-button')?.textContent || '').trim(),
+        backgroundImage: style.backgroundImage,
+        borderColor: style.borderColor,
+        color: style.color,
+      };
+    });
   }
 
   visibleDetailsButtonByAlbumName(albumName) {

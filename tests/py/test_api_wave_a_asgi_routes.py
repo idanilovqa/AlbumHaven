@@ -353,6 +353,7 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
 
     calls: list[dict[str, object]] = []
     refresh_calls: list[dict[str, object]] = []
+    watcher_root_calls: list[list[dict[str, object]]] = []
 
     def fake_start_background_refresh_for_state(library_state, config, logger, **kwargs):
         assert library_state is asgi_app.state.library_state
@@ -372,6 +373,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     def fake_save_library_settings_and_start_refresh(config, settings_payload, **kwargs):
         assert config is asgi_app.state.config
         assert kwargs["library_state"] is asgi_app.state.library_state
+        kwargs["replace_watch_roots"](
+            [{"id": "main", "path": settings_payload["main_library_roots"][0]["path"]}]
+        )
         kwargs["start_background_refresh"](force=True, scan_mode="library_settings_update")
         calls.append(
             {
@@ -394,6 +398,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     assert not hasattr(asgi_routes, "_flask_app")
     asgi_logger = SimpleNamespace(name="asgi-library-settings-logger")
     asgi_app.state.logger = asgi_logger
+    asgi_app.state.replace_library_watch_roots = (
+        lambda roots: watcher_root_calls.append(list(roots))
+    )
     asgi_app.state.flask_app = FatalFlaskBridge()
     monkeypatch.setattr(
         asgi_routes,
@@ -451,6 +458,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
             "scan_mode": "library_settings_update",
         }
     ]
+    assert watcher_root_calls == [[
+        {"id": "main", "path": str(app.config["MUSIC_DIR"])}
+    ]]
 
 
 def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch):

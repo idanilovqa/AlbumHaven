@@ -16,6 +16,42 @@ const helperPath = path.join(
   'utility-list-builders.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const statusUiHelperPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'status-ui-helpers.js',
+);
+const statusUiHelperSource = fs.readFileSync(statusUiHelperPath, 'utf8');
+const utilityRendererPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'utility-renderers-and-actions.js',
+);
+const utilityRendererSource = fs.readFileSync(utilityRendererPath, 'utf8');
+const playbackControlClusterPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'playback-control-cluster.js',
+);
+const playbackControlClusterSource = fs.readFileSync(playbackControlClusterPath, 'utf8');
 const compactDataTablePath = path.join(
   __dirname,
   '..',
@@ -137,6 +173,15 @@ function loadHelpers() {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
+
+test('Appearance navigation exposes the Album page editor', () => {
+  assert.match(utilityRendererSource, /'alerts'/);
+  assert.match(utilityRendererSource, /Alerts/);
+  assert.match(utilityRendererSource, /mountAlertsAppearanceEditor/);
+  assert.match(utilityRendererSource, /'album-page'/);
+  assert.match(utilityRendererSource, /Album page/);
+  assert.match(utilityRendererSource, /mountAlbumPageAppearanceEditor/);
+});
 
 function loadPlayerAlbumResolutionHelpers() {
   const context = loadHelpers();
@@ -323,6 +368,7 @@ function loadLoopBuilderHelpers() {
     },
   };
   vm.createContext(context);
+  vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -5879,6 +5925,161 @@ test('Problematic Files detail renders the approved album-first compact table co
   assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|>Problems<|overflow menu|Not a problem|data-open-repair-confirm/);
 });
 
+test('missing album is an album-level non-excludable problem with the shared removal action', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    problem_reasons: ['Album not found'],
+    album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
+    track_problem_rows: [],
+    allowed_actions: { 'library.inventory.manage': true },
+  };
+
+  const html = context.buildDetectedProblemsHtml(album);
+
+  assert.match(html, /ALBUM-LEVEL PROBLEMS[^]*Album not found/);
+  assert.match(html, /data-remove-missing-album="1"[^]*>Remove from Album Haven</);
+  assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
+  assert.doesNotMatch(html, /Exclude the problem/);
+  assert.doesNotMatch(html, /data-problematic-track-path|TRACK-LEVEL PROBLEMS/);
+});
+
+test('missing album Problematic Files detail gives read-only reviewers explanatory copy', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const html = context.buildDetectedProblemsHtml({
+    key: 'transatlantic-roine-stolt-mixes',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    problem_reasons: ['Album not found'],
+    album_problem_rows: [{ reason: 'Album not found', display_reason: 'Album not found', row_key: '' }],
+    track_problem_rows: [],
+    allowed_actions: { 'library.inventory.manage': false },
+  });
+
+  assert.match(html, /Ask an owner or administrator to remove it\./);
+  assert.doesNotMatch(html, /data-remove-missing-album|Exclude the problem/);
+});
+
+test('watcher health renders one path-free operational row with the authorized full scan action', () => {
+  const context = loadHelpers();
+  context.escapeHtml = (value) => String(value ?? '');
+
+  const html = context.buildLibraryWatchHealthProblemRow({
+    state: 'overflow',
+    root_key: 'root_1234567890abcdef',
+    detected_at: '2026-09-04T12:00:00+00:00',
+    message: 'Some library changes may have been missed.',
+    allowed_actions: { 'library.refresh': true },
+  });
+
+  assert.match(html, /role="status"/);
+  assert.match(html, /Some library changes may have been missed\./);
+  assert.match(html, /class="[^"]*button[^"]*"/);
+  assert.match(html, /data-status-action="full-rescan"/);
+  assert.match(html, />Full Rescan</);
+  assert.doesNotMatch(html, /Private Music|[A-Z]:\\|root_1234567890abcdef/);
+});
+
+test('watcher health keeps the operational message but omits the action for a read-only reviewer', () => {
+  const context = loadHelpers();
+  context.escapeHtml = (value) => String(value ?? '');
+
+  const html = context.buildLibraryWatchHealthProblemRow({
+    state: 'root_unavailable',
+    root_key: 'root_fedcba0987654321',
+    detected_at: '2026-09-04T12:00:00+00:00',
+    message: 'Some library changes may have been missed.',
+    allowed_actions: {},
+  });
+
+  assert.match(html, /Some library changes may have been missed\./);
+  assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321/);
+});
+
+test('Problematic Files keeps watcher health mounted when there are zero problematic albums', () => {
+  const elements = {
+    overlay: {},
+    list: { innerHTML: '', scrollTop: 0 },
+    detail: {
+      innerHTML: '',
+      removeAttribute() {},
+    },
+    count: { textContent: '' },
+    sidebarLabel: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+  };
+  const context = {
+    console,
+    escapeHtml(value) { return String(value ?? ''); },
+    state: {
+      utility: {
+        libraryWatchHealthProblems: [{
+          state: 'overflow',
+          root_key: 'root_1234567890abcdef',
+          message: 'Some library changes may have been missed.',
+          allowed_actions: { 'library.refresh': true },
+        }],
+        selectedProblematicKey: '',
+        selectedProblemFilters: [],
+        searchQuery: '',
+        loading: false,
+      },
+    },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return []; },
+    renderProblemFilterControls() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(helperSource, context, { filename: helperPath });
+  vm.runInContext(utilityRendererSource, context, { filename: utilityRendererPath });
+
+  context.renderProblematicFiles();
+
+  assert.equal(elements.count.textContent, '1');
+  assert.match(elements.list.innerHTML, /Some library changes may have been missed\./);
+  assert.match(elements.list.innerHTML, /data-status-action="full-rescan"/);
+  assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
+  assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
+});
+
+test('watcher warning drives the existing Library Status amber variant and title copy', () => {
+  const context = {
+    formatDurationCompact(value) { return String(value); },
+  };
+  vm.createContext(context);
+  vm.runInContext(statusUiHelperSource, context, { filename: statusUiHelperPath });
+  const status = {
+    watcher_health: {
+      state: 'warning',
+      problems: [{ message: 'Some library changes may have been missed.' }],
+    },
+  };
+
+  assert.equal(context.resolveStatusIndicatorTone(status), 'warning');
+  assert.match(
+    context.buildStatusIndicatorTitleText(status),
+    /Some library changes may have been missed\./,
+  );
+  assert.match(
+    fs.readFileSync(path.join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      'music_app',
+      'static',
+      'css',
+      'runtime',
+      'non-album-and-player.css',
+    ), 'utf8'),
+    /\.status-indicator\.is-warning[^}]*var\(--star-on|#f59e0b|#fbbf24/is,
+  );
+});
+
 test('Problem exclusions use separate album and file compact tables without collapsing Rules layout', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   context.groupProblemIgnoreItems = () => [];
@@ -5990,7 +6191,7 @@ test('saved loop entry uses the compact shared scissors control and inline range
   assert.match(html, /data-loop-action="enter"[^>]*aria-label="Create another loop"/);
   assert.match(
     html,
-    /class="loop-play-control-cluster utility-loop-play-cluster"[^]*class="loop-play-control-button utility-loop-play"[^]*class="loop-play-control-actions utility-loop-actions"[^]*data-loop-action-owner="saved-loop-loop-1"/s,
+    /class="[^"]*playback-control-cluster[^"]*utility-loop-play-cluster"[^]*class="loop-play-control-button utility-loop-play"[^]*class="loop-play-control-actions utility-loop-actions"[^]*data-loop-action-owner="saved-loop-loop-1"/s,
     'saved loops must render the same Play/edit-control component hierarchy as the persistent player',
   );
   assert.match(html, /data-saved-loop-main-surface="loop-1"/);

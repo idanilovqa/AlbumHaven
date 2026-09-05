@@ -1,0 +1,266 @@
+const path = require('node:path');
+const { test, expect } = require('@playwright/test');
+
+const repositoryRoot = path.join(__dirname, '..', '..');
+const baseLayoutCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'base-layout.css',
+);
+const albumTrackTableCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'album-track-table.css',
+);
+const compactDataTableCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'compact-data-table.css',
+);
+const albumDetailsComponentsCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'album-details-components.css',
+);
+const trackModalCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'runtime',
+  'track-modal-and-lightbox.css',
+);
+const buttonComponentCssPath = path.join(
+  repositoryRoot,
+  'music_app',
+  'static',
+  'css',
+  'button-component.css',
+);
+const componentUrl = 'http://album-track-table-component.test/album-track-table';
+const detailsComponentUrl = 'http://album-track-table-component.test/album-details';
+
+async function mountAlbumTrackTable(page) {
+  await page.route(componentUrl, (route) => route.fulfill({
+    contentType: 'text/html; charset=utf-8',
+    body: `<!doctype html>
+      <html>
+        <head>
+          <style>
+            :root {
+              --appearance-play: #34ca78;
+              --appearance-player-accent: #55c7ff;
+              --accent: #60a5fa;
+              --appearance-card: #101a29;
+              --appearance-ink: #f8fafc;
+            }
+            body { margin: 40px; background: #080d16; }
+          </style>
+        </head>
+        <body>
+          <div class="album-track-table">
+            <button
+              class="play-track-button album-track-table__play"
+              type="button"
+              aria-label="Play track"
+            >
+              <span aria-hidden="true">▶</span>
+            </button>
+          </div>
+        </body>
+      </html>`,
+  }));
+
+  await page.goto(componentUrl);
+  await page.addStyleTag({ path: baseLayoutCssPath });
+  await page.addStyleTag({ path: albumTrackTableCssPath });
+}
+
+async function mountAlbumDetailsComponents(page) {
+  await page.setViewportSize({ width: 960, height: 720 });
+  await page.route(detailsComponentUrl, (route) => route.fulfill({
+    contentType: 'text/html; charset=utf-8',
+    body: `<!doctype html>
+      <html>
+        <head>
+          <style>
+            :root {
+              --appearance-interaction-outline: #72baff;
+              --appearance-waveform-edge: #55c7ff;
+              --appearance-accent: #55c7ff;
+              --appearance-line: #526172;
+              --appearance-control: #182231;
+              --appearance-hover: #293a50;
+              --appearance-card: #101a29;
+              --appearance-ink: #f3f6fa;
+              --appearance-muted: #9aa9bc;
+              --panel: #101a29;
+              --text: #f3f6fa;
+              --muted: #9aa9bc;
+              --border: #526172;
+            }
+            * { box-sizing: border-box; }
+            body { margin: 0; padding: 32px; background: #080d16; color: var(--text); font: 14px Arial, sans-serif; }
+            .track-modal-cover { min-height: 360px; border-radius: 10px; background: #182231; }
+            .play-track-button { width: 28px; height: 28px; border: 1px solid #748399; border-radius: 50%; background: transparent; color: white; }
+          </style>
+        </head>
+        <body>
+          <div class="track-modal-dialog">
+            <header class="track-modal-header">
+              <div class="album-details-header" data-album-details-layout="editorial_canvas">
+                <div class="album-details-header__identity">
+                  <h2 id="album-title" class="album-details-header__primary">The Whirlwind</h2>
+                  <div class="album-details-header__secondary">Transatlantic · 2009 · ALBUM</div>
+                </div>
+                <div class="album-details-header__actions">
+                  <button class="ui-button ui-button--icon action-button" type="button" aria-label="Edit album tags"><span class="action-button__content">◇</span></button>
+                  <button class="ui-button ui-button--icon action-button" type="button" aria-label="Open album folder"><span class="action-button__content">□</span></button>
+                  <button class="ui-button ui-button--icon action-button" type="button" aria-label="Close"><span class="action-button__content">×</span></button>
+                </div>
+              </div>
+            </header>
+            <div class="track-modal-body">
+              <div class="track-modal-cover" aria-hidden="true"></div>
+              <main class="track-modal-main"><div class="track-modal-list" id="table-host"></div></main>
+            </div>
+          </div>
+        </body>
+      </html>`,
+  }));
+
+  await page.goto(detailsComponentUrl);
+  for (const cssPath of [
+    baseLayoutCssPath,
+    buttonComponentCssPath,
+    compactDataTableCssPath,
+    albumTrackTableCssPath,
+    albumDetailsComponentsCssPath,
+    trackModalCssPath,
+  ]) await page.addStyleTag({ path: cssPath });
+  await page.addScriptTag({
+    content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }`,
+  });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'compact-data-table.js') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js') });
+  await page.locator('#table-host').evaluate((host) => {
+    host.innerHTML = buildAlbumTrackTableHtml({
+      groups: [{ discNumber: 1, tracks: [
+        { path: 'one.flac', title: 'Overture', trackNumber: 1, duration: '8:11' },
+        { path: 'two.flac', title: 'Heart Like a Whirlwind', trackNumber: 2, duration: '5:11', isProblematic: true },
+        { path: 'three.flac', title: 'Higher Than the Morning', trackNumber: 3, duration: '5:29' },
+        { path: 'four.flac', title: 'The Darkness in the Light', trackNumber: 4, duration: '5:43' },
+        { path: 'five.flac', title: 'Swing High, Swing Low', trackNumber: 5, duration: '3:48' },
+      ] }],
+      totalLength: '2h 14m',
+    });
+  });
+}
+
+test('per-track Play hover uses the player Play color without shifting layout', async ({ page }) => {
+  await mountAlbumTrackTable(page);
+
+  const playButton = page.getByRole('button', { name: 'Play track', exact: true });
+  await expect(playButton).toBeVisible();
+  await expect(playButton).toHaveCSS('outline-style', 'none');
+
+  const beforeHoverBox = await playButton.boundingBox();
+  expect(beforeHoverBox).not.toBeNull();
+
+  await playButton.hover();
+
+  await expect(playButton).toHaveCSS('outline-style', 'solid');
+  await expect(playButton).toHaveCSS('outline-width', '2px');
+  await expect(playButton).toHaveCSS('outline-offset', '2px');
+  await expect(playButton).toHaveCSS('outline-color', 'rgb(52, 202, 120)');
+
+  const afterHoverBox = await playButton.boundingBox();
+  expect(afterHoverBox).toEqual(beforeHoverBox);
+});
+
+test('ActionButton hover and keyboard focus share the same outline without shifting layout', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+
+  const action = page.getByRole('button', { name: 'Edit album tags', exact: true });
+  const restingBox = await action.boundingBox();
+  expect(restingBox).not.toBeNull();
+
+  await action.hover();
+  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
+  const hoverOutline = await action.evaluate((element) => getComputedStyle(element).outlineColor);
+  expect(await action.boundingBox()).toEqual(restingBox);
+
+  await page.mouse.move(0, 0);
+  await page.keyboard.press('Tab');
+  await expect(action).toBeFocused();
+  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-color', hoverOutline);
+  expect(await action.boundingBox()).toEqual(restingBox);
+});
+
+test('problem status uses a hidden header track immediately before Length', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+
+  const table = page.getByRole('table', { name: /Album tracks/ });
+  const problemHeader = table.locator('[data-cdt-column="problem"][aria-hidden="true"]');
+  const problemRow = table.locator('[data-cdt-row-key="two.flac"]');
+  const cleanRow = table.locator('[data-cdt-row-key="one.flac"]');
+  const problemCell = problemRow.locator('[data-cdt-column="problem"]');
+  const problemButton = problemCell.getByRole('button', { name: 'Open this track in Problematic Files', exact: true });
+  const problemDuration = problemRow.locator('[data-cdt-column="duration"]');
+  const cleanDuration = cleanRow.locator('[data-cdt-column="duration"]');
+
+  await expect(problemHeader).toHaveCount(1);
+  await expect(table.getByRole('columnheader', { name: 'Problem' })).toHaveCount(0);
+  await expect(problemButton).toBeVisible();
+  const [problemBox, durationBox, cleanDurationBox] = await Promise.all([
+    problemCell.boundingBox(),
+    problemDuration.boundingBox(),
+    cleanDuration.boundingBox(),
+  ]);
+  expect(problemBox).not.toBeNull();
+  expect(durationBox).not.toBeNull();
+  expect(cleanDurationBox).not.toBeNull();
+  expect(problemBox.x + problemBox.width).toBeLessThanOrEqual(durationBox.x);
+  expect(durationBox.x).toBeCloseTo(cleanDurationBox.x, 1);
+});
+
+test('Editorial table aligns left while its final 1px outline fades into the original footer', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+
+  const title = page.getByRole('heading', { name: 'The Whirlwind', exact: true });
+  const table = page.getByRole('table', { name: /Album tracks/ });
+  const total = page.locator('.album-track-table__total');
+  const [titleBox, tableBox] = await Promise.all([title.boundingBox(), table.boundingBox()]);
+  expect(titleBox).not.toBeNull();
+  expect(tableBox).not.toBeNull();
+  expect(tableBox.x).toBeCloseTo(titleBox.x, 1);
+
+  const edge = await table.evaluate((element) => {
+    const tableEdge = getComputedStyle(element, '::after');
+    return {
+      width: tableEdge.width,
+      right: tableEdge.right,
+      backgroundImage: tableEdge.backgroundImage,
+    };
+  });
+  expect(edge.width).toBe('1px');
+  expect(edge.right).toBe('-1px');
+  expect(edge.backgroundImage).toContain('linear-gradient');
+  expect(edge.backgroundImage).toContain('/ 0.75)');
+  await expect(total).toHaveCSS('border-right-width', '1px');
+  expect(await total.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('none');
+});

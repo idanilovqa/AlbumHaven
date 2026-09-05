@@ -4,9 +4,15 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
+const alertComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'alert-components.js');
+const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');
+const galleryCardComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-card-component.js');
 const virtualGridHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSources = [
   { path: responseStateHelperPath, source: fs.readFileSync(responseStateHelperPath, 'utf8') },
+  { path: alertComponentsPath, source: fs.readFileSync(alertComponentsPath, 'utf8') },
+  { path: albumArtboxPath, source: fs.readFileSync(albumArtboxPath, 'utf8') },
+  { path: galleryCardComponentPath, source: fs.readFileSync(galleryCardComponentPath, 'utf8') },
   { path: virtualGridHelperPath, source: fs.readFileSync(virtualGridHelperPath, 'utf8') },
 ];
 

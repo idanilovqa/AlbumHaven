@@ -1,6 +1,9 @@
 /* NavigationTree keeps flat link/button semantics and consumer-owned spacing. */
 .navigation-tree { min-width: 0; }
 .navigation-tree-item { min-width: 0; position: relative; }
+button.navigation-tree-item[data-navigation-tree-item="panel"] {
+  width: 100%; text-align: left; font: inherit; cursor: pointer;
+}
 .navigation-tree-label { min-width: 0; }
 .navigation-tree-icon { flex: 0 0 22px; text-align: center; }
 .navigation-tree-item.is-selected {

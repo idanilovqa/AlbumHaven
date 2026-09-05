@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-import json
 import re
 from typing import Any
 
 try:  # pragma: no cover - the driver is optional for import-time tooling.
     import psycopg
     from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
 except ImportError:  # pragma: no cover
     psycopg = None
     dict_row = None
+    Jsonb = None
 
 
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -31,7 +32,7 @@ def normalize_selection_accent(payload: object) -> dict[str, object]:
 
 
 class PostgresSelectionAccentStore:
-    """Read/write one bounded metadata value without replacing sibling settings."""
+    """Compatibility projection over the aggregate appearance preference."""
 
     def __init__(
         self,
@@ -47,10 +48,9 @@ class PostgresSelectionAccentStore:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                select id as account_id,
-                       metadata -> 'appearance_selection_accent_v1' as selection_accent
-                from app.accounts
-                where id = %s and is_active and disabled_at is null
+                select account_id, selection_accent
+                from app.user_appearance_preferences
+                where account_id = %s and client_profile = 'desktop'
                 """,
                 (account_id,),
             ).fetchone()
@@ -65,15 +65,14 @@ class PostgresSelectionAccentStore:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                update app.accounts
-                set metadata = jsonb_set(
-                        metadata, '{appearance_selection_accent_v1}', %s::jsonb, true
-                    ),
+                update app.user_appearance_preferences
+                set selection_accent = %s::jsonb,
+                    revision = revision + 1,
                     updated_at = now()
-                where id = %s and is_active and disabled_at is null
-                returning metadata -> 'appearance_selection_accent_v1' as selection_accent
+                where account_id = %s and client_profile = 'desktop'
+                returning selection_accent
                 """,
-                (json.dumps(normalized), account_id),
+                (Jsonb(normalized) if Jsonb is not None else normalized, account_id),
             ).fetchone()
             if row is None:
                 raise RuntimeError("Selection accent account is unavailable.")

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.43 - 2026-09-05
+
+- Added local authentication and account administration, including secure owner
+  bootstrap, sessions, password recovery, invitations, audit records, and
+  policy enforcement for private routes and media.
+- Expanded the shared application UI with account navigation, appearance
+  controls, compact and expanded player layouts, reusable buttons, album
+  details, track tables, alerts, and search and navigation refinements.
+- Added targeted library filesystem watching, reconciliation, health reporting,
+  and transactional missing-album removal backed by Postgres.
+- Bounded HTTPS shutdown behavior and expanded the JavaScript, Python,
+  component, functional, authentication, and performance release gates.
+
 ## 0.9.42 - 2026-08-30
 
 - Reworked the repository landing page around what Album Haven offers users

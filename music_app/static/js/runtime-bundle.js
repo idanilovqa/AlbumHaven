@@ -787,6 +787,10 @@ function normalizeRuntimeSearchContext(searchContext, fallback = null) {
     },
     result_groups: normalizedResultGroups,
     search_filters: normalizeRuntimeSearchFilters(source.search_filters, base.search_filters),
+    artist_name_match_artists: normalizeRuntimeStringList(
+      source.artist_name_match_artists,
+      Array.isArray(base.artist_name_match_artists) ? base.artist_name_match_artists : [],
+    ),
   };
 }
 
@@ -2172,6 +2176,69 @@ function showBrowserConfirm(message) {
   return Boolean(target.confirm(String(message || '')));
 }
 
+let activeAppConfirmDialog = null;
+
+function showAppConfirmDialog(options = {}) {
+  if (activeAppConfirmDialog) return activeAppConfirmDialog.promise;
+  if (typeof document === 'undefined') return Promise.resolve(false);
+  const modal = document.getElementById('app-confirm-modal');
+  const title = document.getElementById('app-confirm-title');
+  const text = document.getElementById('app-confirm-text');
+  const cancelButton = document.getElementById('app-confirm-cancel');
+  const acceptButton = document.getElementById('app-confirm-accept');
+  if (!modal || !title || !text || !cancelButton || !acceptButton) return Promise.resolve(false);
+
+  const previousFocus = document.activeElement;
+  const listeners = [];
+  const listen = (element, name, handler) => {
+    element?.addEventListener?.(name, handler);
+    listeners.push([element, name, handler]);
+  };
+  let resolveDialog;
+  const promise = new Promise(resolve => { resolveDialog = resolve; });
+  activeAppConfirmDialog = { promise };
+  const finish = accepted => {
+    if (activeAppConfirmDialog?.promise !== promise) return;
+    listeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
+    modal.hidden = true;
+    activeAppConfirmDialog = null;
+    resolveDialog(Boolean(accepted));
+    previousFocus?.focus?.();
+  };
+  const handleKeydown = event => {
+    if (event?.key === 'Escape') {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      finish(false);
+      return;
+    }
+    if (event?.key !== 'Tab') return;
+    if (event.shiftKey && document.activeElement === cancelButton) {
+      event.preventDefault?.(); acceptButton.focus?.();
+    } else if (!event.shiftKey && document.activeElement === acceptButton) {
+      event.preventDefault?.(); cancelButton.focus?.();
+    }
+  };
+  const handleBackdropClick = event => {
+    if (typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event)) finish(false);
+  };
+  if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  listen(cancelButton, 'click', () => finish(false));
+  listen(acceptButton, 'click', () => finish(true));
+  listen(modal, 'keydown', handleKeydown);
+  listen(modal, 'click', handleBackdropClick);
+  title.textContent = String(options.title || 'Confirm action');
+  text.textContent = String(options.message || 'Continue?');
+  cancelButton.textContent = String(options.cancelLabel || 'Cancel');
+  acceptButton.textContent = String(options.acceptLabel || 'Continue');
+  acceptButton.classList?.toggle?.('confirm-modal-danger', Boolean(options.danger));
+  modal.style.zIndex = '140';
+  modal.hidden = false;
+  document.body?.classList?.add?.('modal-open');
+  cancelButton.focus?.();
+  return promise;
+}
+
 let activeLoopNameDialog = null;
 
 function showLoopNameDialog(options = {}) {
@@ -2727,6 +2794,12 @@ function buildStatusIndicatorTitleParts(data = {}) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
     }
   }
+  const watcherProblems = Array.isArray(data?.watcher_health?.problems)
+    ? data.watcher_health.problems
+    : [];
+  if (data?.watcher_health?.state === 'warning' || watcherProblems.length) {
+    parts.push('Some library changes may have been missed.');
+  }
   if (!parts.length) {
     parts.push('Library ready');
   }
@@ -2737,6 +2810,14 @@ function buildStatusIndicatorTitleParts(data = {}) {
     parts.push(`Last scan: ${data.last_scan_display}`);
   }
   return parts;
+}
+
+function resolveStatusIndicatorTone(data = {}) {
+  if (data?.watcher_health?.state === 'warning') return 'warning';
+  if (data.scan_in_progress || data.relations_in_progress || data.covers_in_progress) {
+    return 'busy';
+  }
+  return 'done';
 }
 
 function buildStatusIndicatorTitleText(data = {}) {
@@ -2920,8 +3001,11 @@ function updateStatusIndicator(data) {
   const relBusy = Boolean(normalizedStatus.relations_in_progress);
   const coverBusy = Boolean(normalizedStatus.covers_in_progress);
   const busy = scanBusy || relBusy || coverBusy;
-  indicator.classList.remove('is-idle', 'is-busy', 'is-done');
+  indicator.classList.remove('is-idle', 'is-busy', 'is-done', 'is-warning');
   indicator.classList.add(busy ? 'is-busy' : 'is-done');
+  if (resolveStatusIndicatorTone(normalizedStatus) === 'warning') {
+    indicator.classList.add('is-warning');
+  }
 
   indicator.title = resolveStatusIndicatorTitleText(indicator, normalizedStatus);
   if (progressEl) {
@@ -3204,6 +3288,195 @@ function buildRelatedMarkup(view = {}) {
 
 // END js/runtime/render-markup-helpers.js
 
+// BEGIN js/runtime/alert-components.js
+
+function normalizeAlertSeverity(value) {
+  const severity = String(value || '').trim().toLowerCase();
+  return ['error', 'warning', 'info'].includes(severity) ? severity : 'info';
+}
+
+function buildAlertIconHtml(severity) {
+  const normalized = normalizeAlertSeverity(severity);
+  if (normalized === 'info') {
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6"></path><path d="M12 7.5h.01"></path></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
+}
+
+function buildSmallAlertHtml(config = {}) {
+  const severity = normalizeAlertSeverity(config.severity);
+  const message = String(config.message || '').trim();
+  const className = String(config.className || '').trim();
+  return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeHtml(className)}` : ''}" role="status" aria-label="${escapeHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeHtml(message)}</span></span>`;
+}
+
+function buildOnPageAlertHtml(config = {}) {
+  const severity = normalizeAlertSeverity(config.severity);
+  const title = String(config.title || '').trim();
+  const message = String(config.message || '').trim();
+  const actionsHtml = String(config.actionsHtml || '');
+  return `<section class="on-page-alert on-page-alert--${severity}" role="alert" data-on-page-alert="${severity}"><span class="on-page-alert__icon">${buildAlertIconHtml(severity)}</span><div class="on-page-alert__content"><strong class="on-page-alert__title">${escapeHtml(title)}</strong><p class="on-page-alert__message">${escapeHtml(message)}</p>${actionsHtml ? `<div class="on-page-alert__actions">${actionsHtml}</div>` : ''}</div></section>`;
+}
+
+// END js/runtime/alert-components.js
+
+// BEGIN js/runtime/album-artbox.js
+
+function buildMissingAlbumMarkHtml() {
+  return `<span class="album-artbox__missing-mark" aria-hidden="true">
+    <svg viewBox="0 0 96 96">
+      <circle class="album-artbox__missing-disc" cx="48" cy="48" r="31"></circle>
+      <circle class="album-artbox__missing-groove" cx="48" cy="48" r="23"></circle>
+      <circle class="album-artbox__missing-groove" cx="48" cy="48" r="17"></circle>
+      <circle class="album-artbox__missing-label" cx="48" cy="48" r="10"></circle>
+      <circle class="album-artbox__missing-hub" cx="48" cy="48" r="3"></circle>
+      <path class="album-artbox__missing-slash" d="M22 22 74 74"></path>
+    </svg>
+  </span>`;
+}
+
+function buildAlbumArtboxHtml(config = {}) {
+  const requestedState = String(config.state || '').trim().toLowerCase();
+  const state = ['ready', 'loading', 'empty', 'missing'].includes(requestedState)
+    ? requestedState
+    : 'empty';
+  const label = String(config.label || 'Album artwork').trim();
+  const coverHtml = String(config.coverHtml || '');
+  const actionHtml = String(config.actionHtml || '');
+  const content = state === 'missing' || state === 'empty'
+    ? buildMissingAlbumMarkHtml()
+    : (coverHtml || `<span class="album-artbox__placeholder">${state === 'loading' ? 'Loading cover art' : 'No cover art'}</span>`);
+  return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
+}
+
+// END js/runtime/album-artbox.js
+
+// BEGIN js/runtime/gallery-card-component.js
+
+function buildGalleryCardHtml(config = {}) {
+  const trackCount = Math.max(0, Number(config.trackCount || 0));
+  const trackLabel = `${trackCount} track${trackCount === 1 ? '' : 's'}`;
+  const lengthHtml = config.lengthDisplay
+    ? `<div class="album-length">${escapeHtml(config.lengthDisplay)}</div>`
+    : '<div class="album-length"></div>';
+  const yearHtml = config.year
+    ? `<div class="album-year">${escapeHtml(config.year)}</div>`
+    : '<div class="album-year"></div>';
+  const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
+  return `
+    <section class="album-card" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+      <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
+        ${String(config.artboxHtml || '')}
+      </button>
+      <div class="album-body">
+        <h3 class="album-title"><button class="album-open-trigger album-title-button" type="button" ${openAttributes}>${escapeHtml(config.title || '')}</button></h3>
+        <div class="album-meta-row">
+          <div class="album-subtitle">${escapeHtml(config.artist || '')}</div>
+          ${yearHtml}
+        </div>
+        ${String(config.ratingHtml || '')}
+        <div class="chip-row">
+          <span class="track-count">${trackLabel}</span>
+          ${lengthHtml}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+// END js/runtime/gallery-card-component.js
+
+// BEGIN js/runtime/album-details-components.js
+
+function normalizeAlbumDetailsLayout(value) {
+  const layout = String(value || '').trim().toLowerCase();
+  return ['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(layout)
+    ? layout
+    : 'classic_bar';
+}
+
+function buildAlbumDetailsHeaderHtml(config = {}) {
+  const layout = normalizeAlbumDetailsLayout(config.layout);
+  const artist = escapeHtml(config.artist || '');
+  const album = escapeHtml(config.album || 'Album');
+  const year = escapeHtml(config.year || '');
+  const releaseType = escapeHtml(config.releaseType || 'ALBUM');
+  const tags = Array.isArray(config.tags) ? config.tags.filter(Boolean) : [];
+  const tagParts = tags.map((tag) => {
+    const label = String(tag).trim();
+    const missingClass = label.toLowerCase() === 'missing' ? ' album-details-header__tag--missing' : '';
+    return `<span class="album-details-header__tag${missingClass}">${escapeHtml(label)}</span>`;
+  });
+  const tagHtml = tagParts.join('');
+  const actionHtml = String(config.actionsHtml || '');
+  const compactIdentity = [artist, album, year].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
+  const stackedPrimary = [artist, album].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
+  const secondaryValues = layout === 'editorial_canvas'
+    ? [{ value: artist }, { value: year }, { value: releaseType, releaseType: true }]
+    : [{ value: year }, { value: releaseType, releaseType: true }];
+  const secondaryParts = secondaryValues
+    .filter((part) => part.value)
+    .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
+  const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
+  const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="track-modal-title">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="track-modal-subtitle">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? '<div class="track-modal-subtitle" id="track-modal-subtitle"></div>' : ''}</header>`;
+}
+
+function buildAlbumDetailsHeaderActionsHtml(config = {}) {
+  const missing = Boolean(config.missing);
+  const editLabel = missing ? 'Edit album tags unavailable while album is missing' : 'Edit album tags';
+  const folderLabel = missing ? 'Open album folder unavailable while album is missing' : 'Open album in File Explorer';
+  const editAttributes = { id: 'track-modal-edit-tags' };
+  const folderAttributes = { id: 'track-modal-folder' };
+  if (!missing) {
+    editAttributes['data-open-track-modal-editor'] = '1';
+    folderAttributes['data-open-track-modal-folder'] = '1';
+  }
+  return [
+    ButtonComponent.renderActionButton({
+      ariaLabel: editLabel,
+      title: editLabel,
+      disabled: missing,
+      className: 'track-modal-edit-tags album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+      attributes: editAttributes,
+    }),
+    ButtonComponent.renderActionButton({
+      ariaLabel: folderLabel,
+      title: folderLabel,
+      disabled: missing,
+      className: 'track-modal-folder album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder',
+      attributes: folderAttributes,
+    }),
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Close tracklist',
+      className: 'track-modal-close album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+      attributes: { id: 'track-modal-close', 'data-close-track-modal': '1' },
+    }),
+  ].join('');
+}
+
+function buildMissingAlbumDetailsHtml(config = {}) {
+  const albumKey = escapeHtml(config.albumKey || '');
+  const removeButton = config.canRemove
+    ? `<button class="button ui-button ui-button--primary ui-button--medium on-page-alert__remove" type="button" data-remove-missing-album="1" data-album-key="${albumKey}"><span class="ui-button__content">Remove from library</span></button>`
+    : '';
+  const keepButton = '<button class="button ui-button ui-button--secondary ui-button--medium" type="button" data-close-track-modal="1"><span class="ui-button__content">Keep as missing</span></button>';
+  const message = config.canRemove
+    ? 'This album cannot be found under the current libraries. Its library entry is still saved.'
+    : 'This album cannot be found under the current libraries. Ask an owner or administrator to remove it.';
+  return buildOnPageAlertHtml({
+    severity: 'error',
+    title: 'Album details unavailable',
+    message,
+    actionsHtml: `${removeButton}${keepButton}`,
+  });
+}
+
+// END js/runtime/album-details-components.js
+
 // BEGIN js/runtime/core-state-and-helpers.js
 
 const state = {
@@ -3348,6 +3621,7 @@ const state = {
   utility: {
     activeTab: 'problematic-files',
     problematicFiles: [],
+    libraryWatchHealthProblems: [],
     selectedProblematicKey: '',
     pendingRepairKey: '',
     pendingRepairAction: '',
@@ -3455,7 +3729,7 @@ const state = {
       saveBusy: false,
       error: '',
     },
-    appearanceKey: 'seekbar',
+    appearanceKey: 'backgrounds',
   },
   player: {
     streaming: {
@@ -3911,20 +4185,20 @@ function didCompactPlayerDrag({ startX, startY, currentX, currentY, threshold = 
 
 function clampCompactPlayerPosition(options = {}) {
   const margin = Math.max(0, Number(options.margin) || 0);
-  const maximumX = Math.max(margin, Number(options.viewportWidth) - Number(options.playerWidth) - margin);
+  const leftMargin = Math.max(margin, Number(options.leftMargin) || 0);
+  const maximumX = Math.max(leftMargin, Number(options.viewportWidth) - Number(options.playerWidth) - margin);
   const maximumY = Math.max(margin, Number(options.viewportHeight) - Number(options.playerHeight) - margin);
   return {
-    x: Math.max(margin, Math.min(Number(options.x) || 0, maximumX)),
+    x: Math.max(leftMargin, Math.min(Number(options.x) || 0, maximumX)),
     y: Math.max(margin, Math.min(Number(options.y) || 0, maximumY)),
   };
 }
 
 function createCompactPlayerSessionPosition(options = {}) {
-  const tree = options.treeRect || {};
   return clampCompactPlayerPosition({
     ...options,
-    x: Number(tree.left) + Number(options.margin || 0),
-    y: Number(tree.top) + Number(tree.height) - Number(options.playerHeight) - Number(options.margin || 0),
+    x: Number(options.leftMargin ?? options.margin ?? 0),
+    y: Number(options.viewportHeight) - Number(options.playerHeight) - Number(options.margin || 0),
   });
 }
 
@@ -3944,6 +4218,12 @@ function resolveCompactQueueControls({ queueLength, currentIndex } = {}) {
   };
 }
 
+function shouldOpenCompactPlayerAlbum({ style, eventType, detail = 0 } = {}) {
+  if (eventType === 'dblclick') return style === 'floating';
+  if (eventType === 'click') return style !== 'floating' || Number(detail) === 0;
+  return false;
+}
+
 if (typeof module !== 'undefined' && module.exports) module.exports = {
   COMPACT_PLAYER_MODE_STORAGE_KEY,
   isCompactPlayerEligible,
@@ -3955,6 +4235,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = {
   createCompactPlayerSessionPosition,
   resolveDockedCompactGeometry,
   resolveCompactQueueControls,
+  shouldOpenCompactPlayerAlbum,
 };
 
 // END js/runtime/compact-player-helpers.js
@@ -7877,9 +8158,13 @@ async function openAlbumInExplorer(album) {
 function getTrackModalElements() {
   return {
     overlay: document.getElementById('track-modal'),
+    header: typeof document.querySelector === 'function'
+      ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
+      : null,
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),
+    missingWarning: document.getElementById('track-modal-missing-warning'),
     duplicateWarning: document.getElementById('track-modal-duplicate-warning'),
     duplicateTabs: document.getElementById('track-modal-duplicate-tabs'),
     list: document.getElementById('track-modal-list'),
@@ -8570,6 +8855,10 @@ function renderTrackModalLoadingState(album) {
       <div class="cover-placeholder">Loading cover art...</div>
     </div>
   `;
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
+  }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
     els.duplicateWarning.innerHTML = '';
@@ -8600,6 +8889,10 @@ function clearTrackModalRenderedState() {
   }
   if (els.cover) {
     els.cover.innerHTML = '';
+  }
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
   }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
@@ -8730,7 +9023,12 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   trackModalHydratedAlbumDetailsLru.delete(resolvedAlbum);
   trackModalHydratedAlbumDetailsLru.set(
     resolvedAlbum,
-    { aliases, previewAlbumsByAlias, trustedAliases },
+    {
+      aliases,
+      previewAlbumsByAlias,
+      trustedAliases,
+      inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+    },
   );
   while (trackModalHydratedAlbumDetailsLru.size > TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) {
     const oldestAlbum = trackModalHydratedAlbumDetailsLru.keys().next().value;
@@ -8784,6 +9082,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
   return invalidatedAlbums.size;
 }
 
+function invalidateAllHydratedTrackModalAlbumDetails() {
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  if (!cachedAlbums.length) return 0;
+  return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
+}
+
 function getTrackModalAlbumKeyAliases(albumKey, album = null) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   const indexedAlbum = album || getIndexedAlbum(normalizedAlbumKey);
@@ -8832,6 +9136,12 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
+    const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+    if (cachedInventoryRevision !== currentInventoryRevision) {
+      invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+      return null;
+    }
     const trustedAlias = cachedEntry?.trustedAliases?.has(normalizedAlbumKey);
     if (
       indexedAlbum
@@ -9306,6 +9616,7 @@ function attachModalEvents() {
 // BEGIN js/runtime/player-waveform-peaks.js
 
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
+const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
 const SAVED_LOOP_WAVEFORM_CACHE_LIMIT = 4;
 const playerWaveformPeakCache = new Map();
@@ -9370,7 +9681,7 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   const path = String(state.player?.current?.path || '');
   if (!path || generation !== Number(suspension.generation || 0)) return null;
 
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_PEAK_COUNT, generation);
+  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   if (!peaks || playerWaveformForegroundSuspensionDepth > 0
       || Number(state.player?.streaming?.generation) !== generation
       || String(state.player?.current?.path || '') !== path) return null;
@@ -9445,7 +9756,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
 
 async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0) {
   const rawPath = String(path || '');
-  if (!rawPath || sampleCount !== PLAYER_WAVEFORM_PEAK_COUNT) return null;
+  if (!rawPath || ![PLAYER_WAVEFORM_PEAK_COUNT, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT].includes(sampleCount)) return null;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
   if (playerWaveformPeakGeneration !== generation) {
     playerWaveformPeakController?.abort();
@@ -9455,7 +9766,7 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   } else if (!playerWaveformPeakController) {
     playerWaveformPeakController = new AbortController();
   }
-  const identity = `${generation}\u0000${rawPath}`;
+  const identity = `${generation}\u0000${sampleCount}\u0000${rawPath}`;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
     playerWaveformPeakCache.delete(identity);
@@ -9520,7 +9831,7 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
   } else if (!playerWaveformPeakController) {
     playerWaveformPeakController = new AbortController();
   }
-  const identity = `${generation}\u0000${rawPath}`;
+  const identity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
   let peaks = null;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
@@ -9544,14 +9855,14 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
       probe = (async () => {
         const query = new URLSearchParams({
           path: rawPath,
-          bins: String(PLAYER_WAVEFORM_PEAK_COUNT),
+          bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
           cachedOnly: '1',
         });
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
         if (!response.ok || response.status !== 200) return null;
         const cachedPeaks = validateWaveformPeakPayload(
           await response.json(),
-          PLAYER_WAVEFORM_PEAK_COUNT,
+          PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
         );
         if (!cachedPeaks || controller.signal.aborted
             || state.player.streaming.generation !== generation) return null;
@@ -9585,12 +9896,12 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
 }
 
 async function promoteWaveformPeaks(completedPath, currentPath, generation) {
-  const completedIdentity = `${generation}\u0000${String(completedPath || '')}`;
-  const currentIdentity = `${generation}\u0000${String(currentPath || '')}`;
+  const completedIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(completedPath || '')}`;
+  const currentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(currentPath || '')}`;
   let cached = playerWaveformPeakCache.get(currentIdentity);
   let peaks = cached ? await cached : null;
   if (!peaks && state.player.streaming.generation === generation) {
-    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_PEAK_COUNT, generation);
+    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
     cached = playerWaveformPeakCache.get(currentIdentity);
     peaks = cached ? await cached : null;
   }
@@ -10051,6 +10362,85 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
 
 // END js/runtime/loop-range-controls.js
 
+// BEGIN js/runtime/playback-control-cluster.js
+
+(function (scope) {
+  'use strict';
+
+  const PLAYBACK_CONTROL_VARIANTS = new Set(['expanded-player', 'compact-player', 'saved-loop']);
+
+  function escapePlaybackControlAttribute(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function renderPreviousIcon() {
+    return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 6l-6 6 6 6"></path><path d="M11 6l-6 6 6 6"></path></svg>';
+  }
+
+  function renderNextIcon() {
+    return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
+  }
+
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '' } = {}) {
+    if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
+      throw new TypeError('Unknown PlaybackControlCluster variant.');
+    }
+    if (variant === 'compact-player') {
+      return `
+        <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
+          <button class="compact-player-skip" type="button" data-playback-control-action="previous" data-compact-player-previous aria-label="Previous track">${renderPreviousIcon()}</button>
+          <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play">&#9654;</button>
+          <button class="compact-player-skip" type="button" data-playback-control-action="next" data-compact-player-next aria-label="Next track">${renderNextIcon()}</button>
+        </div>
+      `;
+    }
+    if (variant === 'expanded-player') {
+      const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
+      return `
+        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player">
+          <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+          <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
+        </span>
+      `;
+    }
+    const owner = escapePlaybackControlAttribute(ownerId);
+    const id = escapePlaybackControlAttribute(loopId);
+    const renderLoopActions = typeof buildLoopEditActionControl === 'function'
+      ? buildLoopEditActionControl
+      : scope?.buildLoopEditActionControl;
+    if (typeof renderLoopActions !== 'function') {
+      throw new TypeError('PlaybackControlCluster requires the loop action renderer.');
+    }
+    return `
+      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop">
+        <button class="loop-play-control-button utility-loop-play" type="button" data-playback-control-action="play-pause" data-loop-play="${id}" aria-label="Play or pause">&#9654;</button>
+        <span class="loop-play-control-actions utility-loop-actions" data-playback-control-loop-actions>
+          ${renderLoopActions({ ownerId: owner, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
+        </span>
+      </div>
+    `;
+  }
+
+  function getPlaybackControlClusterElements(root) {
+    return {
+      previous: root?.querySelector?.('[data-playback-control-action="previous"]') || null,
+      playPause: root?.querySelector?.('[data-playback-control-action="play-pause"]') || null,
+      next: root?.querySelector?.('[data-playback-control-action="next"]') || null,
+      loopActions: root?.querySelector?.('[data-playback-control-loop-actions]') || null,
+    };
+  }
+
+  const api = { getPlaybackControlClusterElements, renderPlaybackControlCluster };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  if (scope) Object.assign(scope, api);
+})(typeof window !== 'undefined' ? window : globalThis);
+
+// END js/runtime/playback-control-cluster.js
+
 // BEGIN js/runtime/loop-edit-session-expiry.js
 
 const LOOP_EDIT_INACTIVITY_MS = 5 * 60 * 1000;
@@ -10261,6 +10651,11 @@ function getPlayerPlaybackSnapshot() {
   return getStreamingPlaybackSnapshot();
 }
 
+function shapeWaveformPeak(value) {
+  const peak = Math.max(0, Math.min(1, Number(value) || 0));
+  return peak ** 2.2;
+}
+
 function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
   if (!canvas) return;
   const width = Math.max(1, canvas.clientWidth || canvas.width || 1);
@@ -10291,25 +10686,21 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
 
   const drawChannel = (peaks, centerY, fillAlpha) => {
     if (!peaks.length) return;
-    const smoothed = peaks.map((peak, index) => {
-      const prev = peaks[Math.max(0, index - 1)] || peak;
-      const next = peaks[Math.min(peaks.length - 1, index + 1)] || peak;
-      return ((prev * 0.25) + (peak * 0.5) + (next * 0.25));
-    });
+    const shaped = peaks.map(shapeWaveformPeak);
 
     ctx.beginPath();
-    smoothed.forEach((peak, index) => {
+    shaped.forEach((peak, index) => {
       const x = index * barWidth;
-      const amplitude = Math.max(1, peak * halfBand);
+      const amplitude = Math.max(0.35, peak * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY - amplitude);
       } else {
         ctx.lineTo(x, centerY - amplitude);
       }
     });
-    for (let index = smoothed.length - 1; index >= 0; index -= 1) {
+    for (let index = shaped.length - 1; index >= 0; index -= 1) {
       const x = index * barWidth;
-      const amplitude = Math.max(1, smoothed[index] * halfBand);
+      const amplitude = Math.max(0.35, shaped[index] * halfBand);
       ctx.lineTo(x, centerY + amplitude);
     }
     ctx.closePath();
@@ -10319,9 +10710,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
     ctx.globalAlpha = 1;
 
     ctx.beginPath();
-    smoothed.forEach((peak, index) => {
+    shaped.forEach((peak, index) => {
       const x = index * barWidth;
-      const amplitude = Math.max(1, peak * halfBand);
+      const amplitude = Math.max(0.35, peak * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY - amplitude);
       } else {
@@ -10335,9 +10726,9 @@ function drawWaveformOnCanvas(canvas, waveform, progressRatio = 0) {
     ctx.stroke();
 
     ctx.beginPath();
-    for (let index = 0; index < smoothed.length; index += 1) {
+    for (let index = 0; index < shaped.length; index += 1) {
       const x = index * barWidth;
-      const amplitude = Math.max(1, smoothed[index] * halfBand);
+      const amplitude = Math.max(0.35, shaped[index] * halfBand);
       if (index === 0) {
         ctx.moveTo(x, centerY + amplitude);
       } else {
@@ -10386,12 +10777,20 @@ function clearWaveformCanvas() {
   ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+function setPlayerSeekbarPresentation(isWaveform) {
+  const mode = isWaveform ? 'waveform' : 'regular';
+  const player = getPlayerElements().player;
+  player?.setAttribute('data-player-seekbar-presentation', mode);
+  document.documentElement?.classList.toggle('has-waveform-player', isWaveform);
+}
+
 async function updateWaveformAppearance(forceReload = false) {
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();
   const path = String(state.player.current?.path || '');
   const isWaveform = state.player.loopActive || state.player.appearance.seekbarMode === 'waveform';
+  setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
   if (els.waveformCanvas) {
     els.waveformCanvas.hidden = !isWaveform;
@@ -10420,7 +10819,7 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   const generation = Number(event.generation) || 0;
   const currentPath = String(event.currentPath || '');
   const continuityPath = String(event.continuityPath || '');
-  const currentPeaks = await loadWaveformPeaks(currentPath, 280, generation);
+  const currentPeaks = await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   const playback = getPlayerPlaybackSnapshot();
   if (!currentPeaks || Number(playback.generation ?? state.player.streaming?.generation) !== generation
       || String(state.player.current?.path || '') !== currentPath) return;
@@ -10432,7 +10831,7 @@ async function handleStreamingPlaybackWaveformReady(event = {}) {
   }
   if (continuityPath
       && Number(getPlayerPlaybackSnapshot().generation ?? state.player.streaming?.generation) === generation) {
-    await loadWaveformPeaks(continuityPath, 280, generation);
+    await loadWaveformPeaks(continuityPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   }
 }
 
@@ -11914,6 +12313,11 @@ async function browseScannedLibrarySnapshot() {
 
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
+    knownStatus,
+    'inventory_mutation_revision',
+  );
+  const knownInventoryRevision = Number(knownStatus.inventory_mutation_revision || 0);
   const knownBusy = Boolean(
     knownStatus.scan_in_progress
     || knownStatus.relations_in_progress
@@ -11936,6 +12340,28 @@ async function pollStatus() {
     const data = await response.json();
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
+    const currentInventoryRevision = Number(
+      normalizedStatus.inventory_mutation_revision || 0,
+    );
+    if (
+      hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision
+    ) {
+      if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+        invalidateAllHydratedTrackModalAlbumDetails();
+      }
+      state.ui.pendingInventoryMutationViewRefresh = true;
+      if (state.utility.loaded) {
+        try {
+          await loadProblematicFiles(true);
+        } catch (problematicFilesError) {
+          console.error(
+            '[AlbumHaven][Watcher] Failed to refresh Problematic Files after an inventory change.',
+            problematicFilesError,
+          );
+        }
+      }
+    }
     const statusObservationSequence = recordSuccessfulStatusObservation();
 
     const logHistoryRevision = String(
@@ -12073,6 +12499,7 @@ async function pollStatus() {
       if (!normalizedStatus.last_error && !scanWasCancelled) {
         showToast('Library scan complete.', 'success', 3200);
       }
+      state.ui.pendingInventoryMutationViewRefresh = false;
     }
     if (wasCoverPollingBusy && !coverBusyNow) {
       if (shouldAutoRefreshViewAfterCoverCompletion()) {
@@ -12093,6 +12520,32 @@ async function pollStatus() {
         await loadProblematicFiles(true);
       }
       showToast('Album covers updated.', 'success', 3200);
+    }
+    if (
+      state.ui.pendingInventoryMutationViewRefresh
+      && !busyNow
+      && !coverBusyNow
+      && !state.busy
+      && !hasPendingSidebarNavigation()
+    ) {
+      state.ui.pendingInventoryMutationViewRefresh = false;
+      try {
+        const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
+          preserveScroll: true,
+          restartIfSameUrl: true,
+        });
+        if (!refreshApplied) {
+          state.ui.pendingInventoryMutationViewRefresh = true;
+        } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+          invalidateAllHydratedTrackModalAlbumDetails();
+        }
+      } catch (inventoryRefreshError) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
+          inventoryRefreshError,
+        );
+      }
     }
     const statusMenu = document.getElementById('status-context-menu');
     const visibleStatusMenuNeedsBusySampling = Boolean(
@@ -12542,6 +12995,11 @@ function buildCompactDataTable(config = {}) {
       ))
       .join('')}</div>`;
   const body = rows.map((row) => {
+    const rowClassName = String(row?.className || '')
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter((value) => /^[a-zA-Z0-9_-]+$/.test(value))
+      .join(' ');
     const selected = row?.ariaSelected === true ? ' aria-selected="true"' : '';
     const disabled = row?.ariaDisabled === true ? ' aria-disabled="true"' : '';
     const busy = row?.ariaBusy === true ? ' aria-busy="true"' : '';
@@ -12551,7 +13009,11 @@ function buildCompactDataTable(config = {}) {
         ? ` data-${normalizedName}="${escapeHtml(value || '')}"`
         : '';
     }).join('');
-    return `<div role="row" class="compact-data-table-row" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${selected}${disabled}${busy}>${columns.map((column) => (
+    if (Object.prototype.hasOwnProperty.call(row || {}, 'fullSpanContent')) {
+      const fullSpanLabel = String(row?.ariaLabel || '').trim();
+      return `<div role="row" class="compact-data-table-row compact-data-table-row--full-span${rowClassName ? ` ${rowClassName}` : ''}" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${fullSpanLabel ? ` aria-label="${escapeHtml(fullSpanLabel)}"` : ''}><div role="cell" data-cdt-full-span>${row.fullSpanContent || ''}</div></div>`;
+    }
+    return `<div role="row" class="compact-data-table-row${rowClassName ? ` ${rowClassName}` : ''}" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${selected}${disabled}${busy}>${columns.map((column) => (
       buildCell(column, row?.cells?.[column.key] || '', 'cell')
     )).join('')}</div>`;
   }).join('');
@@ -12564,6 +13026,97 @@ function buildCompactDataTable(config = {}) {
 }
 
 // END js/runtime/compact-data-table.js
+
+// BEGIN js/runtime/album-track-table.js
+
+function buildAlbumTrackPlayButtonHtml(track = {}) {
+  const trackPath = String(track.path || '');
+  const title = String(track.playbackTitle || track.title || 'Track');
+  const artist = String(track.artist || '');
+  const albumArtist = String(track.albumArtist || track.album_artist || '');
+  const album = String(track.album || '');
+  const coverPath = String(track.coverPath || track.cover_path || '');
+  const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
+  const isPlaying = Boolean(track.isPlaying);
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${isPlaying ? '&#x23F8;' : '&#x25B6;'}</button>`;
+}
+
+function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
+  const trackPath = String(track.path || '');
+  const classes = ['album-track-table__row'];
+  if (track.isCurrent) classes.push('album-track-table__row--current');
+  if (track.isPlaying) classes.push('album-track-table__row--playing');
+  if (track.isSearchMatch) classes.push('album-track-table__row--search-match');
+  if (track.isPlaying && config.playingAnimation !== false) classes.push('album-track-table__row--animated');
+  const secondary = String(track.secondaryArtist || track.secondary_artist || '').trim();
+  const titleHtml = `<span class="album-track-table__title">${escapeHtml(track.title || '')}${secondary ? `<span class="album-track-table__secondary">${escapeHtml(secondary)}</span>` : ''}</span>`;
+  const problemHtml = track.isProblematic
+    ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
+    : '';
+  return {
+    key: trackPath || `${index + 1}`,
+    className: classes.join(' '),
+    dataAttributes: {
+      'track-row-path': trackPath,
+      'track-search-match': track.isSearchMatch ? 'true' : '',
+      'track-playing': track.isPlaying ? 'true' : '',
+    },
+    cells: {
+      play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
+      number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
+      title: { content: titleHtml },
+      problem: { content: problemHtml },
+      duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
+    },
+  };
+}
+
+function buildAlbumTrackTableHtml(config = {}) {
+  const groups = Array.isArray(config.groups) ? config.groups : [];
+  const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
+  const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
+  const tableSections = groups.map((group, groupIndex) => {
+    const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
+    const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
+    const showLabel = multiDisc && Boolean(label) && (Boolean(group?.isBonus) || mainDiscCount > 1);
+    const table = buildCompactDataTable({
+      id: `album-track-table-tracks-${groupIndex + 1}`,
+      ariaLabel: label ? `Album tracks — ${label}` : 'Album tracks',
+      headers: groupIndex === 0 ? 'visible' : 'absent',
+      columns: '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columnsConfig: [
+        { key: 'play', label: 'Play', header: 'absent' },
+        { key: 'number', label: '#' },
+        { key: 'title', label: 'Track' },
+        { key: 'problem', label: 'Problem', header: 'absent', action: true },
+        { key: 'duration', label: 'Length', action: true },
+      ],
+      rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
+      density: 'compact',
+      frame: 'outline',
+      overflow: 'none',
+      mobile: 'preserve',
+    });
+    const heading = showLabel
+      ? `<h4 class="album-track-table__disc-heading">${escapeHtml(label)}</h4>`
+      : '';
+    return `<section class="album-track-table__disc">${heading}${table}</section>`;
+  }).join('');
+  const totalLength = String(config.totalLength || '').trim();
+  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${totalLength ? `<div class="album-track-table__total">Total Length: ${escapeHtml(totalLength)}</div>` : ''}</div></div>`;
+}
+
+function triggerAlbumTrackPlayActivation(button) {
+  if (!button?.classList?.add || !button?.classList?.remove) return;
+  button.classList.remove('album-track-table__play--activating');
+  void button.offsetWidth;
+  button.classList.add('album-track-table__play--activating');
+  button.addEventListener?.('animationend', () => {
+    button.classList.remove('album-track-table__play--activating');
+  }, { once: true });
+}
+
+// END js/runtime/album-track-table.js
 
 // BEGIN js/runtime/utility-list-builders.js
 
@@ -12657,12 +13210,11 @@ function buildUtilityLoopEntry(loop) {
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
-        <div class="loop-play-control-cluster utility-loop-play-cluster">
-          <button class="loop-play-control-button utility-loop-play" type="button" data-loop-play="${escapeHtml(loop.id || '')}" aria-label="Play or pause">&#9654;</button>
-          <span class="loop-play-control-actions utility-loop-actions">
-            ${buildLoopEditActionControl({ ownerId: `saved-loop-${loopId}`, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
-          </span>
-        </div>
+        ${renderPlaybackControlCluster({
+          variant: 'saved-loop',
+          ownerId: `saved-loop-${String(loop.id || '')}`,
+          loopId: String(loop.id || ''),
+        })}
         <div class="utility-loop-main" data-saved-loop-main-surface="${loopId}">
           <div class="utility-loop-player-top-row" data-loop-player-top-row>
             <div class="utility-loop-control utility-loop-pitch-control" data-loop-pitch-control="${loopId}" data-loop-pitch-controls="${loopId}" aria-label="Pitch shift">
@@ -12748,23 +13300,8 @@ function buildUtilityAppearanceListItem(key, title, subtitle, selected) {
 }
 
 function buildUtilityAppearanceDetail() {
-  const appearance = state.player.appearance || getDefaultPlayerAppearance();
-  const waveformSelected = appearance.seekbarMode === 'waveform';
   return `
     <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">Seekbar</h3>
-      <p class="utility-rule-description">Choose the player seekbar style. Waveform keeps loop selection and seek behavior intact.</p>
-      <div class="appearance-section">
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default">
-          <span>Default seekbar</span>
-        </label>
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform">
-          <span>Waveform seekbar</span>
-        </label>
-      </div>
-      <p class="utility-rule-description">Display mode applies immediately on this browser. Save color changes to your account below.</p>
       <div data-appearance-seekbar-editor></div>
     </div>
   `;
@@ -13134,6 +13671,24 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
 }
 
 function buildDetectedProblemsHtml(album) {
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
+  if (albumMissing) {
+    const canRemove = Boolean(album?.allowed_actions?.['library.inventory.manage']);
+    return `
+      <div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
+      <div class="utility-album-problem-list">
+        <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
+        <div class="utility-album-problem-content">
+          <span class="utility-track-problem-chip">Album not found</span>
+        </div>
+      </div>
+      <div class="utility-detected-actions utility-missing-album-actions">
+        ${canRemove
+          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
+          : '<p>Ask an owner or administrator to remove it.</p>'}
+      </div>
+    `;
+  }
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const albumRows = Array.isArray(album?.album_problem_rows)
     ? album.album_problem_rows
@@ -15629,6 +16184,19 @@ function getSelectedSeparateReleaseKeys() {
     .map(([key]) => key);
 }
 
+function buildLibraryWatchHealthProblemRow(problem = {}) {
+  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
+  return `
+    <div class="utility-list-item utility-operational-problem" role="status">
+      <div class="utility-operational-problem-copy">
+        <strong>Library watcher needs attention</strong>
+        <span>${escapeHtml('Some library changes may have been missed.')}</span>
+      </div>
+      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
+    </div>
+  `;
+}
+
 // END js/runtime/utility-list-builders.js
 
 // BEGIN js/runtime/problem-exclusion-mutations.js
@@ -16766,8 +17334,22 @@ function markCoverLookupTaskActionTaken(taskId, album = null) {
 function getBackgroundAppearanceEditor() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
 }
-function confirmBackgroundAppearanceLeave() {
-  return getBackgroundAppearanceEditor()?.allowLeave(message => showBrowserConfirm(message)) !== false;
+let pendingBackgroundAppearanceLeave = null;
+function confirmBackgroundAppearanceLeave(onDiscard = null) {
+  const editor = getBackgroundAppearanceEditor();
+  if (!editor || editor.allowLeave(() => false) !== false) return true;
+  if (!pendingBackgroundAppearanceLeave && typeof showAppConfirmDialog === 'function') {
+    pendingBackgroundAppearanceLeave = showAppConfirmDialog({
+      title: 'Discard appearance changes?',
+      message: 'Your unsaved Appearance changes will be lost.',
+      cancelLabel: 'Keep editing',
+      acceptLabel: 'Discard changes',
+      danger: true,
+    }).then(accepted => {
+      if (accepted && editor.allowLeave(() => true) !== false) onDiscard?.();
+    }).finally(() => { pendingBackgroundAppearanceLeave = null; });
+  }
+  return false;
 }
 function unmountAppearanceEditors() {
   getBackgroundAppearanceEditor()?.unmount();
@@ -16807,8 +17389,23 @@ function mountSeekbarAppearanceEditor(detail) {
   const host = detail.querySelector('[data-appearance-seekbar-editor]');
   if (!host) return;
   const editor = getBackgroundAppearanceEditor();
-  if (editor?.mountSeekbar) editor.mountSeekbar(host, { getLegacyColors: getPreviousBrowserWaveformColors });
+  if (editor?.mountSeekbar) editor.mountSeekbar(host, {
+    getLegacyColors: getPreviousBrowserWaveformColors,
+    getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+  });
   else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+}
+
+function mountAlbumPageAppearanceEditor(detail) {
+  const editor = getBackgroundAppearanceEditor();
+  if (editor?.mountAlbumPage) editor.mountAlbumPage(detail);
+  else detail.innerHTML = '<div class="utility-empty-state">Album page appearance could not be loaded. Reload this page to try again.</div>';
+}
+
+function mountAlertsAppearanceEditor(detail) {
+  const editor = getBackgroundAppearanceEditor();
+  if (editor?.mountAlerts) editor.mountAlerts(detail);
+  else detail.innerHTML = '<div class="utility-empty-state">Alert appearance could not be loaded. Reload this page to try again.</div>';
 }
 
 // END js/runtime/appearance-backgrounds-bridge.js
@@ -16820,8 +17417,14 @@ function mountSeekbarAppearanceEditor(detail) {
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
 
   const items = getFilteredProblematicAlbums();
+  const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
+    ? state.utility.libraryWatchHealthProblems
+    : [];
+  const operationalHtml = operationalItems
+    .map((problem) => buildLibraryWatchHealthProblemRow(problem))
+    .join('');
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  els.count.textContent = String(items.length + operationalItems.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -16849,13 +17452,13 @@ function mountSeekbarAppearanceEditor(detail) {
   els.detail.removeAttribute?.('inert');
 
   if (state.utility.loading) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Loading...</div>';
+    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`;
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">No matching problematic albums found.</div>';
+    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`;
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -16863,7 +17466,7 @@ function mountSeekbarAppearanceEditor(detail) {
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
+    els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -16890,7 +17493,7 @@ function mountSeekbarAppearanceEditor(detail) {
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
+  els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;
@@ -17198,7 +17801,7 @@ function renderUtilityAppearance() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
-  els.count.textContent = '3';
+  els.count.textContent = '5';
   if (els.search) {
     els.search.value = '';
     els.search.disabled = true;
@@ -17210,21 +17813,27 @@ function renderUtilityAppearance() {
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  const appearanceKeys = ['seekbar', 'backgrounds', 'selection-accent'];
-  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'seekbar';
+  const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
   const selectedKey = state.utility.appearanceKey;
-  els.list.innerHTML = [
-    buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', selectedKey === 'seekbar'),
-    buildUtilityAppearanceListItem('backgrounds', 'Backgrounds', 'Main surface, app bar, and panels', selectedKey === 'backgrounds'),
-    buildUtilityAppearanceListItem('selection-accent', 'Selection accent', 'Color on the left of selected items', selectedKey === 'selection-accent'),
-  ].join('');
+  const navigationTree = typeof window !== 'undefined' ? window.NavigationTree : null;
+  const labels = { backgrounds: 'Main elements', seekbar: 'Player & Seekbar', 'selection-accent': 'Selection & Hover', alerts: 'Alerts', 'album-page': 'Album page' };
+  els.list.innerHTML = appearanceKeys.map(key => navigationTree?.renderItem
+    ? navigationTree.renderItem({ key, label: labels[key], variant: 'panel', action: true, selected: selectedKey === key, attributes: { 'data-utility-appearance-key': key } })
+    : buildUtilityAppearanceListItem(key, labels[key], '', selectedKey === key)).join('');
   if (selectedKey === 'backgrounds') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
   } else if (selectedKey === 'selection-accent') {
-    if (typeof getBackgroundAppearanceEditor === 'function') getBackgroundAppearanceEditor()?.unmount();
-    if (typeof window !== 'undefined' && window.AlbumHavenSelectionAccent?.mount) window.AlbumHavenSelectionAccent.mount(els.detail);
-    else els.detail.innerHTML = '<div class="utility-empty-state">Selection accent could not be loaded. Reload this page to try again.</div>';
+    const appearance = typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
+    if (appearance?.mountSelectionAccent) appearance.mountSelectionAccent(els.detail);
+    else els.detail.innerHTML = '<div class="utility-empty-state">Selection &amp; Hover could not be loaded. Reload this page to try again.</div>';
+  } else if (selectedKey === 'alerts') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlertsAppearanceEditor === 'function') mountAlertsAppearanceEditor(els.detail);
+  } else if (selectedKey === 'album-page') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlbumPageAppearanceEditor === 'function') mountAlbumPageAppearanceEditor(els.detail);
   } else {
     if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
     els.detail.innerHTML = buildUtilityAppearanceDetail();
@@ -17389,9 +17998,13 @@ function collapseAllUtilityLoopGroups() {
   }, {});
 }
 
-function setUtilityActiveTab(nextTab) {
+function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
   const normalizedTab = String(nextTab || 'problematic-files');
-  if (normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return state.utility.activeTab;
+  if (!skipAppearanceGuard && normalizedTab !== state.utility.activeTab && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
+    setUtilityActiveTab(normalizedTab, true);
+    if (typeof loadActiveUtilityTab === 'function') loadActiveUtilityTab(true);
+    if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
+  })) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
     clearUtilityLoopSpaceOwner();
   }
@@ -18231,7 +18844,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
       }
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      const { summaryItems, initialDetail } = validateProblematicSummaryPayload(data);
+      const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
       const stateCommitStartedAt = getProblematicUtilityNow();
       initialDetailKey = String(initialDetail?.key || '').trim();
       state.utility.problematicFiles = summaryItems.map((item) => {
@@ -18239,6 +18852,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         initialDetailMerged = true;
         return { ...item, ...initialDetail, detail_loaded: true };
       });
+      state.utility.libraryWatchHealthProblems = operationalItems;
       state.utility.detailLoadPromises = {};
       state.utility.loaded = true;
       loadSucceeded = true;
@@ -18249,6 +18863,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       state.utility.problematicFiles = [];
+      state.utility.libraryWatchHealthProblems = [];
       state.utility.detailLoadPromises = {};
       state.utility.loaded = false;
       showToast('Unable to load problematic files.', 'error', 3200);
@@ -18430,9 +19045,34 @@ function validateProblematicSummaryPayload(payload) {
   if (itemKeys.has('')) {
     throw new Error('Problematic Files summary items must include non-empty keys.');
   }
+  const rawOperationalItems = Array.isArray(payload.operational_items)
+    ? payload.operational_items
+    : [];
+  if (rawOperationalItems.some((item) => !isProblematicPayloadObject(item))) {
+    throw new Error('Problematic Files operational items must be JSON objects.');
+  }
+  const operationalItems = rawOperationalItems.map((item) => {
+    const stateValue = String(item.state || '').trim();
+    const rootKey = String(item.root_key || '').trim();
+    if (
+      !['overflow', 'root_unavailable'].includes(stateValue)
+      || !/^root_[a-f0-9]{16}$/.test(rootKey)
+    ) {
+      throw new Error('Problematic Files operational item is invalid.');
+    }
+    return {
+      state: stateValue,
+      root_key: rootKey,
+      detected_at: String(item.detected_at || ''),
+      message: 'Some library changes may have been missed.',
+      allowed_actions: item?.allowed_actions?.['library.refresh'] === true
+        ? { 'library.refresh': true }
+        : {},
+    };
+  });
   const initialDetailValue = payload.initial_detail;
   if (initialDetailValue === undefined || initialDetailValue === null) {
-    return { summaryItems: payload.items, initialDetail: null };
+    return { summaryItems: payload.items, initialDetail: null, operationalItems };
   }
   if (!isProblematicPayloadObject(initialDetailValue)) {
     throw new Error('Problematic Files initial detail must be a JSON object or null.');
@@ -18444,6 +19084,7 @@ function validateProblematicSummaryPayload(payload) {
   return {
     summaryItems: payload.items,
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
+    operationalItems,
   };
 }
 
@@ -19399,8 +20040,8 @@ async function disconnectLastfmIntegration() {
   }
 }
 
-function closeUtilityModal() {
-  if (typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+function closeUtilityModal(skipAppearanceGuard = false) {
+  if (!skipAppearanceGuard && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
@@ -23750,11 +24391,166 @@ function getTrackModalAlbumIdentity(album) {
   return getTrackModalAlbumRequestKey(album);
 }
 
+function canConfirmMissingAlbumRemoval(album) {
+  return Boolean(album?.allowed_actions?.['library.inventory.manage']);
+}
+
+function buildMissingAlbumRemovalConfirmation(album) {
+  const albumName = String(album?.name || 'this album').trim() || 'this album';
+  return {
+    title: 'Remove album?',
+    message: `Remove “${albumName}” from Album Haven? Its local files are already missing. This removes the album and its Album Haven data. It does not delete files from disk.`,
+    cancelLabel: 'Cancel',
+    acceptLabel: 'Remove album',
+    danger: true,
+  };
+}
+
+const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalToViewDefault(albumKey, payload = {}) {
+  const normalizedKey = String(albumKey || '').trim();
+  if (!normalizedKey || !state?.view) return false;
+  const groupFields = ['artist_groups', 'primary_artist_groups', 'family_artist_groups'];
+  const removedArtists = new Set();
+  const previousSidebarCount = Array.isArray(state.view.artists_sidebar)
+    ? state.view.artists_sidebar.length
+    : 0;
+  groupFields.forEach((field) => {
+    const groups = Array.isArray(state.view[field]) ? state.view[field] : [];
+    state.view[field] = groups.flatMap((group) => {
+      const albums = Array.isArray(group?.albums) ? group.albums : [];
+      const retainedAlbums = albums.filter((album) => {
+        const matches = String(getTrackModalAlbumRequestKey(album) || album?.key || '').trim() === normalizedKey;
+        if (matches) removedArtists.add(String(group?.artist || album?.album_artist || '').trim());
+        return !matches;
+      });
+      return retainedAlbums.length ? [{ ...group, albums: retainedAlbums }] : [];
+    });
+  });
+
+  const remainingArtists = new Set(groupFields.flatMap((field) => (
+    (Array.isArray(state.view[field]) ? state.view[field] : [])
+      .map((group) => String(group?.artist || '').trim())
+      .filter(Boolean)
+  )));
+  if (Array.isArray(state.view.artists_sidebar)) {
+    state.view.artists_sidebar = state.view.artists_sidebar.filter((item) => {
+      const artist = String(item?.artist || item?.name || '').trim();
+      return !removedArtists.has(artist) || remainingArtists.has(artist);
+    });
+  }
+  if (Number.isFinite(Number(payload.album_count))) {
+    state.view.album_count = Number(payload.album_count);
+  } else if (Number.isFinite(Number(state.view.album_count))) {
+    state.view.album_count = Math.max(0, Number(state.view.album_count) - 1);
+  } else {
+    state.view.album_count = (state.view.artist_groups || []).reduce(
+      (count, group) => count + (Array.isArray(group?.albums) ? group.albums.length : 0),
+      0,
+    );
+  }
+  if (Number.isFinite(Number(payload.artist_count))) {
+    state.view.artist_count = Number(payload.artist_count);
+  } else if (Number.isFinite(Number(state.view.artist_count))) {
+    const currentSidebarCount = Array.isArray(state.view.artists_sidebar)
+      ? state.view.artists_sidebar.length
+      : previousSidebarCount;
+    state.view.artist_count = Math.max(
+      0,
+      Number(state.view.artist_count) - Math.max(0, previousSidebarCount - currentSidebarCount),
+    );
+  } else {
+    state.view.artist_count = Array.isArray(state.view.artists_sidebar)
+      ? state.view.artists_sidebar.length
+      : (state.view.artist_groups || []).length;
+  }
+  if (state.gallery) {
+    if (typeof rebuildAlbumIndex === 'function') rebuildAlbumIndex(state.view.artist_groups || []);
+    else state.gallery.albumIndex?.delete?.(normalizedKey);
+  }
+  if (state.utility) {
+    state.utility.problematicFiles = (Array.isArray(state.utility.problematicFiles)
+      ? state.utility.problematicFiles
+      : []).filter((album) => String(album?.key || '').trim() !== normalizedKey);
+    if (String(state.utility.selectedProblematicKey || '').trim() === normalizedKey) {
+      state.utility.selectedProblematicKey = '';
+    }
+  }
+  if (typeof renderView === 'function') {
+    const renderOptions = typeof payload?.constructor === 'function'
+      ? new payload.constructor()
+      : {};
+    renderOptions.preserveScroll = true;
+    renderView(renderOptions);
+  }
+  return true;
+};
+if (typeof applyMissingAlbumRemovalToView !== 'function') {
+  var applyMissingAlbumRemovalToView = applyMissingAlbumRemovalToViewDefault;
+}
+
+async function confirmMissingAlbumRemoval(album, options = {}) {
+  if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
+  if (!canConfirmMissingAlbumRemoval(album)) {
+    if (typeof showToast === 'function') {
+      showToast('Ask an owner or administrator to remove this album.', 'info', 3200);
+    }
+    return false;
+  }
+  const accepted = await showAppConfirmDialog(buildMissingAlbumRemovalConfirmation(album));
+  if (!accepted) return false;
+  const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
+  try {
+    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/confirm-removal`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = {};
+    }
+    if (response.status === 409) {
+      if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
+        const refreshOptions = typeof album?.constructor === 'function'
+          ? new album.constructor()
+          : {};
+        refreshOptions.preserveScroll = true;
+        await fetchAndRender(buildUrl(state.view), false, refreshOptions);
+      }
+      if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const conflictMessage = String(
+        payload.error || payload.detail || 'Album Haven found this album again.'
+      ).trim() || 'Album Haven found this album again.';
+      if (typeof showToast === 'function') showToast(conflictMessage, 'info', 3200);
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
+    }
+    applyMissingAlbumRemovalToView(albumKey, payload);
+    if (typeof closeTrackModal === 'function') closeTrackModal();
+    if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+    if (typeof showToast === 'function') showToast('Album removed from Album Haven.', 'success', 3200);
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Library] Missing album removal failed.', error);
+    if (typeof showToast === 'function') {
+      showToast(error?.message || 'Unable to remove album from Album Haven.', 'error', 3200);
+    }
+    return false;
+  }
+}
+
 function renderTrackModalRelease(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
+    ? buildAlbumArtboxHtml
+    : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const candidateSnapshot = album?.cover_candidate_snapshot && typeof album.cover_candidate_snapshot === 'object'
     ? album.cover_candidate_snapshot
     : null;
@@ -23774,9 +24570,21 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
-  els.subtitle.textContent = '';
+  const albumDetailsLayout = String(
+    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
+  ).trim().toLowerCase();
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      layout: albumDetailsLayout,
+      artist: album.album_artist || '',
+      album: album.name || 'Album',
+      year: album.year || '',
+      releaseType: album.release_type || 'ALBUM',
+      tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
+    });
+    els = getTrackModalElements();
+  }
   if (els.folder) {
     els.folder.dataset.album = '';
     els.folder.dataset.albumKey = resolvedAlbumKey;
@@ -23785,7 +24593,22 @@ function renderTrackModalRelease(album) {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
-  if (albumHasDisplayCover(album)) {
+  if (els.missingWarning) {
+    els.missingWarning.hidden = !albumMissing;
+    els.missingWarning.innerHTML = albumMissing
+      ? buildMissingAlbumDetailsHtml({
+        canRemove: canConfirmMissingAlbumRemoval(album),
+        albumKey,
+      })
+      : '';
+  }
+  if (albumMissing) {
+    els.cover.innerHTML = `
+      <div class="track-modal-cover-shell">
+        ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
+      </div>
+    `;
+  } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
@@ -23815,7 +24638,11 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        <button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>
+        ${renderAlbumArtbox({
+          state: 'ready',
+          label: `Album cover for ${album.name}`,
+          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        })}
         ${coverSourceBadge}
         <div class="track-modal-cover-tools">
           <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
@@ -23884,7 +24711,7 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        <div class="cover-placeholder">No cover art</div>
+        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
         <div class="track-modal-cover-tools">
           <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
             ${coverLookupIcon}
@@ -23896,7 +24723,7 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
-  const duplicateSources = getAlbumDuplicateSources(album);
+  const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
@@ -23955,18 +24782,14 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album);
   if (els.footer) {
-    if (bonusGroups.length > 0) {
-      els.footer.innerHTML = `${mainLength ? `<div>Total Main Album Length: ${escapeHtml(mainLength)}</div>` : ''}<div>Bonus Disc Length: ${escapeHtml(bonusLength)}</div>`;
-      els.footer.hidden = false;
-    } else {
-      els.footer.textContent = totalLength ? `Total Length: ${totalLength}` : '';
-      els.footer.hidden = !totalLength;
-    }
+    els.footer.textContent = '';
+    els.footer.hidden = true;
   }
   renderTrackModalTabs(els);
   refreshTrackModalPlaybackState();
+  if (typeof attachSharedPlayer === 'function') attachSharedPlayer();
 }
 
 
@@ -24081,7 +24904,6 @@ function groupAlbumTracks(tracks) {
 
 function buildTrackListHtml(tracks, album = null) {
   const grouped = groupAlbumTracks(tracks);
-  const parts = [];
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const trackRows = Array.isArray(album?.track_rows) ? album.track_rows : [];
@@ -24094,22 +24916,19 @@ function buildTrackListHtml(tracks, album = null) {
       .filter(Boolean)
   );
 
-  grouped.groups.forEach((group) => {
-    const groupSeconds = group.tracks.reduce((sum, track) => sum + (Number(track.duration_seconds) || 0), 0);
-    const groupLength = formatAlbumDuration(groupSeconds);
-
-    if (grouped.multiDisc && (group.discLabel || (Number.isInteger(group.discNumber) && group.discNumber > 0))) {
-      let label = group.discLabel || `CD${group.discNumber}`;
-      if (group.isBonus) {
-        label += ` • Bonus Disc`;
-      }
-      if (group.discSubtitle) {
-        label += ` · ${escapeHtml(group.discSubtitle)}`;
-      }
-      parts.push(`<li class="track-disc-header">${label}</li>`);
+  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const componentGroups = grouped.groups.map((group) => {
+    let discLabel = String(group.discLabel || '').trim();
+    if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
+      discLabel = `CD ${group.discNumber}`;
     }
-
-    group.tracks.forEach((track, index) => {
+    discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
+    if (group.isBonus) {
+      discLabel = group.discSubtitle || (discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD');
+    } else if (group.discSubtitle) {
+      discLabel = `${discLabel} • ${group.discSubtitle}`;
+    }
+    const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;
       const duration = formatTrackDuration(track.duration_seconds);
       const trackPath = String(track.path || '');
@@ -24118,29 +24937,48 @@ function buildTrackListHtml(tracks, album = null) {
       const currentTimeDisplay = isCurrentTrack
         ? `${formatLoopTime(playback.currentTime || 0)} / ${duration || formatTrackDuration(playback.duration) || '0:00'}`
         : duration;
-      const durationMarkup = currentTimeDisplay
-        ? `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(duration || '')}">${escapeHtml(currentTimeDisplay)}</span>`
-        : (duration ? `<span class="track-duration">${escapeHtml(duration)}</span>` : '');
       const trackValue = getAlbumTrackDisplayNumber(track, index);
-      const utilityJump = track.is_problematic
-        ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(track.path)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-        : '';
       const trackRow = trackRowByPath.get(trackPath) || null;
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
-      const trackArtistLabel = secondaryArtist
-        ? `<span class="track-artist-name">${escapeHtml(secondaryArtist)}</span>`
-        : '';
-      parts.push(`<li value="${trackValue}" data-track-row-path="${escapeHtml(trackPath)}" class="${isCurrentTrack ? 'is-current' : ''}${isActivelyPlaying ? ' is-playing' : ''}"><span class="track-number">${trackValue}.</span><button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.title || '')}" data-track-artist="${escapeHtml(track.artist || track.album_artist || '')}" data-track-album-artist="${escapeHtml(track.album_artist || album?.album_artist || '')}" data-track-album="${escapeHtml(track.album || '')}" data-track-cover="${escapeHtml(track.cover_path || '')}" data-track-duration-seconds="${Number(track.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? 'Pause track' : 'Play track'}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(displayTitle)}${trackArtistLabel}</span>${utilityJump}${durationMarkup}</li>`);
+      return {
+        path: trackPath,
+        src,
+        title: displayTitle,
+        playbackTitle: String(track.title || '').trim(),
+        artist: track.artist || track.album_artist || '',
+        albumArtist: track.album_artist || album?.album_artist || '',
+        album: track.album || album?.name || '',
+        coverPath: track.cover_path || album?.cover_path || '',
+        durationSeconds: Number(track.duration_seconds) || 0,
+        duration: currentTimeDisplay || duration,
+        originalDuration: duration,
+        trackNumber: trackValue,
+        secondaryArtist,
+        isCurrent: Boolean(isCurrentTrack),
+        isPlaying: Boolean(isActivelyPlaying),
+        isProblematic: Boolean(track.is_problematic),
+        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+      };
     });
-
-    if (grouped.multiDisc && groupLength) {
-      const lengthLabel = group.isBonus ? 'Bonus Disc Length' : 'Total Length';
-      parts.push(`<li class="track-disc-total">${lengthLabel}: ${escapeHtml(groupLength)}</li>`);
-    }
+    return {
+      discNumber: group.discNumber,
+      discLabel,
+      isBonus: Boolean(group.isBonus),
+      tracks: componentTracks,
+    };
   });
-
-  return parts.join('');
+  if (typeof buildAlbumTrackTableHtml !== 'function') {
+    return componentGroups.flatMap((group) => group.tracks).map((track) => (
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+    )).join('');
+  }
+  return buildAlbumTrackTableHtml({
+    groups: componentGroups,
+    multiDisc: grouped.multiDisc,
+    totalLength: album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds),
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 function buildPlayerTrackPayload(track, album = null) {
@@ -24326,6 +25164,13 @@ function refreshTrackModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
@@ -24337,9 +25182,7 @@ function refreshTrackModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }
@@ -26512,6 +27355,7 @@ function getAlbumCardVersionKey(album) {
 }
 
 function albumCardHtml(album, options = {}) {
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
   const ratingMarkup = `
@@ -26519,11 +27363,9 @@ function albumCardHtml(album, options = {}) {
           <div class="stars" role="img" aria-label="${rating === null ? 'Album unrated' : `Album rating ${rating}/10`}">${renderStars(rating)}</div>
           ${rating === null ? '' : `<div class="rating-text">${rating}/10</div>`}
         </div>`;
-  const year = album.year ? `<div class="album-year">${escapeHtml(album.year)}</div>` : '<div class="album-year"></div>';
-  const length = summary.lengthDisplay ? `<div class="album-length">${escapeHtml(summary.lengthDisplay)}</div>` : '<div class="album-length"></div>';
-  const albumKey = escapeHtml(getAlbumRequestKey(album));
-  const albumVersionKey = escapeHtml(getAlbumCardVersionKey(album));
-  const albumFallback = escapeHtml(JSON.stringify({
+  const albumKey = getAlbumRequestKey(album);
+  const albumVersionKey = getAlbumCardVersionKey(album);
+  const albumFallback = JSON.stringify({
     key: getAlbumRequestKey(album),
     name: String(album?.name || ''),
     album_artist: String(album?.album_artist || ''),
@@ -26537,36 +27379,49 @@ function albumCardHtml(album, options = {}) {
     cover_revision: String(album?.cover_revision || ''),
     remote_cover_url: String(album?.remote_cover_url || ''),
     remote_cover_thumbnail_url: String(album?.remote_cover_thumbnail_url || ''),
-  }));
+    inventory_status: String(album?.inventory_status || ''),
+    missing_since: String(album?.missing_since || ''),
+    allowed_actions: album?.allowed_actions && typeof album.allowed_actions === 'object'
+      ? album.allowed_actions
+      : {},
+  });
   const localCoverPath = escapeHtml(String(album?.cover_path || '').trim());
   const remoteCoverUrl = escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim());
-  const cardIdentity = escapeHtml(getAlbumCardNodeIdentity(album));
-  const cardRenderKey = escapeHtml(getAlbumCardRenderKey(album));
-  return `
-    <section class="album-card" data-gallery-card-key="${cardIdentity}" data-gallery-card-render-key="${cardRenderKey}">
-      <button class="cover album-open-trigger" type="button" data-open-tracklist="1" data-album-key="${albumKey}" data-album-version-key="${albumVersionKey}" data-album="${albumFallback}" aria-label="Open ${escapeHtml(album.name)} tracklist">
-        ${albumHasDisplayCover(album)
-          ? buildAlbumCardCoverHtml(album, {
-            coverPriority: options.coverPriority,
-            localCoverPath,
-            remoteCoverUrl,
-          })
-          : '<div class="cover-placeholder">No cover art</div>'}
-      </button>
-      <div class="album-body">
-        <h3 class="album-title"><button class="album-open-trigger album-title-button" type="button" data-open-tracklist="1" data-album-key="${albumKey}" data-album-version-key="${albumVersionKey}" data-album="${albumFallback}">${escapeHtml(album.name)}</button></h3>
-        <div class="album-meta-row">
-          <div class="album-subtitle">${escapeHtml(album.album_artist)}</div>
-          ${year}
-        </div>
-        ${ratingMarkup}
-        <div class="chip-row">
-          <span class="track-count">${summary.trackCount} track${summary.trackCount === 1 ? '' : 's'}</span>
-          ${length}
-        </div>
-      </div>
-    </section>
-  `;
+  const coverHtml = albumMissing
+    ? ''
+    : (albumHasDisplayCover(album)
+      ? buildAlbumCardCoverHtml(album, {
+        coverPriority: options.coverPriority,
+        localCoverPath,
+        remoteCoverUrl,
+      })
+      : '<div class="cover-placeholder">No cover art</div>');
+  const actionHtml = albumMissing
+    ? buildSmallAlertHtml({ severity: 'error', message: 'Album not found' })
+    : '';
+  const artboxHtml = buildAlbumArtboxHtml({
+    state: albumMissing ? 'missing' : (albumHasDisplayCover(album) ? 'ready' : 'empty'),
+    label: albumMissing
+      ? `${album.name} artwork unavailable. Album not found.`
+      : `Album cover for ${album.name}`,
+    coverHtml,
+    actionHtml,
+  });
+  return buildGalleryCardHtml({
+    identity: getAlbumCardNodeIdentity(album),
+    renderKey: getAlbumCardRenderKey(album),
+    albumKey,
+    albumVersionKey,
+    albumFallback,
+    openLabel: `Open ${album.name} tracklist${albumMissing ? '. Album not found' : ''}`,
+    title: album.name,
+    artist: album.album_artist,
+    year: album.year,
+    ratingHtml: ratingMarkup,
+    trackCount: summary.trackCount,
+    lengthDisplay: summary.lengthDisplay,
+    artboxHtml,
+  });
 }
 
 function getAlbumCardRating(album) {
@@ -26588,6 +27443,8 @@ function getAlbumCardRenderKey(album) {
     albumHasDisplayCover(album) ? buildAlbumDisplayCoverUrl(album) : '',
     String(album?.cover_path || '').trim(),
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
+    String(album?.inventory_status || ''),
+    String(album?.missing_since || ''),
   ]);
 }
 
@@ -29375,6 +30232,9 @@ function attachSharedPlayer() {
     btn.addEventListener('click', () => {
       const src = btn.getAttribute('data-src');
       if (!src) return;
+      if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
+        triggerAlbumTrackPlayActivation(btn);
+      }
       const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
       const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
       const playback = getPlayerPlaybackSnapshot();
@@ -29498,18 +30358,24 @@ let compactPlayerDrag = null;
 let compactPlayerPosition = null;
 let compactPlayerSuppressClick = false;
 const FLOATING_COMPACT_PLAYER_MARGIN = 4;
+const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12;
 
 function compactPlayerElements() {
   const player = document.querySelector('.global-player');
+  const expanded = player?.querySelector('.player-shell');
+  const compact = player?.querySelector('.compact-player-shell');
+  const compactControlRoot = compact?.querySelector('[data-playback-control-cluster]');
+  const compactControls = getPlaybackControlClusterElements(compactControlRoot);
   return {
     player,
-    expanded: player?.querySelector('.player-shell'),
-    compact: player?.querySelector('.compact-player-shell'),
-    toggle: player?.querySelector('[data-player-toggle]'),
+    expanded,
+    compact,
+    collapse: expanded?.querySelector("[data-ui-button-action='player-collapse']"),
+    expand: compact?.querySelector("[data-ui-button-action='player-expand']"),
     cover: player?.querySelector('[data-compact-player-cover]'),
-    play: player?.querySelector('[data-compact-player-play]'),
-    previous: player?.querySelector('[data-compact-player-previous]'),
-    next: player?.querySelector('[data-compact-player-next]'),
+    play: compactControls.playPause,
+    previous: compactControls.previous,
+    next: compactControls.next,
   };
 }
 
@@ -29557,18 +30423,15 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     els.compact.inert = !compact;
     els.compact.setAttribute('aria-hidden', String(!compact));
   }
-  if (els.toggle) {
-    els.toggle.hidden = !compactPlayerEligible();
-    els.toggle.textContent = compact ? '›' : '‹';
-    els.toggle.setAttribute('aria-label', compact ? 'Expand player' : 'Collapse player');
-    els.toggle.title = compact ? 'Expand player' : 'Collapse player';
-  }
+  if (els.collapse) els.collapse.hidden = !compactPlayerEligible();
+  if (els.expand) els.expand.hidden = !compactPlayerEligible();
   if (compact && compactPlayerStyle === 'docked') syncDockedCompactGeometry();
   if (compact && compactPlayerStyle === 'floating') {
     if (!compactPlayerPosition || previousStyle !== 'floating') resetCompactPlayerPosition();
     else {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     }
@@ -29579,11 +30442,11 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
 
 function resetCompactPlayerPosition() {
   const els = compactPlayerElements();
-  const tree = document.getElementById('shell-navigation-rail');
-  if (!els.player || !tree) return;
+  if (!els.player) return;
   compactPlayerPosition = createCompactPlayerSessionPosition({
-    treeRect: tree.getBoundingClientRect(), playerWidth: 96, playerHeight: 96,
+    playerWidth: 96, playerHeight: 96,
     viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+    leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN,
   });
   els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
   els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
@@ -29620,6 +30483,9 @@ function syncCompactPlayerUi(snapshot = {}) {
       : '';
     els.cover.classList.toggle('is-idle-placeholder', !track);
     els.cover.disabled = !track;
+    const openLabel = compactPlayerStyle === 'floating' ? 'Double-click to open album details' : 'Open album details';
+    els.cover.setAttribute('aria-label', openLabel);
+    els.cover.title = openLabel;
   }
   if (els.play) {
     els.play.textContent = playback.paused ? '▶' : '⏸';
@@ -29639,14 +30505,24 @@ function initCompactPlayer() {
   let saved = 'expanded';
   try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
-  els.toggle?.addEventListener('click', () => applyCompactPlayerMode(compactPlayerMode === 'compact' ? 'expanded' : 'compact'));
+  els.collapse?.addEventListener('click', () => applyCompactPlayerMode('compact'));
+  els.expand?.addEventListener('click', () => applyCompactPlayerMode('expanded'));
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
-  els.cover?.addEventListener('click', event => {
-    if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }
+  const openCurrentAlbumDetails = () => {
     const album = resolveAlbumForPlayerTrack(state.player.current);
     if (album) openTrackModal(album, { coverLightboxGallery: false });
+  };
+  els.cover?.addEventListener('click', event => {
+    if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }
+    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    openCurrentAlbumDetails();
+  });
+  els.cover?.addEventListener('dblclick', event => {
+    if (!shouldOpenCompactPlayerAlbum({ style: compactPlayerStyle, eventType: event.type, detail: event.detail })) return;
+    event.preventDefault();
+    openCurrentAlbumDetails();
   });
   els.cover?.addEventListener('pointerdown', event => {
     if (compactPlayerStyle !== 'floating') return;
@@ -29661,7 +30537,8 @@ function initCompactPlayer() {
     if (!compactPlayerDrag.didDrag) return;
     compactPlayerPosition = clampCompactPlayerPosition({ x: compactPlayerDrag.originX + event.clientX - compactPlayerDrag.startX,
       y: compactPlayerDrag.originY + event.clientY - compactPlayerDrag.startY, playerWidth: 96, playerHeight: 96,
-      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
+      viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+      leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
     els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
     els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
   });
@@ -29687,7 +30564,8 @@ function initCompactPlayer() {
       if (savedMode === 'compact') applyCompactPlayerMode(savedMode, { persist: false });
     } else if (compactPlayerStyle === 'floating' && compactPlayerPosition) {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
-        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN });
+        viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,
+        leftMargin: FLOATING_COMPACT_PLAYER_LEFT_MARGIN });
       els.player.style.setProperty('--compact-player-x', `${compactPlayerPosition.x}px`);
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     } else if (compactPlayerStyle === 'docked') {
@@ -29767,6 +30645,15 @@ function attachRepairConfirmEvents() {
 // BEGIN js/runtime/bootstrap-utility-event-handlers.js
 
 ﻿async function handleUtilityBootstrapClick(event) {
+  const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
+  if (removeMissingAlbumButton) {
+    event.preventDefault();
+    const album = getSelectedProblematicAlbum();
+    const runtimeOptions = typeof album?.constructor === 'function' ? new album.constructor() : {};
+    runtimeOptions.source = 'problematic-files';
+    void confirmMissingAlbumRemoval(album, runtimeOptions);
+    return;
+  }
   const repairAlertDismiss = event.target.closest('[data-dismiss-repair-alert="1"]');
   if (repairAlertDismiss) {
     event.preventDefault();
@@ -29947,8 +30834,12 @@ function attachRepairConfirmEvents() {
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
-    const sharedAppearanceDraft = ['backgrounds', 'seekbar'].includes(state.utility.appearanceKey) && ['backgrounds', 'seekbar'].includes(nextAppearanceKey);
-    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+    const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+    const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
+    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
+      state.utility.appearanceKey = nextAppearanceKey;
+      renderUtilityModalContent();
+    })) return;
     state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;
@@ -30922,6 +31813,15 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 // BEGIN js/runtime/bootstrap-gallery-event-handlers.js
 
 ﻿function handleGalleryBootstrapClick(event) {
+  const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
+  if (removeMissingAlbumButton) {
+    event.preventDefault();
+    const album = resolveTrackModalActionAlbum(removeMissingAlbumButton);
+    const runtimeOptions = typeof album?.constructor === 'function' ? new album.constructor() : {};
+    runtimeOptions.source = 'album-details';
+    void confirmMissingAlbumRemoval(album, runtimeOptions);
+    return;
+  }
   const ignoreVersionButton = event.target.closest('[data-ignore-version-context="1"]');
   if (ignoreVersionButton) {
     event.preventDefault();
@@ -32263,6 +33163,12 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && (
         currentFamilyGroups.length
         || currentRelatedArtists.length
+      )
+      && (
+        !Array.isArray(state.view?.search_context?.artist_name_match_artists)
+        || state.view.search_context.artist_name_match_artists.some(
+          (artistNameMatch) => String(artistNameMatch || '').trim() === normalizedArtist,
+        )
       )
     )
     : hasAuthoritativeMountedFamilyContext;

@@ -7,15 +7,19 @@
   <title>{{ app_name }} v{{ app_version }}</title>
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script">
   <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/alert-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-artbox-and-gallery-card.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-details-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-track-table.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="/static/css/admin-members.css">
   <link rel="stylesheet" href="/static/css/account.css">
   <link rel="stylesheet" href="/static/css/settings-navigation.css">
@@ -45,6 +49,8 @@
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
   {% from "partials/app-bar.html" import app_bar with context %}
   {% from "partials/search-input.html" import search_input %}
+  {% from "partials/button.html" import ui_button, action_button %}
+  {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
     {% call app_bar("library") %}
         <form class="toolbar-left" id="search-form" method="get" action="/">
@@ -57,19 +63,19 @@
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
         </form>
         <div class="toolbar-right">
-          <button class="icon-button cover-lookup-drawer-button" type="button" id="cover-lookup-drawer-button" data-toggle-cover-lookup-drawer="1" title="Cover art lookups" aria-label="Cover art lookups">
+          {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
               <img class="cover-lookup-drawer-glyph-default" src="{{ url_for('static', filename='images/cover-lookup-notification-icon-offwhite.png') }}" alt="">
               <img class="cover-lookup-drawer-glyph-hover" src="{{ url_for('static', filename='images/cover-lookup-notification-icon.png') }}" alt="">
             </span>
             <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
-          </button>
-          <button class="status-indicator is-idle" type="button" id="scan-indicator" aria-label="Library status" title="Library ready">
+          {% endcall %}
+          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready') %}
             <span class="status-spinner" aria-hidden="true"></span>
             <span class="status-check" aria-hidden="true">&#10003;</span>
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
-          </button>
+          {% endcall %}
           {% include 'partials/account-menu.html' %}
         </div>
     {% endcall %}
@@ -181,13 +187,12 @@
     <div class="settings-outlet" data-settings-outlet></div>
   </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
-    <button class="player-mode-toggle" type="button" data-player-toggle aria-label="Collapse player" title="Collapse player">‹</button>
     <div class="player-shell">
-      <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
-      <span class="loop-play-control-cluster player-play-cluster">
-        <button class="loop-play-control-button player-play" type="button" id="player-play" aria-label="Play or pause">Play</button>
-        <span class="loop-play-control-actions player-loop-actions" data-loop-action-mount="global-player" data-loop-action-owner="global-player"></span>
-      </span>
+      <div class="player-controls">
+        {% call ui_button(variant='icon', size='small', action='player-collapse', class_name='player-collapse-button', aria_label='Collapse player', title='Collapse player') %}‹{% endcall %}
+        <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
+        {{ playback_control_cluster('expanded-player', owner_id='global-player') }}
+      </div>
       <div class="player-main">
         <div class="player-meta">
           <div class="player-title" id="player-title"></div>
@@ -206,22 +211,9 @@
       </div>
     </div>
     <div class="compact-player-shell" aria-label="Compact player" hidden>
+      {% call ui_button(variant='icon', size='small', action='player-expand', class_name='compact-player-expand', aria_label='Expand player', title='Expand player') %}›{% endcall %}
       <button class="compact-player-cover" type="button" data-compact-player-cover aria-label="Open album details"></button>
-      <div class="compact-player-transport">
-        <button class="compact-player-skip" type="button" data-compact-player-previous aria-label="Previous track">
-          <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M18 6l-6 6 6 6"></path>
-            <path d="M11 6l-6 6 6 6"></path>
-          </svg>
-        </button>
-        <button class="compact-player-play" type="button" data-compact-player-play aria-label="Play">▶</button>
-        <button class="compact-player-skip" type="button" data-compact-player-next aria-label="Next track">
-          <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M6 6l6 6-6 6"></path>
-            <path d="M13 6l6 6-6 6"></path>
-          </svg>
-        </button>
-      </div>
+      {{ playback_control_cluster('compact-player') }}
     </div>
   </div>
 

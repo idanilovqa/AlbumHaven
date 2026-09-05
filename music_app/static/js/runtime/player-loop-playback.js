@@ -873,6 +873,9 @@ function attachSharedPlayer() {
     btn.addEventListener('click', () => {
       const src = btn.getAttribute('data-src');
       if (!src) return;
+      if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
+        triggerAlbumTrackPlayActivation(btn);
+      }
       const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
       const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
       const playback = getPlayerPlaybackSnapshot();

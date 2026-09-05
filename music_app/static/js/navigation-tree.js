@@ -7,14 +7,15 @@
     const template = document.getElementById('navigation-tree-item-template')?.textContent;
     if (!template) throw new Error('NavigationTreeItem template is missing.');
     const settings = variant === 'settings';
+    const panel = variant === 'panel';
     const legacy = settings ? 'settings-nav-item' : 'artist-link';
     const tag = action ? 'button' : 'a';
     const values = {
       class: legacy + (selected ? (settings ? ' is-active' : ' active') : '') + ' navigation-tree-item' + (selected ? ' is-selected' : ''),
-      'data-navigation-tree-item': settings ? 'settings' : 'artists',
+      'data-navigation-tree-item': panel ? 'panel' : (settings ? 'settings' : 'artists'),
       'data-navigation-tree-key': key,
     };
-    if (action) values.type = 'submit';
+    if (action) values.type = panel ? 'button' : 'submit';
     else values.href = /^(?:\/(?!\/)|#)/.test(String(href)) ? href : '#';
     for (const [name, value] of Object.entries(attributes)) {
       if (/^data-[a-z0-9-]+$/.test(name) && !name.startsWith('data-navigation-tree-')) values[name] = value;

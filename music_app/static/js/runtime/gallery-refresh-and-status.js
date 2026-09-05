@@ -1331,6 +1331,11 @@ async function browseScannedLibrarySnapshot() {
 
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
+    knownStatus,
+    'inventory_mutation_revision',
+  );
+  const knownInventoryRevision = Number(knownStatus.inventory_mutation_revision || 0);
   const knownBusy = Boolean(
     knownStatus.scan_in_progress
     || knownStatus.relations_in_progress
@@ -1353,6 +1358,28 @@ async function pollStatus() {
     const data = await response.json();
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
+    const currentInventoryRevision = Number(
+      normalizedStatus.inventory_mutation_revision || 0,
+    );
+    if (
+      hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision
+    ) {
+      if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+        invalidateAllHydratedTrackModalAlbumDetails();
+      }
+      state.ui.pendingInventoryMutationViewRefresh = true;
+      if (state.utility.loaded) {
+        try {
+          await loadProblematicFiles(true);
+        } catch (problematicFilesError) {
+          console.error(
+            '[AlbumHaven][Watcher] Failed to refresh Problematic Files after an inventory change.',
+            problematicFilesError,
+          );
+        }
+      }
+    }
     const statusObservationSequence = recordSuccessfulStatusObservation();
 
     const logHistoryRevision = String(
@@ -1490,6 +1517,7 @@ async function pollStatus() {
       if (!normalizedStatus.last_error && !scanWasCancelled) {
         showToast('Library scan complete.', 'success', 3200);
       }
+      state.ui.pendingInventoryMutationViewRefresh = false;
     }
     if (wasCoverPollingBusy && !coverBusyNow) {
       if (shouldAutoRefreshViewAfterCoverCompletion()) {
@@ -1510,6 +1538,32 @@ async function pollStatus() {
         await loadProblematicFiles(true);
       }
       showToast('Album covers updated.', 'success', 3200);
+    }
+    if (
+      state.ui.pendingInventoryMutationViewRefresh
+      && !busyNow
+      && !coverBusyNow
+      && !state.busy
+      && !hasPendingSidebarNavigation()
+    ) {
+      state.ui.pendingInventoryMutationViewRefresh = false;
+      try {
+        const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
+          preserveScroll: true,
+          restartIfSameUrl: true,
+        });
+        if (!refreshApplied) {
+          state.ui.pendingInventoryMutationViewRefresh = true;
+        } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+          invalidateAllHydratedTrackModalAlbumDetails();
+        }
+      } catch (inventoryRefreshError) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
+          inventoryRefreshError,
+        );
+      }
     }
     const statusMenu = document.getElementById('status-context-menu');
     const visibleStatusMenuNeedsBusySampling = Boolean(

@@ -384,20 +384,52 @@
     slate: { player: '#152334', 'player-ink': '#B4C9DF', play: '#A1BFDE', 'play-ink': '#152334', 'player-accent': '#8FB1D4' },
     midnight: { player: '#131C31', 'player-ink': '#BDCBE4', play: '#B0C2E8', 'play-ink': '#131C31', 'player-accent': '#A0B6DE' },
   };
+  const selectionAccents = {
+    steelblue: '#8BAED1',
+    navy: '#91B4E3',
+    powderblue: '#4F7398',
+    graphite: '#8A96A3',
+    slate: '#7896B4',
+    midnight: '#8297CC',
+    black: '#1DB954',
+    blackgray: '#BDBDBD',
+    paper: '#596775',
+    silver: '#596775',
+    coollight: '#526E8B',
+  };
   const baseTokens = { ink: '#EDF0F4', muted: '#ABB6C5', card: '#202938', control: '#202938', line: '#526173', hover: '#FFFFFF0B', accent: '#68B6B0', player: '#112820', 'player-ink': '#B3CFC0', play: '#79B390', 'play-ink': '#0A2118', stars: '#D6BC6D' };
   function freeze(value) {
     if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
     return value;
   }
-  const palettes = freeze(definitions.map(palette => ({ ...palette, mode: palette.mode || 'dark', tokens: { ...(palette.tokens || {}), ...(playerDefaults[palette.id] || {}) } })));
+  const palettes = freeze(definitions.map(palette => ({
+    ...palette,
+    mode: palette.mode || 'dark',
+    selectionAccent: selectionAccents[palette.id],
+    tokens: { ...(palette.tokens || {}), ...(playerDefaults[palette.id] || {}) },
+  })));
   function hex(value) {
     if (typeof value !== 'string' || value.length !== 7 || !/^#[0-9a-f]{6}$/i.test(value)) throw new TypeError('Enter a color as #RRGGBB.');
     return value.toUpperCase();
   }
   function normalizePlayerOverride(value) {
     if (value === null) return null;
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 3 || !['background', 'fill', 'edge'].every(key => Object.hasOwn(value, key))) throw new TypeError('Player colors must include background, fill and edge.');
-    return { background: hex(value.background), fill: hex(value.fill), edge: hex(value.edge) };
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Player colors are incomplete.');
+    const keys = Object.keys(value);
+    if (keys.length === 3 && ['background', 'fill', 'edge'].every(key => Object.hasOwn(value, key))) {
+      return { background: hex(value.background), fill: hex(value.fill), edge: hex(value.edge) };
+    }
+    if (keys.length !== 4 || !['surface', 'controls', 'waveform', 'handles'].every(key => Object.hasOwn(value, key))) throw new TypeError('Player colors are incomplete.');
+    const { surface, controls, waveform, handles } = value;
+    if (!surface || !controls || !waveform || !handles || [surface, controls, waveform, handles].some(part => typeof part !== 'object' || Array.isArray(part))) throw new TypeError('Player colors are incomplete.');
+    if (!['gradient', 'layered_gradient', 'solid'].includes(surface.mode) || !Number.isFinite(surface.angle) || surface.angle < 0 || surface.angle > 360) throw new TypeError('Player surface is invalid.');
+    if (Object.keys(surface).length !== 4 || Object.keys(controls).length !== 2 || Object.keys(waveform).length !== 2 || Object.keys(handles).length !== 1) throw new TypeError('Player colors are incomplete.');
+    return {
+      surface: { mode: surface.mode, angle: surface.angle, start: hex(surface.start), end: hex(surface.end) },
+      controls: { fill: hex(controls.fill), border: hex(controls.border) },
+      waveform: { fill: hex(waveform.fill), edge: hex(waveform.edge) },
+      handles: { color: hex(handles.color) },
+    };
   }
   function contrastingInk(background) {
     const channels = [1, 3, 5].map(offset => parseInt(background.slice(offset, offset + 2), 16) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
@@ -411,13 +443,32 @@
     if (!Number.isInteger(index) || index < 0 || index > (palette ? 2 : 0)) throw new TypeError('Unknown panel companion.');
     const source = palette?.tokens || {};
     const override = normalizePlayerOverride(value.player_override ?? null);
-    const player = override || {
+    const player = override && Object.hasOwn(override, 'surface') ? {
+      background: override.surface.start,
+      fill: override.waveform.fill,
+      edge: override.waveform.edge,
+      style: override,
+    } : override || {
       background: source.player || '#112820',
       fill: source['waveform-fill'] || source['player-accent'] || source.accent || '#79B390',
       edge: source['waveform-edge'] || source['player-ink'] || '#DCEBE3',
     };
     const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge };
-    if (override) Object.assign(tokens, { player: player.background, 'player-ink': contrastingInk(player.background), play: contrastingInk(player.background), 'play-ink': player.background, 'player-accent': player.fill });
+    if (override) {
+      const style = player.style;
+      Object.assign(tokens, {
+        player: player.background,
+        'player-surface-start': style?.surface.start || player.background,
+        'player-surface-end': style?.surface.end || player.background,
+        'player-surface-angle': style ? `${style.surface.angle}deg` : '0deg',
+        'player-ink': contrastingInk(player.background),
+        play: style?.controls.fill || contrastingInk(player.background),
+        'play-ink': contrastingInk(style?.controls.fill || player.background),
+        'player-control-border': style?.controls.border || player.edge,
+        'player-accent': player.fill,
+        'player-handle': style?.handles.color || player.edge,
+      });
+    }
     return { main: palette?.main || (value.main_surface_color == null ? '#111C2C' : hex(value.main_surface_color)),
       panel: palette ? palette.panels[index][1] : (value.panel_background_color == null ? '#0E1B2B' : hex(value.panel_background_color)),
       tokens, player: { ...player }, mode: palette?.mode || 'dark' };

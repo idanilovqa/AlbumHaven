@@ -1,4 +1,13 @@
 ﻿function handleGalleryBootstrapClick(event) {
+  const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
+  if (removeMissingAlbumButton) {
+    event.preventDefault();
+    const album = resolveTrackModalActionAlbum(removeMissingAlbumButton);
+    const runtimeOptions = typeof album?.constructor === 'function' ? new album.constructor() : {};
+    runtimeOptions.source = 'album-details';
+    void confirmMissingAlbumRemoval(album, runtimeOptions);
+    return;
+  }
   const ignoreVersionButton = event.target.closest('[data-ignore-version-context="1"]');
   if (ignoreVersionButton) {
     event.preventDefault();
@@ -1340,6 +1349,12 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && (
         currentFamilyGroups.length
         || currentRelatedArtists.length
+      )
+      && (
+        !Array.isArray(state.view?.search_context?.artist_name_match_artists)
+        || state.view.search_context.artist_name_match_artists.some(
+          (artistNameMatch) => String(artistNameMatch || '').trim() === normalizedArtist,
+        )
       )
     )
     : hasAuthoritativeMountedFamilyContext;

@@ -80,6 +80,8 @@ def test_artist_search_buckets_prefers_direct_artist_and_track_matches():
     assert [album.key for album in buckets["albums"]] == ["neal-1", "spock-1"]
     assert buckets["direct_artists_ordered"] == ["Neal Morse", "Spock's Beard"]
     assert buckets["related_artists_ordered"] == []
+    assert buckets["direct_album_keys"] == {"neal-1", "spock-1"}
+    assert buckets["artist_name_match_artists"] == {"Neal Morse"}
 
 
 def test_artist_search_buckets_skips_track_fields_after_direct_artist_match(monkeypatch):

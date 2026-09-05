@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.auth_asgi import _policy_config
 from music_app.services.appearance_preferences_postgres import (
+    AppearanceRevisionConflict,
     PostgresAppearancePreferencesRepository,
     appearance_client_profile,
     expand_appearance_preferences,
@@ -70,16 +71,29 @@ async def get_appearance(request: Request) -> JSONResponse:
 @router.put("/account/appearance")
 async def put_appearance(request: Request) -> JSONResponse:
     try:
-        colors = normalize_appearance_preferences(await request.json())
+        payload = await request.json()
+        expected_revision = payload.pop("expected_revision", None) if isinstance(payload, dict) else None
+        colors = normalize_appearance_preferences(payload)
+        aggregate = "interaction_overrides" in colors
+        if aggregate and (type(expected_revision) is not int or expected_revision < 0):
+            raise ValueError("Invalid expected revision.")
+        if not aggregate and expected_revision is not None:
+            raise ValueError("Unexpected revision.")
     except (ValueError, UnicodeDecodeError):
         return JSONResponse({"error": "invalid_appearance"}, status_code=400, headers=_NO_STORE)
     try:
+        kwargs = {
+            "account_id": request.state.current_actor.account_id,
+            "preferences": colors,
+            "client_profile": _client_profile(request),
+        }
+        if aggregate:
+            kwargs["expected_revision"] = expected_revision
         saved = expand_appearance_preferences(await run_in_threadpool(
-            _repository(request).save_preferences,
-            account_id=request.state.current_actor.account_id,
-            preferences=colors,
-            client_profile=_client_profile(request),
+            _repository(request).save_preferences, **kwargs,
         ))
+    except AppearanceRevisionConflict as conflict:
+        return JSONResponse({"error": "appearance_conflict", "appearance": expand_appearance_preferences(conflict.current)}, status_code=409, headers=_NO_STORE)
     except Exception:
         return JSONResponse({"error": "appearance_unavailable"}, status_code=503, headers=_NO_STORE)
     return JSONResponse(saved, headers=_NO_STORE)

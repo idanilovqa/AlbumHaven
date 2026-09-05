@@ -12,8 +12,10 @@ test('the existing Settings gear owns a shared, permission-filtered menu with pr
   assert.doesNotMatch(index, /id="settings-button"/);
   assert.doesNotMatch(index, /id="account-button"/);
   assert.doesNotMatch(index, /<a\b[^>]*href=["']\/account["']/);
-  assert.match(menu, /id="settings-button"[^>]*data-account-menu-trigger/);
-  assert.match(menu, /aria-haspopup="menu"[^>]*aria-expanded="false"/);
+  assert.match(menu, /id='settings-button'[^%]*'data-account-menu-trigger': true/);
+  assert.match(menu, /from "partials\/button\.html" import action_button/);
+  assert.match(menu, /call action_button\('Settings'/);
+  assert.match(menu, /'aria-haspopup': 'menu'[^%]*'aria-expanded': 'false'/);
   assert.match(menu, /allows\('accounts.read'\)/);
   assert.match(menu, /method="post" action="\/logout"/);
   assert.match(menu, /name="csrf_token" value="\{\{ account_menu_csrf_token \}\}"/);

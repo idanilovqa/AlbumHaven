@@ -536,7 +536,7 @@ jobs:
         include:
           - shard: gallery-search-visual
             displayName: Gallery, Search & Visual
-            expectedCases: 35
+            expectedCases: 36
             portBase: 5200
             outputDir: functional-output-gallery-search-visual
             blobName: functional-blob-gallery-search-visual
@@ -554,7 +554,7 @@ jobs:
             blobName: functional-blob-metadata-mutations
           - shard: playback-utilities
             displayName: Playback & Utilities
-            expectedCases: 25
+            expectedCases: 30
             portBase: 5500
             outputDir: functional-output-playback-utilities
             blobName: functional-blob-playback-utilities

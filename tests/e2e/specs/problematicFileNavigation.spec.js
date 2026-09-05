@@ -142,6 +142,10 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
   await stepLogger.step('Open Problematic Files from that exact track and scroll the matching album into view', async () => {
     await utilityProblematicFilesActions.startNavigationRenderObservation();
     await trackModalActions.openProblematicFilesForTrack(PROBLEMATIC_TRACK);
+    const utilityStack = await settingsModalAppBarActions.settingsModalAppBar
+      .readStackingCheckpoint(trackModalActions.trackModal.dialog);
+    expect(utilityStack.utilityZIndex).toBeGreaterThan(utilityStack.underlyingZIndex);
+    expect(utilityStack.utilityOwnsTopElement).toBe(true);
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.waitForSelectedDetailSelection({ expectedTitle: ALBUM });
     await utilityProblematicFilesActions.waitForActiveAlbumInSidebarViewport(ALBUM);

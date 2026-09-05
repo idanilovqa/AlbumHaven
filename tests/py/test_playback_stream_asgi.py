@@ -221,6 +221,39 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
     assert int(headers["content-length"]) == len(body)
 
 
+def test_waveform_route_allows_the_bounded_higher_detail_player_density(
+    playback_app,
+    media_path,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int]] = []
+
+        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+            self.calls.append((path, bins))
+            return WaveformPeaks(
+                left=(0.25,) * bins,
+                right=(0.5,) * bins,
+                sample_count=bins,
+            )
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"path": str(media_path), "bins": "720"},
+    )
+
+    assert status == 200
+    assert registry.calls == [(media_path, 720)]
+    assert decode_json(body)["sampleCount"] == 720
+
+
 def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bounded_registry(
     playback_app,
     tmp_path,

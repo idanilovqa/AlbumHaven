@@ -70,7 +70,10 @@ async def playback_waveform(
     path: str = "",
     loop_id: str = "",
     cachedOnly: str = "",
+    bins: int = 280,
 ) -> Response:
+    if bins not in {280, 720}:
+        return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
     requested_path = str(path or "").strip()
     requested_loop_id = str(loop_id or "").strip()
     if requested_path and requested_loop_id:
@@ -90,7 +93,7 @@ async def playback_waveform(
         try:
             peaks = await request.app.state.waveform_peaks_registry.get_cached(
                 resolved_path,
-                bins=280,
+                bins=bins,
             )
         except WaveformPeaksBusyError as error:
             return JSONResponse({"error": str(error)}, status_code=429)
@@ -107,7 +110,7 @@ async def playback_waveform(
     peaks_task = asyncio.create_task(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
-            bins=280,
+            bins=bins,
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))

@@ -177,7 +177,6 @@
       editor.removeEventListener('input', onInput);
       editor.removeEventListener('change', onChange);
       editor.removeEventListener('click', onClick);
-      controller.cancel();
     };
     disposeEditor = cleanup;
     const release = () => { if (disposeEditor === cleanup) unmount(); };
@@ -186,7 +185,8 @@
   }
 
   window.AlbumHavenSelectionAccent = { create, mount, unmount };
-  if (typeof document !== 'undefined' && document.documentElement && typeof window.fetch === 'function') {
+  if (typeof document !== 'undefined' && document.documentElement && typeof window.fetch === 'function'
+    && !document.getElementById('appearance-bootstrap')) {
     const instance = create({ fetch: (...args) => window.fetch(...args), apply, getCsrfToken });
     window.AlbumHavenSelectionAccent.instance = instance;
     void instance.load();

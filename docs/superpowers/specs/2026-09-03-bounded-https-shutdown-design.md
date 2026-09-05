@@ -10,6 +10,15 @@ work. A second `Ctrl+C` forces Uvicorn to cancel the lifecycle task and prints a
 
 - Configure the direct `start_https.py` launcher with a five-second Uvicorn
   graceful-shutdown timeout.
+- Stop filesystem watcher intake and coordination, cancel queued targeted
+  reconciliation, and do not join an already-running daemon reconciliation
+  worker during application shutdown.
+- Keep intentionally daemon executor workers out of `concurrent.futures`'
+  interpreter-exit join registry so `wait=False` remains nonblocking when the
+  interpreter exits.
+- Suppress only Windows asyncio's benign `WinError 10054` record from
+  `_ProactorBasePipeTransport._call_connection_lost`; preserve all other
+  asyncio errors.
 - Preserve normal graceful completion for requests that finish within that
   window. After the window, let Uvicorn cancel remaining request tasks and then
   run the existing FastAPI lifecycle cleanup.
@@ -22,7 +31,7 @@ work. A second `Ctrl+C` forces Uvicorn to cancel the lifecycle task and prints a
 
 ## Verification
 
-Run the focused HTTPS launcher tests and the existing runtime-shutdown tests
+Run the focused HTTPS launcher, runtime-shutdown, watcher, and coordinator tests
 sequentially. Manually start `python start_https.py` with browser connections
 active, press `Ctrl+C` once, and confirm that the process exits within the
 five-second drain window plus cleanup time without requiring `taskkill`.

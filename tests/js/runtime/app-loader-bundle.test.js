@@ -52,7 +52,12 @@ const expectedRuntimeOrder = [
   'status-ui-helpers.js',
   'notification-ui-helpers.js',
   'render-markup-helpers.js',
+  'alert-components.js',
+  'album-artbox.js',
+  'gallery-card-component.js',
+  'album-details-components.js',
   'core-state-and-helpers.js',
+  'compact-player-helpers.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
   'account-menu.js',
@@ -64,12 +69,14 @@ const expectedRuntimeOrder = [
   'track-modal-lightbox-helpers.js',
   'player-waveform-peaks.js',
   'loop-range-controls.js',
+  'playback-control-cluster.js',
   'loop-edit-session-expiry.js',
   'player-and-waveform.js',
   'gallery-refresh-and-status.js',
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
   'compact-data-table.js',
+  'album-track-table.js',
   'utility-list-builders.js',
   'problem-exclusion-mutations.js',
   'library-settings.js',
@@ -86,6 +93,7 @@ const expectedRuntimeOrder = [
   'gallery-cover-load-scheduler.js',
   'virtual-artist-grid.js',
   'player-loop-playback.js',
+  'compact-player-controller.js',
   'track-modal-and-gallery.js',
   'bootstrap-utility-event-handlers.js',
   'bootstrap-gallery-event-handlers.js',
@@ -138,8 +146,13 @@ test('app loader fetches one generated runtime bundle instead of individual runt
   );
   assert.ok(
     bundleJs.indexOf('// BEGIN js/runtime/loop-range-controls.js')
+      < bundleJs.indexOf('// BEGIN js/runtime/playback-control-cluster.js'),
+    'shared loop controls must load before the playback-control renderer',
+  );
+  assert.ok(
+    bundleJs.indexOf('// BEGIN js/runtime/playback-control-cluster.js')
       < bundleJs.indexOf('// BEGIN js/runtime/loop-edit-session-expiry.js'),
-    'shared loop controls must load before loop edit session expiry',
+    'the playback-control renderer must load before loop edit session expiry and consumers',
   );
   assert.ok(
     bundleJs.indexOf('// BEGIN js/runtime/loop-edit-session-expiry.js')

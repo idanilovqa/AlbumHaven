@@ -177,10 +177,12 @@ def _template_url_for(request: Request, name: str, **path_params: object) -> str
 def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
+        runtime_stylesheets = tuple(sorted((static_root / "css" / "runtime").glob("*.css")))
         asset_paths = (
             static_root / "app.js",
             static_root / "js" / "runtime-bundle.js",
             static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
+            *runtime_stylesheets,
         )
     digest = hashlib.sha256()
     try:

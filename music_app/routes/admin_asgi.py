@@ -58,6 +58,7 @@ _CAPABILITY_GROUPS = (
             ("library.browse.read", "View library"),
             ("library.media.read", "Play and download files"),
             ("library.problems.read", "Review library problems"),
+            ("library.inventory.manage", "Remove missing library inventory"),
             ("library.resources.read", "View library resources"),
         ),
     ),

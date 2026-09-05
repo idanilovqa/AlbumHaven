@@ -13,3 +13,4 @@ zstandard
 argon2-cffi
 aiosmtplib
 cryptography>=42
+watchdog>=4.0,<7

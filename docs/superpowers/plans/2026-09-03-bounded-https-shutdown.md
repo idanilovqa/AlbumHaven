@@ -69,3 +69,44 @@
   Confirm the diff contains only the design, plan, launcher, launcher test,
   HTTPS guide, and operational functional case. Do not stage or modify the
   unrelated authentication work.
+
+### Task 2: Remove lifecycle cleanup blockers exposed by manual testing
+
+**Files:**
+- Modify: `music_app/__init__.py`
+- Modify: `music_app/services/runtime_shutdown.py`
+- Modify: `tests/py/test_runtime_shutdown.py`
+- Modify: `start_https.py`
+- Modify: `tests/py/test_start_https.py`
+
+**Interfaces:**
+- Consumes: the library watcher, event coordinator, targeted reconciliation
+  daemon executor, and Python's `asyncio` logger.
+- Produces: nonblocking watcher cleanup and narrow suppression of Windows
+  Proactor connection-reset noise.
+
+- [x] **Step 1: Add failing regressions**
+
+  Require watcher shutdown to stop intake and coordination before calling
+  `targeted_executor.shutdown(wait=False, cancel_futures=True)`. Require the
+  logging filter to reject only `WinError 10054` emitted by
+  `_ProactorBasePipeTransport._call_connection_lost`.
+
+- [x] **Step 2: Implement the lifecycle fix**
+
+  Extract `_stop_library_watch_runtime`, route lifespan cleanup through it,
+  and leave the targeted executor's daemon worker unjoined during process exit.
+
+  Exclude `DaemonThreadPoolExecutor` workers from the standard library's
+  interpreter-exit join registry; otherwise its exit hook would undo the
+  executor's daemon behavior.
+
+- [x] **Step 3: Filter the benign Windows transport record**
+
+  Attach `_WindowsProactorConnectionResetFilter` to the `asyncio` logger only
+  while the direct HTTPS launcher runs, and remove it in `finally`.
+
+- [x] **Step 4: Run focused verification**
+
+  Verify the two new regressions, the complete HTTPS launcher test file, and
+  the library watcher/coordinator test files.

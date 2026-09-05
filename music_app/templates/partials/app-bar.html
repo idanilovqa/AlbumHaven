@@ -2,7 +2,10 @@
 {% macro app_bar(variant='settings') -%}
 <header class="app-bar shell-app-bar app-bar--{{ variant }}" data-shell-slot="app_bar"{% if variant == 'library' %} data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}"{% else %} data-shell-content-kind="settings_toolbar"{% endif %}>
   <a class="app-bar-brand" href="/" aria-label="Album Haven library">
-    <img src="/static/images/album-haven-cloud-vinyl.png" alt="" width="40" height="38">
+    <span class="app-bar-brand-mark" aria-hidden="true">
+      <img class="app-bar-brand-art" src="/static/images/album-haven-cloud-vinyl.png" alt="" width="40" height="38">
+      <span class="app-bar-brand-label"><span class="app-bar-brand-label-hole"></span></span>
+    </span>
   </a>
   {% if caller is defined %}{{ caller() }}{% endif %}
 </header>

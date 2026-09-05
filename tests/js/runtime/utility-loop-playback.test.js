@@ -287,6 +287,41 @@ test('central utility tab transition clears loop Space ownership and collapses g
   );
 });
 
+test('accepting the Appearance leave dialog loads and renders the deferred utility tab', () => {
+  let discardAppearance;
+  let loadCount = 0;
+  let renderCount = 0;
+  const context = loadHelper({
+    state: {
+      utility: {
+        activeTab: 'appearance',
+        loops: [],
+        collapsedLoopGroups: {},
+      },
+    },
+    confirmBackgroundAppearanceLeave(onDiscard) {
+      discardAppearance = onDiscard;
+      return false;
+    },
+    loadActiveUtilityTab(force) {
+      assert.equal(force, true);
+      loadCount += 1;
+    },
+    renderUtilityModalContent() {
+      renderCount += 1;
+    },
+  });
+
+  assert.equal(context.setUtilityActiveTab('rules'), 'appearance');
+  assert.equal(context.state.utility.activeTab, 'appearance');
+  assert.equal(typeof discardAppearance, 'function');
+
+  discardAppearance();
+  assert.equal(context.state.utility.activeTab, 'rules');
+  assert.equal(loadCount, 1);
+  assert.equal(renderCount, 1);
+});
+
 test('focused or play-requested loop owns Space until Loops is left', async () => {
   const audio = new FakeAudio({ paused: false, duration: 12, src: '/loops/media/loop-1' });
   const entry = new FakeElement({

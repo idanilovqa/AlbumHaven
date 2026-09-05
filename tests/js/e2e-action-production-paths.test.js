@@ -5055,23 +5055,23 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   }
 
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
-  assert.match(spec, /opened\.playerHeight\)\.toBe\(85\)/);
-  assert.match(spec, /opened\.waveformHeight\)\.toBe\(36\)/);
+  assert.match(spec, /opened\.playerHeight\)\.toBe\(108\)/);
+  assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
   assert.match(spec, /opened\.metadataWaveformGap\)\.toBeGreaterThanOrEqual\(3\)/);
-  assert.doesNotMatch(spec, /opened\.waveformHeight\)\.toBeGreaterThanOrEqual\(40\)/);
+  assert.doesNotMatch(spec, /opened\.waveformHeight\)\.toBe\(36\)/);
   assert.match(
     spec,
     /playingPlayerLayout\.coverCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.playCenterY - unavailable\.visual\.timelineCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder must share the compact active-player alignment contract',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
+    'the no-track placeholder keeps controls centered while the taller waveform sits lower',
   );
   assert.match(
     spec,
-    /playingPlayerLayout\.playCenterY - playingPlayerLayout\.timelineCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
+    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,
@@ -5111,6 +5111,7 @@ test('loop action production path exposes the persistent enabled and engaged pod
   const player = read('music_app/static/js/runtime/player-loop-playback.js');
   const utility = read('music_app/static/js/runtime/utility-loop-playback.js');
   const template = read('music_app/templates/index.html');
+  const playbackControlMacro = read('music_app/templates/partials/playback-control-cluster.html');
   const css = read('music_app/static/css/runtime/non-album-and-player.css');
 
   assert.match(controls, /data-loop-action-pod/);
@@ -5122,9 +5123,10 @@ test('loop action production path exposes the persistent enabled and engaged pod
   assert.match(player, /Boolean\(getPlayerPlaybackSnapshot\(\)\.src\s*\|\|\s*state\.player\.current\?\.src\)/);
   assert.match(utility, /mountLoopEditActionControl\s*\(\s*\{[^]*enabled:\s*true/);
   assert.match(
-    template,
-    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="global-player"[^>]*data-loop-action-owner="global-player"[^>]*>\s*<\/span>/,
+    playbackControlMacro,
+    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="\{\{ owner_id \}\}"[^>]*data-loop-action-owner="\{\{ owner_id \}\}"[^>]*>\s*<\/span>/,
   );
+  assert.match(template, /playback_control_cluster\('expanded-player', owner_id='global-player'\)/);
   assert.doesNotMatch(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*(?:wait|progress)/s);
 });
 
@@ -5144,4 +5146,18 @@ test('loop player production markup keeps waveform identities and one timestamp 
   assert.doesNotMatch(builder, /data-loop-range-times|data-loop-range-time=/);
   assert.doesNotMatch(css, /\.player-timeline-wrap\.is-waveform(?:\.is-looping)?\s+\.player-timeline\s*\{[^}]*opacity:\s*0\.0[0-9]/s);
   assert.doesNotMatch(utility, /elements\.timeline\.hidden\s*=\s*editor\.active/);
+});
+
+test('compact-player Appearance helper enters the owning Player and Seekbar page before selecting a style', () => {
+  const actions = read('tests/e2e/actions/utilityAppearanceActions.js');
+  const start = actions.indexOf('async saveCompactPlayerStyle(');
+  const end = actions.indexOf('\n  async openSection(', start);
+  assert.ok(start >= 0 && end > start, 'Expected the compact-player Appearance action helper.');
+  const helper = actions.slice(start, end);
+
+  assert.match(
+    helper,
+    /compactPlayerStyle\.buttons\.count\(\)\s*===\s*0[^]*await this\.openSection\('seekbar'\)/,
+    'the shared compact-player control is owned by Player & Seekbar, not the Main elements landing page',
+  );
 });

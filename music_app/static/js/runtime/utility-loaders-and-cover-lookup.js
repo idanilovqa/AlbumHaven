@@ -38,7 +38,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
       }
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      const { summaryItems, initialDetail } = validateProblematicSummaryPayload(data);
+      const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
       const stateCommitStartedAt = getProblematicUtilityNow();
       initialDetailKey = String(initialDetail?.key || '').trim();
       state.utility.problematicFiles = summaryItems.map((item) => {
@@ -46,6 +46,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         initialDetailMerged = true;
         return { ...item, ...initialDetail, detail_loaded: true };
       });
+      state.utility.libraryWatchHealthProblems = operationalItems;
       state.utility.detailLoadPromises = {};
       state.utility.loaded = true;
       loadSucceeded = true;
@@ -56,6 +57,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       state.utility.problematicFiles = [];
+      state.utility.libraryWatchHealthProblems = [];
       state.utility.detailLoadPromises = {};
       state.utility.loaded = false;
       showToast('Unable to load problematic files.', 'error', 3200);
@@ -237,9 +239,34 @@ function validateProblematicSummaryPayload(payload) {
   if (itemKeys.has('')) {
     throw new Error('Problematic Files summary items must include non-empty keys.');
   }
+  const rawOperationalItems = Array.isArray(payload.operational_items)
+    ? payload.operational_items
+    : [];
+  if (rawOperationalItems.some((item) => !isProblematicPayloadObject(item))) {
+    throw new Error('Problematic Files operational items must be JSON objects.');
+  }
+  const operationalItems = rawOperationalItems.map((item) => {
+    const stateValue = String(item.state || '').trim();
+    const rootKey = String(item.root_key || '').trim();
+    if (
+      !['overflow', 'root_unavailable'].includes(stateValue)
+      || !/^root_[a-f0-9]{16}$/.test(rootKey)
+    ) {
+      throw new Error('Problematic Files operational item is invalid.');
+    }
+    return {
+      state: stateValue,
+      root_key: rootKey,
+      detected_at: String(item.detected_at || ''),
+      message: 'Some library changes may have been missed.',
+      allowed_actions: item?.allowed_actions?.['library.refresh'] === true
+        ? { 'library.refresh': true }
+        : {},
+    };
+  });
   const initialDetailValue = payload.initial_detail;
   if (initialDetailValue === undefined || initialDetailValue === null) {
-    return { summaryItems: payload.items, initialDetail: null };
+    return { summaryItems: payload.items, initialDetail: null, operationalItems };
   }
   if (!isProblematicPayloadObject(initialDetailValue)) {
     throw new Error('Problematic Files initial detail must be a JSON object or null.');
@@ -251,6 +278,7 @@ function validateProblematicSummaryPayload(payload) {
   return {
     summaryItems: payload.items,
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
+    operationalItems,
   };
 }
 
@@ -1206,8 +1234,8 @@ async function disconnectLastfmIntegration() {
   }
 }
 
-function closeUtilityModal() {
-  if (typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave()) return;
+function closeUtilityModal(skipAppearanceGuard = false) {
+  if (!skipAppearanceGuard && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;

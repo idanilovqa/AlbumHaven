@@ -45,7 +45,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(unavailable.visual.coverCenterY).not.toBeNull();
     expect(Math.abs(unavailable.visual.coverCenterY - unavailable.visual.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(unavailable.visual.playCenterY - unavailable.visual.timelineCenterY))
+    expect(Math.abs((unavailable.visual.timelineCenterY - unavailable.visual.playCenterY) - 12))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(unavailable.visual.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
     const hovered = await globalPlayerActions.hoverLoopAction();
@@ -92,10 +92,10 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(playingPlayerLayout.coverCenterY).not.toBeNull();
     expect(Math.abs(playingPlayerLayout.coverCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(playingPlayerLayout.playCenterY - playingPlayerLayout.timelineCenterY))
+    expect(Math.abs((playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY) - 12))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(playingPlayerLayout.playerBounds.height).toBe(85);
+    expect(playingPlayerLayout.playerBounds.height).toBe(108);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -174,7 +174,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(idle.styles.state).toBe('idle');
     expect(idle.styles.engaged).toBe('false');
     expect(Math.abs(idle.coverCenterY - idle.playCenterY)).toBeLessThanOrEqual(1);
-    expect(Math.abs(idle.playCenterY - idle.timelineCenterY)).toBeLessThanOrEqual(1);
+    expect(Math.abs((idle.timelineCenterY - idle.playCenterY) - 12)).toBeLessThanOrEqual(1);
     expect(Math.abs(idle.timelineCenterY - playingPlayerLayout.timelineCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(idle.mainAreaBounds.x - playingPlayerLayout.mainAreaBounds.x))
@@ -193,8 +193,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(opened.cursors.endHandle).toBe('grab');
     expect(opened.timeWaveformOverlap).toBe(false);
     expect(opened.metadataWaveformGap).toBeGreaterThanOrEqual(3);
-    expect(opened.playerHeight).toBe(85);
-    expect(opened.waveformHeight).toBe(36);
+    expect(opened.playerHeight).toBe(108);
+    expect(opened.waveformHeight).toBe(56);
     expect(opened.selectionStartErrorPixels).toBeLessThanOrEqual(1);
     expect(opened.selectionEndErrorPixels).toBeLessThanOrEqual(1);
     const keyboardDialog = await globalPlayerActions.openLoopNameDialogWithEnter();

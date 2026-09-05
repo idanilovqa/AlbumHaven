@@ -1,6 +1,7 @@
 """Start Album Haven with existing mkcert files, without shell SSL variables."""
 
 import argparse
+import logging
 import os
 from pathlib import Path
 import ssl
@@ -8,6 +9,19 @@ import sys
 
 
 GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS = 5
+_WINDOWS_PROACTOR_CONNECTION_LOST = (
+    "Exception in callback _ProactorBasePipeTransport._call_connection_lost"
+)
+
+
+class _WindowsProactorConnectionResetFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        error = record.exc_info[1] if record.exc_info else None
+        return not (
+            isinstance(error, ConnectionResetError)
+            and getattr(error, "winerror", None) == 10054
+            and record.getMessage().startswith(_WINDOWS_PROACTOR_CONNECTION_LOST)
+        )
 
 
 def build_https_options(data_dir: Path, port: int) -> dict[str, object]:
@@ -66,12 +80,20 @@ def main(argv=None) -> int:
     print("Using existing trusted-server.pem and trusted-server-key.pem. Press Ctrl+C to stop.", flush=True)
     import uvicorn
 
-    uvicorn.run(
-        "music_app:create_asgi_app",
-        factory=True,
-        timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
-        **options,
-    )
+    asyncio_logger = logging.getLogger("asyncio")
+    connection_reset_filter = _WindowsProactorConnectionResetFilter()
+    if sys.platform == "win32":
+        asyncio_logger.addFilter(connection_reset_filter)
+    try:
+        uvicorn.run(
+            "music_app:create_asgi_app",
+            factory=True,
+            timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_TIMEOUT_SECONDS,
+            **options,
+        )
+    finally:
+        if sys.platform == "win32":
+            asyncio_logger.removeFilter(connection_reset_filter)
     return 0
 
 

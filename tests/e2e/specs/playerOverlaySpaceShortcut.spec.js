@@ -21,6 +21,7 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
   coverLookupActions,
   galleryActions,
   globalPlayerActions,
+  appBarActions,
   playbackEvidence,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -32,6 +33,10 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PLAYBACK_TARGET)).toEqual(PLAYBACK_TARGET);
+    const albumDetailsStack = await trackModalActions.trackModal
+      .readStackingCheckpoint(appBarActions.appBar);
+    expect(albumDetailsStack).toMatchObject({ appBarCoveredByAlbumDetails: true });
+    expect(albumDetailsStack.modalZIndex).toBeGreaterThan(albumDetailsStack.appBarZIndex);
     const playbackMark = await playbackEvidence.playbackMark();
     const track = await trackModalActions.playTrackAt(0);
     playbackPath = track.path;

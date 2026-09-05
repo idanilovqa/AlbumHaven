@@ -83,6 +83,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/cover-lookup/remote-image"): "library.covers.remote.read",
     ("GET", "/playback/waveform"): "library.media.read",
     ("POST", "/refresh-api"): "library.refresh",
+    (
+        "POST",
+        "/api/library/albums/{album_key}/confirm-removal",
+    ): "library.inventory.manage",
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
     ("GET", "/refresh"): "library.refresh.read",
     ("GET", "/library-settings"): "library.settings.read",

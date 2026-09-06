@@ -21,7 +21,7 @@ const EXPECTED_FIXTURE_FILENAMES = Array.from(
 );
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(FIXTURE_ARTIST)}`;
 const albumDetailsTitle = (albumName, year = FIXTURE_YEAR) => (
-  `${FIXTURE_ARTIST} - ${albumName} - ${year}`
+  `${FIXTURE_ARTIST} • ${albumName} • ${year}`
 );
 const SPLIT_ORIGINAL_ALBUM = 'Selected Track Split Fixture';
 const SPLIT_RENAMED_ALBUM = 'Selected Track Split Fixture 2';

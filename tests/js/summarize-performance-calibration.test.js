@@ -16,7 +16,7 @@ function fingerprint(environment, overrides = {}) {
   return {
     runnerImage: environment === 'ci' ? 'windows-2025' : 'windows-local',
     chromeVersion: '151.0.7922.138',
-    fixtureRelease: 'fixtures-v1.0.19',
+    fixtureRelease: 'fixtures-v1.0.20',
     fixtureSchemaVersion: 1,
     postgresMajor: environment === 'ci' ? 17 : 18,
     measurementContract: 'performance-v1',

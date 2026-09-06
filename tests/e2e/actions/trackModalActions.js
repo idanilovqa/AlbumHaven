@@ -210,6 +210,7 @@ export class TrackModalActions {
       title: String(await this.trackModal.title.textContent() || '').trim(),
       subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),
       footer: String(await this.trackModal.footer.textContent() || '').trim(),
+      total: String(await this.trackModal.albumTrackTable.total.textContent() || '').trim(),
       playButtons: await this.trackModal.playButtons.count(),
       trackRows: await this.trackModal.trackRows.count(),
       coverLoaded,

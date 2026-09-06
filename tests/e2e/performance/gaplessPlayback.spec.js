@@ -44,7 +44,7 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       await galleryActions.clickAlbumDetailsByAlbumName(gaplessPlaybackFixture.album);
       const summary = await trackModalActions.waitForInteractiveSummary();
       expect(summary.title).toContain(
-        `${gaplessPlaybackFixture.artist} - ${gaplessPlaybackFixture.album}`,
+        `${gaplessPlaybackFixture.artist} • ${gaplessPlaybackFixture.album}`,
       );
       expect(summary.trackRows).toBeGreaterThanOrEqual(2);
     });

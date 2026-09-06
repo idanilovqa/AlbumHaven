@@ -54,7 +54,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
     );
     await galleryActions.clickAlbumDetailsByAlbumName(LEGACY_IGNORED_ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${LEGACY_IGNORED_ARTIST} - ${LEGACY_IGNORED_ALBUM}`);
+    expect(summary.title).toContain(`${LEGACY_IGNORED_ARTIST} • ${LEGACY_IGNORED_ALBUM}`);
     await trackModalActions.expectProblemLinksAbsent();
     await trackModalActions.close();
   });
@@ -99,7 +99,7 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
     await galleryActions.waitForAlbumVisibleUnderHeading(ALBUM_ARTIST, ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ALBUM_ARTIST} - ${ALBUM}`);
+    expect(summary.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
   });
 
   await stepLogger.step('Show the server-owned Problematic Files action on the late problematic track', async () => {

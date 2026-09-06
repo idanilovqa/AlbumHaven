@@ -95,7 +95,7 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
   await stepLogger.step('Open album details and verify the server-owned track-row presentation', async () => {
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ALBUM_ARTIST} - ${ALBUM}`);
+    expect(summary.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
     expect(summary.trackRows).toBeGreaterThanOrEqual(EXPECTED_TRACK_CREDITS.length);
     const credits = await trackModalActions.readTrackCredits(EXPECTED_TRACK_CREDITS.length);
     expect(credits).toEqual(EXPECTED_TRACK_CREDITS);
@@ -113,7 +113,7 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
     expect(await galleryActions.readAlbumCreditByName(ORDINARY_ALBUM)).toBe(ORDINARY_ALBUM_ARTIST);
     await galleryActions.clickAlbumDetailsByAlbumName(ORDINARY_ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ORDINARY_ALBUM_ARTIST} - ${ORDINARY_ALBUM}`);
+    expect(summary.title).toContain(`${ORDINARY_ALBUM_ARTIST} • ${ORDINARY_ALBUM}`);
     const credits = await trackModalActions.readTrackCredits(ORDINARY_TRACK_CREDITS.length);
     expect(credits).toEqual(ORDINARY_TRACK_CREDITS);
     await trackModalActions.close();
@@ -232,7 +232,7 @@ test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after p
     expect(await galleryActions.readAlbumCreditByName(ALBUM)).toBe(ALBUM_ARTIST);
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ALBUM_ARTIST} - ${ALBUM}`);
+    expect(summary.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
     const playbackMark = await playbackEvidence.playbackMark();
     playedTrack = await trackModalActions.playTrackAt(0);
     expect(playedTrack.artist).toBe('Solo Voice');
@@ -253,7 +253,7 @@ test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after p
     await trackModalActions.close();
     await globalPlayerActions.openCurrentAlbumFromCover();
     const reopened = await trackModalActions.waitForLoadedSummary();
-    expect(reopened.title).toContain(`${ALBUM_ARTIST} - ${ALBUM}`);
+    expect(reopened.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
     expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
   });
 });
@@ -276,7 +276,7 @@ test('FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once
     await galleryActions.clickAlbumDetailsByAlbumName(DUPLICATE_HEADER_ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
     expect(summary.title).toBe(
-      `${DISTINCT_HEADER_ARTIST_DISPLAY} - ${DUPLICATE_HEADER_ALBUM} - ${DUPLICATE_HEADER_YEAR}`,
+      `${DISTINCT_HEADER_ARTIST_DISPLAY} • ${DUPLICATE_HEADER_ALBUM} • ${DUPLICATE_HEADER_YEAR}`,
     );
     const [rawTrack, visibleCredit] = await Promise.all([
       trackModalActions.readTrackAt(0),
@@ -306,7 +306,7 @@ test('FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename', a
 
   await stepLogger.step('Verify natural filename order when positive track numbers are absent', async () => {
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${TRACK_ORDER_ALBUM_ARTIST} - ${TRACK_ORDER_ALBUM}`);
+    expect(summary.title).toContain(`${TRACK_ORDER_ALBUM_ARTIST} • ${TRACK_ORDER_ALBUM}`);
     const titles = await Promise.all(
       Array.from({ length: summary.trackRows }, (_, index) => (
         trackModalActions.readTrackAt(index).then((track) => track.title)

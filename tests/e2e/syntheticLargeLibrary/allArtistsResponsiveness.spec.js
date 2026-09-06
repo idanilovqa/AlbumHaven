@@ -404,7 +404,7 @@ test.describe('FTC-GALLERY-STARTUP-005A synthetic-large responsiveness', () => {
       });
 
       expect(summary.title, 'Expected the album details modal title to load.').not.toBe('');
-      expect(summary.footer, 'Expected the album details modal footer to include album length.').toContain('Length');
+      expect(summary.total, 'Expected the AlbumTrackTable total to include album length.').toContain('Length');
       expect(summary.playButtons, 'Expected per-track play buttons to render in the album details modal.').toBeGreaterThan(0);
       expect(summary.trackRows, 'Expected the album details modal tracklist to render.').toBeGreaterThan(0);
 

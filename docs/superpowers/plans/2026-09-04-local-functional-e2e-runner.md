@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Use Windows-native PowerShell plus npm aliases.
-- Use `fixtures-v1.0.19` and the `functional-core` profile.
+- Use `fixtures-v1.0.20` and the `functional-core` profile.
 - Use `localhost` for local PostgreSQL authentication.
 - Preserve an explicit `PGPASSFILE`; otherwise use `postgresql\pgpass.conf` beneath the current user's standard application-data directory when present.
 - Run all shards sequentially and never start more than one Playwright process.

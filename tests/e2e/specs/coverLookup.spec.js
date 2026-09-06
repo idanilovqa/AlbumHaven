@@ -642,7 +642,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
       .toEqual(COVER_LOOKUP_TARGET);
     expect((await trackModalActions.waitForLoadedSummary()).title)
-      .toBe('Mastodon - Crack The Skye - 2009');
+      .toBe('Mastodon • Crack The Skye • 2009');
     const originalDetailCover = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage,
       'initial detail canonical cover',

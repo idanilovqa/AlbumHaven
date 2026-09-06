@@ -229,7 +229,7 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
     await session.tagEditorActions.setTrackNumber(15);
     await session.tagEditorActions.applyAndWaitForSavedFiles();
     await session.trackModalActions.waitForExactAlbumDetails({
-      title: `${ARTIST} - ${SOURCE_ALBUM} - ${FIXTURE_YEAR}`,
+      title: `${ARTIST} • ${SOURCE_ALBUM} • ${FIXTURE_YEAR}`,
       trackTitles: TRACKS.map((track) => track.title),
       displayedTrackNumbers: TRACKS.map((_track, index) => index + 1),
     });

@@ -57,7 +57,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
     expect(selectedAlbum).toEqual(LOOP_ALBUM_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe('Album Haven Last.fm Fixture - Signed Scrobble Journey - 2026');
+    expect(modal.title).toBe('Album Haven Last.fm Fixture • Signed Scrobble Journey • 2026');
     const playbackMark = await playbackEvidence.playbackMark();
     selectedTrack = await trackModalActions.playTrackAt(0);
     expect(selectedTrack.title).toBe(LOOP_TRACK_TITLE);

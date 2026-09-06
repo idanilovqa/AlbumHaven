@@ -22,8 +22,8 @@ function sampleInput() {
       { id: 'performance:idle-memory', conclusion: 'success', passed: 2, failed: 0, skipped: 0 },
     ],
     fixture: {
-      release: 'fixtures-v1.0.19',
-      manifestSha256: 'cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51',
+      release: 'fixtures-v1.0.20',
+      manifestSha256: 'b1b53a4a439aa1ae58beaf8b7a86b2bea7b74397045c10a5be7eff7c367af7fc',
       profiles: ['functional-core', 'synthetic-large-library'],
     },
     environment: {

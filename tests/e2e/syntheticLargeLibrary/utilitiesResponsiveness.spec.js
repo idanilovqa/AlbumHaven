@@ -143,7 +143,7 @@ test.describe(`${RULES_CASE_ID} synthetic-large utilities rules and sibling-tab 
           memoryKey: 'appearance-memory',
           memoryLabel: 'Appearance idle memory after ready',
           assertSummary(summary) {
-            expect(summary.itemCount, 'Expected all three Appearance pages.').toBe(3);
+            expect(summary.itemCount, 'Expected all five Appearance pages.').toBe(5);
             expect(summary.sectionLabels).toEqual(['Main elements', 'Player & Seekbar', 'Selection & Hover']);
             expect(summary.seekbarModeCount, 'Player controls stay unmounted on the Main elements page.').toBe(0);
             expect(summary.detailTitle).toBe('Main elements');

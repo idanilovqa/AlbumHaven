@@ -41,7 +41,7 @@ test('FTC-PLAYER-013 album-detail playback starts promptly regardless of song le
       await galleryActions.waitForAlbumVisible(ALBUM);
       await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
       const summary = await trackModalActions.waitForInteractiveSummary();
-      expect(summary.title).toContain(`${ARTIST} - ${ALBUM}`);
+      expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
       expect(summary.trackRows).toBeGreaterThan(ATTEMPTS.at(-1).rowIndex);
     });
 

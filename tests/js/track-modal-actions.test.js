@@ -41,9 +41,12 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
         },
       },
       detailedCoverImage: albumCoverImage,
-      title: createLocator({ text: 'Neal Morse - One - 2004' }),
+      title: createLocator({ text: 'Neal Morse • One • 2004' }),
       subtitle: createLocator({ text: 'Neal Morse' }),
       footer: createLocator({ text: 'Total Main Album Length: 1h 19m' }),
+      albumTrackTable: {
+        total: createLocator({ text: 'Total Main Album Length: 1h 19m' }),
+      },
       playButtons: createLocator({ count: 4 }),
       trackRows: createLocator({ count: 12 }),
       coverPlaceholder: createLocator({

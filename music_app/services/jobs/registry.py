@@ -6,12 +6,14 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
+from datetime import datetime
+from types import MappingProxyType
 from typing import Any
 
 from .models import EnqueueJob, JobKind, JobPolicy, RecoveryPolicy
 
 
-JOB_POLICIES: dict[str, JobPolicy] = {
+JOB_POLICIES: Mapping[str, JobPolicy] = MappingProxyType({
     "full_scan": JobPolicy(
         frozenset({"library.refresh"}), 2, RecoveryPolicy.RETRY_SAFE
     ),
@@ -48,7 +50,7 @@ JOB_POLICIES: dict[str, JobPolicy] = {
         RecoveryPolicy.AMBIGUOUS_ON_STALE_LEASE,
         public_lifecycle=True,
     ),
-}
+})
 
 _CONTROL_CHARACTER = re.compile(r"[\x00-\x1f\x7f]")
 _STABLE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*\Z")
@@ -63,6 +65,7 @@ _POSIX_ABSOLUTE_PATH = re.compile(
     r"(?<![a-z0-9/])/(?!/)(?:[^/\s]+/)+[^/\s]*", re.IGNORECASE
 )
 _BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+\S+")
+_OPAQUE_BEARER_VALUE = re.compile(r"[A-Za-z0-9_-]{43,}\Z")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)(?<![\w-])(?:"
     r"(?:[a-z0-9]+[_-])*(?:api[_-]?key|password|token|secret)\s*=\s*\S+|"
@@ -141,6 +144,13 @@ def _is_scalar(value: Any) -> bool:
     if value is None or isinstance(value, (str, bool, int)):
         return True
     return isinstance(value, float) and math.isfinite(value)
+
+
+def _validate_optional_positive_id(name: str, value: Any) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive integer when present")
 
 
 def _validate_parameter_shape(parameters: Any) -> Mapping[str, Any]:
@@ -229,7 +239,14 @@ def _contains_unsafe_parameter(value: Any, *, key: str | None = None) -> bool:
         if _unsafe_string(key) or _unsafe_parameter_key(key):
             return True
     if isinstance(value, str):
-        return _unsafe_string(value)
+        stable_metadata = (
+            key is not None
+            and _parameter_key_tokens(key)
+            and _parameter_key_tokens(key)[-1] in _STABLE_CONTEXT_METADATA_TOKENS
+        )
+        return _unsafe_string(value) or (
+            bool(_OPAQUE_BEARER_VALUE.fullmatch(value)) and not stable_metadata
+        )
     if isinstance(value, Mapping):
         return any(
             _contains_unsafe_parameter(child, key=child_key)
@@ -246,11 +263,24 @@ def validate_enqueue(command: EnqueueJob) -> EnqueueJob:
     policy = policy_for(command.kind)
     kind = command.kind.value if isinstance(command.kind, JobKind) else command.kind
 
+    if (
+        not isinstance(command.scheduled_at, datetime)
+        or command.scheduled_at.tzinfo is None
+        or command.scheduled_at.utcoffset() is None
+    ):
+        raise ValueError("scheduled_at must be a timezone-aware datetime")
+
+    _validate_optional_positive_id("account_id", command.account_id)
+    _validate_optional_positive_id("library_id", command.library_id)
+
     _validate_identifier("subject_kind", command.subject_kind, maximum=128)
     _validate_identifier("subject_ref", command.subject_ref, maximum=1024)
     _validate_identifier("idempotency_key", command.idempotency_key, maximum=1024)
     _validate_identifier(
-        "request_origin_ref", command.request_origin_ref, maximum=1024, required=True
+        "request_origin_ref",
+        command.request_origin_ref,
+        maximum=1024,
+        required=not policy.server_owned,
     )
     _validate_identifier("deployment_mode", command.deployment_mode, maximum=128)
     _validate_identifier("client_surface", command.client_surface, maximum=128)
@@ -266,7 +296,7 @@ def validate_enqueue(command: EnqueueJob) -> EnqueueJob:
         ("deployment_mode", command.deployment_mode),
         ("client_surface", command.client_surface),
     ):
-        if _unsafe_string(value):
+        if value is not None and _unsafe_string(value):
             raise ValueError(f"{name} contains unsafe unredacted data")
 
     parameters = _validate_parameter_shape(command.parameters)

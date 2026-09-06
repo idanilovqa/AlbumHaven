@@ -77,6 +77,32 @@ def test_registry_is_closed_and_excludes_synchronous_album_moves():
     assert "album_move" not in JOB_POLICIES
 
 
+def test_job_policy_registry_rejects_assignment():
+    original = JOB_POLICIES["full_scan"]
+    with pytest.raises(TypeError):
+        JOB_POLICIES["full_scan"] = original
+
+
+def test_job_policy_registry_rejects_addition():
+    policy = JOB_POLICIES["full_scan"]
+    try:
+        with pytest.raises(TypeError):
+            JOB_POLICIES["album_move"] = policy
+    finally:
+        if "album_move" in JOB_POLICIES:
+            JOB_POLICIES.pop("album_move")
+
+
+def test_job_policy_registry_rejects_deletion():
+    original = JOB_POLICIES["full_scan"]
+    try:
+        with pytest.raises(TypeError):
+            del JOB_POLICIES["full_scan"]
+    finally:
+        if "full_scan" not in JOB_POLICIES:
+            JOB_POLICIES["full_scan"] = original
+
+
 def test_job_states_are_the_approved_closed_state_machine():
     assert {state.value for state in JobState} == {
         "queued",
@@ -136,6 +162,30 @@ def test_server_owned_work_inherits_library_scope_without_an_actor_capability():
     assert validate_enqueue(command) is command
 
 
+@pytest.mark.parametrize(
+    ("kind", "subject_kind", "subject_ref", "max_attempts"),
+    [
+        ("targeted_reconciliation", "reconciliation_intent", "intent-42", 3),
+        ("post_scan_cover_refresh", "inventory_revision", "revision-18", 2),
+    ],
+)
+def test_server_owned_work_does_not_require_a_request_origin(
+    kind, subject_kind, subject_ref, max_attempts
+):
+    command = _command(
+        kind=kind,
+        subject_kind=subject_kind,
+        subject_ref=subject_ref,
+        parameters={},
+        account_id=None,
+        capability_key=None,
+        request_origin_ref=None,
+        max_attempts=max_attempts,
+    )
+
+    assert validate_enqueue(command) is command
+
+
 @pytest.mark.parametrize("missing", ["library_id", "subject_ref"])
 def test_server_owned_work_rejects_missing_inherited_resource_scope(missing):
     overrides = {
@@ -184,6 +234,24 @@ def test_public_password_reset_uses_lifecycle_context_without_an_actor_capabilit
     assert validate_enqueue(command) is command
 
 
+def test_public_password_reset_still_requires_request_origin_context():
+    command = _command(
+        kind="auth_password_reset_delivery",
+        subject_kind="mail_outbox",
+        subject_ref="outbox-81",
+        parameters={},
+        account_id=None,
+        library_id=None,
+        capability_key=None,
+        request_origin_ref=None,
+        idempotency_key="forgot-password:outbox-81",
+        max_attempts=1,
+    )
+
+    with pytest.raises(ValueError, match="request_origin_ref|origin"):
+        validate_enqueue(command)
+
+
 def test_administrator_password_reset_requires_the_approved_capability():
     command = _command(
         kind="auth_password_reset_delivery",
@@ -213,6 +281,27 @@ def test_non_public_job_cannot_omit_its_actor_capability():
 
     with pytest.raises(ValueError, match="capability"):
         validate_enqueue(command)
+
+
+@pytest.mark.parametrize("scheduled_at", ["2026-09-05T00:00:00Z", datetime(2026, 9, 5)])
+def test_enqueue_requires_a_timezone_aware_datetime_schedule(scheduled_at):
+    with pytest.raises(ValueError, match="scheduled_at|timezone|datetime"):
+        validate_enqueue(_command(scheduled_at=scheduled_at))
+
+
+@pytest.mark.parametrize("field", ["account_id", "library_id"])
+@pytest.mark.parametrize("invalid", [True, 0, -1, "9"])
+def test_present_account_and_library_identifiers_must_be_positive_integers(
+    field, invalid
+):
+    with pytest.raises(ValueError, match="account_id|library_id|positive integer"):
+        validate_enqueue(_command(**{field: invalid}))
+
+
+def test_positive_account_and_library_identifiers_remain_valid():
+    command = _command(account_id=7, library_id=9)
+
+    assert validate_enqueue(command) is command
 
 
 @pytest.mark.parametrize(
@@ -290,6 +379,29 @@ def test_parameters_accept_scalars_and_one_level_containers():
             "options": {"mode": "normal", "refresh": False},
         }
     )
+
+    assert validate_enqueue(command) is command
+
+
+def test_bearer_shaped_value_is_rejected_under_a_benign_non_reference_key():
+    with pytest.raises(ValueError, match="redacted parameters"):
+        validate_enqueue(_command(parameters={"value": "A" * 43}))
+
+
+@pytest.mark.parametrize(
+    "context_key",
+    [
+        "integration_session_ref",
+        "credential_id",
+        "token_id",
+        "session_revision",
+        "credential_version",
+    ],
+)
+def test_bearer_length_opaque_values_remain_valid_under_stable_metadata_keys(
+    context_key,
+):
+    command = _command(parameters={context_key: "A" * 43})
 
     assert validate_enqueue(command) is command
 

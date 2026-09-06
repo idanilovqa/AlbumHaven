@@ -40,6 +40,7 @@
 }
 .search-field-action { display: flex; align-items: stretch; padding: 2px; }
 .search-field-action > .search-field-button {
+  appearance: none;
   display: inline-grid;
   place-items: center;
   min-width: 28px;

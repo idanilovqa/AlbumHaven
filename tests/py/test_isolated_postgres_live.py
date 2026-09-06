@@ -1227,12 +1227,14 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             },
             "structural-root-identity",
             1.0,
+            observed_library_root_ids={"structural-root"},
         )
         adapter.save_snapshot(
             Path("unused-structural-rename.json"),
             previous,
             "structural-root-identity",
             1.1,
+            observed_library_root_ids={"structural-root"},
         )
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute(
@@ -4499,6 +4501,7 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             first_snapshot,
             "scan-membership-root-identity",
             1.0,
+            observed_library_root_ids={"scan-membership-root"},
         )
 
         with isolatedPostgres._connect(setup_url) as connection:
@@ -4565,6 +4568,7 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             second_snapshot,
             "scan-membership-root-identity",
             2.0,
+            observed_library_root_ids={"scan-membership-root"},
         )
 
         with isolatedPostgres._connect(setup_url) as connection:
@@ -4581,6 +4585,13 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
                 join library.local_artists
                   on library.local_artists.id = library.local_album_featured_artists.artist_id
                 order by album_title, artist_name, featured_kind
+                """
+            ).fetchall()
+            file_states = connection.execute(
+                """
+                select private_path, scan_cache_stale
+                from library.local_track_files
+                order by private_path
                 """
             ).fetchall()
             from music_app.services.relation_projection_postgres import (
@@ -4611,6 +4622,11 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             )
             for row in memberships
         }
+        file_state_by_path = {
+            str(row["private_path"]): bool(row["scan_cache_stale"])
+            for row in file_states
+        }
+        assert file_state_by_path[str(removed_path)] is True, file_state_by_path
         assert (
             "Retained Album",
             "Curated Guest",
@@ -4640,7 +4656,15 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
         browse_artists = {row["artist"] for row in browse_payload["artists_sidebar"]}
         assert "New Guest" in browse_artists
         assert "Old Guest" not in browse_artists
-        assert "Archived Owner" not in browse_artists
+        assert "Archived Owner" in browse_artists
+        archived_album = next(
+            album
+            for group in browse_payload["artist_groups"]
+            if group["artist"] == "Archived Owner"
+            for album in group["albums"]
+            if album["name"] == "Removed Album"
+        )
+        assert archived_album["inventory_status"] == "missing"
         assert "Curated Guest" in browse_artists
 
         relation_views = build_relation_views_from_postgres_rows(config, relation_rows)

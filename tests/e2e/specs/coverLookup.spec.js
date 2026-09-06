@@ -103,7 +103,7 @@ test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can 
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(CANCEL_CLEAR_TARGET);
     expect(selectedAlbum).toEqual(CANCEL_CLEAR_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe(Object.values(CANCEL_CLEAR_TARGET).join(' - '));
+    expect(modal.title).toBe(Object.values(CANCEL_CLEAR_TARGET).join(' • '));
   });
 
   await stepLogger.step('Open the cover lookup gallery for the fake album and capture its random subtitle', async () => {
@@ -395,7 +395,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(PARTIAL_COVER_LOOKUP_TARGET);
     expect(selectedAlbum).toEqual(PARTIAL_COVER_LOOKUP_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
+    expect(modal.title).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();
@@ -936,7 +936,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();
@@ -1055,7 +1055,7 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const fixtureCover = findFixtureCoverBySubtitle(
@@ -1129,7 +1129,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     );
     expect(opened.selected).toEqual(AUTOMATIC_CANDIDATE_TARGET);
     expect(opened.album.cover_path).toBeNull();
-    expect((await trackModalActions.waitForLoadedSummary()).coverPlaceholderVisible).toBe(true);
+    expect((await trackModalActions.waitForInteractiveSummary()).coverPlaceholderVisible).toBe(true);
     await trackModalActions.close();
   });
 

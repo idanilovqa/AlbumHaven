@@ -229,7 +229,14 @@ export class SearchToolbarActions {
   }
 
   async dismissRecentSearchesWithOutsideClick() {
-    await this.searchToolbar.mainContent.click({ position: { x: 4, y: 4 } });
+    const viewport = this.searchToolbar.page.viewportSize();
+    if (!viewport) {
+      throw new Error('Recent-search outside dismissal requires a fixed viewport.');
+    }
+    await this.searchToolbar.page.mouse.click(
+      Math.max(1, viewport.width - 32),
+      Math.max(1, viewport.height - 32),
+    );
     await this.expectRecentSearchesDismissed();
   }
 

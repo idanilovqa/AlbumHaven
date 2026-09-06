@@ -126,6 +126,7 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
 });
 
 test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History', async ({
+  appBarActions,
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -152,50 +153,56 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
     await tagEditorActions.setAlbumName('Unwritable Album Probe');
   });
 
-  await stepLogger.step('Surface a compact top-centered error when the generated MP3 disappears during the write', async () => {
-    const unavailableTrack = temporarilyMakeGeneratedMp3Unavailable({
-      artist: RARITY_ARTIST,
-      album: RARITY_ALBUM,
-      filename: RARITY_TRACK_FILENAME,
-    });
-    try {
-      failure = await tagEditorActions.applyAndWaitForFailure({
-        expectedErrorPattern: /^Failed to edit tags\.$/u,
+  try {
+    await stepLogger.step('Surface a compact top-centered error when the generated MP3 disappears during the write', async () => {
+      const unavailableTrack = temporarilyMakeGeneratedMp3Unavailable({
+        artist: RARITY_ARTIST,
+        album: RARITY_ALBUM,
+        filename: RARITY_TRACK_FILENAME,
       });
-    } finally {
-      unavailableTrack.restore();
-    }
-    expect(failure.status).toBe(500);
-    expect(failure.alertText).toBe('Failed to edit tags.');
-    expect(failure.payload.error).toContain(RARITY_TRACK_FILENAME);
-    const presentation = await tagEditorActions.readFailureAlertPresentation();
-    expect(presentation.alertCenterOffsetPx).toBeLessThanOrEqual(2);
-    expect(presentation.alertTopPx).toBeGreaterThanOrEqual(0);
-    expect(presentation.alertTopPx).toBeLessThanOrEqual(24);
-    expect(presentation.linkText).toBe('View details');
-    expect(presentation.alertText).not.toContain(failure.payload.error);
-    expect(presentation.whiteSpace).toBe('nowrap');
-  });
-
-  await stepLogger.step('Open the exact Log History entry and retain the complete failure diagnostic', async () => {
-    await tagEditorActions.openLogHistoryFromFailure();
-    await utilityLogHistoryActions.waitForReady();
-    const entryId = await utilityLogHistoryActions.readSelectedEntryId();
-    expect(entryId).not.toBe('');
-    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.payload.error);
-    const stored = await utilityLogHistoryActions.readBrowserStoredEntry(entryId);
-    expect(stored.entry).toMatchObject({
-      id: entryId,
-      action: 'Tag edit failed',
-      error: failure.payload.error,
-      file_count: 1,
-      source: 'this_browser',
-      source_label: 'This browser',
+      try {
+        failure = await tagEditorActions.applyAndWaitForFailure({
+          expectedErrorPattern: /^Failed to edit tags\.$/u,
+        });
+      } finally {
+        unavailableTrack.restore();
+      }
+      expect(failure.status).toBe(500);
+      expect(failure.alertText).toBe('Failed to edit tags.');
+      expect(failure.payload.error).toContain(RARITY_TRACK_FILENAME);
+      const presentation = await tagEditorActions.readFailureAlertPresentation();
+      expect(presentation.alertCenterOffsetPx).toBeLessThanOrEqual(2);
+      expect(presentation.alertTopPx).toBeGreaterThanOrEqual(0);
+      expect(presentation.alertTopPx).toBeLessThanOrEqual(24);
+      expect(presentation.linkText).toBe('View details');
+      expect(presentation.alertText).not.toContain(failure.payload.error);
+      expect(presentation.whiteSpace).toBe('nowrap');
     });
-    expect(stored.entry.files).toEqual(expect.arrayContaining([
-      expect.stringContaining(RARITY_TRACK_FILENAME),
-    ]));
-  });
+
+    await stepLogger.step('Open the exact Log History entry and retain the complete failure diagnostic', async () => {
+      await tagEditorActions.openLogHistoryFromFailure();
+      await utilityLogHistoryActions.waitForReady();
+      const entryId = await utilityLogHistoryActions.readSelectedEntryId();
+      expect(entryId).not.toBe('');
+      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.payload.error);
+      const stored = await utilityLogHistoryActions.readBrowserStoredEntry(entryId);
+      expect(stored.entry).toMatchObject({
+        id: entryId,
+        action: 'Tag edit failed',
+        error: failure.payload.error,
+        file_count: 1,
+        source: 'this_browser',
+        source_label: 'This browser',
+      });
+      expect(stored.entry.files).toEqual(expect.arrayContaining([
+        expect.stringContaining(RARITY_TRACK_FILENAME),
+      ]));
+    });
+  } finally {
+    await galleryActions.goto('/?surface=albums');
+    await galleryActions.waitForGalleryReady();
+    await appBarActions.triggerFullRescanAndWait();
+  }
 });
 
 test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry', async ({

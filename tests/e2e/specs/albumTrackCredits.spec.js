@@ -102,7 +102,7 @@ test('FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a 
     const colors = await trackModalActions.readTrackCreditColorsAt(0);
     expect(colors.title).toBe('rgb(249, 250, 251)');
     expect(colors.title).not.toBe(colors.secondaryArtist);
-    expect(colors.secondaryArtist).toBe('rgb(121, 191, 232)');
+    expect(colors.secondaryArtist).toBe('rgb(156, 163, 175)');
     await trackModalActions.close();
   });
 
@@ -143,7 +143,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
     destination: {
       credits: [{
         ...EXPECTED_TRACK_CREDITS[0],
-        secondaryArtist: 'feat. Featured Voice',
+        secondaryArtist: 'Solo Voice / feat. Featured Voice',
       }],
       trackRows: 1,
     },

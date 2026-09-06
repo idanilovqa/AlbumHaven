@@ -45,6 +45,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.saveCompactPlayerStyle('docked');
     await utilityAppearanceActions.selectSeekbarMode('default');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('regular');

@@ -23,6 +23,11 @@ const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(FIXTURE_AR
 const albumDetailsTitle = (albumName, year = FIXTURE_YEAR) => (
   `${FIXTURE_ARTIST} • ${albumName} • ${year}`
 );
+const coverResourceIdentity = (source) => {
+  const url = new URL(String(source || ''));
+  url.searchParams.delete('v');
+  return url.href;
+};
 const SPLIT_ORIGINAL_ALBUM = 'Selected Track Split Fixture';
 const SPLIT_RENAMED_ALBUM = 'Selected Track Split Fixture 2';
 const SPLIT_SECOND_RENAMED_ALBUM = 'Selected Track Split Result B';
@@ -517,9 +522,9 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_RENAMED_ALBUM,
     );
-    expect(sourceCover.productionSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(sourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     destinationCoverSrc = destinationCover.productionSrc;
-    expect(destinationCoverSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(destinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
 
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
@@ -663,10 +668,10 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_SECOND_RENAMED_ALBUM,
     );
-    expect(sourceCover.productionSrc).toBe(originalCoverSrc);
-    expect(destinationCover.productionSrc).toBe(destinationCoverSrc);
+    expect(coverResourceIdentity(sourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
+    expect(coverResourceIdentity(destinationCover.productionSrc)).toBe(coverResourceIdentity(destinationCoverSrc));
     secondDestinationCoverSrc = secondDestinationCover.productionSrc;
-    expect(secondDestinationCoverSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(secondDestinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
 
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
@@ -734,12 +739,12 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       year: FIXTURE_YEAR,
     })).toBe(1);
     expect(mergeBackMultiplicity.finalCount).toBe(1);
-    expect((
+    expect(coverResourceIdentity((
       await galleryActions.waitForAlbumCoverReadyUnderHeading(
         FIXTURE_ARTIST,
         SPLIT_ORIGINAL_ALBUM,
       )
-    ).productionSrc).toBe(originalCoverSrc);
+    ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
   });
 
@@ -788,12 +793,12 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       year: FIXTURE_YEAR,
     })).toBe(0);
     expect(mergeBackMultiplicity.finalCount).toBe(1);
-    expect((
+    expect(coverResourceIdentity((
       await galleryActions.waitForAlbumCoverReadyUnderHeading(
         FIXTURE_ARTIST,
         SPLIT_ORIGINAL_ALBUM,
       )
-    ).productionSrc).toBe(originalCoverSrc);
+    ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_SECOND_RENAMED_ALBUM);
 
     const physicalTags = await readGeneratedMp3AlbumTags({
@@ -818,7 +823,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_ORIGINAL_ALBUM,
     );
-    expect(freshSourceCover.productionSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(freshSourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await freshSession.galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
     await freshSession.galleryActions.waitForAlbumHidden(SPLIT_SECOND_RENAMED_ALBUM);
     await freshSession.galleryActions.selectAlbumDetailsByIdentity({

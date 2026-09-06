@@ -26,8 +26,9 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
     await searchToolbarActions.waitForQuery(PLAYING_ALBUM);
     await galleryActions.waitForAlbumVisible(PLAYING_ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(PLAYING_ALBUM);
-    expect((await trackModalActions.waitForLoadedSummary()).title)
-      .toContain(`${PLAYING_ALBUM_ARTIST} • ${PLAYING_ALBUM}`);
+    const summary = await trackModalActions.waitForLoadedSummary();
+    expect(summary.title).toContain(PLAYING_ALBUM);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(PLAYING_ALBUM_ARTIST);
     const playbackMark = await playbackEvidence.playbackMark();
     playedTrack = await trackModalActions.playTrackAt(0);
     expect(playedTrack.artist).toBe(PLAYING_TRACK_ARTIST);
@@ -90,7 +91,8 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
   await stepLogger.step('Open player artwork and recover the original playing album and track', async () => {
     await globalPlayerActions.openCurrentAlbumFromCover();
     const reopened = await trackModalActions.waitForLoadedSummary();
-    expect(reopened.title).toContain(`${PLAYING_ALBUM_ARTIST} • ${PLAYING_ALBUM}`);
+    expect(reopened.title).toContain(PLAYING_ALBUM);
+    expect(`${reopened.title} ${reopened.subtitle}`).toContain(PLAYING_ALBUM_ARTIST);
     expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
   });
 });

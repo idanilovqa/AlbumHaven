@@ -2122,9 +2122,7 @@ async function watchSaveTask(taskId, context = {}) {
   const canReconcileOriginView = () => (
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
-  const supersededMutationStillAtOrigin = () => (
-    originStillOwnsView() && !mutationStillOwnsOriginResources()
-  );
+  const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
   const absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
@@ -2282,7 +2280,7 @@ async function watchSaveTask(taskId, context = {}) {
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
-            && !supersededMutationStillAtOrigin()
+            && !mutationWasSuperseded()
           ) {
             try {
               viewRefreshed = await fetchAndRender(
@@ -2295,7 +2293,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: () => !supersededMutationStillAtOrigin(),
+                  shouldApplyResponse: () => !mutationWasSuperseded(),
                 },
               );
               if (viewRefreshed && finalizedAlbums.length) {
@@ -2431,7 +2429,7 @@ async function watchSaveTask(taskId, context = {}) {
       }
       if (data.status === 'failed') {
         let viewRefreshed = false;
-        if (!supersededMutationStillAtOrigin()) {
+        if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
               buildApiUrl(state.view),

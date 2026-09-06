@@ -15262,9 +15262,7 @@ async function watchSaveTask(taskId, context = {}) {
   const canReconcileOriginView = () => (
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
-  const supersededMutationStillAtOrigin = () => (
-    originStillOwnsView() && !mutationStillOwnsOriginResources()
-  );
+  const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
   const absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
@@ -15422,7 +15420,7 @@ async function watchSaveTask(taskId, context = {}) {
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
-            && !supersededMutationStillAtOrigin()
+            && !mutationWasSuperseded()
           ) {
             try {
               viewRefreshed = await fetchAndRender(
@@ -15435,7 +15433,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: () => !supersededMutationStillAtOrigin(),
+                  shouldApplyResponse: () => !mutationWasSuperseded(),
                 },
               );
               if (viewRefreshed && finalizedAlbums.length) {
@@ -15571,7 +15569,7 @@ async function watchSaveTask(taskId, context = {}) {
       }
       if (data.status === 'failed') {
         let viewRefreshed = false;
-        if (!supersededMutationStillAtOrigin()) {
+        if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
               buildApiUrl(state.view),
@@ -33334,7 +33332,9 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const query = String(state.view?.query || '').trim();
+  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
+    && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
     ? getReusableSelectedArtistBrowseView(nextView)
     : null;
@@ -33359,7 +33359,6 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     }
     return true;
   }
-  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   if (!optimisticGroups) return false;
   if (!query && !optimisticGroups.skipFetch) return false;
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;

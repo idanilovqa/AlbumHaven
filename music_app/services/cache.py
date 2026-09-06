@@ -34,6 +34,8 @@ _MISSING_CACHE_FIELD = object()
 def _cache_rebase_comparison_value(key: str, value: object) -> object:
     if key == "exception_type" and value is not _MISSING_CACHE_FIELD:
         return normalize_exception_value(value)
+    if key == "year" and value is not _MISSING_CACHE_FIELD:
+        return str(value or "").strip()
     return value
 
 

@@ -98,8 +98,9 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
     await searchToolbarActions.waitForQuery(ALBUM);
     await galleryActions.waitForAlbumVisibleUnderHeading(ALBUM_ARTIST, ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
-    const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
+    const summary = await trackModalActions.waitForInteractiveSummary();
+    expect(summary.title).toContain(ALBUM);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(ALBUM_ARTIST);
   });
 
   await stepLogger.step('Show the server-owned Problematic Files action on the late problematic track', async () => {
@@ -527,11 +528,15 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
       album: SUGGESTED_EDIT_ALBUM,
     });
     const normalizedSelectedPath = selectedTitleRepair.path.toLowerCase();
-    expect(postgresAfterSuggestedRepair).toEqual(postgresBeforeSuggestedRepair.map((row) => (
+    const withoutLibraryRoot = ({ library_root_id: _libraryRootId, ...row }) => row;
+    expect(postgresAfterSuggestedRepair.map(withoutLibraryRoot)).toEqual(
+      postgresBeforeSuggestedRepair.map((row) => withoutLibraryRoot(
       String(row.path || '').toLowerCase() === normalizedSelectedPath
         ? { ...row, title: selectedTitleRepair.repaired }
-        : row
-    )));
+        : row,
+      )),
+    );
+    expect(postgresAfterSuggestedRepair.every((row) => Boolean(row.library_root_id))).toBe(true);
 
     await utilityTabBarActions.openTab('rules');
     await utilityRulesActions.waitForReady();

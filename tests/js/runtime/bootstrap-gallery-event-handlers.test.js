@@ -1464,6 +1464,59 @@ test('handleSidebarArtistSelectionClick reconciles a family artist that matched 
   assert.equal(calls.pushBrowserViewState[0].selected_artist, 'Neal Morse');
 });
 
+test('handleSidebarArtistSelectionClick ignores a complete cached family view for a content-only search match', () => {
+  const cachedSelectedArtistView = {
+    query: '',
+    selected_artist: 'Neal Morse',
+    artists_sidebar: [{ artist: 'Neal Morse', count: 2 }],
+    primary_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ key: 'neal-one' }, { key: 'neal-two' }],
+    }],
+    family_artist_groups: [],
+    related_artists: [],
+  };
+  const { context, calls } = createContext({ cachedSelectedArtistView });
+  context.state.view = {
+    ...context.state.view,
+    query: 'transatlantic',
+    selected_artist: 'Transatlantic',
+    all_artists_active: false,
+    related_filter_artists: [],
+    primary_filter_active: false,
+    search_context: {
+      selected_artist: 'Transatlantic',
+      selected_artist_source: 'auto_top_match',
+      artist_name_match_artists: ['Transatlantic'],
+      direct_match_artists: ['Transatlantic', 'Neal Morse'],
+      related_match_artists: [],
+    },
+    related_artists: ['Neal Morse'],
+    primary_artist_groups: [{
+      artist: 'Transatlantic',
+      albums: [{ key: 'transatlantic-smpte' }],
+    }],
+    family_artist_groups: [{
+      artist: 'Neal Morse',
+      albums: [{ key: 'neal-transatlantic-demos' }],
+    }],
+    artist_groups: [],
+    artists_sidebar: [
+      { artist: 'Transatlantic', count: 1 },
+      { artist: 'Neal Morse', count: 1 },
+    ],
+  };
+  const { event } = createSidebarArtistEvent('Neal Morse');
+
+  context.handleSidebarArtistSelectionClick(event);
+
+  assert.deepEqual(
+    context.state.view.primary_artist_groups[0].albums.map((album) => album.key),
+    ['neal-transatlantic-demos'],
+  );
+  assert.equal(calls.fetchAndRender.length, 1);
+});
+
 test('handleSidebarArtistSelectionClick promotes an already visible family group into the primary selected-artist view before the fetch returns', () => {
   const speedMenu = { hidden: false };
   const { context, calls } = createContext({

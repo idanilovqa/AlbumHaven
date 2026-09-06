@@ -4341,6 +4341,46 @@ test('watchSaveTask ignores an older stale save-task completion after a newer ed
   );
 });
 
+test('a pending second move supersedes the first move before either save task completes', () => {
+  const context = loadHelpers();
+  const firstTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\01 First.flac',
+    title: 'First',
+  };
+  const secondTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\02 Second.flac',
+    title: 'Second',
+  };
+  const remainingTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\03 Remaining.flac',
+    title: 'Remaining',
+  };
+  const source = {
+    key: 'ordering-source',
+    name: 'Source',
+    album_artist: 'Ordering Artist',
+    tracks: [firstTrack, secondTrack, remainingTrack],
+  };
+  const sourceAfterFirstMove = {
+    ...source,
+    tracks: [secondTrack, remainingTrack],
+  };
+
+  const firstClaim = context.claimTagEditViewMutation(
+    source,
+    [firstTrack.path],
+    { [firstTrack.path]: { album: 'Destination' } },
+  );
+  const secondClaim = context.claimTagEditViewMutation(
+    sourceAfterFirstMove,
+    [secondTrack.path],
+    { [secondTrack.path]: { album: 'Destination' } },
+  );
+
+  assert.equal(context.tagEditViewMutationStillOwnsResources(firstClaim), false);
+  assert.equal(context.tagEditViewMutationStillOwnsResources(secondClaim), true);
+});
+
 test('watchSaveTask prevents a delayed canonical terminal payload from overwriting a newer overlapping edit', async () => {
   const context = loadHelpers();
   const movedTrack = {
@@ -4462,6 +4502,7 @@ test('watchSaveTask prevents a delayed canonical terminal payload from overwriti
     [movedTrack.path],
     newerTagEdits,
   );
+  context.state.ui.viewStateRevision = 62;
   const newerGroups = [{
     artist: 'Ordering Artist',
     albums: [newerSource, newerDestination],

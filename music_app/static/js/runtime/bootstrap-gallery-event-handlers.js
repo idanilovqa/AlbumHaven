@@ -1469,7 +1469,9 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const query = String(state.view?.query || '').trim();
+  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
+    && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
     ? getReusableSelectedArtistBrowseView(nextView)
     : null;
@@ -1494,7 +1496,6 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     }
     return true;
   }
-  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   if (!optimisticGroups) return false;
   if (!query && !optimisticGroups.skipFetch) return false;
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;

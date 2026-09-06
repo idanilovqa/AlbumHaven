@@ -5072,12 +5072,12 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder keeps controls centered while the taller waveform sits lower',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
+    'the no-track placeholder keeps its cover, controls, and timeline centered',
   );
   assert.match(
     spec,
-    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)/,
+    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,

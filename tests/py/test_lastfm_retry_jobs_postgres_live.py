@@ -14,6 +14,13 @@ from music_app.services.lastfm_retry_jobs_postgres import (
 )
 from music_app.services.lastfm_postgres import LastfmPostgresAdapter
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.jobs.authorization import (
+    AuthorizationDecision,
+    JobAuthorizationService,
+    PostgresJobAuthorizationContextRepository,
+    build_lastfm_retry_resource_validator,
+)
+from music_app.services.policy_evaluator import PolicyEvaluator
 from tests.e2e.support import isolatedPostgres
 
 
@@ -274,3 +281,98 @@ def test_live_retry_enqueue_failure_rolls_back_new_pending_identity(
             ).fetchone()["count"]
         )
     assert count == 0
+
+
+def test_live_worker_authorizes_exact_session_and_cannot_select_secret_table(
+    live_lastfm_database,
+):
+    import psycopg
+
+    setup_url, _runtime_url = live_lastfm_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    accepted = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).accept_retryable_pending(
+        account_id=account_id,
+        library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=f"worker-auth-{uuid4().hex}",
+        track_key="opaque-track",
+        played_at=now - timedelta(minutes=5),
+        previous_attempts=1,
+        next_attempt_at=now,
+        active_session_id=session_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        payload={"source_payload": {"artist": "private", "title": "private"}},
+    )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="lastfm-auth-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=60,
+        kinds=("lastfm_scrobble_retry",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    retry_repository = PostgresLastfmRetryJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=jobs,
+    )
+    authorization = JobAuthorizationService(
+        context_repository=PostgresJobAuthorizationContextRepository(
+            worker_url, connect_to_database=isolatedPostgres._connect
+        ),
+        policy_evaluator=PolicyEvaluator(),
+        resource_validators={
+            "lastfm_scrobble_retry": build_lastfm_retry_resource_validator(
+                retry_repository=retry_repository
+            )
+        },
+    )
+    observed_at = now + timedelta(seconds=2)
+
+    assert authorization.authorize(claim, observed_at) in {
+        AuthorizationDecision(True, "authorized"),
+        AuthorizationDecision(True, "bootstrap_owner"),
+    }
+    assert retry_repository.load_claimed_session_secret(
+        pending_scrobble_id=accepted.pending_scrobble_id,
+        active_session_id=session_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=observed_at,
+    ) == "encrypted-test-secret"
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.execute(
+                "select session_key_encrypted from integration.lastfm_sessions"
+            ).fetchall()
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update integration.lastfm_sessions set is_active = false where id = %s",
+            (session_id,),
+        )
+    assert authorization.authorize(claim, observed_at) == AuthorizationDecision(
+        False, "lastfm_retry_scope_stale"
+    )
+    assert retry_repository.load_claimed_session_secret(
+        pending_scrobble_id=accepted.pending_scrobble_id,
+        active_session_id=session_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=observed_at,
+    ) is None

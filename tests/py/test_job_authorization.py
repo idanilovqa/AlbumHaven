@@ -15,6 +15,7 @@ from music_app.services.current_actor import (
 from music_app.services.jobs.authorization import (
     AuthorizationDecision,
     JobAuthorizationService,
+    build_lastfm_retry_resource_validator,
 )
 from music_app.services.jobs.models import ClaimedJob
 from music_app.services.policy import RequestOrigin
@@ -340,6 +341,96 @@ def test_replaced_lastfm_integration_session_fails_closed():
     assert service.authorize(claim, NOW) == AuthorizationDecision(
         False, "integration_session_replaced"
     )
+
+
+def test_production_lastfm_validator_fences_pending_attempt_and_opaque_session():
+    class RetryRepository:
+        def __init__(self):
+            self.calls = []
+
+        def validate_claimed_retry(self, **values):
+            self.calls.append(values)
+            return True
+
+    retry_repository = RetryRepository()
+    repository = _ContextRepository()
+    repository.actor = _actor(capability="integration.lastfm.scrobble")
+    repository.integration_session_ref = "31"
+    claim = _claim(
+        kind="lastfm_scrobble_retry",
+        subject_kind="pending_scrobble",
+        subject_ref="53",
+        capability_key="integration.lastfm.scrobble",
+        parameters={"active_session_ref": "31"},
+        max_attempts=1,
+        scope_version=5,
+        resource_revision=2,
+        idempotency_key="lastfm-scrobble:53:attempt:2",
+    )
+    service, _ = _service(
+        repository,
+        validators={
+            "lastfm_scrobble_retry": build_lastfm_retry_resource_validator(
+                retry_repository=retry_repository
+            )
+        },
+    )
+
+    assert service.authorize(claim, NOW) == AuthorizationDecision(True, "authorized")
+    assert retry_repository.calls == [
+        {
+            "pending_scrobble_id": 53,
+            "active_session_id": 31,
+            "account_id": 7,
+            "library_id": 9,
+            "job_id": 41,
+            "attempt": 1,
+            "worker_id": "worker-a",
+            "lease_token": "opaque-lease-token",
+            "now": NOW,
+            "row_revision": 5,
+            "accepted_attempt": 2,
+        }
+    ]
+
+
+def test_production_lastfm_validator_rejects_session_replacement_before_domain_read():
+    class RetryRepository:
+        def __init__(self):
+            self.calls = []
+
+        def validate_claimed_retry(self, **values):
+            self.calls.append(values)
+            return True
+
+    retry_repository = RetryRepository()
+    repository = _ContextRepository()
+    repository.actor = _actor(capability="integration.lastfm.scrobble")
+    repository.integration_session_ref = "32"
+    claim = _claim(
+        kind="lastfm_scrobble_retry",
+        subject_kind="pending_scrobble",
+        subject_ref="53",
+        capability_key="integration.lastfm.scrobble",
+        parameters={"active_session_ref": "31"},
+        max_attempts=1,
+        scope_version=5,
+        resource_revision=2,
+        idempotency_key="lastfm-scrobble:53:attempt:2",
+    )
+    service, _ = _service(
+        repository,
+        validators={
+            "lastfm_scrobble_retry": build_lastfm_retry_resource_validator(
+                retry_repository=retry_repository
+            )
+        },
+    )
+
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        False, "integration_session_replaced"
+    )
+    assert retry_repository.calls == []
 
 
 @pytest.mark.parametrize(

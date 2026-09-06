@@ -110,6 +110,61 @@ ResourceValidator = Callable[
 ]
 
 
+def build_lastfm_retry_resource_validator(
+    *, retry_repository: Any
+) -> ResourceValidator:
+    """Validate one pending scrobble against its exact claim and session."""
+
+    def validate(
+        claim: ClaimedJob, context: Any, now: datetime
+    ) -> AuthorizationDecision:
+        try:
+            pending_id = int(claim.subject_ref)
+            active_session_id = int(claim.parameters.get("active_session_ref"))
+        except (AttributeError, TypeError, ValueError):
+            return AuthorizationDecision(False, "lastfm_retry_scope_invalid")
+        if (
+            claim.kind not in {JobKind.LASTFM_SCROBBLE_RETRY, "lastfm_scrobble_retry"}
+            or claim.subject_kind != "pending_scrobble"
+            or pending_id < 1
+            or active_session_id < 1
+            or set(claim.parameters) != {"active_session_ref"}
+            or claim.account_id is None
+            or claim.library_id is None
+            or claim.capability_key != "integration.lastfm.scrobble"
+            or claim.max_attempts != 1
+            or claim.scope_version is None
+            or claim.resource_revision is None
+            or not 1 <= claim.resource_revision <= 5
+            or claim.idempotency_key
+            != f"lastfm-scrobble:{pending_id}:attempt:{claim.resource_revision}"
+        ):
+            return AuthorizationDecision(False, "lastfm_retry_scope_invalid")
+        if context.integration_session_ref != str(active_session_id):
+            return AuthorizationDecision(False, "integration_session_replaced")
+        try:
+            valid = retry_repository.validate_claimed_retry(
+                pending_scrobble_id=pending_id,
+                active_session_id=active_session_id,
+                account_id=claim.account_id,
+                library_id=claim.library_id,
+                job_id=claim.job_id,
+                attempt=claim.attempt,
+                worker_id=claim.worker_id,
+                lease_token=claim.lease_token,
+                now=now,
+                row_revision=claim.scope_version,
+                accepted_attempt=claim.resource_revision,
+            )
+        except Exception:
+            return AuthorizationDecision(False, "lastfm_retry_scope_invalid")
+        if valid is not True:
+            return AuthorizationDecision(False, "lastfm_retry_scope_stale")
+        return AuthorizationDecision(True, "lastfm_retry_scope_current")
+
+    return validate
+
+
 class JobAuthorizationService:
     """Revalidate durable authority without reviving an initiating session."""
 
@@ -535,6 +590,11 @@ def _authorization_context_from_row(
         deployment_allowed=claim.deployment_mode in _APPROVED_DEPLOYMENT_MODES,
         client_surface_allowed=client_surface_allowed,
         library_current=library_exists,
+        integration_session_ref=(
+            str(row["integration_session_ref"])
+            if row.get("integration_session_ref") is not None
+            else None
+        ),
     )
 
 

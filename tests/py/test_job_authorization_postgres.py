@@ -142,7 +142,9 @@ def _normalized(statement):
 
 
 def test_loads_one_redacted_current_authorization_snapshot_by_stable_ids():
-    repository, connector, connection = _repository([_snapshot_row()])
+    repository, connector, connection = _repository(
+        [_snapshot_row(integration_session_ref="31")]
+    )
 
     context = repository.load_authorization_context(_claim(), NOW)
 
@@ -167,6 +169,7 @@ def test_loads_one_redacted_current_authorization_snapshot_by_stable_ids():
     assert context.request_origin_account_id == 7
     assert isinstance(context.request_origin, RequestOrigin)
     assert context.request_origin.origin_type == "browser"
+    assert context.integration_session_ref == "31"
     assert "23" in context.request_origin.origin_key
     assert "<redacted>" in repr(context.request_origin)
     assert connector.urls == [DATABASE_URL]
@@ -191,6 +194,7 @@ def test_loads_one_redacted_current_authorization_snapshot_by_stable_ids():
         "root_path",
         "display_name",
         "username_display",
+        "session_key_encrypted",
     ):
         assert private_column not in normalized
 

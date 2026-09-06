@@ -289,3 +289,51 @@ def test_generic_retry_job_never_contains_provider_payload_or_secret():
     assert "artist" not in rendered
     assert "title" not in rendered
     assert "opaque-track-42" not in rendered
+
+
+def test_claimed_retry_validation_uses_complete_claim_and_domain_fence():
+    connection = _Connection([{"valid": True}])
+    repository = _repository(connection, _Jobs())
+
+    valid = repository.validate_claimed_retry(
+        pending_scrobble_id=53,
+        active_session_id=31,
+        account_id=7,
+        library_id=19,
+        job_id=71,
+        attempt=1,
+        worker_id="worker-a",
+        lease_token="lease-a",
+        now=NOW,
+        row_revision=5,
+        accepted_attempt=2,
+    )
+
+    assert valid is True
+    sql, values = connection.executed[0]
+    assert "ops.validate_claimed_lastfm_retry" in sql
+    assert values["pending_scrobble_id"] == 53
+    assert values["active_session_id"] == 31
+    assert values["row_revision"] == 5
+    assert values["accepted_attempt"] == 2
+
+
+def test_claimed_session_secret_loader_returns_only_local_secret_value():
+    connection = _Connection([{"session_key_encrypted": "encrypted-local-value"}])
+    repository = _repository(connection, _Jobs())
+
+    secret = repository.load_claimed_session_secret(
+        pending_scrobble_id=53,
+        active_session_id=31,
+        job_id=71,
+        attempt=1,
+        worker_id="worker-a",
+        lease_token="lease-a",
+        now=NOW,
+    )
+
+    assert secret == "encrypted-local-value"
+    sql, values = connection.executed[0]
+    assert "ops.load_claimed_lastfm_session_secret" in sql
+    assert "integration.lastfm_sessions" not in sql
+    assert values["job_id"] == 71

@@ -72,6 +72,9 @@ DURABLE_SCAN_STATUS_MIGRATION = (
 LASTFM_RETRY_JOB_STATE_MIGRATION = (
     MIGRATIONS_DIR / "0077_create_lastfm_retry_job_state.sql"
 )
+LASTFM_RETRY_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0078_grant_worker_lastfm_retry.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -118,6 +121,27 @@ def test_lastfm_retry_job_state_preserves_stable_pending_identity_and_fences_att
     due_index = sql.split("create index if not exists pending_scrobbles_due_retry_idx", 1)[1]
     assert "where status in ('pending', 'retry_wait')" in due_index
     assert "where status in ('pending', 'retry_wait', 'orphaned_repair')" not in due_index
+
+
+def test_lastfm_retry_worker_migration_exposes_only_claim_fenced_secret_access():
+    sql = _normalized_sql(LASTFM_RETRY_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "function ops.validate_claimed_lastfm_retry(" in sql
+    assert "function ops.load_claimed_lastfm_session_secret(" in sql
+    assert "job.kind = 'lastfm_scrobble_retry'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "pending.current_job_id = job.id" in sql
+    assert "pending.row_revision = job.scope_version" in sql
+    assert "pending.accepted_attempt = job.resource_revision" in sql
+    assert "session.id = pending.active_session_id" in sql
+    assert "session.is_active" in sql
+    assert "revoke all on table integration.lastfm_sessions from album_haven_worker" in sql
+    assert "revoke all on table integration.pending_scrobbles from album_haven_worker" in sql
+    assert "grant execute on function ops.load_claimed_lastfm_session_secret" in sql
+    authorization_return = sql.split("returns table (", 1)[1].split(") language sql", 1)[0]
+    assert "integration_session_ref varchar" in authorization_return
+    assert "session_key_encrypted" not in authorization_return
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"

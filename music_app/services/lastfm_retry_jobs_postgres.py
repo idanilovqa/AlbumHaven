@@ -108,6 +108,76 @@ class PostgresLastfmRetryJobRepository:
     def _connect(self) -> Any:
         return self._connect_to_database(self._database_url)
 
+    @staticmethod
+    def _claim_values(**values: object) -> dict[str, object]:
+        return {
+            "pending_scrobble_id": _positive(
+                "pending_scrobble_id", values["pending_scrobble_id"]
+            ),
+            "active_session_id": _positive(
+                "active_session_id", values["active_session_id"]
+            ),
+            "job_id": _positive("job_id", values["job_id"]),
+            "attempt": _positive("attempt", values["attempt"]),
+            "worker_id": _bounded("worker_id", values["worker_id"], maximum=128),
+            "lease_token": _bounded(
+                "lease_token", values["lease_token"], maximum=256
+            ),
+            "now": _aware("now", values["now"]),
+        }
+
+    def validate_claimed_retry(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        parameters.update(
+            {
+                "account_id": _positive("account_id", values["account_id"]),
+                "library_id": _positive("library_id", values["library_id"]),
+                "row_revision": _nonnegative(
+                    "row_revision", values["row_revision"]
+                ),
+                "accepted_attempt": _positive(
+                    "accepted_attempt", values["accepted_attempt"]
+                ),
+            }
+        )
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select ops.validate_claimed_lastfm_retry(
+                      %(pending_scrobble_id)s, %(active_session_id)s,
+                      %(account_id)s, %(library_id)s, %(job_id)s,
+                      %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s,
+                      %(row_revision)s, %(accepted_attempt)s
+                    ) as valid
+                    """,
+                    parameters,
+                ).fetchone()
+            )
+        return bool(row.get("valid"))
+
+    def load_claimed_session_secret(self, **values: object) -> str | None:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select * from ops.load_claimed_lastfm_session_secret(
+                      %(pending_scrobble_id)s, %(active_session_id)s,
+                      %(job_id)s, %(attempt)s, %(worker_id)s,
+                      %(lease_token)s, %(now)s
+                    )
+                    """,
+                    parameters,
+                ).fetchone()
+            )
+        secret = row.get("session_key_encrypted")
+        if secret is None:
+            return None
+        if not isinstance(secret, str) or not secret or len(secret) > 8192:
+            raise RuntimeError("claimed Last.fm session secret is invalid")
+        return secret
+
     def list_due_pending(
         self, *, now: datetime, limit: int = 100
     ) -> tuple[DueLastfmPending, ...]:

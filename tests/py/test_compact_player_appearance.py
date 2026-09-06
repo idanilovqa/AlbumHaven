@@ -72,7 +72,7 @@ def test_legacy_compact_write_persists_style_without_replacing_other_appearance_
     assert tuple(params) == (41, "desktop", "#123456", None, "floating")
 
 
-def test_canonical_compact_write_inserts_only_columns_supplied_by_the_legacy_statement():
+def test_canonical_compact_write_inserts_revision_but_no_unprovided_aggregate_columns():
     row = {
         "main_surface_color": None, "panel_background_color": None,
         "palette_id": None, "panel_index": 0,
@@ -90,7 +90,7 @@ def test_canonical_compact_write_inserts_only_columns_supplied_by_the_legacy_sta
 
     sql, _params = connection.operations[0]
     insert_columns = sql.split("select account_id", 1)[0]
-    assert "revision" not in insert_columns
+    assert "revision" in insert_columns
     assert "interaction_overrides" not in insert_columns
 
 

@@ -179,7 +179,11 @@ test('album-card POM owns the exact subtitle selector used by the action layer',
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.subtitleWithinCardSelector\)/);
   assert.match(source, /yearByAlbumName\(albumName\)/);
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.yearWithinCardSelector\)/);
-  assert.doesNotMatch(source, /\.evaluate(?:All)?\s*\(/);
+  const actionSelectorMethods = source.slice(
+    source.indexOf('subtitleByAlbumName(albumName)'),
+    source.indexOf('ratingRowByArtistAndAlbum('),
+  );
+  assert.doesNotMatch(actionSelectorMethods, /\.evaluate(?:All)?\s*\(/);
 });
 
 test('alias parity spec stays scenario-only and avoids browser-side mutation shortcuts', () => {

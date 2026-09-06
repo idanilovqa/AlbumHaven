@@ -3701,6 +3701,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
     asgi_app.state.config = asgi_config
     asgi_app.state.library_state = asgi_library_state
     asgi_app.state.logger = asgi_logger
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: [],
+    )
 
     detail_calls: list[str] = []
     fallback_calls: list[tuple[str, dict[str, object], dict[str, object], object]] = []
@@ -3821,6 +3824,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
         "context_music_dir": str(asgi_config["MUSIC_DIR"]),
         "state_album_count": 1,
         "logger_name": "problematic-fallback-logger",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {
@@ -3996,6 +4002,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: [],
+    )
 
     list_status, _list_headers, list_body = _run_asgi_request(
         asgi_app,
@@ -4045,6 +4054,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {

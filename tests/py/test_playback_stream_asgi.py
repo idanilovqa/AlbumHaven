@@ -107,6 +107,10 @@ def playback_app(tmp_path, monkeypatch):
         FakePostgresLibraryRootSettingsStore,
     )
     monkeypatch.setattr(
+        "music_app.services.exception_overrides.load_exception_overrides",
+        lambda _config: {},
+    )
+    monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_library_state_on_startup",
         lambda _runtime: True,
     )

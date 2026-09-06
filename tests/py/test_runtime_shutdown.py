@@ -23,6 +23,30 @@ def runtime_carrier() -> RuntimeShutdownApp:
     return RuntimeShutdownApp()
 
 
+@pytest.fixture(autouse=True)
+def _stub_asgi_lifespan_persistence(monkeypatch):
+    class _TargetedRepositoryStub:
+        backend = "postgres"
+
+    monkeypatch.setattr(
+        "music_app.services.scan_cache_persistence.select_scan_cache_adapter",
+        lambda _config: _TargetedRepositoryStub(),
+    )
+    monkeypatch.setattr(
+        "music_app.services.library_roots.get_library_roots",
+        lambda config: [{
+            "id": "runtime-shutdown-root",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+            "category": "main_library",
+        }],
+    )
+    monkeypatch.setattr(
+        "music_app.services.exception_overrides.load_exception_overrides",
+        lambda _config: {},
+    )
+
+
 def test_runtime_shutdown_tests_do_not_use_flask_fixtures_or_app_context():
     source = Path(__file__).read_text(encoding="utf-8")
 

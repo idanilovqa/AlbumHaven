@@ -12,6 +12,9 @@ DEFAULTS = {
     "main_surface_color": None, "panel_background_color": None,
     "palette_id": None, "panel_index": 0, "player_override": None,
     "compact_player_style": "docked",
+    "album_details_layout": "classic_bar",
+    "album_playing_row_animation": "enabled",
+    "alert_family": "ember",
 }
 PLAYER = {"background": "#142E22", "fill": "#8BBFA0", "edge": "#D5EFDE"}
 

@@ -326,6 +326,7 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     inherited_values = [item for item in inputs if item.get("type") == "hidden"]
     expected_keys = {
         "library.browse.read", "library.media.read", "library.problems.read",
+        "library.inventory.manage",
         "library.resources.read", "library.playlists.create", "library.playlists.manage",
         "library.playlists.items.manage", "library.track_preferences.manage",
         "library.discovery.read", "library.rules.read", "library.logs.read",
@@ -372,7 +373,7 @@ def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path,
     assert '<option value="owner"' not in body
     assert "Individual permissions below override" in body
     inputs = FormInputs(body, "capability_keys").inputs
-    assert len(inputs) == 12
+    assert len(inputs) == 13
     assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
     assert {item["value"] for item in inputs if "checked" in item} == selected_keys
 

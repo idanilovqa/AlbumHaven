@@ -50,7 +50,7 @@ test('local functional runner lists approved shards without provisioning', () =>
 });
 
 test('local functional runner owns setup, delegation, and teardown', () => {
-  assert.match(source, /fixtures-v1\.0\.19/);
+  assert.match(source, /fixtures-v1\.0\.20/);
   assert.match(source, /functional-core/);
   assert.match(source, /-HostName\s+localhost/);
   assert.match(source, /validate-functional-shards\.cjs/);

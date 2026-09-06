@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -226,7 +226,20 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
         "library.repair_orphaned_scan_intents(timestamptz,integer)",
     )
     producer_procedures = procedures[:5]
-    loader_procedures = procedures[5:]
+    retired_worker_procedures = (
+        procedures[5],
+        procedures[7],
+        "library.fence_full_scan_publication(bigint,bigint,integer,varchar,varchar,bigint,timestamptz)",
+    )
+    loader_procedures = (
+        procedures[6],
+        procedures[8],
+        "library.load_claimed_full_scan_intent_v2(bigint,varchar,varchar)",
+        "library.load_claimed_full_scan_scope(bigint,bigint,bigint,integer,varchar,varchar,timestamptz)",
+        "library.checkpoint_claimed_full_scan(bigint,bigint,integer,varchar,varchar,varchar,bigint,bigint,text,timestamptz)",
+        "library.publish_claimed_full_scan(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz)",
+        "app.load_claimed_job_authorization_context(bigint,integer,varchar,varchar,timestamptz)",
+    )
     with isolatedPostgres._connect(setup_url) as connection:
         for procedure in procedures:
             assert connection.execute(
@@ -257,6 +270,9 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
                 ).fetchone()["allowed"] is False
         for procedure in loader_procedures:
             assert connection.execute(
+                "select to_regprocedure(%s) is not null as present", (procedure,)
+            ).fetchone()["present"] is True
+            assert connection.execute(
                 "select has_function_privilege('album_haven_worker', %s, 'EXECUTE') as allowed",
                 (procedure,),
             ).fetchone()["allowed"] is True
@@ -265,6 +281,11 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
                     "select has_function_privilege(%s, %s, 'EXECUTE') as allowed",
                     (role, procedure),
                 ).fetchone()["allowed"] is False
+        for procedure in retired_worker_procedures:
+            assert connection.execute(
+                "select has_function_privilege('album_haven_worker', %s, 'EXECUTE') as allowed",
+                (procedure,),
+            ).fetchone()["allowed"] is False
 
 
 def test_live_full_scan_rolls_back_domain_record_when_job_creation_fails(
@@ -604,40 +625,38 @@ def test_live_job_trigger_checkpoint_and_bounded_orphan_repair_contracts(
             (accepted.intent_id,),
         ).fetchone()["state"] == "running"
 
-    checkpoint_sql = """
-        select library.checkpoint_claimed_scan_intent(
-          %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        ) as applied
-    """
-    valid_values = (
-        "full_scan",
-        accepted.intent_id,
-        claimed.job_id,
-        claimed.attempt,
-        claimed.worker_id,
-        claimed.lease_token,
-        "running",
-        40,
-        100,
-        17,
-        datetime.now(timezone.utc),
+    scan_repository = _scan_repository(worker_url)
+    intent = scan_repository.load_claimed_full_scan(
+        job_id=claimed.job_id,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
     )
-    invalid_values = (
-        (*valid_values[:3], claimed.attempt + 1, *valid_values[4:]),
-        (*valid_values[:4], "wrong-worker", *valid_values[5:]),
-        (
-            *valid_values[:5],
-            "wrong-token",
-            *valid_values[6:],
-        ),
-    )
-    with isolatedPostgres._connect(worker_url) as connection:
-        for values in invalid_values:
-            assert connection.execute(checkpoint_sql, values).fetchone()["applied"] is False
-        assert connection.execute(checkpoint_sql, valid_values).fetchone()["applied"] is True
-        advanced_values = valid_values[:7] + (80, 100, 23, valid_values[-1])
-        assert connection.execute(checkpoint_sql, advanced_values).fetchone()["applied"] is True
-        assert connection.execute(checkpoint_sql, valid_values).fetchone()["applied"] is False
+    checkpoint = {
+        "intent_id": accepted.intent_id,
+        "job_id": claimed.job_id,
+        "attempt": claimed.attempt,
+        "worker_id": claimed.worker_id,
+        "lease_token": claimed.lease_token,
+        "phase": "indexing",
+        "current": 40,
+        "total": 100,
+        "current_path": "C:/private/phase8/transitions/track.flac",
+        "now": datetime.now(timezone.utc),
+    }
+    assert intent.inventory_mutation_revision >= 0
+    assert scan_repository.checkpoint_claimed_full_scan(
+        **{**checkpoint, "attempt": claimed.attempt + 1}
+    ) is False
+    assert scan_repository.checkpoint_claimed_full_scan(
+        **{**checkpoint, "worker_id": "wrong-worker"}
+    ) is False
+    assert scan_repository.checkpoint_claimed_full_scan(
+        **{**checkpoint, "lease_token": "wrong-token"}
+    ) is False
+    assert scan_repository.checkpoint_claimed_full_scan(**checkpoint) is True
+    advanced = {**checkpoint, "current": 80, "now": datetime.now(timezone.utc)}
+    assert scan_repository.checkpoint_claimed_full_scan(**advanced) is True
+    assert scan_repository.checkpoint_claimed_full_scan(**checkpoint) is False
 
     with isolatedPostgres._connect(setup_url) as connection:
         progress = connection.execute(
@@ -650,16 +669,15 @@ def test_live_job_trigger_checkpoint_and_bounded_orphan_repair_contracts(
         assert dict(progress) == {
             "progress_current": 80,
             "progress_total": 100,
-            "committed_inventory_revision": 23,
+            "committed_inventory_revision": None,
         }
         connection.execute(
             "update ops.jobs set lease_expires_at = %s where id = %s",
             (datetime.now(timezone.utc) - timedelta(seconds=1), claimed.job_id),
         )
-    with isolatedPostgres._connect(worker_url) as connection:
-        assert connection.execute(
-            checkpoint_sql, valid_values[:-1] + (datetime.now(timezone.utc),)
-        ).fetchone()["applied"] is False
+    assert scan_repository.checkpoint_claimed_full_scan(
+        **{**advanced, "current": 90, "now": datetime.now(timezone.utc)}
+    ) is False
 
     stale_result = worker.reconcile_stale_leases(
         now=datetime.now(timezone.utc), limit=1000
@@ -1291,3 +1309,199 @@ def test_live_worker_has_no_direct_inventory_table_privileges(
         ).fetchone()["allowed"]
 
     assert allowed is False
+
+
+def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
+    live_scan_database,
+):
+    import psycopg
+
+    setup_url, runtime_url, worker_url = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "full-publication")
+    arguments = _full_scan_arguments(account_id, library_id, "full-publication")
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    worker_jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = worker_jobs.claim(
+        worker_id="full-publication-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+    scope = scans.load_claimed_full_scan_scope(
+        intent_id=intent.intent_id,
+        library_id=intent.library_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+    result = scans.publish_claimed_full_scan(
+        claim=claim,
+        intent_id=intent.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=[root["id"] for root in scope.roots],
+        now=datetime.now(timezone.utc),
+    )
+    assert result == {
+        "publication_won": True,
+        "inventory_mutation_revision": intent.inventory_mutation_revision + 1,
+    }
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.execute(
+                "select private_path from library.local_track_files"
+            ).fetchall()
+    recovered = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+    assert (
+        recovered.committed_inventory_revision
+        == result["inventory_mutation_revision"]
+    )
+
+
+@pytest.mark.parametrize("revocation", ("cancel", "account", "root"))
+def test_live_full_scan_publication_revalidates_claim_authority_and_roots(
+    live_scan_database,
+    revocation,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = f"full-revoked-{revocation}"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    arguments = _full_scan_arguments(account_id, library_id, suffix)
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id=f"{suffix}-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        if revocation == "cancel":
+            connection.execute(
+                "update ops.jobs set cancel_requested_at = now(), "
+                "cancel_reason_code = 'user_requested' where id = %s",
+                (claim.job_id,),
+            )
+        elif revocation == "account":
+            connection.execute(
+                "update app.accounts set is_active = false where id = %s",
+                (account_id,),
+            )
+        else:
+            connection.execute(
+                "update library.library_roots set is_active = false "
+                "where library_id = %s and metadata ->> 'root_id' = 'root-a'",
+                (library_id,),
+            )
+
+    result = scans.publish_claimed_full_scan(
+        claim=claim,
+        intent_id=intent.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory={
+            "artists": [],
+            "albums": [],
+            "featured_artists": [],
+            "tracks": [],
+            "track_files": [],
+        },
+        observed_root_ids=intent.root_ids,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert result["publication_won"] is False
+    with isolatedPostgres._connect(setup_url) as connection:
+        revision = connection.execute(
+            "select coalesce(nullif(metadata ->> 'inventory_mutation_revision', '')::bigint, 0) as revision "
+            "from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["revision"]
+    assert revision == intent.inventory_mutation_revision
+
+
+def test_live_full_scan_publication_waits_for_concurrent_authority_revocation(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = "full-concurrent-revocation"
+    account_id, library_id = _seed_scope(setup_url, suffix)
+    arguments = _full_scan_arguments(account_id, library_id, suffix)
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id=f"{suffix}-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+
+    def publish():
+        return scans.publish_claimed_full_scan(
+            claim=claim,
+            intent_id=intent.intent_id,
+            expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+            inventory={
+                "artists": [],
+                "albums": [],
+                "featured_artists": [],
+                "tracks": [],
+                "track_files": [],
+            },
+            observed_root_ids=intent.root_ids,
+            now=datetime.now(timezone.utc),
+        )
+
+    with isolatedPostgres._connect(setup_url) as revoker:
+        revoker.execute(
+            "update app.accounts set is_active = false where id = %s",
+            (account_id,),
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            publication = executor.submit(publish)
+            with pytest.raises(FutureTimeoutError):
+                publication.result(timeout=0.2)
+            revoker.commit()
+            result = publication.result(timeout=5)
+
+    assert result["publication_won"] is False

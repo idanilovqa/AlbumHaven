@@ -176,20 +176,13 @@ def test_loads_one_redacted_current_authorization_snapshot_by_stable_ids():
     sql, parameters = connection.executed[0]
     normalized = _normalized(sql)
     assert parameters == {
-        "account_id": 7,
-        "library_id": 9,
-        "request_origin_id": 23,
+        "job_id": 41,
+        "attempt": 1,
+        "worker_id": "worker-a",
+        "lease_token": "opaque-lease-token",
+        "now": NOW,
     }
-    for table in (
-        "app.accounts",
-        "app.bootstrap_owners",
-        "library.libraries",
-        "library.library_memberships",
-        "app.capabilities",
-        "app.request_origins",
-    ):
-        assert table in normalized
-    assert "owner_key = 'local-bootstrap-owner'" in normalized
+    assert "app.load_claimed_job_authorization_context" in normalized
     for private_column in (
         "password_hash",
         "session_token_hash",

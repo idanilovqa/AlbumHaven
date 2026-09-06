@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from music_app.services.jobs.models import ClaimedJob, JobState
+from music_app.services.jobs.models import ClaimedJob, JobState, JobTransitionResult
 from music_app.services.library_event_coordinator import TargetedReconciliationRequest
 from music_app.services.targeted_library_reconciliation import (
     TargetedReconciliationResult,
@@ -282,3 +282,311 @@ def test_duplicate_dispatch_commits_and_invalidates_projection_only_once():
     assert second_reconciler.mutations == []
     assert len(repository.fences) == 2
     assert len(invalidated) == 1
+
+
+def _full_claim() -> ClaimedJob:
+    return ClaimedJob(
+        job_id=902,
+        kind="full_scan",
+        subject_kind="full_scan_intent",
+        subject_ref="85",
+        parameters={"intent_id": 85},
+        account_id=7,
+        library_id=19,
+        capability_key="library.refresh",
+        request_origin_id=11,
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        idempotency_key="full-scan-intent:85",
+        attempt=3,
+        max_attempts=3,
+        worker_id="worker-full",
+        lease_token="lease-full",
+        lease_expires_at=NOW + timedelta(minutes=5),
+        scheduled_at=NOW,
+    )
+
+
+class _FullContext:
+    def __init__(self, *, allowed=True):
+        self.claim = _full_claim()
+        self.allowed = allowed
+        self.cancel_requested = False
+        self.lease_active = True
+        self.reauthorizations = 0
+
+    def reauthorize(self):
+        self.reauthorizations += 1
+        return SimpleNamespace(allowed=self.allowed, reason_code="authorized")
+
+
+class _FullScanRepository:
+    def __init__(self, *, roots=("root-a",), revision=40):
+        self.intent = SimpleNamespace(
+            intent_id=85,
+            library_id=19,
+            initiating_account_id=7,
+            mode="manual_full_rescan",
+            force=True,
+            root_ids=tuple(roots),
+            inventory_mutation_revision=revision,
+        )
+        self.scope = SimpleNamespace(
+            roots=tuple(
+                {
+                    "id": root_id,
+                    "path": Path(f"C:/Music/{root_id}"),
+                    "library_id": 19,
+                    "is_active": True,
+                }
+                for root_id in roots
+            ),
+            inventory_mutation_revision=revision,
+            scope_complete=True,
+        )
+        self.loads = []
+        self.scope_loads = []
+        self.checkpoints = []
+
+    def load_claimed_full_scan(self, **kwargs):
+        self.loads.append(kwargs)
+        return self.intent
+
+    def load_claimed_full_scan_scope(self, **kwargs):
+        self.scope_loads.append(kwargs)
+        return self.scope
+
+    def checkpoint_claimed_full_scan(self, **kwargs):
+        self.checkpoints.append(kwargs)
+        return True
+
+
+class _FullScanner:
+    def __init__(self, *, error=None, before_publish=None, after_publish=None):
+        self.error = error
+        self.before_publish = before_publish
+        self.after_publish = after_publish
+        self.calls = []
+
+    def run(self, intent, *, roots, checkpoint, should_cancel, expected_revision):
+        self.calls.append((intent, tuple(roots), expected_revision))
+        checkpoint(current=1, total=2, current_path="Artist/Private Album/01.flac")
+        if self.before_publish is not None:
+            self.before_publish()
+        if should_cancel():
+            return SimpleNamespace(canceled=True)
+        if self.error is not None:
+            raise self.error
+        checkpoint(current=2, total=2, current_path="Artist/Private Album/02.flac")
+        result = SimpleNamespace(
+            canceled=False,
+            inventory_mutation_revision=expected_revision + 1,
+        )
+        if self.after_publish is not None:
+            self.after_publish()
+        return result
+
+
+def _full_handler(repository, scanner, *, logged=None, watcher=None):
+    from music_app.jobs.scan_handlers import build_full_scan_handler
+
+    return build_full_scan_handler(
+        scan_repository=repository,
+        scan_executor=scanner,
+        watcher_coordinator=watcher,
+        clock=lambda: NOW,
+        log_event=(lambda message: logged.append(message)) if logged is not None else None,
+    )
+
+
+def test_full_scan_handler_reloads_scope_checkpoints_and_completes():
+    repository = _FullScanRepository()
+    scanner = _FullScanner()
+    context = _FullContext()
+
+    outcome = _full_handler(repository, scanner)(_full_claim(), context)
+
+    assert repository.loads == [
+        {"job_id": 902, "worker_id": "worker-full", "lease_token": "lease-full"}
+    ]
+    assert repository.scope_loads == [
+        {
+            "intent_id": 85,
+            "library_id": 19,
+            "job_id": 902,
+            "attempt": 3,
+            "worker_id": "worker-full",
+            "lease_token": "lease-full",
+            "now": NOW,
+        }
+    ]
+    assert scanner.calls[0][2] == 40
+    assert [item["current"] for item in repository.checkpoints] == [1, 2]
+    assert all(item["job_id"] == 902 and item["attempt"] == 3 for item in repository.checkpoints)
+    assert all(item["worker_id"] == "worker-full" for item in repository.checkpoints)
+    assert all(item["lease_token"] == "lease-full" for item in repository.checkpoints)
+    assert context.reauthorizations >= 3
+    assert outcome == JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    (
+        ("cancel", "full_scan_canceled"),
+        ("lease", "full_scan_lease_lost"),
+        ("authority", "full_scan_authority_revoked"),
+    ),
+)
+def test_full_scan_handler_stops_cooperatively_before_publication(mutation, reason):
+    repository = _FullScanRepository()
+    context = _FullContext()
+
+    def stop():
+        if mutation == "cancel":
+            context.cancel_requested = True
+        elif mutation == "lease":
+            context.lease_active = False
+        else:
+            context.allowed = False
+
+    scanner = _FullScanner(before_publish=stop)
+    outcome = _full_handler(repository, scanner)(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, reason)
+    assert len(repository.checkpoints) == 1
+
+
+@pytest.mark.parametrize("mutation", ("cancel", "lease", "authority"))
+def test_full_scan_handler_treats_committed_publication_as_success(mutation):
+    repository = _FullScanRepository()
+    context = _FullContext()
+
+    def mutate_after_publication():
+        if mutation == "cancel":
+            context.cancel_requested = True
+        elif mutation == "lease":
+            context.lease_active = False
+        else:
+            context.allowed = False
+
+    outcome = _full_handler(
+        repository,
+        _FullScanner(after_publish=mutate_after_publication),
+    )(_full_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.SUCCEEDED, "full_scan_completed")
+
+
+@pytest.mark.parametrize(
+    ("scope", "reason"),
+    (
+        (SimpleNamespace(roots=(), scope_complete=False), "full_scan_root_invalid"),
+        (
+            SimpleNamespace(
+                roots=(
+                    {
+                        "id": "root-a",
+                        "path": Path("C:/Music/root-a"),
+                        "library_id": 20,
+                        "is_active": True,
+                    },
+                ),
+                scope_complete=True,
+            ),
+            "full_scan_root_invalid",
+        ),
+    ),
+)
+def test_full_scan_handler_rejects_removed_or_cross_library_roots(scope, reason):
+    repository = _FullScanRepository()
+    repository.scope = scope
+    scanner = _FullScanner()
+
+    outcome = _full_handler(repository, scanner)(_full_claim(), _FullContext())
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, reason)
+    assert scanner.calls == []
+
+
+def test_full_scan_handler_maps_scanner_failure_to_bounded_generic_outcome():
+    secret_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    repository = _FullScanRepository()
+    scanner = _FullScanner(error=OSError(secret_path))
+    logged = []
+
+    outcome = _full_handler(repository, scanner, logged=logged)(
+        _full_claim(), _FullContext()
+    )
+
+    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_failed")
+    assert secret_path not in repr(outcome)
+    assert secret_path not in repr(logged)
+
+
+def test_full_scan_checkpoint_rejection_fails_closed_as_lease_loss():
+    repository = _FullScanRepository()
+    repository.checkpoint_claimed_full_scan = lambda **_kwargs: False
+
+    outcome = _full_handler(repository, _FullScanner())(_full_claim(), _FullContext())
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, "full_scan_lease_lost")
+
+
+def test_full_scan_inventory_revision_conflict_never_reports_success():
+    repository = _FullScanRepository(revision=40)
+    scanner = _FullScanner(error=RuntimeError("inventory revision conflict"))
+
+    outcome = _full_handler(repository, scanner)(_full_claim(), _FullContext())
+
+    assert outcome == JobTransitionResult(JobState.FAILED, "full_scan_revision_conflict")
+
+
+def test_full_scan_authority_revocation_before_start_never_invokes_scanner():
+    repository = _FullScanRepository()
+    scanner = _FullScanner()
+
+    outcome = _full_handler(repository, scanner)(
+        _full_claim(), _FullContext(allowed=False)
+    )
+
+    assert outcome == JobTransitionResult(
+        JobState.CANCELED, "full_scan_authority_revoked"
+    )
+    assert scanner.calls == []
+
+
+def test_full_scan_generic_identity_is_path_free_while_private_checkpoint_keeps_path():
+    claim = _full_claim()
+    repository = _FullScanRepository()
+    _full_handler(repository, _FullScanner())(claim, _FullContext())
+
+    private_path = repository.checkpoints[0]["current_path"]
+    assert private_path
+    assert private_path not in claim.subject_ref
+    assert private_path not in repr(claim.parameters)
+    assert private_path not in claim.idempotency_key
+
+
+def test_retried_full_scan_suspends_watcher_overlap_and_resumes_after_completion():
+    class Watcher:
+        def __init__(self):
+            self.events = []
+
+        def suspend_targeted_reconciliation(self):
+            self.events.append("suspend")
+
+        def resume_targeted_reconciliation(self):
+            self.events.append("resume")
+
+    watcher = Watcher()
+    repository = _FullScanRepository()
+
+    outcome = _full_handler(
+        repository,
+        _FullScanner(),
+        watcher=watcher,
+    )(_full_claim(), _FullContext())
+
+    assert _full_claim().attempt == 3
+    assert watcher.events == ["suspend", "resume"]
+    assert outcome.next_state is JobState.SUCCEEDED

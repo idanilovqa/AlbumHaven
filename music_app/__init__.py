@@ -244,6 +244,7 @@ def create_asgi_app():
         scan_jobs = PostgresScanJobRepository(
             database_url=targeted_database_url
         )
+        _app.state.scan_job_repository = scan_jobs
         watcher_library_id = (
             scan_jobs.resolve_local_library_id() if targeted_database_url else None
         )

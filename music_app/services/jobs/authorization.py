@@ -79,71 +79,24 @@ class PostgresJobAuthorizationContextRepository:
     def load_authorization_context(
         self, claim: ClaimedJob, now: datetime
     ) -> JobAuthorizationContext:
-        del now
         if not self._database_url:
             raise RuntimeError("job authorization database URL is required")
         if not isinstance(claim, ClaimedJob):
             raise RuntimeError("job authorization claim is invalid")
 
         statement = """
-            select account.id as account_id,
-                   case
-                     when account.id is null then null
-                     else account.is_active and account.disabled_at is null
-                   end as account_is_active,
-                   coalesce(exists (
-                     select 1
-                       from app.bootstrap_owners as owner_record
-                      where owner_record.account_id = account.id
-                        and owner_record.owner_key = 'local-bootstrap-owner'
-                   ), false) as is_bootstrap_owner,
-                   (library_record.id is not null) as library_exists,
-                   coalesce(exists (
-                     select 1
-                       from library.library_memberships as current_membership
-                      where current_membership.account_id = account.id
-                        and current_membership.library_id = library_record.id
-                   ), false) as membership_current,
-                   coalesce((
-                     select jsonb_agg(jsonb_build_object(
-                              'library_id', membership.library_id,
-                              'membership_role', membership.membership_role,
-                              'is_primary_owner',
-                                member_library.owner_account_id = account.id
-                            ) order by membership.library_id)
-                       from library.library_memberships as membership
-                       join library.libraries as member_library
-                         on member_library.id = membership.library_id
-                      where membership.account_id = account.id
-                   ), '[]'::jsonb) as library_relationships,
-                   coalesce((
-                     select jsonb_agg(jsonb_build_object(
-                              'capability_key', capability.capability_key,
-                              'scope_kind', capability.scope_kind,
-                              'scope_id', capability.scope_id
-                            ) order by capability.capability_key,
-                                       capability.scope_kind,
-                                       capability.scope_id nulls first)
-                       from app.capabilities as capability
-                      where capability.account_id = account.id
-                        and capability.revoked_at is null
-                   ), '[]'::jsonb) as capability_grants,
-                   request_record.id as request_origin_id,
-                   request_record.account_id as request_origin_account_id,
-                   request_record.origin_type as request_origin_type,
-                   request_record.client_surface_class as request_origin_surface
-              from (values (1)) as snapshot_anchor(singleton)
-              left join app.accounts as account
-                on account.id = %(account_id)s
-              left join library.libraries as library_record
-                on library_record.id = %(library_id)s
-              left join app.request_origins as request_record
-                on request_record.id = %(request_origin_id)s
+            select *
+              from app.load_claimed_job_authorization_context(
+                %(job_id)s, %(attempt)s, %(worker_id)s,
+                %(lease_token)s, %(now)s
+              )
         """
         parameters = {
-            "account_id": claim.account_id,
-            "library_id": claim.library_id,
-            "request_origin_id": claim.request_origin_id,
+            "job_id": claim.job_id,
+            "attempt": claim.attempt,
+            "worker_id": claim.worker_id,
+            "lease_token": claim.lease_token,
+            "now": now,
         }
         with self._connect_to_database(self._database_url) as connection:
             rows = connection.execute(statement, parameters).fetchall()

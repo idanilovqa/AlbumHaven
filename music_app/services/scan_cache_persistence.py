@@ -197,6 +197,29 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
 
+    def prepare_full_scan_inventory(
+        self,
+        file_cache: dict[str, dict[str, object]],
+        *,
+        separate_release_keys: set[str] | None = None,
+    ) -> dict[str, object]:
+        """Prepare bounded JSON rows for claim-scoped database publication."""
+
+        albums = self._build_albums(
+            _file_cache_with_inferred_blank_album_memberships(file_cache),
+            set(separate_release_keys or set()),
+        )
+        artists, album_rows, featured, tracks, files = _inventory_rows_from_albums(
+            file_cache, albums
+        )
+        return {
+            "artists": _jsonb_compatible(artists),
+            "albums": _jsonb_compatible(album_rows),
+            "featured_artists": _jsonb_compatible(featured),
+            "tracks": _jsonb_compatible(tracks),
+            "track_files": _jsonb_compatible(files),
+        }
+
     def persist_targeted_inventory_mutation(
         self,
         *,

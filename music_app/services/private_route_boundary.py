@@ -90,7 +90,7 @@ _PRIVATE_ROUTE_ACTIONS = {
         "/api/library/albums/{album_key}/confirm-removal",
     ): "library.inventory.manage",
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
-    ("GET", "/refresh"): "library.refresh.read",
+    ("GET", "/refresh"): "library.refresh",
     ("GET", "/library-settings"): "library.settings.read",
     ("POST", "/library-settings"): "library.settings.manage",
     ("POST", "/library-settings/import-album-ratings"): "library.ratings.import",

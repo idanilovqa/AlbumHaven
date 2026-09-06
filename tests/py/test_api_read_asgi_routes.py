@@ -110,6 +110,24 @@ def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app)
     assert len(calls) == 1
 
 
+def test_authenticated_status_keeps_private_current_path_out_of_job_projection():
+    from music_app.routes import api_read_asgi_routes
+
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    payload = api_read_asgi_routes._build_status_payload_from_state(
+        {
+            "scan_in_progress": True,
+            "scan_current_path": private_path,
+            "scan_processed": 1,
+            "scan_total": 2,
+        }
+    )
+
+    assert payload["scan_current_path"] == private_path
+    assert "job_status" not in payload
+    assert "worker_status" not in payload
+
+
 class _ActorResolver:
     def __init__(self, actor):
         self.actor = actor
@@ -137,6 +155,7 @@ class _JobStatusService:
             raise RuntimeError("postgresql://user:password@private-host/jobs")
         return {
             "worker_status": self.worker_status,
+            "scan_current_path": "C:/Users/private/Music/Artist/Album/01.flac",
             "worker": {
                 "instance_id": "worker-opaque-a",
                 "lifecycle_state": "running",
@@ -150,6 +169,7 @@ class _JobStatusService:
                 "ambiguous_count": 1,
                 "oldest_queue_age_seconds": 120,
                 "claim_lag_seconds": 45,
+                "current_path": "C:/Users/private/Music/Artist/Album/01.flac",
             },
         }
 
@@ -234,6 +254,8 @@ def test_asgi_status_adds_one_sanitized_nested_projection_for_authorized_operato
             "claim_lag_seconds": 45,
         },
     }
+    assert "scan_current_path" not in payload["job_status"]
+    assert "current_path" not in payload["job_status"]["jobs"]
     assert service.public_calls == []
     assert len(service.operator_calls) == 1
     assert "subject_ref" not in repr(payload["job_status"])

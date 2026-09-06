@@ -117,6 +117,43 @@ def allowed_actions_for_request(
     return AllowedActions.from_decisions(decisions)
 
 
+def evaluate_action_for_request(
+    request: Request,
+    action: str,
+    *,
+    target_account_id: int | None = None,
+) -> PolicyEvaluationResult:
+    """Evaluate an additional request action without replacing route authority."""
+
+    actor = getattr(request.state, "current_actor", None)
+    if actor is None:
+        raise RuntimeError("Current actor is unavailable for policy evaluation.")
+    evaluator = getattr(request.app.state, "policy_evaluator", None)
+    if evaluator is None:
+        evaluator = PolicyEvaluator()
+        request.app.state.policy_evaluator = evaluator
+    if not isinstance(evaluator, PolicyEvaluator):
+        raise RuntimeError("Policy evaluator configuration is invalid.")
+    context = PolicyContext.build(
+        actor=actor,
+        action=action,
+        library_id=_library_scope(actor, action, None),
+        target_account_id=target_account_id,
+        deployment_mode=_deployment_mode(request),
+        request_origin=_request_origin(request),
+        client_surface_class="private_web",
+    )
+    constraint_resolver = getattr(
+        request.app.state, "policy_constraint_resolver", None
+    )
+    constraints = (
+        constraint_resolver(context)
+        if callable(constraint_resolver)
+        else PolicyEvaluationConstraints()
+    )
+    return evaluator.evaluate(context, constraints=constraints)
+
+
 def _library_scope(actor, action: str, explicit_library_id: int | None) -> int | None:
     if explicit_library_id is not None:
         return explicit_library_id
@@ -159,3 +196,10 @@ def _request_origin(request: Request) -> RequestOrigin:
         hashlib.sha256,
     ).hexdigest()
     return RequestOrigin("network", f"hmac:v{int(version or 1)}:{digest}")
+
+
+def request_origin_ref_for_request(request: Request) -> str:
+    """Return the exact private origin reference bound into policy evaluation."""
+
+    origin = _request_origin(request)
+    return f"{origin.origin_type}:{origin.origin_key}"

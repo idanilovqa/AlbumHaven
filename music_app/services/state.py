@@ -436,6 +436,8 @@ def refresh_relation_views_for_state(
     seed_missing_album_ratings: bool = False,
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
     guarded_live_repair = (
@@ -476,6 +478,12 @@ def refresh_relation_views_for_state(
         snapshot_options["expected_cover_mutation_revision"] = (
             expected_cover_mutation_revision
         )
+    if expected_inventory_mutation_revision is not None:
+        snapshot_options["expected_inventory_mutation_revision"] = (
+            expected_inventory_mutation_revision
+        )
+    if before_commit is not None:
+        snapshot_options["before_commit"] = before_commit
     if seed_missing_album_ratings:
         if expected_scan_generation is None:
             raise ValueError(
@@ -589,16 +597,30 @@ def scan_music_incremental(
     expected_scan_generation: int | None = None,
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    exception_overrides: dict[str, object] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     cfg = config
-    configured_roots = iter_library_root_paths(cfg)
+    selected_root_definitions = (
+        list(root_definitions) if root_definitions is not None else get_library_roots(cfg)
+    )
+    configured_roots = (
+        [
+            Path(str(root.get("path") or "")).resolve(strict=False)
+            for root in selected_root_definitions
+        ]
+        if root_definitions is not None
+        else [Path(root).resolve(strict=False) for root in iter_library_root_paths(cfg)]
+    )
     scan_roots = [root for root in configured_roots if root.exists()]
     if not scan_roots:
         raise FileNotFoundError(
             "No configured library roots are currently available: "
             + ", ".join([str(root) for root in configured_roots] or [str(cfg["MUSIC_DIR"])])
         )
-    root_definitions = get_library_roots(cfg)
+    root_definitions = selected_root_definitions
     available_paths = {
         str(Path(root).resolve(strict=False)).casefold()
         for root in scan_roots
@@ -650,13 +672,19 @@ def scan_music_incremental(
         roots=scan_roots,
         supported_extensions=cfg["SUPPORTED_EXTENSIONS"],
         image_extensions=cfg["IMAGE_EXTENSIONS"],
-        exception_overrides=load_exception_overrides(cfg),
+        exception_overrides=(
+            dict(exception_overrides)
+            if exception_overrides is not None
+            else load_exception_overrides(cfg)
+        ),
         use_existing_cache=use_existing_cache,
         expected_scan_generation=expected_scan_generation,
         root_definitions=root_definitions,
         publication_state=publication_state,
         publish_partial_snapshot=publish_partial_snapshot,
         record_file_error=record_file_error,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
     )
     if publication_state is not None and traversal_failed_root_ids:
         observed_root_ids = publication_state.get("observed_library_root_ids")
@@ -790,12 +818,19 @@ def refresh_library_for_state(
     logger: object,
     *,
     force: bool = False,
+    root_definitions: list[dict[str, object]] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
 ) -> None:
     def refresh_relation_views(
         *,
         seed_missing_album_ratings: bool = False,
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
+        before_commit: Callable[[object], object] | None = None,
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
@@ -805,6 +840,10 @@ def refresh_library_for_state(
             options["expected_scan_generation"] = expected_scan_generation
         if expected_cover_mutation_revision is not None:
             options["expected_cover_mutation_revision"] = expected_cover_mutation_revision
+        if expected_inventory_mutation_revision is not None:
+            options["expected_inventory_mutation_revision"] = expected_inventory_mutation_revision
+        if before_commit is not None:
+            options["before_commit"] = before_commit
         if publication_state is not None:
             options["publication_state"] = publication_state
         refresh_relation_views_for_state(
@@ -823,6 +862,9 @@ def refresh_library_for_state(
             config=config,
             logger=logger,
             library_state=library_state,
+            root_definitions=root_definitions,
+            progress_callback=progress_callback,
+            should_cancel=should_cancel,
             **kwargs,
         ),
         refresh_relation_views=refresh_relation_views,
@@ -890,6 +932,8 @@ def refresh_library_for_state(
         recover_library_watch_health=config.get(
             "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"
         ),
+        expected_inventory_mutation_revision=expected_inventory_mutation_revision,
+        before_commit=before_commit,
     )
 
 

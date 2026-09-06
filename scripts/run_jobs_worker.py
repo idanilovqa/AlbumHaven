@@ -89,6 +89,8 @@ def _build_worker(config: Any) -> Any:
     from config import Config
     from music_app.jobs.dispatch import JobHandlerRegistry
     from music_app.jobs.scan_handlers import (
+        build_full_scan_handler,
+        build_full_scan_resource_validator,
         build_targeted_reconciliation_handler,
         build_targeted_reconciliation_resource_validator,
     )
@@ -109,6 +111,7 @@ def _build_worker(config: Any) -> Any:
         TargetedLibraryReconciler,
     )
     from music_app.services.jobs.models import JobKind
+    from music_app.jobs.full_scan_executor import DurableFullScanExecutor
 
     pool = create_worker_pool(config)
 
@@ -142,6 +145,9 @@ def _build_worker(config: Any) -> Any:
     targeted_validator = build_targeted_reconciliation_resource_validator(
         scan_repository=scan_repository
     )
+    full_scan_validator = build_full_scan_resource_validator(
+        scan_repository=scan_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -149,6 +155,7 @@ def _build_worker(config: Any) -> Any:
         ),
         policy_evaluator=PolicyEvaluator(),
         resource_validators={
+            JobKind.FULL_SCAN.value: full_scan_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
         },
     )
@@ -157,6 +164,16 @@ def _build_worker(config: Any) -> Any:
         connect_to_database=connect_to_database,
     )
     handlers = JobHandlerRegistry()
+    handlers.register(
+        JobKind.FULL_SCAN,
+        build_full_scan_handler(
+            scan_repository=scan_repository,
+            scan_executor=DurableFullScanExecutor(
+                config=scan_config,
+                scan_repository=scan_repository,
+            ),
+        ),
+    )
     handlers.register(
         JobKind.TARGETED_RECONCILIATION,
         build_targeted_reconciliation_handler(

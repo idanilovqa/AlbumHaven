@@ -46,7 +46,10 @@ from music_app.services.listen_through import (
     default_album_preference_overlay,
 )
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
-from music_app.services.scan_state import resolve_active_scan_browse_state
+from music_app.services.scan_state import (
+    project_durable_full_scan_status,
+    resolve_active_scan_browse_state,
+)
 from music_app.services.view_payloads import (
     build_home_payload,
     build_view_payload,
@@ -334,10 +337,26 @@ async def status(request: Request) -> JSONResponse:
         library_state,
         _app_config(request),
     )
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    durable_status = None
+    if scan_jobs is not None and isinstance(library_id, int) and library_id > 0:
+        try:
+            durable_status = await run_in_threadpool(
+                scan_jobs.load_authorized_full_scan_status,
+                policy_evaluation=evaluation,
+                library_id=library_id,
+            )
+        except Exception:
+            durable_status = None
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
         payload = _build_status_payload_from_state(library_state)
+        if durable_status is not None:
+            payload.update(project_durable_full_scan_status(durable_status))
         payload["log_history_revision"] = load_log_history_revision(_app_config(request))
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":

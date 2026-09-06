@@ -148,6 +148,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0070_authorize_full_scan_lifecycle.sql` adds an atomic created-versus-already-active acceptance result and domain-linked active full-scan cancellation. Authorized library operators can request cancellation without direct scan-domain table access, while malformed or unlinked generic jobs remain outside the cancellation boundary.
 
+`0071_grant_worker_full_scan_execution.sql` adds claim-scoped current-root loading, private monotonic full-scan progress, and a lease-fenced same-transaction publication boundary that records the committed inventory revision. The worker receives only these narrow scan-domain functions; authenticated status reads use a separate application-only projection so private current paths never enter generic job data.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

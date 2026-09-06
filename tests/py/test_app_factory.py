@@ -649,6 +649,8 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
                 }
             )
 
+    durable_enqueues = []
+
     class FakeScanJobRepository:
         def __init__(self, *, database_url):
             assert database_url == "postgresql://album_haven_app@localhost/app"
@@ -660,6 +662,21 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
         @staticmethod
         def enqueue_targeted_reconciliation(**_kwargs):
             raise AssertionError("startup without watcher events must not enqueue")
+
+        @staticmethod
+        def enqueue_authorized_full_scan(**kwargs):
+            durable_enqueues.append(kwargs)
+            return types.SimpleNamespace(created=True, job_id=901, intent_id=85)
+
+        @staticmethod
+        def load_authorized_full_scan_status(**_kwargs):
+            return {
+                "state": "accepted",
+                "progress_current": 0,
+                "progress_total": 0,
+                "phase": "accepted",
+                "mode": "background",
+            }
 
     submissions = []
     monkeypatch.setattr(
@@ -696,6 +713,29 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _app: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _app: None)
     monkeypatch.setattr(web_asgi, "library_browse_postgres_is_effective", lambda _config: True)
+    policy_evaluation = types.SimpleNamespace(
+        decision=types.SimpleNamespace(allowed=True),
+        audit=types.SimpleNamespace(library_id=1),
+    )
+
+    def fake_require_action(_action):
+        async def dependency(request):
+            request.state.policy_evaluation = policy_evaluation
+            return policy_evaluation
+
+        return dependency
+
+    monkeypatch.setattr(web_asgi, "require_action", fake_require_action)
+    monkeypatch.setattr(
+        web_asgi,
+        "_authorized_scan_request",
+        lambda _request: (
+            policy_evaluation,
+            1,
+            "network:test-origin",
+            ("startup-main",),
+        ),
+    )
     monkeypatch.setattr(
         web_asgi,
         "PostgresLibraryBrowseRepository",
@@ -727,17 +767,12 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     assert b'"scanInProgress": true' in root_body
     assert b'"scanPhase": "discovering"' in root_body
     assert status_status == 200
-    assert json.loads(status_body)["scan_in_progress"] is True
-    assert len(submissions) == 1
-    submitted_function, submitted_args, submitted_kwargs = submissions[0]
-    assert submitted_function is state._refresh_library_worker
-    assert submitted_args == (
-        asgi_app.state.library_state,
-        asgi_app.state.config,
-        asgi_app.state.logger,
-        False,
-    )
-    assert submitted_kwargs == {}
+    assert "scan_in_progress" in json.loads(status_body)
+    assert submissions == []
+    assert len(durable_enqueues) == 1
+    assert durable_enqueues[0]["library_id"] == 1
+    assert durable_enqueues[0]["force"] is False
+    assert durable_enqueues[0]["mode"] == "background"
 
 
 @pytest.mark.parametrize(

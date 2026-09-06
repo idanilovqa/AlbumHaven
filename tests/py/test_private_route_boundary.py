@@ -71,6 +71,7 @@ def test_private_routes_have_explicit_action_classification():
         ("GET", "/", "app.shell.read"),
         ("GET", "/track", "library.media.read"),
         ("POST", "/refresh-api", "library.refresh"),
+        ("POST", "/cancel-refresh-api", "library.refresh.cancel"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
         ("POST", "/loops/delete", "library.loops.delete"),
@@ -242,6 +243,20 @@ def test_health_is_public_and_sanitized():
 
     assert status == 200
     assert body == b'{"status":"ok","worker_status":"worker_unavailable"}'
+
+
+def test_public_health_never_exposes_authenticated_scan_path_or_job_identity():
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    app, _ = _app(CurrentActor.anonymous())
+    app.state.library_state = {"scan_current_path": private_path}
+
+    status, body = _request(app, "/health")
+
+    assert status == 200
+    assert private_path.encode() not in body
+    assert b"scan_current_path" not in body
+    assert b"subject_ref" not in body
+    assert b"parameters" not in body
 
 
 def test_health_uses_configured_job_status_service_without_authentication_or_details():

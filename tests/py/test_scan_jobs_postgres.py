@@ -543,8 +543,10 @@ def test_claimed_full_scan_loader_returns_exact_immutable_root_snapshot():
                     "library_id": 19,
                     "initiating_account_id": 7,
                     "mode": "manual_full_rescan",
-                    "force": True,
-                    "logical_root_ids": ["root-a", "root-b"],
+                        "force": True,
+                        "logical_root_ids": ["root-a", "root-b"],
+                        "inventory_mutation_revision": 0,
+                        "committed_inventory_revision": None,
                 }
             )
         ]

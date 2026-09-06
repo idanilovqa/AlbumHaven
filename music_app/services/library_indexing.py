@@ -404,6 +404,8 @@ def _discover_music_files_with_stats(
     supported_extensions: set[str],
     expected_scan_generation: int | None,
     record_file_error: Callable[..., None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[list[tuple[Path, os.stat_result]], int, int]:
     discovered_files: list[tuple[Path, os.stat_result]] = []
     discovered_album_folders: set[Path] = set()
@@ -423,6 +425,8 @@ def _discover_music_files_with_stats(
             root,
             record_file_error=record_file_error,
         ):
+            if should_cancel is not None and should_cancel():
+                raise ScanCancelled("Library indexing cancelled")
             if expected_scan_generation is not None:
                 current_generation = int(library_state.get("scan_generation") or 0)
                 scan_still_active = bool(library_state.get("scan_in_progress"))
@@ -448,6 +452,13 @@ def _discover_music_files_with_stats(
             library_state["scan_current_path"] = str(path)
             library_state["scan_total_bytes"] = total_bytes
             library_state["scan_album_folders_total"] = len(discovered_album_folders)
+            if progress_callback is not None:
+                progress_callback(
+                    phase="discovering",
+                    current=0,
+                    total=len(discovered_files),
+                    current_path=str(path),
+                )
 
     return discovered_files, len(discovered_album_folders), total_bytes
 
@@ -623,6 +634,8 @@ def scan_library_file_cache(
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
     record_file_error: Callable[..., None] | None = None,
+    progress_callback: Callable[..., None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
     publication_target = publication_state if publication_state is not None else library_state
     all_file_stats, album_folders_total, total_bytes = _discover_music_files_with_stats(
@@ -631,6 +644,8 @@ def scan_library_file_cache(
         supported_extensions=supported_extensions,
         expected_scan_generation=expected_scan_generation,
         record_file_error=record_file_error,
+        progress_callback=progress_callback,
+        should_cancel=should_cancel,
     )
     updated_file_cache: dict[str, dict[str, object]] = {}
 
@@ -689,6 +704,8 @@ def scan_library_file_cache(
         ordered_metadata_entries,
         start=1,
     ):
+        if should_cancel is not None and should_cancel():
+            raise ScanCancelled("Library indexing cancelled")
         path_str = str(path)
         track_folder = path.parent
         library_state["scan_current_path"] = path_str
@@ -752,6 +769,13 @@ def scan_library_file_cache(
             total_bytes=total_bytes,
             album_folders_processed=len(seen_album_folders),
         )
+        if progress_callback is not None:
+            progress_callback(
+                phase="indexing",
+                current=index,
+                total=len(all_file_stats),
+                current_path=path_str,
+            )
         _cooperative_scan_yield(index)
 
         if (

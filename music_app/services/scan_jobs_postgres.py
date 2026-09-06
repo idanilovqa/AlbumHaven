@@ -43,6 +43,19 @@ class ClaimedFullScanIntent:
     mode: str
     force: bool
     root_ids: tuple[str, ...]
+    inventory_mutation_revision: int
+    committed_inventory_revision: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedFullScanScope:
+    roots: tuple[dict[str, object], ...]
+    inventory_mutation_revision: int
+    scope_complete: bool
+    exception_overrides: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    separate_release_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +110,12 @@ def _optional_positive_id(value: object, name: str) -> int | None:
     if value is None:
         return None
     return _positive_id(value, name)
+
+
+def _nonnegative_int(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a nonnegative integer")
+    return value
 
 
 def _bounded_text(value: object, name: str, *, maximum: int = 128) -> str:
@@ -534,7 +553,7 @@ class PostgresScanJobRepository:
             row = connection.execute(
                 """
                 select *
-                  from library.load_claimed_full_scan_intent(
+                  from library.load_claimed_full_scan_intent_v2(
                     %(job_id)s, %(worker_id)s, %(lease_token)s
                   )
                 """,
@@ -553,7 +572,249 @@ class PostgresScanJobRepository:
                 _bounded_text(value, "root_id")
                 for value in payload.get("logical_root_ids") or ()
             ),
+            inventory_mutation_revision=_nonnegative_int(
+                payload.get("inventory_mutation_revision"),
+                "inventory_mutation_revision",
+            ),
+            committed_inventory_revision=(
+                _nonnegative_int(
+                    payload.get("committed_inventory_revision"),
+                    "committed_inventory_revision",
+                )
+                if payload.get("committed_inventory_revision") is not None
+                else None
+            ),
         )
+
+    def load_claimed_full_scan_scope(
+        self,
+        *,
+        intent_id: int,
+        library_id: int,
+        job_id: int,
+        attempt: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+    ) -> ClaimedFullScanScope:
+        parameters = {
+            "intent_id": _positive_id(intent_id, "intent_id"),
+            "library_id": _positive_id(library_id, "library_id"),
+            "job_id": _positive_id(job_id, "job_id"),
+            "attempt": _positive_id(attempt, "attempt"),
+            "worker_id": _bounded_text(worker_id, "worker_id"),
+            "lease_token": _bounded_text(lease_token, "lease_token"),
+            "now": now,
+        }
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                select *
+                  from library.load_claimed_full_scan_scope(
+                    %(intent_id)s, %(library_id)s, %(job_id)s, %(attempt)s,
+                    %(worker_id)s, %(lease_token)s, %(now)s
+                  )
+                """,
+                parameters,
+            ).fetchall()
+        roots: list[dict[str, object]] = []
+        scope_complete = True
+        inventory_mutation_revision: int | None = None
+        exception_overrides: dict[str, str] = {}
+        separate_release_keys: tuple[str, ...] = ()
+        for raw_row in rows:
+            row = _row_mapping(raw_row)
+            row_revision = _nonnegative_int(
+                row.get("inventory_mutation_revision"),
+                "inventory_mutation_revision",
+            )
+            if (
+                inventory_mutation_revision is not None
+                and inventory_mutation_revision != row_revision
+            ):
+                raise RuntimeError("full scan scope revision is inconsistent")
+            inventory_mutation_revision = row_revision
+            raw_overrides = row.get("exception_overrides") or {}
+            if not isinstance(raw_overrides, Mapping):
+                raise RuntimeError("full scan exception overrides are invalid")
+            exception_overrides = {
+                _bounded_text(key, "exception override path", maximum=4096): str(value or "")
+                for key, value in raw_overrides.items()
+            }
+            separate_release_keys = tuple(
+                _bounded_text(value, "separate release key", maximum=1024)
+                for value in row.get("separate_release_keys") or ()
+            )
+            roots.append(
+                {
+                    "id": _bounded_text(row.get("logical_root_id"), "root_id"),
+                    "path": Path(
+                        _bounded_text(
+                            row.get("root_path"), "root_path", maximum=4096
+                        )
+                    ),
+                    "category": _bounded_text(row.get("root_kind"), "root_kind"),
+                    "library_id": _positive_id(row.get("library_id"), "library_id"),
+                    "is_active": row.get("is_active") is True,
+                }
+            )
+            scope_complete = scope_complete and row.get("scope_complete") is True
+        return ClaimedFullScanScope(
+            tuple(roots),
+            (
+                inventory_mutation_revision
+                if inventory_mutation_revision is not None
+                else 0
+            ),
+            bool(roots) and scope_complete,
+            MappingProxyType(exception_overrides),
+            separate_release_keys,
+        )
+
+    def checkpoint_claimed_full_scan(
+        self,
+        *,
+        intent_id: int,
+        job_id: int,
+        attempt: int,
+        worker_id: str,
+        lease_token: str,
+        current: int,
+        total: int,
+        current_path: str,
+        phase: str,
+        now: datetime,
+    ) -> bool:
+        if isinstance(current, bool) or not isinstance(current, int) or current < 0:
+            raise ValueError("current must be a nonnegative integer")
+        if isinstance(total, bool) or not isinstance(total, int) or total < current:
+            raise ValueError("total must be an integer no smaller than current")
+        path = str(current_path or "")
+        if len(path) > 4096 or any(ord(character) < 32 for character in path):
+            raise ValueError("current_path must be bounded text")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select library.checkpoint_claimed_full_scan(
+                  %(intent_id)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(phase)s,
+                  %(current)s, %(total)s, %(current_path)s, %(now)s
+                ) as checkpoint_accepted
+                """,
+                {
+                    "intent_id": _positive_id(intent_id, "intent_id"),
+                    "job_id": _positive_id(job_id, "job_id"),
+                    "attempt": _positive_id(attempt, "attempt"),
+                    "worker_id": _bounded_text(worker_id, "worker_id"),
+                    "lease_token": _bounded_text(lease_token, "lease_token"),
+                    "phase": _bounded_text(phase, "phase", maximum=32),
+                    "current": current,
+                    "total": total,
+                    "current_path": path or None,
+                    "now": now,
+                },
+            ).fetchone()
+        return _row_mapping(row).get("checkpoint_accepted") is True
+
+    def publish_claimed_full_scan(
+        self,
+        *,
+        claim: Any,
+        intent_id: int,
+        expected_inventory_mutation_revision: int,
+        inventory: Mapping[str, object],
+        observed_root_ids: Iterable[str],
+        now: datetime,
+    ) -> dict[str, object]:
+        roots = tuple(
+            dict.fromkeys(_bounded_text(value, "root_id") for value in observed_root_ids)
+        )
+        if not roots:
+            raise ValueError("full scan publication requires observed roots")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select * from library.publish_claimed_full_scan(
+                  %(intent_id)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(expected_revision)s,
+                  %(inventory)s::jsonb, %(root_ids)s, %(now)s
+                )
+                """,
+                {
+                    "intent_id": _positive_id(intent_id, "intent_id"),
+                    "job_id": _positive_id(claim.job_id, "job_id"),
+                    "attempt": _positive_id(claim.attempt, "attempt"),
+                    "worker_id": _bounded_text(claim.worker_id, "worker_id"),
+                    "lease_token": _bounded_text(claim.lease_token, "lease_token"),
+                    "expected_revision": _nonnegative_int(
+                        expected_inventory_mutation_revision,
+                        "expected_inventory_mutation_revision",
+                    ),
+                    "inventory": json.dumps(
+                        dict(inventory), ensure_ascii=False, separators=(",", ":")
+                    ),
+                    "root_ids": list(roots),
+                    "now": now,
+                },
+            ).fetchone()
+        payload = _row_mapping(row)
+        return {
+            "publication_won": payload.get("publication_won") is True,
+            "inventory_mutation_revision": (
+                _nonnegative_int(
+                    payload.get("inventory_mutation_revision"),
+                    "inventory_mutation_revision",
+                )
+                if payload.get("inventory_mutation_revision") is not None
+                else None
+            ),
+        }
+
+    def load_authorized_full_scan_status(
+        self,
+        *,
+        policy_evaluation: PolicyEvaluationResult,
+        library_id: int,
+    ) -> dict[str, object] | None:
+        library_id = _positive_id(library_id, "library_id")
+        _approved_policy(
+            policy_evaluation,
+            action="app.status.read",
+            library_id=library_id,
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "select * from library.load_authorized_full_scan_status(%(library_id)s)",
+                {"library_id": library_id},
+            ).fetchone()
+        if row is None:
+            return None
+        payload = _row_mapping(row)
+        return {
+            "state": _bounded_text(payload.get("state"), "state", maximum=32),
+            "progress_current": _nonnegative_int(
+                payload.get("progress_current"), "progress_current"
+            ),
+            "progress_total": _nonnegative_int(
+                payload.get("progress_total"), "progress_total"
+            ),
+            "current_path": str(payload.get("current_path") or ""),
+            "phase": _bounded_text(payload.get("phase"), "phase", maximum=32),
+            "mode": _bounded_text(payload.get("mode"), "mode", maximum=32),
+            "outcome_code": (
+                str(payload.get("outcome_code"))
+                if payload.get("outcome_code") is not None
+                else None
+            ),
+            "committed_inventory_revision": (
+                _nonnegative_int(
+                    payload.get("committed_inventory_revision"),
+                    "committed_inventory_revision",
+                )
+                if payload.get("committed_inventory_revision") is not None
+                else None
+            ),
+        }
 
     def load_claimed_targeted_reconciliation(
         self, *, job_id: int, worker_id: str, lease_token: str
@@ -800,6 +1061,7 @@ class PostgresScanJobRepository:
 
 __all__ = [
     "ClaimedFullScanIntent",
+    "ClaimedFullScanScope",
     "PostgresScanJobRepository",
     "ScanJobEnqueueResult",
 ]

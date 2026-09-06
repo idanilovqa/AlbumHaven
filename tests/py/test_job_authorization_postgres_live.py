@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+from psycopg.types.json import Jsonb
 
 from music_app.services.jobs.authorization import (
     AuthorizationDecision,
@@ -172,6 +173,34 @@ def _claim(account_id: int, library_id: int, origin_id: int) -> ClaimedJob:
     )
 
 
+def _persist_claim(setup_url: str, claim: ClaimedJob) -> None:
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            """
+            insert into ops.jobs (
+              id, kind, state, subject_kind, subject_ref, parameters,
+              account_id, library_id, capability_key, request_origin_id,
+              deployment_mode, client_surface, idempotency_key,
+              scheduled_at, attempt_count, max_attempts, recovery_policy,
+              lease_owner, lease_token, lease_expires_at, heartbeat_at,
+              started_at, updated_at
+            ) overriding system value values (
+              %s, %s, 'running', %s, %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s, %s, 'retry_safe', %s, %s, %s, %s, %s, %s
+            )
+            """,
+            (
+                claim.job_id, str(claim.kind), claim.subject_kind, claim.subject_ref,
+                Jsonb(claim.parameters), claim.account_id, claim.library_id,
+                claim.capability_key, claim.request_origin_id, claim.deployment_mode,
+                claim.client_surface, claim.idempotency_key, claim.scheduled_at,
+                claim.attempt, claim.max_attempts, claim.worker_id, claim.lease_token,
+                claim.lease_expires_at, claim.scheduled_at, claim.scheduled_at,
+                claim.scheduled_at,
+            ),
+        )
+
+
 def _assert_worker_select_denied(worker_url: str, statement: str) -> None:
     import psycopg
 
@@ -191,7 +220,7 @@ def _mutate_authorization_scope(setup_url: str, statement: str, parameters=()) -
         connection.execute(statement, parameters)
 
 
-def _assert_worker_has_only_authorization_columns(
+def _assert_worker_has_no_direct_authorization_reads(
     worker_url: str, account_id: int, library_id: int, origin_id: int
 ) -> None:
     permitted_queries = (
@@ -243,8 +272,12 @@ def _assert_worker_has_only_authorization_columns(
                 (table_name,),
             ).fetchone()["permitted"]
             assert permitted is False
-        for statement, parameters in permitted_queries:
-            connection.execute(statement, parameters).fetchall()
+    for statement, parameters in permitted_queries:
+        import psycopg
+
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with isolatedPostgres._connect(worker_url) as connection:
+                connection.execute(statement, parameters).fetchall()
 
 
 def test_live_worker_authorization_snapshot_is_usable_and_private():
@@ -254,6 +287,7 @@ def test_live_worker_authorization_snapshot_is_usable_and_private():
         isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
         account_id, library_id, origin_id = _seed_authorization_scope(setup_url)
         claim = _claim(account_id, library_id, origin_id)
+        _persist_claim(setup_url, claim)
         repository = PostgresJobAuthorizationContextRepository(
             worker_url, connect_to_database=isolatedPostgres._connect
         )
@@ -283,7 +317,7 @@ def test_live_worker_authorization_snapshot_is_usable_and_private():
             claim, datetime.now(timezone.utc)
         ) == AuthorizationDecision(True, "bootstrap_owner")
 
-        _assert_worker_has_only_authorization_columns(
+        _assert_worker_has_no_direct_authorization_reads(
             worker_url, account_id, library_id, origin_id
         )
 

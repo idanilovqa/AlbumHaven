@@ -2292,3 +2292,32 @@ def test_fresh_snapshot_hydration_rebuilds_relations_without_rating_seed_intent(
     )
 
     assert publication_intents == [False]
+
+
+def test_durable_scan_projection_preserves_legacy_status_fields_without_public_job_data():
+    private_path = "C:/Users/private/Music/Artist/Album/01.flac"
+    projected = scan_state.project_durable_full_scan_status(
+        {
+            "state": "running",
+            "progress_current": 3,
+            "progress_total": 8,
+            "current_path": private_path,
+            "phase": "indexing",
+            "mode": "manual_full_rescan",
+            "outcome_code": None,
+        }
+    )
+
+    assert projected == {
+        "scan_in_progress": True,
+        "scan_processed": 3,
+        "scan_total": 8,
+        "scan_percent": 37,
+        "scan_current_path": private_path,
+        "scan_phase": "indexing",
+        "scan_mode": "manual_full_rescan",
+        "scan_outcome": "running",
+    }
+    assert "job_id" not in projected
+    assert "subject_ref" not in projected
+    assert "parameters" not in projected

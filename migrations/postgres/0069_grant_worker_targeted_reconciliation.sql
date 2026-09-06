@@ -671,6 +671,11 @@ begin
     return query select false, committed_revision, affected_keys;
     return;
   end if;
+
+  perform pg_advisory_xact_lock(
+    hashtext('album-haven:local-inventory-publication')
+  );
+
   update library.targeted_reconciliation_intents as intent
      set publication_attempt = p_attempt,
          updated_at = greatest(intent.updated_at, p_now)

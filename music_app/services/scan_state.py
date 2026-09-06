@@ -167,6 +167,27 @@ def finalize_post_scan_actions(
     start_background_cover_refresh()
 
 
+def project_durable_full_scan_status(
+    status: dict[str, object] | None,
+) -> dict[str, object]:
+    """Map the private durable scan projection onto the legacy status contract."""
+
+    source = status if isinstance(status, dict) else {}
+    state = str(source.get("state") or "idle")
+    current = max(0, int(source.get("progress_current") or 0))
+    total = max(0, int(source.get("progress_total") or 0))
+    return {
+        "scan_in_progress": state in {"accepted", "queued", "running", "retry_wait"},
+        "scan_processed": current,
+        "scan_total": total,
+        "scan_percent": min(100, int(current * 100 / total)) if total else 0,
+        "scan_current_path": str(source.get("current_path") or ""),
+        "scan_phase": str(source.get("phase") or "idle"),
+        "scan_mode": str(source.get("mode") or "idle"),
+        "scan_outcome": str(source.get("outcome_code") or state),
+    }
+
+
 def refresh_library_state(
     library_state: dict[str, object],
     *,
@@ -182,6 +203,8 @@ def refresh_library_state(
     queue_utility_rules_prewarm: Callable[[], None] | None = None,
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
     recover_library_watch_health: Callable[..., int] | None = None,
+    expected_inventory_mutation_revision: int | None = None,
+    before_commit: Callable[[object], object] | None = None,
 ) -> None:
     cfg = config
     log_app_event(cfg, logger, "Library indexing started", level="info", force=force)
@@ -260,11 +283,12 @@ def refresh_library_state(
         "load_inventory_mutation_revision",
         None,
     )
-    expected_inventory_mutation_revision = (
-        int(load_inventory_mutation_revision())
-        if callable(load_inventory_mutation_revision)
-        else None
-    )
+    if expected_inventory_mutation_revision is None:
+        expected_inventory_mutation_revision = (
+            int(load_inventory_mutation_revision())
+            if callable(load_inventory_mutation_revision)
+            else None
+        )
     relations_refreshed_from_disk = False
     file_cache, disk_last_scan, disk_relation_views, disk_relations_last_built, disk_error = scan_cache_adapter.load_snapshot(
         cache_path,
@@ -426,6 +450,8 @@ def refresh_library_state(
             relation_refresh_options["expected_inventory_mutation_revision"] = (
                 expected_inventory_mutation_revision
             )
+        if before_commit is not None:
+            relation_refresh_options["before_commit"] = before_commit
         refresh_relation_views(**relation_refresh_options)
         with cache_lock:
             generation_is_current = (

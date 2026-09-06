@@ -51,6 +51,9 @@ TARGETED_RECONCILIATION_WORKER_MIGRATION = (
 FULL_SCAN_LIFECYCLE_MIGRATION = (
     MIGRATIONS_DIR / "0070_authorize_full_scan_lifecycle.sql"
 )
+FULL_SCAN_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0071_grant_worker_full_scan_execution.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -450,7 +453,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-32:] == [
+    assert migration_names[-33:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -483,6 +486,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0068_create_scan_job_intents.sql",
         "0069_grant_worker_targeted_reconciliation.sql",
         "0070_authorize_full_scan_lifecycle.sql",
+        "0071_grant_worker_full_scan_execution.sql",
     ]
 
 
@@ -3862,3 +3866,30 @@ def test_full_scan_lifecycle_cancellation_is_domain_linked_and_progress_preservi
         "rolname = 'album_haven_worker'", 1
     )[1].split("rolname = 'album_haven_readonly'", 1)[0]
     assert "grant execute" not in worker_privileges
+
+
+def test_scan_publications_share_one_inventory_serialization_lock():
+    targeted_sql = _normalized_sql(
+        TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    full_sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    lock = "pg_advisory_xact_lock( hashtext('album-haven:local-inventory-publication') )"
+
+    assert lock in targeted_sql
+    assert lock in full_sql
+
+
+def test_obsolete_revision_only_full_scan_fence_is_not_granted_to_worker():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+    signature = (
+        "library.fence_full_scan_publication(bigint, bigint, integer, varchar, "
+        "varchar, bigint, timestamptz)"
+    )
+
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"revoke execute on function {signature} from album_haven_worker" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql

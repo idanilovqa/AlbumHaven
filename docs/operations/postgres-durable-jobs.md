@@ -2,7 +2,7 @@
 
 The durable-jobs worker is a separate process from the Album Haven web server. The shared ledger, transition history, and worker heartbeat live in Postgres; the web process must never be treated as the owner of accepted background work.
 
-Full scans and filesystem-watcher targeted reconciliation run through this worker. A successful full-scan publication also creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision. That follow-up remains queued until the cover-job slice installs its shared cover executor. Other cover work, Last.fm delivery, and authentication mail remain on their existing execution paths until their later migration slices are complete.
+Full scans, filesystem-watcher targeted reconciliation, candidate cover lookup, bulk cover refresh, post-scan cover refresh, and remote cover save run through this worker. A successful full-scan publication creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision and the shared cover-refresh handler executes it. Last.fm delivery and authentication mail remain on their existing execution paths until their later migration slices are complete.
 
 ## Configuration
 
@@ -126,17 +126,27 @@ Only registered job kinds are claimable by a worker process. Full-scan and targe
 
 Expired retry-safe scan leases are reconciled before new claims. Recovery repeats only work that did not commit its authoritative publication. A committed full scan and its revision-keyed cover follow-up are one transaction, so recovery can produce neither committed inventory without its follow-up nor duplicate follow-ups for the same library revision. Do not repair scan jobs by editing the ledger or private intent tables.
 
-For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A queued `post_scan_cover_refresh` at attempt zero is expected before the cover-job executor is deployed. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
+For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A growing `post_scan_cover_refresh` backlog is not expected after migrations through `0076` and the matching worker artifact are active. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
+
+## Cover jobs and recovery
+
+Candidate lookup acceptance commits the existing cover task and its generic job atomically. Bulk refresh uses its private progress record as orchestration authority; the server-owned post-scan kind enters the same claimed execution core without a second job. Generic jobs, transitions, health, and metrics contain only opaque task/resource identities and bounded counters or reason codes. Candidate payloads, provider responses, URLs, image bytes, and filesystem paths remain outside generic operational data.
+
+After claim, the worker reloads current album/root scope and revalidates account, membership, capability, deployment/client, inventory revision, cancellation, and lease authority before provider or publication work. Provider deadlines begin at execution rather than enqueue, and bounded provider/transform concurrency remains internal to the claim. Lost authority or a stale lease prevents later candidate, progress, or cover-selection publication. Ordinary provider no-result/timeout behavior keeps its existing domain outcome instead of becoming an indiscriminate durable retry.
+
+Remote saves checkpoint acceptance, download start, exactly owned artifact creation, Postgres selection commit, local promotion or rollback, and task publication. Retry only when durable checkpoints prove the prior attempt did not leave an uncertain external, filesystem, or selection write. Preserve `ambiguous` jobs and their private checkpoint evidence for operator reconciliation; never reset their state or trigger a replacement download by hand. Cleanup is allowed only for the exact artifact identity recorded for that task/job and only after resolving and verifying it remains under the currently authorized album root.
+
+For a cover backlog, use authorized aggregate status to distinguish queued, running, retry-wait, failed, canceled, and ambiguous work. Confirm the matching handler is registered and the current album/root/inventory authority still exists. Cancellation is cooperative once claimed. During drain, let bounded provider work observe the cancellation/lease predicate and preserve checkpoints; do not terminate unrelated provider, browser, Python, or worker processes.
 
 ## Promotion
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0071_grant_worker_full_scan_execution.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0076_complete_durable_scan_status_projection.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
-3. Configure the dedicated worker-role URL, start the worker, and confirm its closed registry and claim filter include full scans and targeted reconciliation but exclude every unwired kind.
-4. Deploy the compatible web artifact that enables durable scan producers. Exactly one execution owner may accept each scan workflow during this cutover.
-5. Verify `/health`, the authorized `/status` projection, and unchanged scan acknowledgement/status responses.
+3. Configure the dedicated worker-role URL, start the worker, and confirm its closed registry and claim filter include the completed scan and cover kinds but exclude every unwired kind.
+4. Deploy the compatible web artifact that enables durable scan and cover producers. Exactly one execution owner may accept each workflow during this cutover.
+5. Verify `/health`, the authorized `/status` projection, and unchanged scan, cover-task, notification, cancellation, and acknowledgement responses.
 6. Migrate each later workflow family only when its Phase 8 slice is complete and its handler is registered before its producers are enabled.
 
 Do not insert jobs manually. A worker deliberately ignores kinds without registered handlers; deploy the corresponding handler before expecting that backlog to advance.
@@ -169,6 +179,8 @@ The application and worker roles do not receive retention deletion privileges. D
 - `worker_unavailable`: confirm the service state and exact process tree, then check Postgres reachability with an approved secret-safe probe. Web readiness may still be healthy.
 - Growing retry or failure counts: use only the authorized aggregate status and opaque job IDs available through approved protected diagnostics. Do not query or publish raw parameters or subject references for diagnostics.
 - Scan backlog: confirm the scan handlers are registered, current roots and watcher health are valid, and the account or server-owned scope remains authorized. Let expired-lease reconciliation recover uncommitted work; do not reset attempts or leases manually.
-- Post-scan cover backlog: attempt-zero rows are expected until the cover worker bridge is installed. Do not run an unwired worker merely to consume them.
+- Post-scan cover backlog: verify the deployed worker includes the shared bulk-cover handler and that the job's committed inventory revision remains current. Do not edit its revision or create a replacement row manually.
+- Cover lookup or bulk backlog: verify current album/root authority, the actor capability for user-owned work, worker readiness, and provider configuration using secret-safe checks. Preserve provider order and deadlines; do not bypass them with manual ledger changes.
+- Ambiguous remote save: stop automatic intervention, preserve the job and checkpoint evidence, and reconcile whether download, owned-artifact write, selection commit, promotion, rollback, and task publication completed. Remove only an exactly owned artifact after the authorized root containment check succeeds.
 - Shutdown timeout: preserve the ledger and lease evidence. Diagnose the exact handler and owned child process; do not kill unrelated processes or force a state transition.
 - Cleanup failure: verify the migrator connection and migration level. The command intentionally suppresses exception details; inspect protected service logs without copying credentials, URLs, paths, tokens, addresses, media, or private fixtures.

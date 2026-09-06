@@ -35,6 +35,12 @@ class RecoveryPolicy(str, Enum):
     AMBIGUOUS_ON_STALE_LEASE = "ambiguous_on_stale_lease"
 
 
+class JobCancellationDisposition(str, Enum):
+    IMMEDIATE_CANCELED = "immediate_canceled"
+    RUNNING_REQUESTED = "running_requested"
+    NOOP = "noop"
+
+
 @dataclass(frozen=True)
 class JobPolicy:
     allowed_capability_keys: frozenset[str]
@@ -59,6 +65,9 @@ class EnqueueJob:
     idempotency_key: str
     scheduled_at: datetime
     max_attempts: int
+    priority: int = 0
+    scope_version: int | None = None
+    resource_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +80,7 @@ class ClaimedJob:
     account_id: int | None
     library_id: int | None
     capability_key: str | None
-    request_origin_ref: str | None
+    request_origin_id: int | None
     deployment_mode: str
     client_surface: str
     idempotency_key: str
@@ -81,6 +90,9 @@ class ClaimedJob:
     lease_token: str
     lease_expires_at: datetime
     scheduled_at: datetime
+    priority: int = 0
+    scope_version: int | None = None
+    resource_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -89,3 +101,34 @@ class JobTransitionResult:
     reason_code: str
     scheduled_at: datetime | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class JobCancellationResult:
+    job_id: int
+    disposition: JobCancellationDisposition
+
+
+@dataclass(frozen=True)
+class JobHeartbeatResult:
+    active: bool
+    cancel_requested: bool
+
+
+@dataclass(frozen=True)
+class StaleLeaseReconciliationResult:
+    retried_count: int
+    failed_count: int
+    ambiguous_count: int
+    canceled_count: int = 0
+
+
+@dataclass(frozen=True)
+class JobStatusSnapshot:
+    queued_count: int
+    running_count: int
+    retry_wait_count: int
+    failed_count: int
+    ambiguous_count: int
+    oldest_runnable_at: datetime | None
+    latest_worker_heartbeat_at: datetime | None

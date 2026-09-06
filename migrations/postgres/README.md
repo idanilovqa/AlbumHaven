@@ -68,6 +68,8 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0061_create_missing_album_removal_function.sql
 0062_narrow_readonly_account_privileges.sql
 0063_create_durable_job_foundation.sql
+0064_request_durable_job_cancellation.sql
+0065_harden_durable_job_boundaries.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -129,5 +131,9 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0062_narrow_readonly_account_privileges.sql` removes table-wide readonly access to account identity data and restores only the non-private operational columns needed for approved verification. The sanitized security-audit table remains readable under the deployment's operator-access policy.
 
 `0063_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
+
+`0064_request_durable_job_cancellation.sql` replaces direct application updates with a narrowly granted, migrator-owned cancellation function. It atomically cancels queued or retry-wait work with one transition, records only cooperative cancellation metadata for running work, and leaves terminal or inaccessible jobs unchanged.
+
+`0065_harden_durable_job_boundaries.sql` closes transition history to legal state-machine edges, narrows worker updates to orchestration columns, and preserves the first accepted running-job cancellation metadata when requests repeat.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

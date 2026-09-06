@@ -13,6 +13,7 @@ from typing import Any
 from .models import EnqueueJob, JobKind, JobPolicy, RecoveryPolicy
 
 
+_POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807
 JOB_POLICIES: Mapping[str, JobPolicy] = MappingProxyType({
     "full_scan": JobPolicy(
         frozenset({"library.refresh"}), 2, RecoveryPolicy.RETRY_SAFE
@@ -148,9 +149,22 @@ def _is_scalar(value: Any) -> bool:
 
 def _validate_optional_positive_id(name: str, value: Any) -> None:
     if value is not None and (
-        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value > _POSTGRES_BIGINT_MAX
     ):
         raise ValueError(f"{name} must be a positive integer when present")
+
+
+def _validate_optional_revision(name: str, value: Any) -> None:
+    if value is not None and (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value > _POSTGRES_BIGINT_MAX
+    ):
+        raise ValueError(f"{name} must be a nonnegative integer when present")
 
 
 def _validate_parameter_shape(parameters: Any) -> Mapping[str, Any]:
@@ -272,6 +286,14 @@ def validate_enqueue(command: EnqueueJob) -> EnqueueJob:
 
     _validate_optional_positive_id("account_id", command.account_id)
     _validate_optional_positive_id("library_id", command.library_id)
+    if (
+        isinstance(command.priority, bool)
+        or not isinstance(command.priority, int)
+        or not -32768 <= command.priority <= 32767
+    ):
+        raise ValueError("priority must fit the Postgres smallint range")
+    _validate_optional_revision("scope_version", command.scope_version)
+    _validate_optional_revision("resource_revision", command.resource_revision)
 
     _validate_identifier("subject_kind", command.subject_kind, maximum=128)
     _validate_identifier("subject_ref", command.subject_ref, maximum=1024)

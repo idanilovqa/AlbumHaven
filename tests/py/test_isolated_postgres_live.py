@@ -4,7 +4,7 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -234,11 +234,9 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
         monkeypatch
     )
     psycopg = pytest.importorskip("psycopg")
+    migrations_root = Path(__file__).resolve().parents[2] / "migrations" / "postgres"
     migration_sql = (
-        Path(__file__).resolve().parents[2]
-        / "migrations"
-        / "postgres"
-        / "0063_create_durable_job_foundation.sql"
+        migrations_root / "0063_create_durable_job_foundation.sql"
     ).read_text(encoding="utf-8")
     cleanup_complete = False
 
@@ -264,6 +262,8 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
             )
             connection.execute(migration_sql)
             connection.execute(migration_sql)
+            for migration_path in sorted(migrations_root.glob("006[45]_*.sql")):
+                connection.execute(migration_path.read_text(encoding="utf-8"))
             index_rows = connection.execute(
                 """
                 select indexname, indexdef
@@ -322,22 +322,22 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
                     ("app-authority", "phase8:app-authority"),
                 ).fetchone()["id"]
             )
-            connection.execute(
-                """
-                update ops.jobs
-                   set cancel_requested_at = now(),
-                       cancel_reason_code = 'owner_request',
-                       updated_at = now()
-                 where id = %s
-                """,
-                (app_job_id,),
-            )
 
         with isolatedPostgres._connect(app_url) as connection:
             connection.autocommit = True
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 connection.execute(
                     "update ops.jobs set state = 'failed' where id = %s",
+                    (app_job_id,),
+                )
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    """
+                    update ops.jobs
+                       set cancel_requested_at = now(),
+                           cancel_reason_code = 'owner_request'
+                     where id = %s
+                    """,
                     (app_job_id,),
                 )
 
@@ -382,6 +382,28 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
             connection.autocommit = True
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 connection.execute("delete from ops.jobs where id = %s", (app_job_id,))
+            for assignment in (
+                "account_id = null",
+                "idempotency_key = 'worker-rewrite'",
+                "audit_hold = true",
+                "tombstoned_at = now()",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        f"update ops.jobs set {assignment} where id = %s",
+                        (app_job_id,),
+                    )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    """
+                    insert into ops.job_transitions (
+                      job_id, prior_state, next_state, attempt_count,
+                      reason_code, worker_instance_id
+                    ) values (%s, 'running', 'running', 1, 'illegal_pair',
+                              'phase8-live-worker')
+                    """,
+                    (app_job_id,),
+                )
 
         with isolatedPostgres._connect(readonly_url) as connection:
             connection.autocommit = True
@@ -391,6 +413,264 @@ def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
                 connection.execute("select nextval('ops.jobs_id_seq')")
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 connection.execute("select nextval('ops.job_transitions_id_seq')")
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
+
+
+def test_live_durable_job_cancellation_function_preserves_legal_transitions(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    psycopg = pytest.importorskip("psycopg")
+    requested_at = datetime(2026, 9, 5, 19, 0, tzinfo=timezone.utc)
+    cleanup_complete = False
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            actor_id = int(
+                connection.execute(
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Phase 8 cancellation actor', 'owner',
+                      'Phase 8 cancellation actor', 'phase8-cancellation-actor',
+                      'phase8-cancellation-actor@example.test',
+                      'phase8-cancellation-actor@example.test'
+                    )
+                    returning id
+                    """
+                ).fetchone()["id"]
+            )
+            other_actor_id = int(
+                connection.execute(
+                    """
+                    insert into app.accounts (
+                      display_name, account_kind, username_display,
+                      username_normalized, contact_email,
+                      contact_email_normalized
+                    ) values (
+                      'Phase 8 other cancellation actor', 'owner',
+                      'Phase 8 other cancellation actor',
+                      'phase8-other-cancellation-actor',
+                      'phase8-other-cancellation-actor@example.test',
+                      'phase8-other-cancellation-actor@example.test'
+                    )
+                    returning id
+                    """
+                ).fetchone()["id"]
+            )
+            function_owner = connection.execute(
+                """
+                select pg_get_userbyid(procedure.proowner) as owner_name
+                  from pg_proc procedure
+                 where procedure.oid =
+                       'ops.request_job_cancellation(bigint,bigint,timestamptz)'::regprocedure
+                """
+            ).fetchone()
+            current_role = connection.execute(
+                "select current_user as role_name"
+            ).fetchone()["role_name"]
+            assert function_owner["owner_name"] == current_role
+
+            job_ids = {}
+            for label, state, attempt_count, completed_at, lease_values in (
+                ("queued", "queued", 0, None, (None, None, None, None)),
+                ("retry", "retry_wait", 1, None, (None, None, None, None)),
+                (
+                    "running",
+                    "running",
+                    1,
+                    None,
+                    (
+                        "phase8-cancel-worker",
+                        "phase8-cancel-lease",
+                        requested_at + timedelta(seconds=300),
+                        requested_at,
+                    ),
+                ),
+                ("terminal", "succeeded", 1, requested_at, (None, None, None, None)),
+            ):
+                started_at = None if state == "queued" else requested_at
+                job_ids[label] = int(
+                    connection.execute(
+                        """
+                        insert into ops.jobs (
+                          kind, state, subject_kind, subject_ref, parameters,
+                          account_id, deployment_mode, client_surface,
+                          idempotency_key, attempt_count, max_attempts,
+                          recovery_policy, started_at, completed_at, lease_owner,
+                          lease_token, lease_expires_at, heartbeat_at
+                        ) values (
+                          'full_scan', %s, 'library', %s, '{}'::jsonb,
+                          %s, 'self_hosted_private_web', 'web', %s, %s, 2,
+                          'retry_safe', %s, %s, %s, %s, %s, %s
+                        )
+                        returning id
+                        """,
+                        (
+                            state,
+                            f"phase8-cancel-{label}",
+                            actor_id,
+                            f"phase8:cancel:{label}",
+                            attempt_count,
+                            started_at,
+                            completed_at,
+                            *lease_values,
+                        ),
+                    ).fetchone()["id"]
+                )
+
+        def request_cancellation(job_id: int):
+            with isolatedPostgres._connect(app_url) as connection:
+                return connection.execute(
+                    """
+                    select *
+                      from ops.request_job_cancellation(%s, %s, %s)
+                    """,
+                    (job_id, actor_id, requested_at),
+                ).fetchone()
+
+        queued_result = request_cancellation(job_ids["queued"])
+        assert queued_result == {
+            "job_id": job_ids["queued"],
+            "prior_state": "queued",
+            "next_state": "canceled",
+            "reason_code": "canceled",
+            "transition_recorded": True,
+        }
+        retry_result = request_cancellation(job_ids["retry"])
+        assert retry_result == {
+            "job_id": job_ids["retry"],
+            "prior_state": "retry_wait",
+            "next_state": "canceled",
+            "reason_code": "canceled",
+            "transition_recorded": True,
+        }
+        running_result = request_cancellation(job_ids["running"])
+        assert running_result == {
+            "job_id": job_ids["running"],
+            "prior_state": "running",
+            "next_state": "running",
+            "reason_code": "cancel_requested",
+            "transition_recorded": False,
+        }
+        with isolatedPostgres._connect(app_url) as connection:
+            repeated_running_result = connection.execute(
+                "select * from ops.request_job_cancellation(%s, %s, %s)",
+                (job_ids["running"], actor_id, requested_at + timedelta(minutes=1)),
+            ).fetchone()
+        assert repeated_running_result == running_result
+        terminal_result = request_cancellation(job_ids["terminal"])
+        assert terminal_result == {
+            "job_id": job_ids["terminal"],
+            "prior_state": "succeeded",
+            "next_state": "succeeded",
+            "reason_code": "terminal_noop",
+            "transition_recorded": False,
+        }
+        with isolatedPostgres._connect(app_url) as connection:
+            inaccessible_result = connection.execute(
+                "select * from ops.request_job_cancellation(%s, %s, %s)",
+                (job_ids["terminal"], other_actor_id, requested_at),
+            ).fetchone()
+        assert inaccessible_result == {
+            "job_id": job_ids["terminal"],
+            "prior_state": None,
+            "next_state": None,
+            "reason_code": "not_found",
+            "transition_recorded": False,
+        }
+        missing_result = request_cancellation(9_223_372_036_854_775_000)
+        assert missing_result == {
+            "job_id": 9_223_372_036_854_775_000,
+            "prior_state": None,
+            "next_state": None,
+            "reason_code": "not_found",
+            "transition_recorded": False,
+        }
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            persisted = {
+                row["subject_ref"]: row
+                for row in connection.execute(
+                    """
+                    select subject_ref, state, cancel_requested_at,
+                           cancel_requested_by_account_id, cancel_reason_code
+                      from ops.jobs
+                     where id = any(%s)
+                    """,
+                    (list(job_ids.values()),),
+                ).fetchall()
+            }
+            transitions = connection.execute(
+                """
+                select job_id, prior_state, next_state, reason_code
+                  from ops.job_transitions
+                 where job_id = any(%s)
+                 order by job_id
+                """,
+                (list(job_ids.values()),),
+            ).fetchall()
+
+        assert persisted["phase8-cancel-queued"]["state"] == "canceled"
+        assert persisted["phase8-cancel-retry"]["state"] == "canceled"
+        running_row = persisted["phase8-cancel-running"]
+        assert running_row["state"] == "running"
+        assert running_row["cancel_requested_at"] == requested_at
+        assert running_row["cancel_requested_by_account_id"] == actor_id
+        assert running_row["cancel_reason_code"] == "owner_request"
+        terminal_row = persisted["phase8-cancel-terminal"]
+        assert terminal_row["state"] == "succeeded"
+        assert terminal_row["cancel_requested_at"] is None
+        assert [
+            (row["job_id"], row["prior_state"], row["next_state"])
+            for row in transitions
+        ] == [
+            (job_ids["queued"], "queued", "canceled"),
+            (job_ids["retry"], "retry_wait", "canceled"),
+        ]
+
+        with isolatedPostgres._connect(app_url) as connection:
+            connection.autocommit = True
+            for statement in (
+                "update ops.jobs set state = 'failed' where id = %s",
+                "update ops.jobs set cancel_requested_at = now() where id = %s",
+                "insert into ops.job_transitions (job_id, next_state, attempt_count, reason_code) values (%s, 'canceled', 0, 'forged')",
+                "delete from ops.jobs where id = %s",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(statement, (job_ids["running"],))
+            for arguments in (
+                (0, actor_id, requested_at),
+                (job_ids["running"], 0, requested_at),
+                (job_ids["running"], actor_id, None),
+            ):
+                with pytest.raises(psycopg.errors.InvalidParameterValue):
+                    connection.execute(
+                        "select * from ops.request_job_cancellation(%s, %s, %s)",
+                        arguments,
+                    )
+
+        for denied_url in (worker_url, readonly_url):
+            with isolatedPostgres._connect(denied_url) as connection:
+                connection.autocommit = True
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        "select * from ops.request_job_cancellation(%s, %s, %s)",
+                        (job_ids["running"], actor_id, requested_at),
+                    )
 
         _drop_application_schemas(setup_url)
         cleanup_complete = True

@@ -30,6 +30,12 @@ READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
 DURABLE_JOBS_MIGRATION = (
     MIGRATIONS_DIR / "0063_create_durable_job_foundation.sql"
 )
+DURABLE_JOB_CANCELLATION_MIGRATION = (
+    MIGRATIONS_DIR / "0064_request_durable_job_cancellation.sql"
+)
+DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
+    MIGRATIONS_DIR / "0065_harden_durable_job_boundaries.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -429,7 +435,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-25:] == [
+    assert migration_names[-27:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -455,6 +461,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0061_create_missing_album_removal_function.sql",
         "0062_narrow_readonly_account_privileges.sql",
         "0063_create_durable_job_foundation.sql",
+        "0064_request_durable_job_cancellation.sql",
+        "0065_harden_durable_job_boundaries.sql",
     ]
 
 
@@ -3082,6 +3090,81 @@ def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
     }
 
 
+def test_durable_job_cancellation_migration_file_exists():
+    assert DURABLE_JOB_CANCELLATION_MIGRATION.is_file(), (
+        "durable job cancellation migration SQL is not present yet; "
+        "Task 3 requires 0064_request_durable_job_cancellation.sql"
+    )
+
+
+@pytest.fixture
+def durable_job_cancellation_sql() -> str:
+    if not DURABLE_JOB_CANCELLATION_MIGRATION.exists():
+        pytest.skip(
+            "durable job cancellation migration SQL is not present yet; "
+            "test_durable_job_cancellation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOB_CANCELLATION_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_cancellation_function_is_atomic_validated_and_narrowly_granted(
+    durable_job_cancellation_sql,
+):
+    sql = _normalized_sql(durable_job_cancellation_sql)
+    signature = "ops.request_job_cancellation(bigint, bigint, timestamptz)"
+
+    assert "create or replace function ops.request_job_cancellation(" in sql
+    assert "returns table (" in sql
+    for result_field in (
+        "job_id bigint",
+        "prior_state varchar(",
+        "next_state varchar(",
+        "reason_code varchar(",
+        "transition_recorded boolean",
+    ):
+        assert result_field in sql
+    assert "language plpgsql" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "from ops.jobs" in sql
+    assert "for update" in sql
+    assert "update ops.jobs" in sql
+    assert "insert into ops.job_transitions" in sql
+
+    for parameter_check in (
+        "p_job_id is null or p_job_id <= 0",
+        "p_actor_account_id is null or p_actor_account_id <= 0",
+        "p_requested_at is null",
+    ):
+        assert parameter_check in sql
+    for result_code in (
+        "'canceled'",
+        "'cancel_requested'",
+        "'terminal_noop'",
+        "'not_found'",
+    ):
+        assert result_code in sql
+
+    revoke_update = re.search(
+        r"revoke\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+from\s+album_haven_app",
+        sql,
+    )
+    assert revoke_update is not None
+    assert {
+        column.strip() for column in revoke_update.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+    assert f"revoke all on function {signature} from public" in sql
+    assert f"grant execute on function {signature} to album_haven_app" in sql
+    assert f"grant execute on function {signature} to album_haven_worker" not in sql
+    assert f"grant execute on function {signature} to album_haven_readonly" not in sql
+
+
 def test_durable_job_migration_explicitly_revokes_readonly_sequence_access(
     durable_jobs_sql,
 ):
@@ -3111,3 +3194,44 @@ def test_durable_job_worker_status_and_retention_indexes_are_partial(
         r"where lifecycle_state = 'stopped'",
         sql,
     )
+
+
+def test_durable_job_boundary_hardening_migration_file_exists():
+    assert DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.is_file(), (
+        "Task 3 requires additive migration 0065_harden_durable_job_boundaries.sql"
+    )
+
+
+def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns():
+    if not DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.exists():
+        pytest.skip("durable job boundary hardening migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "constraint job_transitions_legal_pair_check" in sql
+    assert "prior_state is null and next_state = 'queued'" in sql
+    for legal_pair in (
+        "prior_state = 'queued' and next_state in ('running', 'canceled')",
+        "prior_state = 'retry_wait' and next_state in ('running', 'canceled')",
+        "prior_state = 'running' and next_state in ('succeeded', 'failed', 'retry_wait', 'canceled', 'ambiguous')",
+    ):
+        assert legal_pair in sql
+    assert "revoke update on table ops.jobs from album_haven_app" in sql
+    assert "revoke update on table ops.jobs from album_haven_worker" in sql
+    worker_update = re.search(
+        r"grant update\s*\((?P<columns>[^)]+)\)\s+on table ops\.jobs\s+"
+        r"to album_haven_worker",
+        sql,
+    )
+    assert worker_update is not None
+    assert {
+        column.strip() for column in worker_update.group("columns").split(",")
+    } == {
+        "state", "scheduled_at", "attempt_count", "lease_owner", "lease_token",
+        "lease_expires_at", "heartbeat_at", "started_at", "completed_at",
+        "outcome_code", "updated_at",
+    }
+    assert "grant select on table ops.jobs to album_haven_worker" in sql
+    assert "cancel_requested_at = coalesce(jobs.cancel_requested_at" in sql
+    assert "cancel_requested_by_account_id = coalesce(" in sql

@@ -42,6 +42,9 @@ DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
 DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
     MIGRATIONS_DIR / "0067_add_job_transition_retention_index.sql"
 )
+SCAN_JOB_INTENTS_MIGRATION = (
+    MIGRATIONS_DIR / "0068_create_scan_job_intents.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -441,7 +444,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-29:] == [
+    assert migration_names[-30:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -471,6 +474,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0065_harden_durable_job_boundaries.sql",
         "0066_grant_worker_authorization_reads.sql",
         "0067_add_job_transition_retention_index.sql",
+        "0068_create_scan_job_intents.sql",
     ]
 
 
@@ -3346,3 +3350,365 @@ def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges(
     ):
         assert not re.search(rf"\bgrant\b[^;]*\bto\s+{runtime_role}\b", sql)
     assert not re.search(r"\bgrant\s+delete\b", sql)
+
+
+def scan_job_intents_sql() -> str:
+    assert SCAN_JOB_INTENTS_MIGRATION.is_file(), (
+        "Task 1 requires additive migration "
+        "0068_create_scan_job_intents.sql"
+    )
+    return SCAN_JOB_INTENTS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_scan_job_intent_migration_creates_private_normalized_domain_records():
+    sql = _normalized_sql(scan_job_intents_sql())
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in tables:
+        assert f"create table if not exists {table}" in sql
+        assert f"revoke all on table {table} from public" in sql
+
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for fragment in (
+        "library_id bigint not null references library.libraries(id) on delete restrict",
+        "initiating_account_id bigint not null references app.accounts(id) on delete restrict",
+        "mode varchar(",
+        "force boolean not null",
+        "state varchar(",
+        "progress_current",
+        "progress_total",
+        "committed_inventory_revision bigint",
+        "job_id bigint",
+    ):
+        assert fragment in full_scan
+    assert "check (state in (" in full_scan
+
+    roots = _table_sql(sql, "library.full_scan_intent_roots")
+    assert "intent_id bigint not null references library.full_scan_intents(id)" in roots
+    assert "root_id bigint not null references library.library_roots(id) on delete restrict" in roots
+    assert "ordinal" in roots
+
+    paths = _table_sql(sql, "library.targeted_reconciliation_intent_paths")
+    assert "intent_id bigint not null references library.targeted_reconciliation_intents(id)" in paths
+    assert "path_kind varchar(" in paths
+    assert "check (path_kind in ('active', 'deleted', 'deleted_subtree'))" in paths
+    assert "path text not null" in paths
+    assert "ordinal" in paths
+
+    moves = _table_sql(sql, "library.targeted_reconciliation_intent_moves")
+    for fragment in (
+        "source_path text not null",
+        "destination_path text not null",
+        "source_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "destination_root_id bigint not null references library.library_roots(id) on delete restrict",
+        "is_directory boolean not null",
+        "ordinal",
+    ):
+        assert fragment in moves
+
+
+def test_scan_job_intent_migration_indexes_foreign_keys_and_active_full_scan_exclusion():
+    sql = _normalized_sql(scan_job_intents_sql())
+
+    for index_name in (
+        "full_scan_intents_library_id_idx",
+        "full_scan_intents_job_id_idx",
+        "full_scan_intent_roots_root_id_idx",
+        "targeted_reconciliation_intents_library_id_idx",
+        "targeted_reconciliation_intents_job_id_idx",
+        "targeted_reconciliation_intent_paths_intent_id_idx",
+        "targeted_reconciliation_intent_moves_source_root_id_idx",
+        "targeted_reconciliation_intent_moves_destination_root_id_idx",
+    ):
+        assert f"index if not exists {index_name}" in sql
+
+    active_index = re.search(
+        r"create unique index if not exists jobs_one_active_full_scan_per_library_idx\s+"
+        r"on ops\.jobs\s*\(library_id\)\s+where\s+(?P<predicate>[^;]+)",
+        sql,
+    )
+    assert active_index is not None
+    predicate = active_index.group("predicate")
+    assert "kind = 'full_scan'" in predicate
+    assert re.search(r"state\s+in\s*\('queued',\s*'running',\s*'retry_wait'\)", predicate)
+    assert "library_id is not null" in predicate
+
+
+def test_scan_job_intent_migration_uses_narrow_function_grants_for_private_paths():
+    sql = _normalized_sql(scan_job_intents_sql())
+    private_tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    for table in private_tables:
+        for role in ("album_haven_app", "album_haven_worker", "album_haven_readonly"):
+            assert not re.search(
+                rf"grant\s+(?:select|insert|update|delete|truncate|references|trigger|all)"
+                rf"[^;]*on table {re.escape(table)}[^;]*to {role}",
+                sql,
+            )
+
+    producer_functions = (
+        "library.create_full_scan_intent",
+        "library.create_targeted_reconciliation_intent",
+        "library.link_scan_intent_job",
+    )
+    for function in producer_functions:
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+to album_haven_app",
+            sql,
+        )
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public",
+            sql,
+        )
+
+    for loader in (
+        "library.load_claimed_full_scan_intent",
+        "library.load_claimed_targeted_reconciliation_intent",
+    ):
+        assert f"create or replace function {loader}" in sql
+        assert re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(loader)}\([^;]+to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path" in sql
+
+
+def test_scan_job_intent_migration_revokes_inherited_table_and_sequence_privileges():
+    sql = _normalized_sql(scan_job_intents_sql())
+    roles = ("album_haven_app", "album_haven_worker", "album_haven_readonly")
+    tables = (
+        "library.full_scan_intents",
+        "library.full_scan_intent_roots",
+        "library.targeted_reconciliation_intents",
+        "library.targeted_reconciliation_intent_paths",
+        "library.targeted_reconciliation_intent_moves",
+    )
+    sequences = (
+        "library.full_scan_intents_id_seq",
+        "library.targeted_reconciliation_intents_id_seq",
+    )
+    table_revokes = re.findall(r"revoke all on table ([^;]+) from ([a-z_]+)", sql)
+    for table in tables:
+        for role in roles:
+            assert any(
+                role == revoked_role and table in revoked_tables
+                for revoked_tables, revoked_role in table_revokes
+            )
+    sequence_revokes = re.findall(
+        r"revoke all on sequence ([^;]+) from ([a-z_]+)", sql
+    )
+    for sequence in sequences:
+        for role in ("public", *roles):
+            assert any(
+                role == revoked_role and sequence in revoked_sequences
+                for revoked_sequences, revoked_role in sequence_revokes
+            )
+
+
+def test_scan_job_intent_migration_gives_targeted_requests_a_stable_producer_identity():
+    sql = _normalized_sql(scan_job_intents_sql())
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+
+    assert "producer_request_key varchar(" in targeted
+    assert "producer_request_key" in sql
+    assert re.search(
+        r"create unique index if not exists "
+        r"targeted_reconciliation_intents_producer_request_idx\s+"
+        r"on library\.targeted_reconciliation_intents\s*"
+        r"\(library_id,\s*producer_request_key\)",
+        sql,
+    )
+    create_function = sql.split(
+        "create or replace function library.create_targeted_reconciliation_intent",
+        1,
+    )[1].split("create or replace function library.link_scan_intent_job", 1)[0]
+    assert "p_producer_request_key varchar" in create_function
+    assert "on conflict" in create_function
+    assert "producer_request_key" in create_function
+
+
+def test_scan_job_link_function_binds_exact_library_account_and_parameters():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split(
+        "create or replace function library.load_claimed_targeted_reconciliation_intent",
+        1,
+    )[0]
+
+    full_branch = function_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = function_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+
+    assert re.search(
+        r"job\.library_id\s*=\s*(?:intent|library\.full_scan_intents)\.library_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.account_id\s*=\s*"
+        r"(?:intent|library\.full_scan_intents)\.initiating_account_id",
+        full_branch,
+    )
+    assert re.search(
+        r"job\.library_id\s*=\s*"
+        r"(?:intent|library\.targeted_reconciliation_intents)\.library_id",
+        targeted_branch,
+    )
+    assert "job.account_id is null" in targeted_branch
+    assert "job.capability_key is null" in targeted_branch
+    assert "job.request_origin_id is null" in targeted_branch
+    assert re.search(
+        r"job\.parameters\s*=\s*(?:pg_catalog\.)?jsonb_build_object\("
+        r"\s*'intent_id',\s*p_intent_id\s*\)",
+        function_sql,
+    )
+
+
+def test_scan_job_intent_migration_atomically_mirrors_every_job_state():
+    sql = _normalized_sql(scan_job_intents_sql())
+    trigger_function = sql.split(
+        "create or replace function library.sync_scan_intent_job_state()", 1
+    )[1].split("create trigger jobs_sync_scan_intent_state", 1)[0]
+
+    assert "returns trigger" in trigger_function
+    assert "security definer" in trigger_function
+    assert "set search_path = pg_catalog" in trigger_function
+    assert "new.kind not in ('full_scan', 'targeted_reconciliation')" in trigger_function
+    for job_state, intent_state in (
+        ("queued", "accepted"),
+        ("running", "running"),
+        ("retry_wait", "retry_wait"),
+        ("succeeded", "succeeded"),
+        ("canceled", "canceled"),
+    ):
+        assert re.search(
+            rf"when '{job_state}' then '{intent_state}'", trigger_function
+        )
+    assert "else 'failed'" in trigger_function
+    assert "outcome_code" in trigger_function
+    assert "completed_at" in trigger_function
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.full_scan_intents"
+    )
+    assert "outcome_code varchar(128)" in _table_sql(
+        sql, "library.targeted_reconciliation_intents"
+    )
+    assert re.search(
+        r"create trigger jobs_sync_scan_intent_state\s+"
+        r"after update of state on ops\.jobs",
+        sql,
+    )
+
+
+def test_claimed_scan_checkpoint_is_lease_scoped_and_compare_and_set():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.checkpoint_claimed_scan_intent(", 1
+    )[1].split("create or replace function library.repair_orphaned_scan_intents", 1)[0]
+
+    for parameter in (
+        "p_kind varchar",
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_expected_state varchar",
+        "p_progress_current bigint",
+        "p_progress_total bigint",
+        "p_inventory_revision bigint",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.state = p_expected_state",
+    ):
+        assert predicate in function_sql
+    assert "job.state = 'running'" in function_sql
+    assert "progress_current" in function_sql
+    assert "progress_total" in function_sql
+    assert "committed_inventory_revision" in function_sql
+    assert "p_progress_current >= intent.progress_current" in function_sql
+    assert "p_progress_total >= intent.progress_total" in function_sql
+    assert "p_inventory_revision >= intent.committed_inventory_revision" in function_sql
+    assert "p_now >= intent.updated_at" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_orphan_scan_intent_repair_is_old_unlinked_accepted_and_bounded():
+    sql = _normalized_sql(scan_job_intents_sql())
+    function_sql = sql.split(
+        "create or replace function library.repair_orphaned_scan_intents(", 1
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "p_now timestamptz" in function_sql
+    assert "p_limit integer" in function_sql
+    assert (
+        re.search(r"p_limit[^;]+between 1 and 1000", function_sql)
+        or ("p_limit < 1" in function_sql and "p_limit > 1000" in function_sql)
+    )
+    assert "job_id is null" in function_sql
+    assert "state = 'accepted'" in function_sql
+    assert re.search(r"accepted_at\s*<=?\s*p_now\s*-\s*interval", function_sql)
+    assert "order by accepted_at, id" in function_sql
+    assert "limit p_limit" in function_sql
+    assert "for update" in function_sql
+    assert "skip locked" in function_sql
+    assert "security definer" in function_sql
+
+
+def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
+    sql = _normalized_sql(scan_job_intents_sql())
+    full_scan = _table_sql(sql, "library.full_scan_intents")
+    for column in (
+        "capability_key varchar(128) not null",
+        "request_origin_id bigint not null references app.request_origins(id)",
+        "deployment_mode varchar(128) not null",
+        "client_surface varchar(128) not null",
+    ):
+        assert column in full_scan
+    targeted = _table_sql(sql, "library.targeted_reconciliation_intents")
+    assert "deployment_mode varchar(128) not null" in targeted
+    assert "client_surface varchar(128) not null" in targeted
+
+    link_sql = sql.split(
+        "create or replace function library.link_scan_intent_job", 1
+    )[1].split("create or replace function library.load_claimed", 1)[0]
+    full_branch = link_sql.split("if p_kind = 'full_scan' then", 1)[1].split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[0]
+    targeted_branch = link_sql.split(
+        "elsif p_kind = 'targeted_reconciliation' then", 1
+    )[1]
+    assert "job.capability_key = 'library.refresh'" in full_branch
+    for field in (
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+    ):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", full_branch)
+    for field in ("deployment_mode", "client_surface"):
+        assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", targeted_branch)

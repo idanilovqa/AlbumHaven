@@ -96,6 +96,17 @@ class PostgresJobRepository:
 
     def enqueue(self, command: EnqueueJob) -> int:
         validate_enqueue(command)
+        if command.request_origin_ref is not None:
+            origin_type, separator, origin_key = command.request_origin_ref.partition(":")
+            if not separator or not origin_type or not origin_key:
+                raise ValueError("request origin reference must contain type and key")
+        with self._connect() as connection:
+            return self.enqueue_in_transaction(connection, command)
+
+    def enqueue_in_transaction(self, connection: Any, command: EnqueueJob) -> int:
+        """Enqueue through an existing transaction owned by a domain service."""
+
+        validate_enqueue(command)
         kind = _kind_value(command)
         policy = policy_for(command.kind)
         values = {
@@ -170,19 +181,18 @@ class PostgresJobRepository:
                and idempotency_key = %(idempotency_key)s
                and request_origin_id is not distinct from %(request_origin_id)s
         """
-        with self._connect() as connection:
-            if command.request_origin_ref is not None:
-                origin_row = connection.execute(request_origin_sql, values).fetchone()
-                if origin_row is None:
-                    raise ValueError("request origin is missing or no longer accepted")
-                request_origin_id = int(origin_row["request_origin_id"])
-            values["request_origin_id"] = request_origin_id
-            row = connection.execute(insert_sql, values).fetchone()
-            if row is None:
-                row = connection.execute(lookup_sql, values).fetchone()
-            if row is None:
-                raise RuntimeError("idempotent job enqueue could not be resolved")
-            return int(row["job_id"])
+        if command.request_origin_ref is not None:
+            origin_row = connection.execute(request_origin_sql, values).fetchone()
+            if origin_row is None:
+                raise ValueError("request origin is missing or no longer accepted")
+            request_origin_id = int(origin_row["request_origin_id"])
+        values["request_origin_id"] = request_origin_id
+        row = connection.execute(insert_sql, values).fetchone()
+        if row is None:
+            row = connection.execute(lookup_sql, values).fetchone()
+        if row is None:
+            raise RuntimeError("idempotent job enqueue could not be resolved")
+        return int(row["job_id"])
 
     def claim(
         self, *, worker_id: str, now: datetime, lease_seconds: int

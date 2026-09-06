@@ -79,8 +79,8 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
 function buildLooseTracksHeaderActionsHtml() {
   return [
     ButtonComponent.renderActionButton({
-      ariaLabel: 'Edit loose track tags',
-      title: 'Edit loose track tags',
+      ariaLabel: 'Edit tags',
+      title: 'Edit tags',
       className: 'track-modal-edit-tags album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
       attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },

@@ -56,7 +56,10 @@ export class ArtistPageSettingsActions {
   }
 
   async readNonAlbumTrackTitles() {
-    return (await this.artistPageSettings.nonAlbumTrackTitles.allTextContents())
+    // parity-check: allow-read-only-measurement-evaluate -- atomically read title text without nested artist subtitles
+    return (await this.artistPageSettings.nonAlbumTrackTitles.evaluateAll((elements) => (
+      elements.map((element) => element.firstChild?.textContent || '')
+    )))
       .map((title) => title.trim())
       .filter(Boolean);
   }
@@ -84,22 +87,30 @@ export class ArtistPageSettingsActions {
     await expect(this.artistPageSettings.nonAlbumTrackSections).toHaveCount(sections.length);
     await expect(this.artistPageSettings.nonAlbumCompactTables).toHaveCount(sections.length);
     await expect(this.artistPageSettings.nonAlbumColumnHeaders).toHaveText(
-      sections.flatMap(() => ['Track', 'File path']),
+      ['#', 'Track', 'File path', 'Length'],
     );
-    await expect(this.artistPageSettings.nonAlbumControlCells).toHaveCount(tracks.length);
+    await expect(this.artistPageSettings.nonAlbumTrackTable).toHaveCount(1);
+    await expect(this.artistPageSettings.nonAlbumTrackTotal).toHaveCount(1);
+    await expect(this.artistPageSettings.nonAlbumTrackTotal).toContainText('Total Length:');
+    await expect(this.artistPageSettings.nonAlbumHeader).toHaveCount(1);
+    await expect(this.artistPageSettings.nonAlbumHeaderActions).toHaveCount(2);
+    await expect(this.artistPageSettings.nonAlbumHeader.getByRole('button', { name: 'Edit tags', exact: true })).toBeVisible();
+    await expect(this.artistPageSettings.nonAlbumHeader.getByRole('button', { name: 'Close loose tracks', exact: true })).toBeVisible();
+    await expect(this.artistPageSettings.nonAlbumHeaderFolderActions).toHaveCount(0);
+    await expect(this.artistPageSettings.nonAlbumPlayCells).toHaveCount(tracks.length);
+    await expect(this.artistPageSettings.nonAlbumNumberCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumTrackCells).toHaveCount(tracks.length);
     await expect(this.artistPageSettings.nonAlbumPathCells).toHaveCount(tracks.length);
-    await expect(this.artistPageSettings.nonAlbumExceptionLabels).toHaveCount(0);
+    await expect(this.artistPageSettings.nonAlbumProblemCells).toHaveCount(tracks.length);
+    await expect(this.artistPageSettings.nonAlbumDurationCells).toHaveCount(tracks.length);
 
     for (const track of tracks) {
       const row = this.artistPageSettings.nonAlbumTrackRowByTitle(track.title);
       await expect(row).toHaveCount(1);
-      await expect(row.getByRole('button', { name: `Play ${track.title}`, exact: true })).toBeVisible();
+      await expect(row.getByRole('button', { name: 'Play track', exact: true })).toBeVisible();
       await expect(this.artistPageSettings.nonAlbumTrackArtistByTitle(track.title)).toHaveText(track.artist);
       await expect(this.artistPageSettings.nonAlbumTrackPathByTitle(track.title)).toContainText(track.pathSuffix);
-      await expect(this.artistPageSettings.nonAlbumTrackControlByTitle(track.title)).toContainText(
-        `${track.number}.`,
-      );
+      await expect(this.artistPageSettings.nonAlbumTrackNumberByTitle(track.title)).toHaveText(String(track.number));
     }
 
     expect(await this.artistPageSettings.readNonAlbumDialogWidth()).toBeGreaterThan(720);
@@ -111,8 +122,8 @@ export class ArtistPageSettingsActions {
     expect(headerAlignment).not.toBeNull();
     expect(headerAlignment.trackOffset).toBeLessThanOrEqual(1);
     expect(headerAlignment.pathOffset).toBeLessThanOrEqual(1);
+    await expect(firstRow).toHaveClass(/album-track-table__row/);
     await firstRow.hover();
-    await expect(firstRow).toHaveCSS('background-color', 'rgba(148, 163, 184, 0.08)');
   }
 
   async expectNonAlbumTracksOpen(expectedCount, options = {}) {

@@ -3315,6 +3315,35 @@ function buildSmallAlertHtml(config = {}) {
   return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeHtml(className)}` : ''}" role="status" aria-label="${escapeHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeHtml(message)}</span></span>`;
 }
 
+function buildAlertLabelAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:id|title|aria-label|data-problem-exclusion-(?:scope|row-key|reason|row-index))$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeHtml(value)}"`;
+  }).join('');
+}
+
+function buildAlertLabelHtml(config = {}) {
+  const severity = normalizeAlertSeverity(config.severity);
+  const message = String(config.message || '').trim();
+  const interactive = Boolean(config.interactive);
+  const pressed = Boolean(config.pressed);
+  const disabled = Boolean(config.disabled);
+  const className = String(config.className || '').trim();
+  const classes = [
+    'alert-label',
+    `alert-label--${severity}`,
+    className,
+    interactive && pressed ? 'is-active' : '',
+  ].filter(Boolean).join(' ');
+  const attributes = buildAlertLabelAttributes(config.attributes);
+  if (!interactive) {
+    return `<span class="${escapeHtml(classes)}" data-alert-label="${severity}"${attributes}>${escapeHtml(message)}</span>`;
+  }
+  return `<button class="${escapeHtml(classes)}" data-alert-label="${severity}" type="button"${attributes} aria-pressed="${pressed ? 'true' : 'false'}"${disabled ? ' aria-disabled="true" disabled' : ''}>${escapeHtml(message)}</button>`;
+}
+
 function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();
@@ -3402,6 +3431,15 @@ function normalizeAlbumDetailsLayout(value) {
 
 function buildAlbumDetailsHeaderHtml(config = {}) {
   const layout = normalizeAlbumDetailsLayout(config.layout);
+  const variant = config.variant === 'copy' ? 'copy' : 'album';
+  const titleId = escapeHtml(config.titleId || 'track-modal-title');
+  const subtitleId = escapeHtml(config.subtitleId || 'track-modal-subtitle');
+  const actionHtml = String(config.actionsHtml || '');
+  if (variant === 'copy') {
+    const title = escapeHtml(config.title || '');
+    const subtitle = escapeHtml(config.subtitle || '');
+    return `<header class="album-details-header" data-album-details-layout="classic_bar" data-album-details-variant="copy"><div class="album-details-header__identity"><div class="album-details-header__copy"><h3 class="album-details-header__primary" id="${titleId}">${title}</h3><div class="album-details-header__secondary" id="${subtitleId}">${subtitle}</div></div></div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}</header>`;
+  }
   const artist = escapeHtml(config.artist || '');
   const album = escapeHtml(config.album || 'Album');
   const year = escapeHtml(config.year || '');
@@ -3413,7 +3451,6 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     return `<span class="album-details-header__tag${missingClass}">${escapeHtml(label)}</span>`;
   });
   const tagHtml = tagParts.join('');
-  const actionHtml = String(config.actionsHtml || '');
   const compactIdentity = [artist, album, year].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const stackedPrimary = [artist, album].filter(Boolean).join(' <span aria-hidden="true">•</span> ');
   const secondaryValues = layout === 'editorial_canvas'
@@ -3424,7 +3461,7 @@ function buildAlbumDetailsHeaderHtml(config = {}) {
     .map((part) => `<span${part.releaseType ? ' class="album-details-header__release-type"' : ''}>${part.value}</span>`);
   const secondaryHtml = [...secondaryParts, ...tagParts].join('<span aria-hidden="true">•</span>');
   const primary = layout === 'classic_bar' ? compactIdentity : (layout === 'editorial_canvas' ? album : stackedPrimary);
-  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="track-modal-title">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="track-modal-subtitle">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? '<div class="track-modal-subtitle" id="track-modal-subtitle"></div>' : ''}</header>`;
+  return `<header class="album-details-header" data-album-details-layout="${layout}"><div class="album-details-header__identity"><h3 class="album-details-header__primary" id="${titleId}">${primary}</h3>${layout === 'classic_bar' ? `<div class="album-details-header__tags">${releaseType ? `<span class="album-details-header__release-type">${releaseType}</span>` : ''}${tagHtml}</div>` : `<div class="album-details-header__secondary" id="${subtitleId}">${secondaryHtml}</div>`}</div>${actionHtml ? `<div class="album-details-header__actions">${actionHtml}</div>` : ''}${layout === 'classic_bar' ? `<div class="track-modal-subtitle" id="${subtitleId}"></div>` : ''}</header>`;
 }
 
 function buildAlbumDetailsHeaderActionsHtml(config = {}) {
@@ -3459,6 +3496,24 @@ function buildAlbumDetailsHeaderActionsHtml(config = {}) {
       className: 'track-modal-close album-details-header__action',
       iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
       attributes: { id: 'track-modal-close', 'data-close-track-modal': '1' },
+    }),
+  ].join('');
+}
+
+function buildLooseTracksHeaderActionsHtml() {
+  return [
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Edit tags',
+      title: 'Edit tags',
+      className: 'track-modal-edit-tags album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--edit',
+      attributes: { id: 'non-album-modal-edit-tags', 'data-open-non-album-tag-editor': '1' },
+    }),
+    ButtonComponent.renderActionButton({
+      ariaLabel: 'Close loose tracks',
+      className: 'album-details-header__action',
+      iconClass: 'album-details-header__action-icon album-details-header__action-icon--close',
+      attributes: { id: 'non-album-modal-close', 'data-close-non-album-modal': '1' },
     }),
   ].join('');
 }
@@ -7734,16 +7789,12 @@ function getNonAlbumMenuLabel() {
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
-    const src = `/track?path=${encodeURIComponent(item.path || '')}`;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
     const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
-    const utilityJump = problematicAlbum
-      ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-      : '';
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -7751,32 +7802,26 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const artistMarkup = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
-      ? `<small class="non-album-track-artist">${escapeHtml(metadataArtist)}</small>`
+    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+      ? metadataArtist
       : '';
     return {
-      key: trackPath || `${rowIndex}`,
-      dataAttributes: {
-        'track-row-path': trackPath,
-        'non-album-row-index': rowIndex,
-      },
-      cells: {
-        control: `
-          <div class="non-album-track-control">
-            <span class="track-number">${rowIndex}.</span>
-            <button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(item.artist || '')}" data-track-album="" data-track-cover="" data-track-duration-seconds="${Number(item.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? `Pause ${escapeHtml(title)}` : `Play ${escapeHtml(title)}`}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button>
-          </div>
-        `,
-        track: `
-          <div class="non-album-track-cell">
-            <strong class="track-title">${escapeHtml(title)}</strong>
-            ${artistMarkup}
-          </div>
-          ${utilityJump}
-        `,
-        path: `<span class="non-album-track-path">${escapeHtml(displayPath || trackPath)}</span>`,
-      },
-      ariaSelected: isCurrentTrack,
+      path: trackPath,
+      title,
+      playbackTitle: title,
+      artist: String(item.artist || ''),
+      albumArtist: String(item.album_artist || ''),
+      album: '',
+      coverPath: '',
+      durationSeconds: Number(item.duration_seconds) || 0,
+      duration,
+      originalDuration: duration,
+      trackNumber: rowIndex,
+      secondaryArtist,
+      displayPath: displayPath || trackPath,
+      isCurrent: isCurrentTrack,
+      isPlaying: isActivelyPlaying,
+      isProblematic: Boolean(problematicAlbum),
     };
   });
 }
@@ -7788,7 +7833,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
-  return sectionDefinitions.map((section) => {
+  const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       String(
         Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
@@ -7796,31 +7841,21 @@ function buildNonAlbumTrackSectionsMarkup(items) {
           : item.reason_label || '',
       ).trim() === section.exceptionType
     ));
-    if (!sectionItems.length) return '';
-    const rows = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    if (!sectionItems.length) return null;
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return `
-      <section class="non-album-track-section" data-non-album-section="${escapeHtml(section.key)}">
-        <h4 class="non-album-track-section-title">${escapeHtml(section.title)}</h4>
-        ${buildCompactDataTable({
-          id: `non-album-${section.key}-table`,
-          ariaLabel: `${section.title} tracks`,
-          columns: '64px minmax(220px, 1fr) minmax(240px, 0.9fr)',
-          columnsConfig: [
-            { key: 'control', label: 'Play and number', header: 'absent' },
-            { key: 'track', label: 'Track' },
-            { key: 'path', label: 'File path' },
-          ],
-          headers: 'visible',
-          density: 'compact',
-          overflow: 'local',
-          mobile: 'preserve',
-          frame: 'outline',
-          rows,
-        })}
-      </section>
-    `;
-  }).join('');
+    return { discLabel: section.title, sectionKey: section.key, tracks };
+  }).filter(Boolean);
+  const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  return buildAlbumTrackTableHtml({
+    groups,
+    showPath: true,
+    forceGroupLabels: true,
+    ariaLabel: 'Loose tracks',
+    idPrefix: 'loose-track-table',
+    totalLength: formatAlbumDuration(totalSeconds),
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
@@ -7982,10 +8017,18 @@ function openNonAlbumModal() {
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
   const looseTracks = getVisibleNonAlbumTracks();
-  if (els.subtitle) {
-    els.subtitle.textContent = state.view.selected_artist
-      ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-      : 'Non-album tracks found in the artist folders currently displayed.';
+  const subtitle = state.view.selected_artist
+    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
+    : 'Non-album tracks found in the artist folders currently displayed.';
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      variant: 'copy',
+      title: 'Loose Tracks',
+      subtitle,
+      titleId: 'non-album-modal-title',
+      subtitleId: 'non-album-modal-subtitle',
+      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+    });
   }
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
@@ -8827,7 +8870,7 @@ function getTagEditorElements() {
 function getNonAlbumModalElements() {
   return {
     overlay: document.getElementById('non-album-modal'),
-    subtitle: document.getElementById('non-album-modal-subtitle'),
+    header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
     close: document.getElementById('non-album-modal-close'),
   };
@@ -13172,6 +13215,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
+  const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
     key: trackPath || `${index + 1}`,
     className: classes.join(' '),
@@ -13184,6 +13228,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
       number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
       title: { content: titleHtml },
+      path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
       duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
     },
@@ -13192,24 +13237,35 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
 
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
+  const showPath = Boolean(config.showPath);
+  const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
+  const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
-    const showLabel = multiDisc && Boolean(label) && (Boolean(group?.isBonus) || mainDiscCount > 1);
+    const showLabel = Boolean(label) && (
+      forceGroupLabels
+      || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
+    );
+    const columnsConfig = [
+      { key: 'play', label: 'Play', header: 'absent' },
+      { key: 'number', label: '#' },
+      { key: 'title', label: 'Track' },
+      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+      { key: 'problem', label: 'Problem', header: 'absent', action: true },
+      { key: 'duration', label: 'Length', action: true },
+    ];
     const table = buildCompactDataTable({
-      id: `album-track-table-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `Album tracks — ${label}` : 'Album tracks',
+      id: `${idPrefix}-tracks-${groupIndex + 1}`,
+      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
-      columnsConfig: [
-        { key: 'play', label: 'Play', header: 'absent' },
-        { key: 'number', label: '#' },
-        { key: 'title', label: 'Track' },
-        { key: 'problem', label: 'Problem', header: 'absent', action: true },
-        { key: 'duration', label: 'Length', action: true },
-      ],
+      columns: showPath
+        ? '34px 36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+        : '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
       frame: 'outline',
@@ -13805,7 +13861,7 @@ function buildDetectedProblemsHtml(album) {
       <div class="utility-album-problem-list">
         <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
         <div class="utility-album-problem-content">
-          <span class="utility-track-problem-chip">Album not found</span>
+          ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
       <div class="utility-detected-actions utility-missing-album-actions">
@@ -13843,7 +13899,19 @@ function buildDetectedProblemsHtml(album) {
   const albumProblemMarkup = albumRows.map((item) => {
     const rowKey = String(item?.row_key || '');
     const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-    return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="album" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(item?.reason || '')}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(item?.display_reason || item?.reason || '')}</button>`;
+    return buildAlertLabelHtml({
+      severity: 'error',
+      message: item?.display_reason || item?.reason || '',
+      interactive: true,
+      pressed: selected,
+      disabled: !rowKey,
+      className: 'utility-problem-exclusion-pill',
+      attributes: {
+        'data-problem-exclusion-scope': 'album',
+        'data-problem-exclusion-row-key': rowKey,
+        'data-problem-exclusion-reason': item?.reason || '',
+      },
+    });
   }).join('');
   const trackTable = buildUtilityCompactTable({
     id: 'problematic-track-problems',
@@ -13867,7 +13935,20 @@ function buildDetectedProblemsHtml(album) {
           const match = (Array.isArray(row.ignorable_reasons) ? row.ignorable_reasons : []).find((item) => item.reason === reason);
           const rowKey = String(match?.row_key || '');
           const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-          return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="file" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(reason)}" data-problem-exclusion-row-index="${rowIndex}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(reason)}</button>`;
+          return buildAlertLabelHtml({
+            severity: 'error',
+            message: reason,
+            interactive: true,
+            pressed: selected,
+            disabled: !rowKey,
+            className: 'utility-problem-exclusion-pill',
+            attributes: {
+              'data-problem-exclusion-scope': 'file',
+              'data-problem-exclusion-row-key': rowKey,
+              'data-problem-exclusion-reason': reason,
+              'data-problem-exclusion-row-index': rowIndex,
+            },
+          });
         }).join('')}</span>`,
       },
     })),
@@ -25520,6 +25601,13 @@ function refreshNonAlbumModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
@@ -25531,9 +25619,7 @@ function refreshNonAlbumModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }

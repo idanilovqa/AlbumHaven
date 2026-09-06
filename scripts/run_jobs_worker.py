@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 import signal
 import sys
@@ -88,6 +89,10 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
 
     from config import Config
     from music_app.jobs.dispatch import JobHandlerRegistry
+    from music_app.jobs.cover_handlers import (
+        build_cover_lookup_handler,
+        build_cover_lookup_resource_validator,
+    )
     from music_app.jobs.scan_handlers import (
         build_full_scan_handler,
         build_full_scan_resource_validator,
@@ -106,6 +111,8 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         PostgresJobAuthorizationContextRepository,
     )
     from music_app.services.jobs.repository_postgres import PostgresJobRepository
+    from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
+    from music_app.services.cover_lookup_runtime import run_claimed_cover_lookup
     from music_app.services.policy_evaluator import PolicyEvaluator
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
@@ -126,6 +133,11 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         connect_to_database=connect_to_database,
     )
     scan_repository = PostgresScanJobRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
+        job_repository=repository,
+    )
+    cover_repository = PostgresCoverJobRepository(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
         job_repository=repository,
@@ -154,6 +166,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     post_scan_cover_validator = build_post_scan_cover_refresh_resource_validator(
         scan_repository=scan_repository
     )
+    cover_lookup_validator = build_cover_lookup_resource_validator(
+        cover_repository=cover_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -161,6 +176,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         ),
         policy_evaluator=PolicyEvaluator(),
         resource_validators={
+            JobKind.COVER_LOOKUP.value: cover_lookup_validator,
             JobKind.FULL_SCAN.value: full_scan_validator,
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
@@ -171,6 +187,15 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         connect_to_database=connect_to_database,
     )
     handlers = JobHandlerRegistry()
+    handlers.register(
+        JobKind.COVER_LOOKUP,
+        build_cover_lookup_handler(
+            cover_repository=cover_repository,
+            config=scan_config,
+            logger=logging.getLogger("album_haven.jobs.cover"),
+            run_lookup=run_claimed_cover_lookup,
+        ),
+    )
     handlers.register(
         JobKind.FULL_SCAN,
         build_full_scan_handler(

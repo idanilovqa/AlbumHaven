@@ -152,6 +152,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0072_create_durable_cover_job_state.sql` adds stable album, root, actor, origin, candidate-generation, revision, cancellation, and linked-job identities to cover lookup tasks; adds the bounded bulk-refresh progress projection; and registers retry-safe `cover_bulk_refresh` work without weakening existing job kinds. Historical notification metadata is scrubbed of album payloads and track paths while the private selected-cover column remains in the cover domain.
 
+`0073_grant_worker_cover_lookup.sql` adds claim-scoped cover-task validation, current album/root/path reconstruction, bounded cancellation observation, and row-revision-plus-lease-fenced task publication. The worker receives only execute access to these narrow functions; private paths and provider results remain confined to the cover domain.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

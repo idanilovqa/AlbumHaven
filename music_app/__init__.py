@@ -193,6 +193,7 @@ def create_asgi_app():
     from music_app.services.library_roots import get_library_roots
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
@@ -245,6 +246,9 @@ def create_asgi_app():
             database_url=targeted_database_url
         )
         _app.state.scan_job_repository = scan_jobs
+        _app.state.cover_job_repository = PostgresCoverJobRepository(
+            database_url=targeted_database_url
+        )
         watcher_library_id = (
             scan_jobs.resolve_local_library_id() if targeted_database_url else None
         )

@@ -84,13 +84,6 @@ def _accept(repository):
 def test_accept_candidate_lookup_resolves_scope_and_enqueues_atomically():
     connection = _Connection(
         [
-            {
-                "local_album_id": 31,
-                "library_root_id": 44,
-                "candidate_generation": GENERATION,
-                "candidate_revision": 5,
-            },
-            {"task_id": 73, "row_revision": 0},
             {"task_id": 73, "row_revision": 1, "job_id": 88},
         ]
     )
@@ -104,42 +97,22 @@ def test_accept_candidate_lookup_resolves_scope_and_enqueues_atomically():
     assert accepted.row_revision == 1
     assert connection.commits == 1
     assert connection.rollbacks == 0
-    assert len(jobs.calls) == 1
-    command = jobs.calls[0][1]
-    assert command.kind == "cover_lookup"
-    assert command.subject_kind == "cover_lookup_task"
-    assert command.subject_ref == "lookup-opaque-42"
-    assert command.parameters == {"task_id": 73}
-    assert command.account_id == 7
-    assert command.library_id == 19
-    assert command.capability_key == "library.covers.lookup"
-    assert command.request_origin_ref == "origin:accepted-42"
-    assert command.resource_revision == 5
-    assert "path" not in repr(command).casefold()
+    assert jobs.calls == []
     sql = " ".join(statement for statement, _ in connection.executed)
-    assert "library.local_albums" in sql
-    assert "library.local_track_files" in sql
-    assert "library.library_roots" in sql
-    assert "is_active is true" in sql
-    assert "insert into ops.cover_lookup_tasks" in sql
-    assert "update ops.cover_lookup_tasks" in sql
+    assert "ops.accept_cover_lookup" in sql
+    assert "insert into ops.jobs" not in sql
 
 
 def test_accept_candidate_lookup_rolls_back_domain_row_when_enqueue_fails():
-    connection = _Connection(
-        [
-            {
-                "local_album_id": 31,
-                "library_root_id": 44,
-                "candidate_generation": GENERATION,
-                "candidate_revision": 5,
-            },
-            {"task_id": 73, "row_revision": 0},
-        ]
-    )
-    jobs = _Jobs(failure=RuntimeError("enqueue unavailable"))
+    class FailingConnection(_Connection):
+        def execute(self, sql, parameters=None):
+            self.executed.append((" ".join(str(sql).casefold().split()), parameters))
+            raise RuntimeError("acceptance unavailable")
 
-    with pytest.raises(RuntimeError, match="enqueue unavailable"):
+    connection = FailingConnection([])
+    jobs = _Jobs()
+
+    with pytest.raises(RuntimeError, match="acceptance unavailable"):
         _accept(_repository(connection, jobs))
 
     assert connection.commits == 0

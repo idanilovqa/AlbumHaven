@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -198,4 +198,101 @@ def test_live_cover_acceptance_is_atomic_path_free_restartable_and_revision_fenc
         completed_at=datetime.now(timezone.utc),
     )
     assert updated is not None
+    assert stale is None
+
+
+def test_live_claimed_cover_lookup_is_worker_scoped_cancelable_and_fenced(
+    live_cover_database,
+):
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    app_jobs = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    app_covers = PostgresCoverJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=app_jobs,
+    )
+    task_key = f"lookup-{uuid4().hex}"
+    accepted = app_covers.accept_candidate_lookup(
+        task_key=task_key,
+        library_id=library_id,
+        album_key=album_key,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=uuid4(),
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+        task_payload={
+            "id": task_key,
+            "status": "pending",
+            "progress": 0,
+            "manual_urls": ["https://covers.example/manual.jpg"],
+        },
+    )
+    worker_jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claimed_at = datetime.now(timezone.utc)
+    claim = None
+    for claim_index in range(3):
+        candidate = worker_jobs.claim(
+            worker_id=f"cover-worker-live-{claim_index}",
+            now=claimed_at,
+            lease_seconds=60,
+            kinds=("cover_lookup",),
+        )
+        if candidate is None or candidate.job_id == accepted.job_id:
+            claim = candidate
+            break
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_covers = PostgresCoverJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=worker_jobs,
+    )
+    claim_values = {
+        "task_key": task_key,
+        "task_id": accepted.task_id,
+        "library_id": library_id,
+        "job_id": claim.job_id,
+        "attempt": claim.attempt,
+        "worker_id": claim.worker_id,
+        "lease_token": claim.lease_token,
+        "now": claimed_at + timedelta(seconds=1),
+    }
+    assert worker_covers.validate_claimed_candidate_lookup(**claim_values) is True
+    scope = worker_covers.load_claimed_candidate_lookup(**claim_values)
+    assert scope is not None
+    assert scope.album["name"] == "Cover Album"
+    assert len(scope.track_paths) == 1 and scope.track_paths[0].endswith("01.flac")
+    assert scope.manual_urls == ("https://covers.example/manual.jpg",)
+    running = worker_covers.publish_claimed_candidate_lookup(
+        **claim_values,
+        expected_row_revision=scope.row_revision,
+        task_payload={**scope.task_payload, "status": "running", "progress": 12},
+    )
+    assert running is not None and running.status == "running"
+
+    canceled = app_covers.request_candidate_lookup_cancellation(
+        task_key=task_key,
+        library_id=library_id,
+        actor_account_id=account_id,
+        now=claimed_at + timedelta(seconds=2),
+    )
+    assert canceled is not None and canceled["cancel_requested"] is True
+    assert worker_covers.candidate_lookup_cancel_requested(
+        **{**claim_values, "now": claimed_at + timedelta(seconds=3)}
+    ) is True
+    stale = worker_covers.publish_claimed_candidate_lookup(
+        **{**claim_values, "now": claimed_at + timedelta(seconds=3)},
+        expected_row_revision=running.row_revision,
+        task_payload={**running.task_payload, "status": "completed"},
+    )
     assert stale is None

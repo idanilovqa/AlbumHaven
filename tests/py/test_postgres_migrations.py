@@ -57,6 +57,9 @@ FULL_SCAN_WORKER_MIGRATION = (
 DURABLE_COVER_STATE_MIGRATION = (
     MIGRATIONS_DIR / "0072_create_durable_cover_job_state.sql"
 )
+COVER_LOOKUP_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0073_grant_worker_cover_lookup.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -456,7 +459,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-34:] == [
+    assert migration_names[-35:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -491,7 +494,30 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0070_authorize_full_scan_lifecycle.sql",
         "0071_grant_worker_full_scan_execution.sql",
         "0072_create_durable_cover_job_state.sql",
+        "0073_grant_worker_cover_lookup.sql",
     ]
+
+
+def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences():
+    sql = _normalized_sql(COVER_LOOKUP_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_lookup",
+        "validate_claimed_cover_lookup",
+        "load_claimed_cover_lookup",
+        "claimed_cover_lookup_cancel_requested",
+        "load_claimed_cover_lookup_cancellation",
+        "publish_claimed_cover_lookup",
+        "finalize_claimed_cover_lookup_canceled",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_expires_at > observed_at" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "task.row_revision = expected_row_revision" in sql
+    assert "array_agg(file.private_path" in sql
+    assert "grant execute on function ops.load_claimed_cover_lookup" in sql
+    assert "grant select on library.local_track_files" not in sql
+    assert "grant select on ops.cover_lookup_tasks" not in sql
 
 
 def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():

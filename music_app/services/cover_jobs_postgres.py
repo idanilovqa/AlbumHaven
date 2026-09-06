@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from typing import Any
 from uuid import UUID
 
@@ -15,7 +16,6 @@ except ImportError:  # pragma: no cover
     psycopg = None
     dict_row = None
 
-from music_app.services.jobs.models import EnqueueJob
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
 
 
@@ -25,6 +25,19 @@ class AcceptedCoverLookup:
     task_id: int
     job_id: int
     row_revision: int
+
+
+@dataclass(frozen=True)
+class ClaimedCoverLookupScope:
+    task_key: str
+    task_id: int
+    row_revision: int
+    status: str
+    cancel_requested: bool
+    album: Mapping[str, object]
+    track_paths: tuple[str, ...]
+    manual_urls: tuple[str, ...]
+    task_payload: Mapping[str, object]
 
 
 def _default_connect(database_url: str) -> Any:
@@ -87,6 +100,7 @@ class PostgresCoverJobRepository:
         candidate_generation: UUID,
         resource_revision: int,
         scheduled_at: datetime,
+        task_payload: Mapping[str, object] | None = None,
     ) -> AcceptedCoverLookup:
         task_key = _bounded("task_key", task_key, maximum=128)
         album_key = _bounded("album_key", album_key, maximum=1024)
@@ -104,72 +118,6 @@ class PostgresCoverJobRepository:
         deployment_mode = _bounded("deployment_mode", deployment_mode, maximum=128)
         client_surface = _bounded("client_surface", client_surface, maximum=128)
 
-        scope_sql = """
-            select
-              album.id as local_album_id,
-              min(root.id) as library_root_id
-            from library.local_albums as album
-            join library.local_tracks as track
-              on track.album_id = album.id
-             and track.library_id = album.library_id
-            join library.local_track_files as file
-              on file.track_id = track.id
-            join library.library_roots as root
-              on root.id = file.library_root_id
-             and root.library_id = album.library_id
-             and root.is_active is true
-            where album.library_id = %(library_id)s
-              and album.album_key = %(album_key)s
-            group by album.id
-            having count(distinct root.id) = 1
-        """
-        insert_sql = """
-            insert into ops.cover_lookup_tasks (
-              library_id, task_key, status, requested_at, album_key,
-              provider_payload, metadata, local_album_id, library_root_id,
-              initiating_account_id, request_origin_id, capability_key,
-              deployment_mode, client_surface, candidate_generation,
-              resource_revision, row_revision
-            ) values (
-              %(library_id)s, %(task_key)s, 'pending', %(scheduled_at)s,
-              %(album_key)s, '{}'::jsonb,
-              jsonb_build_object(
-                'source_family', 'durable_cover_lookup',
-                'source', 'durable_cover_lookup',
-                'source_key', %(task_key)s::text,
-                'source_payload', jsonb_build_object('id', %(task_key)s::text)
-              ),
-              %(local_album_id)s, %(library_root_id)s, %(account_id)s,
-              (
-                select origin.id from app.request_origins as origin
-                 where origin.origin_type = %(origin_type)s
-                   and origin.origin_key = %(origin_key)s
-                   and origin.client_surface_class = %(client_surface)s
-                   and origin.account_id = %(account_id)s
-                 order by origin.id desc limit 1
-              ),
-              'library.covers.lookup', %(deployment_mode)s, %(client_surface)s,
-              %(candidate_generation)s, %(resource_revision)s, 0
-            )
-            on conflict (library_id, (metadata->>'source_family'), task_key)
-              where library_id is not null and metadata ? 'source_family'
-            do update set task_key = ops.cover_lookup_tasks.task_key
-              where ops.cover_lookup_tasks.local_album_id = excluded.local_album_id
-                and ops.cover_lookup_tasks.library_root_id = excluded.library_root_id
-                and ops.cover_lookup_tasks.initiating_account_id = excluded.initiating_account_id
-                and ops.cover_lookup_tasks.candidate_generation = excluded.candidate_generation
-                and ops.cover_lookup_tasks.resource_revision = excluded.resource_revision
-            returning id as task_id, row_revision
-        """
-        link_sql = """
-            update ops.cover_lookup_tasks
-               set job_id = coalesce(job_id, %(job_id)s),
-                   row_revision = row_revision + case when job_id is null then 1 else 0 end
-             where id = %(task_id)s
-               and library_id = %(library_id)s
-               and (job_id is null or job_id = %(job_id)s)
-            returning id as task_id, row_revision, job_id
-        """
         values = {
             "task_key": task_key,
             "library_id": library_id,
@@ -182,48 +130,217 @@ class PostgresCoverJobRepository:
             "candidate_generation": candidate_generation,
             "resource_revision": resource_revision,
             "scheduled_at": scheduled_at,
+            "task_payload": json.dumps(dict(task_payload or {}), ensure_ascii=True),
         }
         with self._connect() as connection:
-            scope = _mapping(connection.execute(scope_sql, values).fetchone())
-            if not scope:
-                raise ValueError("cover lookup album/root scope is missing or ambiguous")
-            values["local_album_id"] = _positive("local_album_id", scope.get("local_album_id"))
-            values["library_root_id"] = _positive("library_root_id", scope.get("library_root_id"))
-            task = _mapping(connection.execute(insert_sql, values).fetchone())
-            if not task:
-                raise ValueError("cover lookup identity conflicts with current resource scope")
-            task_id = _positive("task_id", task.get("task_id"))
-            command = EnqueueJob(
-                kind="cover_lookup",
-                subject_kind="cover_lookup_task",
-                subject_ref=task_key,
-                parameters={"task_id": task_id},
-                account_id=account_id,
-                library_id=library_id,
-                capability_key="library.covers.lookup",
-                request_origin_ref=request_origin_ref,
-                deployment_mode=deployment_mode,
-                client_surface=client_surface,
-                idempotency_key=f"cover-lookup:{library_id}:{task_key}",
-                scheduled_at=scheduled_at,
-                max_attempts=2,
-                resource_revision=resource_revision,
-            )
-            job_id = self._job_repository.enqueue_in_transaction(connection, command)
-            linked = _mapping(
+            accepted = _mapping(
                 connection.execute(
-                    link_sql,
-                    {"job_id": job_id, "task_id": task_id, "library_id": library_id},
+                    """
+                    select * from ops.accept_cover_lookup(
+                      %(task_key)s, %(library_id)s, %(album_key)s,
+                      %(account_id)s, %(origin_type)s, %(origin_key)s,
+                      %(deployment_mode)s, %(client_surface)s,
+                      %(candidate_generation)s, %(resource_revision)s,
+                      %(scheduled_at)s, %(task_payload)s::jsonb
+                    )
+                    """,
+                    values,
                 ).fetchone()
             )
-            if not linked:
-                raise RuntimeError("cover lookup job link lost its accepted task")
-            return AcceptedCoverLookup(
-                task_key=task_key,
-                task_id=task_id,
-                job_id=_positive("job_id", linked.get("job_id")),
-                row_revision=int(linked.get("row_revision") or 0),
+        if not accepted:
+            raise RuntimeError("cover lookup acceptance returned no identity")
+        return AcceptedCoverLookup(
+            task_key=task_key,
+            task_id=_positive("task_id", accepted.get("task_id")),
+            job_id=_positive("job_id", accepted.get("job_id")),
+            row_revision=max(0, int(accepted.get("row_revision") or 0)),
+        )
+
+    def current_inventory_revision(self, *, library_id: int) -> int:
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select coalesce(
+                             nullif(metadata ->> 'inventory_mutation_revision', '')::bigint,
+                             0
+                           ) as resource_revision
+                      from library.libraries
+                     where id = %(library_id)s
+                    """,
+                    {"library_id": _positive("library_id", library_id)},
+                ).fetchone()
             )
+        if not row:
+            raise ValueError("library is unavailable")
+        return max(0, int(row.get("resource_revision") or 0))
+
+    @staticmethod
+    def _claim_values(**values: object) -> dict[str, object]:
+        return {
+            "task_key": _bounded("task_key", values["task_key"], maximum=128),
+            "task_id": _positive("task_id", values["task_id"]),
+            "library_id": _positive("library_id", values["library_id"]),
+            "job_id": _positive("job_id", values["job_id"]),
+            "attempt": _positive("attempt", values["attempt"]),
+            "worker_id": _bounded("worker_id", values["worker_id"], maximum=128),
+            "lease_token": _bounded("lease_token", values["lease_token"], maximum=256),
+            "now": values["now"],
+        }
+
+    def validate_claimed_candidate_lookup(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.validate_claimed_cover_lookup(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s) as valid",
+                parameters,
+            ).fetchone()
+        return bool(_mapping(row).get("valid"))
+
+    def load_claimed_candidate_lookup(
+        self, **values: object
+    ) -> ClaimedCoverLookupScope | None:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.load_claimed_cover_lookup(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        album = row.get("album_payload") or {}
+        task_payload = row.get("task_payload") or {}
+        if not isinstance(album, Mapping) or not isinstance(task_payload, Mapping):
+            raise RuntimeError("claimed cover lookup payload is invalid")
+        return ClaimedCoverLookupScope(
+            task_key=_bounded("task_key", row.get("task_key"), maximum=128),
+            task_id=_positive("task_id", row.get("task_id")),
+            row_revision=max(0, int(row.get("row_revision") or 0)),
+            status=_bounded("status", row.get("status"), maximum=32),
+            cancel_requested=bool(row.get("cancel_requested")),
+            album=dict(album),
+            track_paths=tuple(str(path) for path in (row.get("track_paths") or ())),
+            manual_urls=tuple(str(url) for url in (row.get("manual_urls") or ())),
+            task_payload=dict(task_payload),
+        )
+
+    def candidate_lookup_cancel_requested(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.claimed_cover_lookup_cancel_requested(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s) as cancel_requested",
+                parameters,
+            ).fetchone()
+        mapped = _mapping(row)
+        return not mapped or bool(mapped.get("cancel_requested"))
+
+    def candidate_lookup_cancellation_state(
+        self, **values: object
+    ) -> tuple[bool, int] | None:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.load_claimed_cover_lookup_cancellation(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        return bool(row.get("cancel_requested")), max(
+            0, int(row.get("row_revision") or 0)
+        )
+
+    def request_candidate_lookup_cancellation(
+        self,
+        *,
+        task_key: str,
+        library_id: int,
+        actor_account_id: int,
+        now: datetime,
+    ) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.request_cover_lookup_cancellation(%(task_key)s, %(library_id)s, %(actor_account_id)s, %(now)s)",
+                    {
+                        "task_key": _bounded("task_key", task_key, maximum=128),
+                        "library_id": _positive("library_id", library_id),
+                        "actor_account_id": _positive(
+                            "actor_account_id", actor_account_id
+                        ),
+                        "now": now,
+                    },
+                ).fetchone()
+            )
+        payload = row.get("task_payload") if row else None
+        return dict(payload) if isinstance(payload, Mapping) else None
+
+    def publish_claimed_candidate_lookup(
+        self,
+        *,
+        expected_row_revision: int,
+        task_payload: Mapping[str, object],
+        **values: object,
+    ) -> ClaimedCoverLookupScope | None:
+        parameters = self._claim_values(**values)
+        parameters.update(
+            {
+                "expected_row_revision": max(0, int(expected_row_revision)),
+                "task_payload": json.dumps(dict(task_payload), ensure_ascii=True),
+            }
+        )
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.publish_claimed_cover_lookup(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_row_revision)s, %(task_payload)s::jsonb)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        return ClaimedCoverLookupScope(
+            task_key=str(parameters["task_key"]),
+            task_id=int(parameters["task_id"]),
+            row_revision=max(0, int(row.get("row_revision") or 0)),
+            status=str(row.get("status") or ""),
+            cancel_requested=bool(row.get("cancel_requested")),
+            album={},
+            track_paths=(),
+            manual_urls=(),
+            task_payload=dict(row.get("task_payload") or task_payload),
+        )
+
+    def finalize_claimed_candidate_lookup_canceled(
+        self,
+        *,
+        expected_row_revision: int,
+        **values: object,
+    ) -> ClaimedCoverLookupScope | None:
+        parameters = self._claim_values(**values)
+        parameters["expected_row_revision"] = max(0, int(expected_row_revision))
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.finalize_claimed_cover_lookup_canceled(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_row_revision)s)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        return ClaimedCoverLookupScope(
+            task_key=str(parameters["task_key"]),
+            task_id=int(parameters["task_id"]),
+            row_revision=max(0, int(row.get("row_revision") or 0)),
+            status=str(row.get("status") or "canceled"),
+            cancel_requested=True,
+            album={},
+            track_paths=(),
+            manual_urls=(),
+            task_payload=dict(row.get("task_payload") or {}),
+        )
 
     def get_task(self, *, task_key: str, library_id: int) -> dict[str, object] | None:
         values = {
@@ -279,4 +396,8 @@ class PostgresCoverJobRepository:
         return row or None
 
 
-__all__ = ["AcceptedCoverLookup", "PostgresCoverJobRepository"]
+__all__ = [
+    "AcceptedCoverLookup",
+    "ClaimedCoverLookupScope",
+    "PostgresCoverJobRepository",
+]

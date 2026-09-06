@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import logging
+import uuid
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -29,6 +30,7 @@ from music_app.services.cover_state import (
     serialize_cover_gallery_payload,
 )
 from music_app.services.cover_lookup_jobs import build_cover_lookup_job_contract
+from music_app.services.policy_asgi import request_origin_ref_for_request
 from music_app.services.cover_lookup_runtime import (
     fetch_remote_cover_bytes,
     merge_lookup_matches,
@@ -76,6 +78,43 @@ def _app_config(request: Request):
 
 def _app_logger(request: Request):
     return getattr(request.app.state, "logger", None) or LOGGER
+
+
+def _durable_cover_request_context(request: Request):
+    repository = getattr(request.app.state, "cover_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    if (
+        repository is None
+        or getattr(audit, "action", None)
+        not in {
+            "library.covers.lookup",
+            "library.covers.lookup.cancel",
+            "library.covers.tasks.read",
+            "library.covers.tasks.manage",
+            "library.covers.write",
+        }
+        or not isinstance(getattr(audit, "account_id", None), int)
+        or not isinstance(getattr(audit, "library_id", None), int)
+    ):
+        return None
+    return repository, audit
+
+
+def _lookup_task_payload_for_request(
+    request: Request, task_id: str
+) -> dict[str, object]:
+    durable = _durable_cover_request_context(request)
+    if durable is not None and task_id:
+        repository, audit = durable
+        try:
+            row = repository.get_task(task_key=task_id, library_id=audit.library_id)
+        except Exception:
+            row = None
+        payload = row.get("provider_payload") if isinstance(row, Mapping) else None
+        if isinstance(payload, Mapping):
+            return dict(payload)
+    return cover_lookup_result(task_id) if task_id else {}
 
 
 def _log_local_cover_persistence_event(config, logger, message: str, **fields) -> None:
@@ -199,7 +238,9 @@ def _serialize_cover_gallery_from_asgi(
     candidate_snapshot: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     config = _app_config(request)
-    task_payload = serialize_cover_lookup_task_payload(cover_lookup_result(task_id) if task_id else {})
+    task_payload = serialize_cover_lookup_task_payload(
+        _lookup_task_payload_for_request(request, task_id)
+    )
     return serialize_cover_gallery_payload(
         album_root=album_root,
         track_paths=track_paths,
@@ -279,6 +320,9 @@ def _task_matches_album_context(
         for path in list(task_payload.get("track_paths") or [])
         if str(path or "").strip()
     }
+    task_album_id = _album_id(task_payload)
+    if not task_track_paths:
+        return task_album_id == album_id
     if task_track_paths != track_paths:
         return False
     try:
@@ -363,7 +407,7 @@ async def utilities_cover_lookup_gallery(request: Request) -> JSONResponse:
     )
     if identity_error is not None:
         return _json_response(identity_error)
-    task_payload = cover_lookup_result(task_id) if task_id else {}
+    task_payload = _lookup_task_payload_for_request(request, task_id)
     if task_payload and not _task_matches_album_context(
         task_payload,
         repository=repository,
@@ -448,14 +492,72 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album does not contain any tracks"}, 400))
-    task_id = queue_cover_lookup_task(
-        album or {},
-        album_context.track_paths,
-        manual_urls,
-        config=config,
-        logger=logger,
-        user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
-    )
+    durable = _durable_cover_request_context(request)
+    task_payload: dict[str, object] | None = None
+    if durable is not None:
+        repository, audit = durable
+        album_key = str(
+            (album or {}).get("key") or (album or {}).get("album_key") or ""
+        ).strip()
+        if not album_key:
+            return _json_response(
+                ({"ok": False, "error": "Album identity could not be resolved"}, 409)
+            )
+        generation = uuid.uuid4()
+        task_id = generation.hex
+        task_payload = {
+            "id": task_id,
+            "status": "pending",
+            "type": "cover-art-lookup",
+            "internal": False,
+            "artist": str((album or {}).get("album_artist") or ""),
+            "album": str((album or {}).get("name") or (album or {}).get("album") or ""),
+            "year": (album or {}).get("year"),
+            "progress": 0,
+            "progress_label": "Queued",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": "",
+            "message": "",
+            "manual_urls": manual_urls,
+            "job_contract": build_cover_lookup_job_contract("candidate_lookup"),
+            "possible_matches": [],
+            "selected_candidate_id": "",
+            "caa_empty_notice": False,
+            "cancel_requested": False,
+            "album_id": _album_id(album or {}),
+        }
+        try:
+            repository.accept_candidate_lookup(
+                task_key=task_id,
+                library_id=audit.library_id,
+                album_key=album_key,
+                account_id=audit.account_id,
+                request_origin_ref=request_origin_ref_for_request(request),
+                deployment_mode=audit.deployment_mode,
+                client_surface=audit.client_surface_class,
+                candidate_generation=generation,
+                resource_revision=repository.current_inventory_revision(
+                    library_id=audit.library_id
+                ),
+                scheduled_at=datetime.now(timezone.utc),
+                task_payload=task_payload,
+            )
+        except ValueError as exc:
+            return _json_response(({"ok": False, "error": str(exc)}, 409))
+        except Exception:
+            return _json_response(
+                ({"ok": False, "error": "Cover lookup could not be queued"}, 503)
+            )
+    else:
+        task_id = queue_cover_lookup_task(
+            album or {},
+            album_context.track_paths,
+            manual_urls,
+            config=config,
+            logger=logger,
+            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+        )
+        task_payload = cover_lookup_result(task_id)
     log_app_event(
         config,
         logger,
@@ -470,7 +572,7 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ok": True,
-            "task": serialize_cover_lookup_task_payload(cover_lookup_result(task_id)),
+            "task": serialize_cover_lookup_task_payload(task_payload),
             "gallery": _serialize_cover_gallery_from_asgi(
                 request,
                 album_context.album_root,
@@ -483,10 +585,27 @@ async def utilities_cover_lookup_start(request: Request) -> JSONResponse:
 
 @router.post("/utilities/cover-lookup/task/{task_id}/cancel")
 async def utilities_cover_lookup_cancel(request: Request, task_id: str) -> JSONResponse:
-    task_payload = cancel_cover_lookup_task_payload(task_id, config=_app_config(request))
+    durable = _durable_cover_request_context(request)
+    if durable is not None:
+        repository, audit = durable
+        try:
+            task_payload = repository.request_candidate_lookup_cancellation(
+                task_key=str(task_id or "").strip(),
+                library_id=audit.library_id,
+                actor_account_id=audit.account_id,
+                now=datetime.now(timezone.utc),
+            )
+        except Exception:
+            task_payload = None
+    else:
+        task_payload = cancel_cover_lookup_task_payload(
+            task_id, config=_app_config(request)
+        )
     if task_payload is None:
         return _json_response(_task_not_found_response("Lookup task"))
-    return JSONResponse({"ok": True, "task": task_payload})
+    return JSONResponse(
+        {"ok": True, "task": serialize_cover_lookup_task_payload(task_payload)}
+    )
 
 
 @router.post("/utilities/cover-lookup/local-select")
@@ -883,7 +1002,7 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
     album_context = resolve_album_context(config, album or {})
     if album_context is None:
         return _json_response(({"ok": False, "error": "Album root could not be resolved"}, 400))
-    task_payload = cover_lookup_result(task_id)
+    task_payload = _lookup_task_payload_for_request(request, task_id)
     selected_match = None
     if task_payload:
         repository, album_id, identity_error = _resolved_snapshot_album_context(

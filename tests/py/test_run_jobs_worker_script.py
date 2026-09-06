@@ -137,3 +137,14 @@ def test_worker_bootstrap_registers_post_scan_cover_bridge_and_validator():
     assert "run_post_scan_cover_refresh_for_state" in source
     assert "if callable(post_scan_cover_bridge)" in source
     assert "claim_kinds=handlers.registered_kinds" in source
+
+
+def test_worker_bootstrap_registers_durable_cover_lookup_handler_and_validator():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "build_cover_lookup_handler" in source
+    assert "build_cover_lookup_resource_validator" in source
+    assert "JobKind.COVER_LOOKUP" in source
+    assert "run_claimed_cover_lookup" in source

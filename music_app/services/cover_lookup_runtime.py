@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import inspect
 from types import MethodType
@@ -64,6 +65,9 @@ _COVER_LOOKUP_BANDCAMP_EXECUTOR = create_daemon_executor(
 )
 _CANDIDATE_LOOKUP_JOB_CONTRACT = build_cover_lookup_job_contract("candidate_lookup")
 _RUNTIME_PHASE_NAMES = ("discovery", "fetch", "scoring", "persistence")
+_CLAIMED_LOOKUP_PUBLISHER: ContextVar[Callable[..., bool] | None] = ContextVar(
+    "claimed_cover_lookup_publisher", default=None
+)
 
 
 def _new_runtime_phase_metrics() -> tuple[dict[str, float], dict[str, int]]:
@@ -134,7 +138,7 @@ def _publish_candidate_runtime_phase_metrics(
     timings: dict[str, float],
     counts: dict[str, int],
 ) -> None:
-    if not cover_lookup_result(task_id):
+    if _CLAIMED_LOOKUP_PUBLISHER.get() is None and not cover_lookup_result(task_id):
         return
     _update_candidate_lookup_task(
         task_id,
@@ -167,6 +171,13 @@ def _update_candidate_lookup_task(
 ) -> None:
     if "possible_matches" in changes:
         changes["candidate_updated_at"] = datetime.now(timezone.utc).isoformat()
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+            **changes,
+        )
+        return
     update_cover_lookup_task(
         task_id,
         config=config,
@@ -351,7 +362,59 @@ def _terminalize_canceled_cover_lookup_task(
             candidate_publisher.fail()
         except Exception:
             pass
-    finalize_cover_lookup_task_canceled(task_id, config=config)
+    claimed_publisher = _CLAIMED_LOOKUP_PUBLISHER.get()
+    if claimed_publisher is not None:
+        claimed_publisher(
+            cancel_requested=True,
+            status="canceled",
+            progress=100,
+            progress_label="Canceled",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            message="Cover art lookup canceled.",
+            job_contract=_CANDIDATE_LOOKUP_JOB_CONTRACT,
+        )
+    else:
+        finalize_cover_lookup_task_canceled(task_id, config=config)
+
+
+class _ClaimedLookupCancelSignal:
+    def __init__(self, should_cancel: Callable[[], bool]) -> None:
+        self._should_cancel = should_cancel
+
+    def is_set(self) -> bool:
+        return bool(self._should_cancel())
+
+
+def run_claimed_cover_lookup(
+    *,
+    task_id: str,
+    config: Mapping[str, object],
+    logger: object,
+    user_agent: str,
+    album: dict[str, object],
+    track_paths: set[str],
+    manual_urls: list[str],
+    provider_deadline_at: float,
+    should_cancel: Callable[[], bool],
+    publish: Callable[..., bool],
+) -> None:
+    """Run the existing provider pipeline inside one durable claim boundary."""
+
+    token = _CLAIMED_LOOKUP_PUBLISHER.set(publish)
+    try:
+        _run_cover_lookup_task(
+            task_id,
+            config,
+            logger,
+            user_agent,
+            album,
+            track_paths,
+            _ClaimedLookupCancelSignal(should_cancel),
+            manual_urls,
+            provider_deadline_at=provider_deadline_at,
+        )
+    finally:
+        _CLAIMED_LOOKUP_PUBLISHER.reset(token)
 
 
 def _run_provider_call_until_deadline(
@@ -945,7 +1008,11 @@ def _run_cover_lookup_task(
             task_id=task_id,
             artist=str(album.get("album_artist") or ""),
             album=str(album.get("name") or album.get("album") or ""),
-            error=str(exc),
+            error=(
+                type(exc).__name__
+                if _CLAIMED_LOOKUP_PUBLISHER.get() is not None
+                else str(exc)
+            ),
         )
         phase_started = time.perf_counter()
         _update_candidate_lookup_task(

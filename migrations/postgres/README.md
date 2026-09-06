@@ -158,6 +158,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0075_create_remote_cover_save_checkpoints.sql` adds atomic remote-selection acceptance and a private, revisioned checkpoint record for download, owned-artifact, selection, promotion, publication, rollback, and ambiguous recovery states. The worker can load private candidate/root/path scope and advance or publish only through an active lease-fenced job.
 
+`0076_complete_durable_scan_status_projection.sql` keeps authenticated scan status authoritative through publication. It projects the committed album count, exposes relation publication as active scan work, and bridges the atomically queued post-scan cover job into cover progress without exposing generic job identities or private paths.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

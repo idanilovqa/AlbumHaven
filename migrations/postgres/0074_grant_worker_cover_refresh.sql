@@ -180,6 +180,7 @@ language plpgsql
 security definer
 set search_path = pg_catalog, ops, library
 as $$
+#variable_conflict use_column
 declare
   selected_job ops.jobs%rowtype;
   selected_refresh ops.cover_bulk_refreshes%rowtype;
@@ -294,7 +295,7 @@ begin
       ) filter (where file.id is not null),
       '{}'::jsonb
     ),
-    count(distinct album.id)::integer,
+    count(distinct album.id) filter (where file.id is not null)::integer,
     selected_refresh.mode::text,
     selected_refresh.force_search
     from library.libraries as library_record

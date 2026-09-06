@@ -128,6 +128,45 @@ def test_authenticated_status_keeps_private_current_path_out_of_job_projection()
     assert "worker_status" not in payload
 
 
+def test_request_scan_browse_state_loads_private_durable_preview(monkeypatch):
+    from music_app.routes import api_read_asgi_routes
+
+    evaluation = SimpleNamespace(audit=SimpleNamespace(library_id=7))
+    preview = {
+        "file_cache": {"private-track": {"artist": "Artist"}},
+        "separate_release_keys": ("release-a",),
+    }
+    repository = SimpleNamespace(
+        load_authorized_full_scan_preview=lambda **kwargs: (
+            preview
+            if kwargs == {"policy_evaluation": evaluation, "library_id": 7}
+            else None
+        )
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                library_state={"albums": [], "file_cache": {}},
+                scan_job_repository=repository,
+            )
+        ),
+        state=SimpleNamespace(policy_evaluation=evaluation),
+    )
+    projected = {"scan_in_progress": True, "albums": ["partial"]}
+    monkeypatch.setattr(
+        api_read_asgi_routes,
+        "project_durable_full_scan_preview",
+        lambda library_state, loaded_preview: (
+            projected
+            if library_state == {"albums": [], "file_cache": {}}
+            and loaded_preview is preview
+            else {}
+        ),
+    )
+
+    assert api_read_asgi_routes._request_scan_browse_state(request) is projected
+
+
 class _ActorResolver:
     def __init__(self, actor):
         self.actor = actor

@@ -202,16 +202,79 @@ def project_durable_full_scan_status(
     state = str(source.get("state") or "idle")
     current = max(0, int(source.get("progress_current") or 0))
     total = max(0, int(source.get("progress_total") or 0))
+    phase = str(source.get("phase") or "idle")
     return {
         "scan_in_progress": state in {"accepted", "queued", "running", "retry_wait"},
         "scan_processed": current,
         "scan_total": total,
         "scan_percent": min(100, int(current * 100 / total)) if total else 0,
         "scan_current_path": str(source.get("current_path") or ""),
-        "scan_phase": str(source.get("phase") or "idle"),
+        "scan_phase": phase,
         "scan_mode": str(source.get("mode") or "idle"),
         "scan_outcome": str(source.get("outcome_code") or state),
+        "album_total": max(0, int(source.get("album_total") or 0)),
+        "relations_in_progress": (
+            state in {"accepted", "queued", "running", "retry_wait"}
+            and phase in {"finalizing", "publishing"}
+        ),
+        "relations_processed": max(
+            0, int(source.get("relations_processed") or 0)
+        ),
+        "relations_total": max(0, int(source.get("relations_total") or 0)),
+        "relations_percent": (
+            min(
+                100,
+                int(
+                    max(0, int(source.get("relations_processed") or 0))
+                    * 100
+                    / max(0, int(source.get("relations_total") or 0))
+                ),
+            )
+            if max(0, int(source.get("relations_total") or 0))
+            else 0
+        ),
+        "relations_phase": str(source.get("relations_phase") or "Idle"),
+        "relations_source": str(source.get("relations_source") or "local"),
+        "scan_elapsed_seconds": max(0.0, float(source.get("elapsed_seconds") or 0.0)),
+        "scan_estimated_remaining_seconds": max(
+            0.0, float(source.get("estimated_remaining_seconds") or 0.0)
+        ),
+        "scan_files_per_second": max(0.0, float(source.get("files_per_second") or 0.0)),
+        "scan_album_folders_processed": max(
+            0, int(source.get("album_folders_processed") or 0)
+        ),
+        "scan_album_folders_total": max(0, int(source.get("album_folders_total") or 0)),
     }
+
+
+def project_durable_full_scan_preview(
+    library_state: Mapping[str, object],
+    preview: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Build a request-local partial browse state from one private scan preview."""
+
+    projected = dict(library_state)
+    if not isinstance(preview, Mapping):
+        return projected
+    file_cache = preview.get("file_cache")
+    if not isinstance(file_cache, Mapping) or not file_cache:
+        return projected
+    separate_release_keys = {
+        str(value)
+        for value in (preview.get("separate_release_keys") or ())
+        if str(value)
+    }
+    projected.update(
+        {
+            "scan_in_progress": True,
+            "file_cache": dict(file_cache),
+            "separate_release_keys": separate_release_keys,
+            "albums": build_albums_from_file_cache(
+                dict(file_cache), separate_release_keys
+            ),
+        }
+    )
+    return projected
 
 
 def refresh_library_state(

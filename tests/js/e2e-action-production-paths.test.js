@@ -12,6 +12,22 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n?/gu, '\n');
 }
 
+test('runtime failure attachments redact private media and view query strings', async () => {
+  const moduleUrl = pathToFileURL(path.join(
+    repoRoot,
+    'tests/e2e/support/baseFixtures.js',
+  )).href;
+  const { sanitizeRuntimeArtifactText } = await import(moduleUrl);
+  const secret = 'C%3A%5CUsers%5CRendref%5CMusic%5CPrivate%5C01.flac';
+
+  const sanitized = sanitizeRuntimeArtifactText(
+    `GET http://127.0.0.1:4173/cover?path=${secret}&size=480`,
+  );
+
+  assert.equal(sanitized, 'GET http://127.0.0.1:4173/cover');
+  assert.doesNotMatch(sanitized, /Rendref|Private|path=/u);
+});
+
 test('FTC-COVERS-016 keeps the 7500px local cover active when matching remote art is not an improvement', () => {
   const spec = read('tests/e2e/specs/coverLookupMatching.spec.js');
   const allowedResolutionSet = spec.match(

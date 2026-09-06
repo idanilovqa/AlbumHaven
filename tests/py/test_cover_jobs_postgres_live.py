@@ -122,6 +122,70 @@ def _seed_cover_scope(setup_url: str) -> tuple[int, int, str, str]:
     return account_id, library_id, album_key, origin_key
 
 
+def test_live_post_scan_cover_refresh_creates_its_durable_scope(
+    live_cover_database,
+):
+    setup_url, _runtime_url = live_cover_database
+    _account_id, library_id, _album_key, _origin_key = _seed_cover_scope(setup_url)
+    inventory_revision = 7
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update library.libraries set metadata = jsonb_set(metadata, "
+            "'{inventory_mutation_revision}', to_jsonb(%s::bigint)) where id = %s",
+            (inventory_revision, library_id),
+        )
+        connection.execute(
+            "insert into ops.jobs (kind, subject_kind, subject_ref, parameters, "
+            "library_id, deployment_mode, client_surface, resource_revision, "
+            "idempotency_key, scheduled_at, max_attempts, recovery_policy) "
+            "values ('post_scan_cover_refresh', 'inventory_revision', %s, %s::jsonb, "
+            "%s, 'self_hosted_private_web', 'private_web', %s, %s, now(), 2, "
+            "'retry_safe')",
+            (
+                f"revision-{inventory_revision}",
+                json.dumps({"inventory_revision": inventory_revision}),
+                library_id,
+                inventory_revision,
+                f"post-scan-cover-refresh:{library_id}:{inventory_revision}",
+            ),
+        )
+
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    worker_jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claimed_at = datetime.now(timezone.utc)
+    claim = worker_jobs.claim(
+        worker_id="post-scan-cover-live",
+        now=claimed_at,
+        lease_seconds=60,
+        kinds=("post_scan_cover_refresh",),
+    )
+    assert claim is not None and claim.library_id == library_id
+    scope = PostgresCoverJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=worker_jobs,
+    ).begin_claimed_cover_refresh(
+        task_id=0,
+        library_id=library_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=claimed_at + timedelta(seconds=1),
+        task_key=f"revision-{inventory_revision}",
+        mode="post_scan",
+        inventory_revision=inventory_revision,
+    )
+    assert scope is not None
+    assert scope.task_key == f"post-scan-{inventory_revision}"
+    assert scope.mode == "post_scan"
+    assert scope.force_search is False
+    assert scope.progress_total == 1
+
+
 def test_live_cover_acceptance_is_atomic_path_free_restartable_and_revision_fenced(
     live_cover_database,
 ):

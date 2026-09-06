@@ -340,7 +340,13 @@ def build_full_scan_handler(
 
         checkpoint_failed = False
 
-        def checkpoint(*, current: int, total: int, current_path: str = "", phase: str = "indexing") -> None:
+        def checkpoint(
+            *, current: int, total: int, current_path: str = "",
+            phase: str = "indexing", elapsed_seconds: float = 0.0,
+            estimated_remaining_seconds: float = 0.0,
+            files_per_second: float = 0.0,
+            album_folders_processed: int = 0, album_folders_total: int = 0,
+        ) -> None:
             nonlocal checkpoint_failed
             reason = stop_reason()
             if reason is not None:
@@ -356,6 +362,11 @@ def build_full_scan_handler(
                 total=total,
                 current_path=current_path,
                 phase=phase,
+                elapsed_seconds=elapsed_seconds,
+                estimated_remaining_seconds=estimated_remaining_seconds,
+                files_per_second=files_per_second,
+                album_folders_processed=album_folders_processed,
+                album_folders_total=album_folders_total,
                 now=now(),
             )
             if accepted is not True:

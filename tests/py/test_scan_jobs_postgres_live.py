@@ -251,8 +251,19 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
         "library.load_claimed_full_scan_intent_v2(bigint,varchar,varchar)",
         "library.load_claimed_full_scan_scope(bigint,bigint,bigint,integer,varchar,varchar,timestamptz)",
         "library.checkpoint_claimed_full_scan(bigint,bigint,integer,varchar,varchar,varchar,bigint,bigint,text,timestamptz)",
+        "library.checkpoint_claimed_full_scan_v2(bigint,bigint,integer,varchar,varchar,varchar,bigint,bigint,text,timestamptz,double precision,double precision,double precision,bigint,bigint)",
+        "library.publish_claimed_full_scan_preview(bigint,bigint,integer,varchar,varchar,jsonb,text[],bigint,timestamptz)",
+        "library.load_claimed_full_scan_cache(bigint,bigint,integer,varchar,varchar,timestamptz)",
         "library.publish_claimed_full_scan(bigint,bigint,integer,varchar,varchar,bigint,jsonb,text[],timestamptz)",
+        "library.validate_claimed_post_scan_cover_refresh(bigint,bigint,bigint,integer,varchar,varchar,timestamptz)",
         "app.load_claimed_job_authorization_context(bigint,integer,varchar,varchar,timestamptz)",
+    )
+    app_read_procedures = (
+        "library.load_authorized_full_scan_status(bigint)",
+        "library.load_authorized_album_total(bigint)",
+        "library.load_authorized_full_scan_metrics(bigint)",
+        "library.load_authorized_full_scan_preview(bigint)",
+        "library.load_authorized_full_scan_relation_status(bigint)",
     )
     with isolatedPostgres._connect(setup_url) as connection:
         for procedure in procedures:
@@ -300,6 +311,19 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
                 "select has_function_privilege('album_haven_worker', %s, 'EXECUTE') as allowed",
                 (procedure,),
             ).fetchone()["allowed"] is False
+        for procedure in app_read_procedures:
+            assert connection.execute(
+                "select to_regprocedure(%s) is not null as present", (procedure,)
+            ).fetchone()["present"] is True
+            assert connection.execute(
+                "select has_function_privilege('album_haven_app', %s, 'EXECUTE') as allowed",
+                (procedure,),
+            ).fetchone()["allowed"] is True
+            for role in ("album_haven_worker", "album_haven_readonly"):
+                assert connection.execute(
+                    "select has_function_privilege(%s, %s, 'EXECUTE') as allowed",
+                    (role, procedure),
+                ).fetchone()["allowed"] is False
 
 
 def test_live_full_scan_rolls_back_domain_record_when_job_creation_fails(
@@ -1392,6 +1416,14 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
             "where kind = 'post_scan_cover_refresh' and library_id = %s",
             (library_id,),
         ).fetchall()
+        album_total = connection.execute(
+            "select library.load_authorized_album_total(%s) as album_total",
+            (library_id,),
+        ).fetchone()
+        cover_status = connection.execute(
+            "select * from ops.load_authorized_cover_refresh_status(%s)",
+            (library_id,),
+        ).fetchone()
     assert len(follow_ups) == 1
     assert dict(follow_ups[0]) == {
         "subject_kind": "inventory_revision",
@@ -1407,6 +1439,14 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
             f"post-scan-cover-refresh:{library_id}:"
             f"{intent.inventory_mutation_revision + 1}"
         ),
+    }
+    assert album_total["album_total"] == 0
+    assert cover_status == {
+        "covers_in_progress": True,
+        "covers_processed": 0,
+        "covers_total": 0,
+        "covers_downloaded": 0,
+        "covers_current_folder": "",
     }
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         with isolatedPostgres._connect(worker_url) as connection:

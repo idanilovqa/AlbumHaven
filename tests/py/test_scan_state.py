@@ -2305,6 +2305,16 @@ def test_durable_scan_projection_preserves_legacy_status_fields_without_public_j
             "phase": "indexing",
             "mode": "manual_full_rescan",
             "outcome_code": None,
+            "album_total": 11,
+            "elapsed_seconds": 2.5,
+            "estimated_remaining_seconds": 4.0,
+            "files_per_second": 1.2,
+            "album_folders_processed": 2,
+            "album_folders_total": 7,
+            "relations_processed": 5,
+            "relations_total": 5,
+            "relations_phase": "Artist Family ready",
+            "relations_source": "local",
         }
     )
 
@@ -2317,10 +2327,65 @@ def test_durable_scan_projection_preserves_legacy_status_fields_without_public_j
         "scan_phase": "indexing",
         "scan_mode": "manual_full_rescan",
         "scan_outcome": "running",
+        "album_total": 11,
+        "relations_in_progress": False,
+        "relations_processed": 5,
+        "relations_total": 5,
+        "relations_percent": 100,
+        "relations_phase": "Artist Family ready",
+        "relations_source": "local",
+        "scan_elapsed_seconds": 2.5,
+        "scan_estimated_remaining_seconds": 4.0,
+        "scan_files_per_second": 1.2,
+        "scan_album_folders_processed": 2,
+        "scan_album_folders_total": 7,
     }
     assert "job_id" not in projected
     assert "subject_ref" not in projected
     assert "parameters" not in projected
+
+
+def test_durable_scan_projection_marks_publication_as_relation_work():
+    projected = scan_state.project_durable_full_scan_status(
+        {
+            "state": "running",
+            "progress_current": 8,
+            "progress_total": 8,
+            "phase": "finalizing",
+            "mode": "manual_full_rescan",
+            "album_total": 11,
+        }
+    )
+
+    assert projected["relations_in_progress"] is True
+    assert projected["album_total"] == 11
+
+
+def test_durable_scan_preview_projects_private_file_cache_for_partial_browse(monkeypatch):
+    preview_albums = [SimpleNamespace(key="artist::album")]
+    monkeypatch.setattr(
+        scan_state,
+        "build_albums_from_file_cache",
+        lambda file_cache, separate_release_keys: (
+            preview_albums
+            if file_cache == {"private-track": {"artist": "Artist"}}
+            and separate_release_keys == {"release-a"}
+            else []
+        ),
+    )
+
+    projected = scan_state.project_durable_full_scan_preview(
+        {"albums": [], "file_cache": {}, "scan_in_progress": False},
+        {
+            "file_cache": {"private-track": {"artist": "Artist"}},
+            "separate_release_keys": ("release-a",),
+        },
+    )
+
+    assert projected["scan_in_progress"] is True
+    assert projected["file_cache"] == {"private-track": {"artist": "Artist"}}
+    assert projected["albums"] is preview_albums
+    assert projected["separate_release_keys"] == {"release-a"}
 
 
 def test_post_scan_cover_bridge_preserves_existing_domain_callback_and_revision():

@@ -659,6 +659,27 @@ test('renderLibraryLoader keeps Cancel Scan and Browse Library available while a
   assert.equal(browseButton.textContent, 'Browse Library');
 });
 
+test('renderLibraryLoader does not offer an empty durable finalizing snapshot', () => {
+  const { context, browseButton } = createLoaderRenderFixture();
+  vm.runInContext(`
+    state.view = {
+      album_count: 0, artists_sidebar: [], primary_artist_groups: [],
+      family_artist_groups: [], artist_groups: [], query: '', selected_artist: '',
+    };
+    state.status = {
+      scan_in_progress: true,
+      scan_phase: 'finalizing',
+      relations_in_progress: true,
+      album_total: 0,
+    };
+    state.awaitingInitialDataRefresh = false;
+    state.ui.scanPageReturnContext = { view: {} };
+    renderLibraryLoader(state.status, { scanPageVisible: true });
+  `, context);
+
+  assert.equal(browseButton.hidden, true);
+});
+
 test('renderLibraryLoader keeps the Browse Library label while a browse request is pending', () => {
   const {
     context,

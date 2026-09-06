@@ -684,6 +684,11 @@ class PostgresScanJobRepository:
         current_path: str,
         phase: str,
         now: datetime,
+        elapsed_seconds: float = 0.0,
+        estimated_remaining_seconds: float = 0.0,
+        files_per_second: float = 0.0,
+        album_folders_processed: int = 0,
+        album_folders_total: int = 0,
     ) -> bool:
         if isinstance(current, bool) or not isinstance(current, int) or current < 0:
             raise ValueError("current must be a nonnegative integer")
@@ -695,10 +700,13 @@ class PostgresScanJobRepository:
         with self._connect() as connection:
             row = connection.execute(
                 """
-                select library.checkpoint_claimed_full_scan(
+                select library.checkpoint_claimed_full_scan_v2(
                   %(intent_id)s, %(job_id)s, %(attempt)s,
                   %(worker_id)s, %(lease_token)s, %(phase)s,
-                  %(current)s, %(total)s, %(current_path)s, %(now)s
+                  %(current)s, %(total)s, %(current_path)s, %(now)s,
+                  %(elapsed_seconds)s, %(estimated_remaining_seconds)s,
+                  %(files_per_second)s, %(album_folders_processed)s,
+                  %(album_folders_total)s
                 ) as checkpoint_accepted
                 """,
                 {
@@ -712,6 +720,11 @@ class PostgresScanJobRepository:
                     "total": total,
                     "current_path": path or None,
                     "now": now,
+                    "elapsed_seconds": max(0.0, float(elapsed_seconds)),
+                    "estimated_remaining_seconds": max(0.0, float(estimated_remaining_seconds)),
+                    "files_per_second": max(0.0, float(files_per_second)),
+                    "album_folders_processed": max(0, int(album_folders_processed)),
+                    "album_folders_total": max(0, int(album_folders_total)),
                 },
             ).fetchone()
         return _row_mapping(row).get("checkpoint_accepted") is True
@@ -770,6 +783,122 @@ class PostgresScanJobRepository:
             ),
         }
 
+    def publish_claimed_full_scan_preview(
+        self,
+        *,
+        claim: Any,
+        intent_id: int,
+        file_cache: Mapping[str, object],
+        separate_release_keys: Iterable[str],
+        album_total: int,
+        now: datetime,
+    ) -> bool:
+        """Publish one private, disposable browse snapshot behind the live claim."""
+
+        if not isinstance(file_cache, Mapping):
+            raise ValueError("file_cache must be a mapping")
+        release_keys = tuple(
+            dict.fromkeys(
+                _bounded_text(value, "separate_release_key", maximum=1024)
+                for value in separate_release_keys
+            )
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select library.publish_claimed_full_scan_preview(
+                  %(intent_id)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s,
+                  %(file_cache)s::jsonb, %(separate_release_keys)s,
+                  %(album_total)s, %(now)s
+                ) as preview_accepted
+                """,
+                {
+                    "intent_id": _positive_id(intent_id, "intent_id"),
+                    "job_id": _positive_id(claim.job_id, "job_id"),
+                    "attempt": _positive_id(claim.attempt, "attempt"),
+                    "worker_id": _bounded_text(claim.worker_id, "worker_id"),
+                    "lease_token": _bounded_text(claim.lease_token, "lease_token"),
+                    "file_cache": json.dumps(
+                        dict(file_cache), ensure_ascii=False, separators=(",", ":")
+                    ),
+                    "separate_release_keys": list(release_keys),
+                    "album_total": _nonnegative_int(album_total, "album_total"),
+                    "now": now,
+                },
+            ).fetchone()
+        return _row_mapping(row).get("preview_accepted") is True
+
+    def load_claimed_full_scan_cache(
+        self,
+        *,
+        claim: Any,
+        intent_id: int,
+        now: datetime,
+    ) -> dict[str, dict[str, object]] | None:
+        """Load current filesystem entries only while the full-scan claim is live."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select library.load_claimed_full_scan_cache(
+                  %(intent_id)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s
+                ) as file_cache
+                """,
+                {
+                    "intent_id": _positive_id(intent_id, "intent_id"),
+                    "job_id": _positive_id(claim.job_id, "job_id"),
+                    "attempt": _positive_id(claim.attempt, "attempt"),
+                    "worker_id": _bounded_text(claim.worker_id, "worker_id"),
+                    "lease_token": _bounded_text(claim.lease_token, "lease_token"),
+                    "now": now,
+                },
+            ).fetchone()
+        payload = _row_mapping(row).get("file_cache")
+        if payload is None:
+            return None
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("claimed full scan cache is invalid")
+        cache: dict[str, dict[str, object]] = {}
+        for path, entry in payload.items():
+            if not isinstance(path, str) or not isinstance(entry, Mapping):
+                raise RuntimeError("claimed full scan cache entry is invalid")
+            cache[path] = dict(entry)
+        return cache
+
+    def load_authorized_full_scan_preview(
+        self,
+        *,
+        policy_evaluation: PolicyEvaluationResult,
+        library_id: int,
+    ) -> dict[str, object] | None:
+        """Load the current private scan preview after app-status authorization."""
+
+        library_id = _positive_id(library_id, "library_id")
+        _approved_policy(
+            policy_evaluation,
+            action="library.browse.read",
+            library_id=library_id,
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "select * from library.load_authorized_full_scan_preview(%(library_id)s)",
+                {"library_id": library_id},
+            ).fetchone()
+        if row is None:
+            return None
+        payload = _row_mapping(row)
+        file_cache = payload.get("file_cache")
+        release_keys = payload.get("separate_release_keys")
+        if not isinstance(file_cache, Mapping):
+            return None
+        return {
+            "file_cache": dict(file_cache),
+            "separate_release_keys": tuple(str(value) for value in (release_keys or ())),
+            "updated_at": payload.get("updated_at"),
+        }
+
     def validate_claimed_post_scan_cover_refresh(
         self,
         *,
@@ -822,9 +951,23 @@ class PostgresScanJobRepository:
                 "select * from library.load_authorized_full_scan_status(%(library_id)s)",
                 {"library_id": library_id},
             ).fetchone()
+            album_total_row = connection.execute(
+                "select library.load_authorized_album_total(%(library_id)s) as album_total",
+                {"library_id": library_id},
+            ).fetchone()
+            relation_row = connection.execute(
+                "select * from library.load_authorized_full_scan_relation_status(%(library_id)s)",
+                {"library_id": library_id},
+            ).fetchone()
+            metrics_row = connection.execute(
+                "select * from library.load_authorized_full_scan_metrics(%(library_id)s)",
+                {"library_id": library_id},
+            ).fetchone()
         if row is None:
             return None
         payload = _row_mapping(row)
+        relation_status = _row_mapping(relation_row)
+        metrics = _row_mapping(metrics_row)
         return {
             "state": _bounded_text(payload.get("state"), "state", maximum=32),
             "progress_current": _nonnegative_int(
@@ -848,6 +991,32 @@ class PostgresScanJobRepository:
                 )
                 if payload.get("committed_inventory_revision") is not None
                 else None
+            ),
+            "album_total": _nonnegative_int(
+                _row_mapping(album_total_row).get("album_total"), "album_total"
+            ),
+            "relations_processed": _nonnegative_int(
+                relation_status.get("relations_processed"), "relations_processed"
+            ),
+            "relations_total": _nonnegative_int(
+                relation_status.get("relations_total"), "relations_total"
+            ),
+            "relations_phase": str(
+                relation_status.get("relations_phase") or "Idle"
+            ),
+            "relations_source": str(
+                relation_status.get("relations_source") or "local"
+            ),
+            "elapsed_seconds": max(0.0, float(metrics.get("elapsed_seconds") or 0.0)),
+            "estimated_remaining_seconds": max(
+                0.0, float(metrics.get("estimated_remaining_seconds") or 0.0)
+            ),
+            "files_per_second": max(0.0, float(metrics.get("files_per_second") or 0.0)),
+            "album_folders_processed": _nonnegative_int(
+                metrics.get("album_folders_processed"), "album_folders_processed"
+            ),
+            "album_folders_total": _nonnegative_int(
+                metrics.get("album_folders_total"), "album_folders_total"
             ),
         }
 

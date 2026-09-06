@@ -66,7 +66,25 @@ COVER_REFRESH_WORKER_MIGRATION = (
 REMOTE_COVER_SAVE_MIGRATION = (
     MIGRATIONS_DIR / "0075_create_remote_cover_save_checkpoints.sql"
 )
+DURABLE_SCAN_STATUS_MIGRATION = (
+    MIGRATIONS_DIR / "0076_complete_durable_scan_status_projection.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
+
+
+def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
+    sql = _normalized_sql(DURABLE_SCAN_STATUS_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "count(distinct album.id)" in sql
+    assert "file.metadata #>> '{scan_cache,stale}'" in sql
+    assert "function library.load_authorized_album_total(p_library_id bigint)" in sql
+    assert "function library.load_authorized_full_scan_relation_status(p_library_id bigint)" in sql
+    assert "count(distinct artist.id)" in sql
+    assert "function library.checkpoint_claimed_full_scan_v2(" in sql
+    assert "function library.load_authorized_full_scan_metrics(p_library_id bigint)" in sql
+    assert "job.kind = 'post_scan_cover_refresh'" in sql
+    assert "job.state in ('queued', 'running', 'retry_wait')" in sql
+    assert "coalesce(active_refresh.covers_in_progress, pending_follow_up.covers_in_progress, false)" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -465,7 +483,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-37:] == [
+    assert migration_names[-38:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -503,6 +521,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0073_grant_worker_cover_lookup.sql",
         "0074_grant_worker_cover_refresh.sql",
         "0075_create_remote_cover_save_checkpoints.sql",
+        "0076_complete_durable_scan_status_projection.sql",
     ]
 
 
@@ -541,6 +560,8 @@ def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status(
     ):
         assert f"function ops.{function_name}" in sql
     assert "job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')" in sql
+    assert "#variable_conflict use_column" in sql
+    assert "count(distinct album.id) filter (where file.id is not null)::integer" in sql
     assert "job.lease_expires_at > observed_at" in sql
     assert "refresh.row_revision = expected_row_revision" in sql
     assert "grant execute on function ops.begin_claimed_cover_refresh" in sql

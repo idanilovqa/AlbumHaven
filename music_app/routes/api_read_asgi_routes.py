@@ -48,6 +48,7 @@ from music_app.services.listen_through import (
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.scan_state import (
     project_durable_full_scan_status,
+    project_durable_full_scan_preview,
     resolve_active_scan_browse_state,
 )
 from music_app.services.view_payloads import (
@@ -243,12 +244,31 @@ def _postgres_browse_library_state(request: Request) -> Mapping[str, object] | N
     return library_state if isinstance(library_state, Mapping) else None
 
 
+def _request_scan_browse_state(request: Request) -> dict[str, object]:
+    library_state = _library_state(request)
+    browse_state = resolve_active_scan_browse_state(library_state)
+    scan_jobs = getattr(request.app.state, "scan_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    library_id = getattr(audit, "library_id", None)
+    if scan_jobs is None or not isinstance(library_id, int) or library_id <= 0:
+        return browse_state
+    try:
+        preview = scan_jobs.load_authorized_full_scan_preview(
+            policy_evaluation=evaluation,
+            library_id=library_id,
+        )
+    except Exception:
+        return browse_state
+    return project_durable_full_scan_preview(library_state, preview)
+
+
 def _should_use_transient_scan_browse_state(
     library_state: Mapping[str, object],
     browse_state: Mapping[str, object],
 ) -> bool:
     return (
-        bool(library_state.get("scan_in_progress"))
+        bool(browse_state.get("scan_in_progress"))
         and bool(browse_state.get("albums"))
         and not bool(library_state.get("albums"))
     )
@@ -561,7 +581,7 @@ def _build_status_payload_from_state(library_state: dict[str, object]) -> dict[s
 @router.get("/view-data")
 def view_data(request: Request) -> JSONResponse:
     library_state = _library_state(request)
-    browse_state = resolve_active_scan_browse_state(library_state)
+    browse_state = _request_scan_browse_state(request)
     if _should_use_transient_scan_browse_state(library_state, browse_state):
         request_started_at = time.perf_counter()
         payload = build_view_payload(

@@ -25,85 +25,19 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  padding: 18px 20px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-.non-album-modal-subtitle {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.9rem;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--border);
 }
 .non-album-modal-table-wrap {
   overflow: auto;
   padding: 14px 20px 20px;
 }
-.non-album-track-section {
-  display: grid;
-  gap: 7px;
-  margin-bottom: 18px;
-}
-.non-album-track-section:last-child {
-  margin-bottom: 0;
-}
-.non-album-track-section-title {
-  margin: 0;
-  color: #efe5d0;
-  font-size: 0.86rem;
-  font-weight: 800;
-}
-.non-album-track-section .compact-data-table {
+.non-album-modal-table .compact-data-table {
   --cdt-mobile-min-width: 620px;
-  --cdt-divider: rgba(148, 163, 184, 0.14);
-}
-.non-album-track-section .compact-data-table-row {
-  transition: background 140ms ease, box-shadow 140ms ease;
-}
-.non-album-track-section .compact-data-table-row:hover {
-  background: rgba(148, 163, 184, 0.08);
-}
-.non-album-track-section .compact-data-table-row[aria-selected="true"] {
-  background: rgba(16, 185, 129, 0.08);
-}
-.non-album-track-section .compact-data-table-row.is-playing {
-  background: rgba(16, 185, 129, 0.14);
-  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.22);
-}
-.non-album-track-control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-}
-.non-album-track-control .track-number {
-  color: var(--muted);
-  font-size: 0.72rem;
 }
 .non-album-modal-table {
   display: grid;
   gap: 8px;
-}
-.non-album-track-cell {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-.non-album-track-cell strong {
-  overflow-wrap: anywhere;
-  font-size: 0.82rem;
-}
-.non-album-track-cell small {
-  color: var(--muted);
-  font-size: 0.7rem;
-}
-.non-album-track-section [data-cdt-column="track"] {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.non-album-track-path {
-  color: var(--muted);
-  font-size: 0.72rem;
-  overflow-wrap: anywhere;
 }
 .albums-scroll {
   overflow-y: auto;

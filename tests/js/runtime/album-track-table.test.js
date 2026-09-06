@@ -65,6 +65,36 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
   assert.match(html, /data-cdt-row-key="clean\.flac"[\s\S]*data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
 });
 
+test('AlbumTrackTable Loose Tracks variant inserts File path before the existing problem slot', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({
+    showPath: true,
+    forceGroupLabels: true,
+    ariaLabel: 'Loose tracks',
+    groups: [{
+      discLabel: 'Non-album rarity',
+      tracks: [{
+        path: 'C:/Music/Artist/Rare.flac',
+        title: 'Rare Song',
+        secondaryArtist: 'Guest Artist',
+        displayPath: 'Artist/Rare.flac',
+        trackNumber: 1,
+        duration: '4:05',
+      }],
+    }],
+    totalLength: '4:05',
+  });
+
+  assert.match(html, /--cdt-columns: 34px 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
+  assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
+  assert.match(html, /data-cdt-column="play"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
+  assert.match(html, /class="album-track-table__secondary">Guest Artist<\/span>/);
+  assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
+  assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
+  assert.match(html, /class="album-track-table__total">Total Length: 4:05<\/div>/);
+});
+
 test('AlbumTrackTable splits a main disc and bonus disc into separate tables without a CD 1 label', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

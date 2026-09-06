@@ -198,16 +198,12 @@ function getNonAlbumMenuLabel() {
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
-    const src = `/track?path=${encodeURIComponent(item.path || '')}`;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
     const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
-    const utilityJump = problematicAlbum
-      ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-      : '';
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -215,32 +211,26 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const artistMarkup = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
-      ? `<small class="non-album-track-artist">${escapeHtml(metadataArtist)}</small>`
+    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+      ? metadataArtist
       : '';
     return {
-      key: trackPath || `${rowIndex}`,
-      dataAttributes: {
-        'track-row-path': trackPath,
-        'non-album-row-index': rowIndex,
-      },
-      cells: {
-        control: `
-          <div class="non-album-track-control">
-            <span class="track-number">${rowIndex}.</span>
-            <button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(item.artist || '')}" data-track-album="" data-track-cover="" data-track-duration-seconds="${Number(item.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? `Pause ${escapeHtml(title)}` : `Play ${escapeHtml(title)}`}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button>
-          </div>
-        `,
-        track: `
-          <div class="non-album-track-cell">
-            <strong class="track-title">${escapeHtml(title)}</strong>
-            ${artistMarkup}
-          </div>
-          ${utilityJump}
-        `,
-        path: `<span class="non-album-track-path">${escapeHtml(displayPath || trackPath)}</span>`,
-      },
-      ariaSelected: isCurrentTrack,
+      path: trackPath,
+      title,
+      playbackTitle: title,
+      artist: String(item.artist || ''),
+      albumArtist: String(item.album_artist || ''),
+      album: '',
+      coverPath: '',
+      durationSeconds: Number(item.duration_seconds) || 0,
+      duration,
+      originalDuration: duration,
+      trackNumber: rowIndex,
+      secondaryArtist,
+      displayPath: displayPath || trackPath,
+      isCurrent: isCurrentTrack,
+      isPlaying: isActivelyPlaying,
+      isProblematic: Boolean(problematicAlbum),
     };
   });
 }
@@ -252,7 +242,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
-  return sectionDefinitions.map((section) => {
+  const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       String(
         Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
@@ -260,31 +250,21 @@ function buildNonAlbumTrackSectionsMarkup(items) {
           : item.reason_label || '',
       ).trim() === section.exceptionType
     ));
-    if (!sectionItems.length) return '';
-    const rows = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    if (!sectionItems.length) return null;
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return `
-      <section class="non-album-track-section" data-non-album-section="${escapeHtml(section.key)}">
-        <h4 class="non-album-track-section-title">${escapeHtml(section.title)}</h4>
-        ${buildCompactDataTable({
-          id: `non-album-${section.key}-table`,
-          ariaLabel: `${section.title} tracks`,
-          columns: '64px minmax(220px, 1fr) minmax(240px, 0.9fr)',
-          columnsConfig: [
-            { key: 'control', label: 'Play and number', header: 'absent' },
-            { key: 'track', label: 'Track' },
-            { key: 'path', label: 'File path' },
-          ],
-          headers: 'visible',
-          density: 'compact',
-          overflow: 'local',
-          mobile: 'preserve',
-          frame: 'outline',
-          rows,
-        })}
-      </section>
-    `;
-  }).join('');
+    return { discLabel: section.title, sectionKey: section.key, tracks };
+  }).filter(Boolean);
+  const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  return buildAlbumTrackTableHtml({
+    groups,
+    showPath: true,
+    forceGroupLabels: true,
+    ariaLabel: 'Loose tracks',
+    idPrefix: 'loose-track-table',
+    totalLength: formatAlbumDuration(totalSeconds),
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
@@ -446,10 +426,18 @@ function openNonAlbumModal() {
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
   const looseTracks = getVisibleNonAlbumTracks();
-  if (els.subtitle) {
-    els.subtitle.textContent = state.view.selected_artist
-      ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-      : 'Non-album tracks found in the artist folders currently displayed.';
+  const subtitle = state.view.selected_artist
+    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
+    : 'Non-album tracks found in the artist folders currently displayed.';
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      variant: 'copy',
+      title: 'Loose Tracks',
+      subtitle,
+      titleId: 'non-album-modal-title',
+      subtitleId: 'non-album-modal-subtitle',
+      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+    });
   }
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
@@ -1291,7 +1279,7 @@ function getTagEditorElements() {
 function getNonAlbumModalElements() {
   return {
     overlay: document.getElementById('non-album-modal'),
-    subtitle: document.getElementById('non-album-modal-subtitle'),
+    header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
     close: document.getElementById('non-album-modal-close'),
   };

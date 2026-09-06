@@ -20,6 +20,10 @@ const compactTableSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'compact-data-table.js'),
   'utf8',
 );
+const albumTrackTableSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'album-track-table.js'),
+  'utf8',
+);
 
 class FakeClassList {
   constructor() {
@@ -126,6 +130,9 @@ function loadHelper() {
     HTMLElement: FakeElement,
     HTMLImageElement: FakeElement,
     document: {
+      documentElement: {
+        getAttribute() { return null; },
+      },
       getElementById(id) {
         return elementsById[id] || null;
       },
@@ -172,8 +179,13 @@ function loadHelper() {
     escapeHtml(value) {
       return String(value ?? '');
     },
-    formatTrackDuration() {
-      return '';
+    formatTrackDuration(value) {
+      const seconds = Math.max(0, Math.floor(Number(value) || 0));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    },
+    formatAlbumDuration(value) {
+      const seconds = Math.max(0, Math.floor(Number(value) || 0));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     },
     getPlayerPlaybackSnapshot() {
       return { paused: true, ended: true, currentTime: 0, duration: 0 };
@@ -215,6 +227,9 @@ function loadHelper() {
   vm.createContext(context);
   vm.runInContext(compactTableSource, context, {
     filename: path.join(path.dirname(helperPath), 'compact-data-table.js'),
+  });
+  vm.runInContext(albumTrackTableSource, context, {
+    filename: path.join(path.dirname(helperPath), 'album-track-table.js'),
   });
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.__preloaders = preloaders;
@@ -299,7 +314,7 @@ test('non-album artist scope expands only aliases of the displayed family', () =
     'retained aliases must not authorize tracks after the displayed artist changes');
 });
 
-test('non-album modal uses compact three-column tables in exception order', () => {
+test('non-album modal adapts ordered exception groups into one shared AlbumTrackTable', () => {
   const { context } = loadHelper();
   const markup = context.buildNonAlbumTrackSectionsMarkup([
     {
@@ -308,6 +323,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
       title: 'An Interview',
       artist: 'Guest Artist',
       exception_type: 'Interview',
+      duration_seconds: 95,
     },
     {
       path: 'C:/Music/Artist/Rarity.mp3',
@@ -315,6 +331,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
       title: 'Rare Song',
       artist: 'Main Artist feat. Guest',
       exception_type: 'Non-album rarity',
+      duration_seconds: 245,
     },
   ]);
 
@@ -322,24 +339,27 @@ test('non-album modal uses compact three-column tables in exception order', () =
     markup.indexOf('>Non-album rarity<') < markup.indexOf('>Interviews<'),
     'rarities must render before interviews regardless of payload order',
   );
-  assert.match(markup, /data-non-album-section="non-album-rarity"/);
-  assert.match(markup, /data-non-album-section="interview"/);
-  assert.match(markup, /class="compact-data-table"/);
-  assert.match(markup, /--cdt-columns: 64px minmax\(220px, 1fr\) minmax\(240px, 0\.9fr\)/);
-  assert.match(markup, /data-cdt-column="control"/);
-  assert.match(markup, /data-cdt-column="track"/);
+  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
+  assert.match(markup, /--cdt-columns: 34px 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(markup, /data-cdt-column="play"/);
+  assert.match(markup, /data-cdt-column="number"/);
+  assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
+  assert.match(markup, /data-cdt-column="problem"/);
+  assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div data-cdt-column="control"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="track"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div>/,
+    /compact-data-table-header"><div data-cdt-column="play"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="non-album-track-artist">Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
-  assert.match(markup, /class="play-track-button"/);
-  assert.match(markup, /class="track-number">1\.<\/span>/);
+  assert.match(markup, /class="play-track-button album-track-table__play"/);
+  assert.match(markup, /data-cdt-column="number"[^>]*>1<\/div>/);
   assert.match(markup, /Artist\/Rarity\.mp3/);
   assert.doesNotMatch(markup, /non-album-type-cell/);
-  assert.doesNotMatch(markup, /class="track-duration"/);
+  assert.match(markup, /class="track-duration"[^>]*>4:05<\/span>/);
+  assert.match(markup, /Total Length: 5:40/);
 
   const rarityOnly = context.buildNonAlbumTrackSectionsMarkup([{
     path: 'C:/Music/Artist/Rarity.mp3',
@@ -368,7 +388,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
     artist: '',
     exception_type: '',
   }]);
-  assert.match(missingMetadata, /class="track-title">Artist - Possible Song\.flac<\/strong>/);
+  assert.match(missingMetadata, /class="album-track-table__title">Artist - Possible Song\.flac/);
   assert.doesNotMatch(missingMetadata, /Unknown track|Unknown Artist/);
 });
 

@@ -142,4 +142,6 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0067_add_job_transition_retention_index.sql` adds the timestamp-and-ID index used by bounded migrator-owned transition retention. It grants no runtime deletion privilege.
 
+Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

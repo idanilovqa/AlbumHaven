@@ -1,0 +1,159 @@
+# Postgres Durable Jobs Operations
+
+The durable-jobs worker is a separate process from the Album Haven web server. The shared ledger, transition history, and worker heartbeat live in Postgres; the web process must never be treated as the owner of accepted background work.
+
+The Phase 8 foundation does not route scans, cover work, Last.fm delivery, or authentication mail through this worker yet. Those workflows remain on their existing execution paths until their later migration slices are complete.
+
+## Configuration
+
+Set the worker connection independently from the application connection:
+
+```powershell
+$env:ALBUM_HAVEN_WORKER_DATABASE_URL = '<worker-role Postgres URL>'
+```
+
+The worker accepts these bounded integer settings:
+
+| Variable | Default | Accepted range |
+| --- | ---: | ---: |
+| `ALBUM_HAVEN_WORKER_CONCURRENCY` | `1` | `1..8` |
+| `ALBUM_HAVEN_WORKER_LEASE_SECONDS` | `300` | `1..86400` |
+| `ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS` | `30` | `1..28800` |
+| `ALBUM_HAVEN_WORKER_POLL_SECONDS` | `1` | `1..300` |
+| `ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS` | `5` | `1..300` |
+| `ALBUM_HAVEN_WORKER_DRAIN_SECONDS` | `30` | `0..300` |
+
+The heartbeat must be no greater than one third of the lease, and the initial poll interval must not exceed the maximum idle backoff. Startup rejects missing or invalid configuration without printing the database URL.
+
+## Development launch and shutdown
+
+Start the web process and worker in separate terminals so each has one visible owner:
+
+```powershell
+python start_https.py
+```
+
+```powershell
+python scripts/run_jobs_worker.py
+```
+
+Send Ctrl+C once to the worker. It stops new claims, marks itself draining, requests cooperative cancellation for handlers that support it, and waits up to `ALBUM_HAVEN_WORKER_DRAIN_SECONDS`. A forced exit leaves lease-owned work recoverable according to its registered recovery policy. A running worker reconciles expired leases before claiming more work; do not delete or rewrite the ledger to make a job runnable.
+
+Before stopping either process, record the exact PID tree. After shutdown, verify that every recorded PID exited:
+
+```powershell
+$workerPid = 12345 # Replace with the PID printed or recorded at launch.
+function Get-OwnedProcessTree([uint32]$RootProcessId) {
+  $snapshot = @(Get-CimInstance Win32_Process)
+  $pending = [Collections.Generic.Queue[uint32]]::new()
+  $owned = [Collections.Generic.HashSet[uint32]]::new()
+  $pending.Enqueue($RootProcessId)
+  while ($pending.Count -gt 0) {
+    $processId = $pending.Dequeue()
+    if (-not $owned.Add($processId)) { continue }
+    foreach ($child in $snapshot | Where-Object ParentProcessId -eq $processId) {
+      $pending.Enqueue([uint32]$child.ProcessId)
+    }
+  }
+  $snapshot | Where-Object { $owned.Contains([uint32]$_.ProcessId) }
+}
+function Get-RemainingOwnedProcess($RecordedTree) {
+  $current = @(Get-CimInstance Win32_Process)
+  foreach ($recorded in $RecordedTree) {
+    $current | Where-Object {
+      $_.ProcessId -eq $recorded.ProcessId -and
+      $_.CreationDate -eq $recorded.CreationDate
+    }
+  }
+}
+$workerTree = @(Get-OwnedProcessTree $workerPid)
+# Send Ctrl+C and wait for the worker command to return, then:
+$remaining = @(Get-RemainingOwnedProcess $workerTree)
+$remaining | Select-Object ProcessId, ParentProcessId, Name, CreationDate
+if ($remaining.Count -ne 0) { throw 'The recorded worker process tree did not exit.' }
+```
+
+Do not use blanket Python, Node, browser, or Git termination commands. If descendants remain, verify ownership from the recorded PID, parent PID, process name, and creation time before stopping only that exact owned tree. Inspect arguments only in a protected, non-captured administrator session when those identifiers are insufficient; never copy raw command lines into a terminal transcript, log, or ticket because later handlers may carry private paths or secrets.
+
+## Windows service ownership
+
+Configure the web server and durable-jobs worker as two services with different service names, process owners, logs, and restart policies. The worker service command is the environment's Python executable with `scripts/run_jobs_worker.py` as its argument and this repository as its working directory. Store `ALBUM_HAVEN_WORKER_DATABASE_URL` in the service's protected environment, not in the command line or repository. Python is not itself a Windows Service Control Manager host, so install it only through the deployment's approved service wrapper; do not point `New-Service` or `sc.exe create` directly at this script.
+
+Use the deployed service name for exact lifecycle commands. In the same administrative PowerShell session, define both process helpers shown above, snapshot the service's owned tree before stopping, then verify those process identities exited before restart:
+
+```powershell
+$workerServiceName = 'AlbumHavenJobsWorker'
+$workerService = Get-CimInstance Win32_Service -Filter "Name='$workerServiceName'"
+if ($workerService.State -ne 'Running' -or $workerService.ProcessId -eq 0) {
+  throw 'The worker service is not running.'
+}
+$workerTree = @(Get-OwnedProcessTree ([uint32]$workerService.ProcessId))
+Stop-Service -Name $workerServiceName
+$service = Get-Service -Name $workerServiceName
+$service.WaitForStatus(
+  [System.ServiceProcess.ServiceControllerStatus]::Stopped,
+  [TimeSpan]::FromSeconds(60)
+)
+$remaining = @(Get-RemainingOwnedProcess $workerTree)
+if ($remaining.Count -ne 0) { throw 'The recorded worker service tree did not exit.' }
+Start-Service -Name $workerServiceName
+$service = Get-Service -Name $workerServiceName
+$service.WaitForStatus(
+  [System.ServiceProcess.ServiceControllerStatus]::Running,
+  [TimeSpan]::FromSeconds(60)
+)
+```
+
+`AlbumHavenJobsWorker` is the recommended service name; use the deployed name consistently if an installation chooses another. A stopped service must have no owned process tree before it is started again.
+
+## Health and authorized status
+
+Public `GET /health` keeps web readiness independent from worker availability:
+
+```json
+{"status":"ok","worker_status":"worker_ready"}
+```
+
+`worker_ready` means the newest active heartbeat is at most 90 seconds old. `worker_degraded` means it is 91 through 300 seconds old or the worker is draining. `worker_unavailable` means there is no active heartbeat, the heartbeat is older than 300 seconds, or the status query failed. Worker failure does not change the web `status` value from `ok`.
+
+Authenticated `/status` callers receive only the same coarse `worker_status` unless the server-side policy grants global `ops.jobs.status.read` (the Phase 8 bootstrap owner receives it). Authorized output contains only an opaque worker identity, lifecycle state, heartbeat age, bounded state counts, oldest queue age, and claim lag. It never contains job parameters, account or library identifiers, subject references, request origins, paths, tokens, addresses, or credentials.
+
+## Promotion
+
+Use this additive order:
+
+1. Back up Postgres and apply migrations through `0067_add_job_transition_retention_index.sql` with the migrator role.
+2. Deploy web code that is compatible with the migrated schema.
+3. Configure the dedicated worker-role URL and start the worker.
+4. Verify `/health`, then verify the authorized `/status` projection.
+5. Migrate one workflow family at a time only when its Phase 8 slice is complete. Exactly one execution owner may claim newly accepted work during each cutover.
+
+No application workflow enqueues these jobs until its migration slice lands. Do not insert jobs manually while the foundation worker's closed registry has no live workflow handlers.
+
+## Rollback
+
+Stop new workflow cutovers, signal the worker to stop claims, and allow the bounded drain to finish before deploying a previous compatible web and worker artifact. Preserve `ops.jobs`, `ops.job_transitions`, `ops.worker_instances`, and all applied migrations. Job evidence is forward-only; rollback must not depend on destructive schema reversal or deletion of ambiguous work.
+
+If the previous artifact is not compatible with the current schema, keep the worker stopped and restore service only with a compatible artifact. Never replay work by editing state, attempt, lease, tombstone, or idempotency columns manually.
+
+## Retention cleanup
+
+Retention is a maintenance operation and must use only the migrator connection:
+
+```powershell
+$env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL = '<migrator-role Postgres URL>'
+python scripts/cleanup_jobs.py --batch-size 1000
+```
+
+Each invocation processes at most the requested `1..10000` rows in each category. It removes eligible transition detail and compacts non-held succeeded, failed, or canceled jobs after 90 days; deletes those idempotency tombstones after 365 days; and removes stopped, unleased worker records after seven days. It never automatically removes queued, running, retry-wait, ambiguous, audit-held, or active-lease work. The command prints only category counts.
+
+The application and worker roles do not receive retention deletion privileges. Do not substitute `ALBUM_HAVEN_APP_DATABASE_URL` or `ALBUM_HAVEN_WORKER_DATABASE_URL` for the migrator URL.
+
+## Troubleshooting
+
+- Configuration errors: confirm the required URL exists in the correct process environment and integer settings are in range. Do not paste a URL into logs or tickets.
+- `worker_degraded`: check whether a planned drain is active, then inspect the exact worker process and its bounded logs.
+- `worker_unavailable`: confirm the service state and exact process tree, then check Postgres reachability with an approved secret-safe probe. Web readiness may still be healthy.
+- Growing retry or failure counts: use only the authorized aggregate status, bounded reason codes, and opaque job IDs. Do not query or publish raw parameters or subject references for diagnostics.
+- Shutdown timeout: preserve the ledger and lease evidence. Diagnose the exact handler and owned child process; do not kill unrelated processes or force a state transition.
+- Cleanup failure: verify the migrator connection and migration level. The command intentionally suppresses exception details; inspect protected service logs without copying credentials, URLs, paths, tokens, addresses, media, or private fixtures.

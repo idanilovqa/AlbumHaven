@@ -2366,6 +2366,13 @@ function refreshNonAlbumModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
@@ -2377,9 +2384,7 @@ function refreshNonAlbumModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }

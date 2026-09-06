@@ -9,7 +9,7 @@ from pathlib import Path
 import threading
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -38,7 +38,10 @@ from music_app.services.admin_reauthentication_postgres import (
 from music_app.services.admin_mail_actions_postgres import (
     PostgresAdminMailActionService,
 )
-from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.policy_asgi import (
+    allowed_actions_for_request,
+    request_origin_ref_for_request,
+)
 
 
 router = APIRouter()
@@ -236,40 +239,26 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
 
 @router.post("/admin/accounts/{account_id}/welcome", status_code=202)
 async def resend_managed_account_welcome(
-    request: Request, account_id: int, background_tasks: BackgroundTasks
+    request: Request, account_id: int
 ) -> Response:
     if await _empty_payload(request) is None:
         return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
     outcome = await _queue_mail_action(request, account_id, "welcome")
     if isinstance(outcome, Response):
         return outcome
-    if outcome.welcome_outbox_id is not None:
-        background_tasks.add_task(
-            _deliver_pending_welcome, request.app, outcome.welcome_outbox_id
-        )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/accounts/{account_id}/password-reset", status_code=202)
 async def send_managed_account_password_reset(
-    request: Request, account_id: int, background_tasks: BackgroundTasks
+    request: Request, account_id: int
 ) -> Response:
     if await _empty_payload(request) is None:
         return JSONResponse({"detail": "Mail action was invalid."}, status_code=400)
     outcome = await _queue_mail_action(request, account_id, "password-reset")
     if isinstance(outcome, Response):
         return outcome
-    if outcome.password_reset_delivery is not None:
-        background_tasks.add_task(
-            _deliver_pending_password_reset,
-            request.app,
-            outcome.password_reset_delivery,
-        )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/accounts/{account_id}/invitation/copy")
@@ -312,7 +301,6 @@ async def copy_managed_account_invitation(
 async def send_managed_account_invitation(
     request: Request,
     account_id: int,
-    background_tasks: BackgroundTasks,
 ) -> Response:
     try:
         invitation_enabled = _mail_config(request.app).get("invitation_enabled")
@@ -326,13 +314,14 @@ async def send_managed_account_invitation(
             {"detail": "Invitation email is not configured."}, status_code=409
         )
     try:
-        delivery = await run_in_threadpool(
+        await run_in_threadpool(
             _invitation_service(request).queue_email,
             actor_account_id=request.state.current_actor.account_id,
             actor_authenticated_at=request.state.current_actor.authenticated_at,
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
@@ -345,14 +334,7 @@ async def send_managed_account_invitation(
             {"detail": "Invitation email is temporarily unavailable."},
             status_code=503,
         )
-    background_tasks.add_task(
-        _deliver_pending_invitation,
-        request.app,
-        delivery,
-    )
-    return JSONResponse(
-        {"accepted": True}, status_code=202, background=background_tasks
-    )
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @router.post("/admin/reauthenticate")
@@ -381,7 +363,7 @@ async def reauthenticate_administrator(request: Request) -> Response:
 
 
 @router.post("/admin/accounts", status_code=201)
-async def create_managed_account(request: Request, background_tasks: BackgroundTasks):
+async def create_managed_account(request: Request):
     payload = await _json_payload(request)
     if payload is None:
         return _invalid()
@@ -395,6 +377,7 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             capability_keys=payload["capability_keys"],
             send_invitation=payload["send_invitation"],
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except PermissionError:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
@@ -410,20 +393,13 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
             {"detail": "Account creation is temporarily unavailable."},
             status_code=503,
         )
-    if result.invitation_delivery is not None:
-        background_tasks.add_task(
-            _deliver_pending_invitation,
-            request.app,
-            result.invitation_delivery,
-        )
     return JSONResponse(
         {
             "account_id": result.account_id,
             "pending": True,
-            "invitation_queued": result.invitation_delivery is not None,
+            "invitation_queued": result.invitation_queued,
         },
         status_code=201,
-        background=background_tasks,
     )
 
 
@@ -522,6 +498,7 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
             library_id=actor.current_library_id,
             target_account_id=account_id,
             request_ref=uuid4().hex,
+            **_auth_mail_job_context(request),
         )
     except RecentAuthenticationRequired:
         return JSONResponse(
@@ -535,6 +512,22 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
         return JSONResponse(
             {"detail": "Mail action is temporarily unavailable."}, status_code=503
         )
+
+
+def _auth_mail_job_context(request: Request) -> dict[str, str]:
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    actor_id = getattr(request.state.current_actor, "account_id", None)
+    origin = request_origin_ref_for_request(request)
+    return {
+        "request_origin_ref": f"{origin}.account-{actor_id}",
+        "deployment_mode": str(
+            getattr(audit, "deployment_mode", "self_hosted")
+        ),
+        "client_surface": str(
+            getattr(audit, "client_surface_class", "private_web")
+        ),
+    }
 
 
 async def _bounded_json_object(request: Request) -> dict[str, object] | None:

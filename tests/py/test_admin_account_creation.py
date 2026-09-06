@@ -64,7 +64,7 @@ def test_admin_create_normalizes_identity_and_creates_pending_account_without_cr
     assert call["contact_email"] == "Test.User+1@EXAMPLE.COM"
     assert call["contact_email_normalized"] == "Test.User+1@example.com"
     assert call["capability_keys"] == ("library.browse.read", "library.media.read")
-    assert call["invitation"] is None
+    assert call["send_invitation"] is False
     assert call["invitation_expires_at"] is None
     assert call["created_at"] == now
     assert call["request_ref"] == "a" * 32
@@ -72,7 +72,7 @@ def test_admin_create_normalizes_identity_and_creates_pending_account_without_cr
     assert "credential" not in call
 
 
-def test_admin_create_issues_invitation_with_caller_owned_timestamp_and_request_ref():
+def test_admin_create_accepts_tokenless_invitation_with_caller_owned_expiry():
     from music_app.services.admin_account_creation import AdminAccountCreationService
 
     repository = Repository()
@@ -91,7 +91,7 @@ def test_admin_create_issues_invitation_with_caller_owned_timestamp_and_request_
         request_ref="b" * 32,
     )
     call = repository.calls[0]
-    assert call["invitation"] is issued
+    assert call["send_invitation"] is True
     assert call["created_at"] == now
     assert call["invitation_expires_at"] == now + timedelta(seconds=259_200)
     assert call["request_ref"] == "b" * 32

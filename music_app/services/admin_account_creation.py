@@ -8,11 +8,8 @@ from datetime import datetime, timedelta, timezone
 import unicodedata
 
 from music_app.services.auth_config import normalize_email_address
-from music_app.services.auth_invitation_models import (
-    InvitationDelivery,
-    validated_issued_invitation_token,
-)
-from music_app.services.auth_tokens import issue_opaque_token, normalize_login_identifier
+from music_app.services.auth_invitation_models import InvitationDelivery
+from music_app.services.auth_tokens import normalize_login_identifier
 from music_app.services.current_actor import CurrentActor
 
 
@@ -42,6 +39,7 @@ MANAGED_CAPABILITY_KEYS = frozenset(
 class CreatedAccount:
     account_id: int
     invitation_delivery: InvitationDelivery | None
+    invitation_queued: bool = False
 
 
 class AdminAccountCreationService:
@@ -50,12 +48,11 @@ class AdminAccountCreationService:
         *,
         repository,
         invitation_token_seconds: int,
-        token_issuer=issue_opaque_token,
+        token_issuer=None,
         clock=None,
     ) -> None:
         self._repository = repository
         self._invitation_token_seconds = invitation_token_seconds
-        self._token_issuer = token_issuer
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def create_account(
@@ -67,6 +64,9 @@ class AdminAccountCreationService:
         capability_keys: Iterable[object],
         send_invitation: object,
         request_ref: str,
+        request_origin_ref: str | None = None,
+        deployment_mode: str = "self_hosted",
+        client_surface: str = "private_web",
     ) -> CreatedAccount:
         library_id = _authorized_library(actor)
         username_display, username_normalized = _username(username)
@@ -74,11 +74,6 @@ class AdminAccountCreationService:
         capabilities = _capabilities(capability_keys)
         if not isinstance(send_invitation, bool):
             raise ValueError("Managed account invitation choice is invalid.")
-        invitation = (
-            validated_issued_invitation_token(self._token_issuer)
-            if send_invitation
-            else None
-        )
         now = self._clock().astimezone(timezone.utc)
         result = self._repository.create_account(
             actor_account_id=actor.account_id,
@@ -88,14 +83,17 @@ class AdminAccountCreationService:
             contact_email=email_display,
             contact_email_normalized=email_normalized,
             capability_keys=capabilities,
-            invitation=invitation,
+            send_invitation=send_invitation,
             invitation_expires_at=(
                 now + timedelta(seconds=self._invitation_token_seconds)
-                if invitation is not None
+                if send_invitation
                 else None
             ),
             created_at=now,
             request_ref=request_ref,
+            request_origin_ref=request_origin_ref,
+            deployment_mode=deployment_mode,
+            client_surface=client_surface,
         )
         if not isinstance(result, CreatedAccount):
             raise RuntimeError("Managed account persistence failed.")

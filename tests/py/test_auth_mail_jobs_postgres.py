@@ -42,7 +42,10 @@ class _Connection:
         return nullcontext()
 
     def execute(self, sql, parameters=None):
-        self.executed.append((" ".join(str(sql).casefold().split()), parameters))
+        statement = " ".join(str(sql).casefold().split())
+        self.executed.append((statement, parameters))
+        if statement.startswith("insert into app.request_origins"):
+            return _Result()
         return _Result(self.rows.pop(0) if self.rows else None)
 
 

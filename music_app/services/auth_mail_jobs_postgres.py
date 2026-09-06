@@ -598,6 +598,32 @@ class PostgresAuthMailJobRepository:
                 row_revision=row_revision,
                 accepted_attempt=accepted_attempt,
             )
+        if request_origin_ref is not None:
+            origin_type, separator, origin_key = _bounded(
+                "request_origin_ref", request_origin_ref, maximum=1024
+            ).partition(":")
+            if not separator or not origin_type or not origin_key:
+                raise ValueError("request_origin_ref must contain type and key")
+            connection.execute(
+                """
+                insert into app.request_origins (
+                  account_id, client_surface_class, origin_type, origin_key,
+                  first_seen_at, last_seen_at
+                ) values (%s, %s, %s, %s, %s, %s)
+                on conflict (client_surface_class, origin_type, origin_key)
+                do update set last_seen_at = excluded.last_seen_at
+                where app.request_origins.account_id is not distinct from
+                      excluded.account_id
+                """,
+                (
+                    actor_account_id,
+                    _bounded("client_surface", client_surface),
+                    origin_type,
+                    origin_key,
+                    scheduled_at,
+                    scheduled_at,
+                ),
+            )
         kind, actor_capability, maximum = _POLICIES[category]
         capability = None if actor_account_id is None else actor_capability
         command = EnqueueJob(

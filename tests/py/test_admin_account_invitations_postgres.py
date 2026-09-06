@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from music_app.services.auth_tokens import hash_opaque_token, issue_opaque_token
+from music_app.services.auth_mail_jobs_postgres import AcceptedAuthMailJob
 
 
 MODULE = "music_app.services.admin_account_invitations_postgres"
@@ -118,6 +119,18 @@ class TokenIssuer:
         return issue_opaque_token(random_bytes=lambda count: byte * count)
 
 
+class Jobs:
+    def __init__(self, *, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def compose_existing_intent_in_transaction(self, connection, **values):
+        self.calls.append((connection, values))
+        if self.fail:
+            raise RuntimeError("job enqueue failed")
+        return AcceptedAuthMailJob(values["outbox_id"], 91, 1, 1)
+
+
 def _service(module, connection, audit=None, **overrides):
     values = {
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app",
@@ -131,6 +144,7 @@ def _service(module, connection, audit=None, **overrides):
         clock=lambda: NOW,
         token_issuer=overrides.pop("token_issuer", TokenIssuer()),
         audit_repository=audit or AuditRepository(),
+        job_repository=overrides.pop("job_repository", Jobs()),
         **overrides,
     )
 
@@ -170,13 +184,18 @@ def test_copy_rotates_prior_token_and_keeps_raw_tokens_out_of_audit(invitations)
     assert connection.events == ["begin", "commit", "begin", "commit"]
 
 
-def test_email_rotation_links_outbox_to_new_token_and_returns_redacting_delivery(
+def test_email_acceptance_is_tokenless_and_composes_job_in_same_transaction(
     invitations,
 ):
     connection = Connection()
     audit = AuditRepository()
 
-    delivery = _service(invitations, connection, audit).queue_email(
+    issuer = TokenIssuer()
+    jobs = Jobs()
+    accepted = _service(
+        invitations, connection, audit, token_issuer=issuer,
+        job_repository=jobs,
+    ).queue_email(
         actor_account_id=OWNER_ID,
         actor_authenticated_at=NOW,
         library_id=LIBRARY_ID,
@@ -188,14 +207,32 @@ def test_email_rotation_links_outbox_to_new_token_and_returns_redacting_delivery
         (sql, params) for sql, params in connection.operations
         if sql.startswith("insert into app.mail_outbox")
     )
-    assert outbox[1][:3] == (PENDING_ID, delivery.invitation_token_id, "account_invitation")
-    assert delivery.outbox_id == 71
-    assert delivery.recipient == "member+one@example.test"
-    assert delivery.username == "member.one"
-    assert delivery.expires_at == NOW + timedelta(hours=72)
-    assert delivery.raw_token not in repr(delivery)
+    assert outbox[1][:2] == (PENDING_ID, "account_invitation")
+    assert accepted == AcceptedAuthMailJob(71, 91, 1, 1)
+    assert issuer.count == 0
+    assert not any(
+        sql.startswith("insert into app.account_invitation_tokens")
+        for sql, _params in connection.operations
+    )
+    assert jobs.calls[0][0] is connection
+    assert jobs.calls[0][1]["outbox_id"] == 71
     assert audit.calls[0]["reason"].value == "invitation_queued"
-    assert delivery.raw_token not in repr(audit.calls)
+
+
+def test_email_job_failure_rolls_back_tokenless_outbox_and_audit(invitations):
+    connection = Connection()
+    audit = AuditRepository()
+    with pytest.raises(RuntimeError, match="persistence failed"):
+        _service(
+            invitations, connection, audit,
+            job_repository=Jobs(fail=True),
+        ).queue_email(
+            actor_account_id=OWNER_ID, actor_authenticated_at=NOW,
+            library_id=LIBRARY_ID, target_account_id=PENDING_ID,
+            request_ref="send-failure",
+        )
+    assert connection.events == ["begin", "rollback"]
+    assert audit.calls == []
 
 
 @pytest.mark.parametrize(

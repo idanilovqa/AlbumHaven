@@ -10,6 +10,10 @@ from uuid import uuid4
 import pytest
 
 from music_app.services.auth_mail_jobs_postgres import PostgresAuthMailJobRepository
+from music_app.services.auth_audit_postgres import PostgresSecurityAuditRepository
+from music_app.services.auth_password_reset_request_postgres import (
+    PostgresPasswordResetRequestService,
+)
 from music_app.services.auth_mail import DeliveryResult
 from music_app.services.auth_mail_outbox_postgres import PostgresWelcomeOutboxService
 from music_app.services.jobs.models import JobState, JobTransitionResult
@@ -145,6 +149,63 @@ def test_live_tokenless_intent_and_job_commit_without_private_generic_data(
     assert job["idempotency_key"] == (
         f"auth-mail:password_reset:{accepted.outbox_id}:attempt:1"
     )
+
+
+def test_live_public_reset_producer_commits_tokenless_outbox_and_job_atomically(
+    live_auth_mail_database,
+):
+    setup_url, runtime_url = live_auth_mail_database
+    account_id, _library_id, _origin_key = _seed_scope(setup_url)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into app.account_credentials "
+            "(account_id, encoded_hash, credential_version) values (%s, 'opaque', 4)",
+            (account_id,),
+        )
+        username = connection.execute(
+            "select username_normalized from app.accounts where id = %s",
+            (account_id,),
+        ).fetchone()["username_normalized"]
+    service = PostgresPasswordResetRequestService(
+        {
+            "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+            "hmac": {"secret": "p" * 48, "key_version": 1},
+            "reset_token_seconds": 900,
+            "throttles": {
+                "reset_candidate": {"limit": 5, "window_seconds": 3600},
+                "reset_account": {"limit": 5, "window_seconds": 3600},
+                "reset_source": {"limit": 20, "window_seconds": 3600},
+            },
+        },
+        connect=isolatedPostgres._connect,
+        audit_repository=PostgresSecurityAuditRepository(),
+    )
+    accepted = service.request_reset(
+        candidate=username,
+        source_key="live-public-reset-source-eligible",
+        request_ref=f"live-reset-{uuid4().hex}",
+        source_class="private",
+        request_origin_ref=f"browser:public-reset-{uuid4().hex}",
+        deployment_mode="self_hosted",
+        client_surface="private_web",
+    )
+    assert accepted.accepted_job is not None
+    with isolatedPostgres._connect(setup_url) as connection:
+        outbox = connection.execute(
+            "select reset_token_id, actor_account_id, authorization_mode, "
+            "current_job_id from app.mail_outbox where id = %s",
+            (accepted.accepted_job.outbox_id,),
+        ).fetchone()
+        tokens = connection.execute(
+            "select count(*) as count from app.password_reset_tokens "
+            "where account_id = %s",
+            (account_id,),
+        ).fetchone()
+    assert outbox["reset_token_id"] is None
+    assert outbox["actor_account_id"] is None
+    assert outbox["authorization_mode"] == "public_lifecycle"
+    assert int(outbox["current_job_id"]) == accepted.accepted_job.job_id
+    assert int(tokens["count"]) == 0
 
 
 def test_live_generic_enqueue_failure_rolls_back_outbox(live_auth_mail_database):

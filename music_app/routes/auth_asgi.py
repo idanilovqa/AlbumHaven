@@ -13,7 +13,7 @@ from time import monotonic as _monotonic
 from urllib.parse import parse_qsl, unquote, urlsplit
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
@@ -49,6 +49,7 @@ from music_app.services.auth_session_csrf import (
 )
 from music_app.services.auth_reset_csrf import issue_reset_csrf, matches_reset_csrf
 from music_app.services.auth_tokens import hash_opaque_token
+from music_app.services.policy_asgi import request_origin_ref_for_request
 
 
 router = APIRouter()
@@ -474,7 +475,6 @@ async def get_forgot_password(request: Request) -> Response:
 @router.post("/forgot-password", response_class=HTMLResponse)
 async def post_forgot_password(
     request: Request,
-    background_tasks: BackgroundTasks,
 ) -> Response:
     started_at = _monotonic()
     try:
@@ -513,16 +513,21 @@ async def post_forgot_password(
             source_key=source_key,
             request_ref=uuid4().hex,
             source_class=source_class,
+            request_origin_ref=(
+                f"{request_origin_ref_for_request(request)}.public"
+            ),
+            deployment_mode=str(
+                getattr(request.app.state, "config", {}).get(
+                    "ALBUM_HAVEN_DEPLOYMENT_MODE", "self_hosted"
+                )
+            ),
+            client_surface="private_web",
         )
     except Exception:
         result = None
 
     await _pad_public_recovery_response(started_at)
-    delivery = getattr(result, "delivery", None)
-    if delivery is not None:
-        background_tasks.add_task(_deliver_password_reset, request.app, delivery)
     response = _render_recovery(request, token=None, sent=True)
-    response.background = background_tasks
     response.delete_cookie(
         _FORGOT_PREAUTH_COOKIE,
         path="/",

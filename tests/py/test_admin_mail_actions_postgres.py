@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from music_app.services.auth_tokens import issue_opaque_token
+import pytest
+
+from music_app.services.auth_mail_jobs_postgres import AcceptedAuthMailJob
 
 
 NOW = datetime(2026, 8, 31, 23, 0, tzinfo=timezone.utc)
@@ -73,12 +75,23 @@ class Connection:
         return Cursor()
 
 
-def _service(connection):
+class Jobs:
+    def __init__(self, *, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def compose_existing_intent_in_transaction(self, connection, **values):
+        self.calls.append((connection, values))
+        if self.fail:
+            raise RuntimeError("job enqueue failed")
+        return AcceptedAuthMailJob(values["outbox_id"], 91, 1, 1)
+
+
+def _service(connection, jobs=None):
     from music_app.services.admin_mail_actions_postgres import (
         PostgresAdminMailActionService,
     )
 
-    issued = issue_opaque_token(random_bytes=lambda count: bytes(range(count)))
     return PostgresAdminMailActionService(
         {
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app",
@@ -91,7 +104,7 @@ def _service(connection):
         },
         connect=lambda _url: connection,
         clock=lambda: NOW,
-        token_issuer=lambda: issued,
+        job_repository=jobs or Jobs(),
     )
 
 
@@ -155,10 +168,11 @@ def test_welcome_resend_remains_bootstrap_owner_only_for_managed_accounts():
     )
 
 
-def test_admin_password_reset_returns_only_a_redacted_internal_delivery():
+def test_admin_password_reset_accepts_tokenless_job_without_issuing_a_token():
     connection = Connection()
+    jobs = Jobs()
 
-    result = _service(connection).queue_password_reset(
+    result = _service(connection, jobs).queue_password_reset(
         actor_account_id=7,
         actor_authenticated_at=NOW,
         library_id=9,
@@ -167,15 +181,10 @@ def test_admin_password_reset_returns_only_a_redacted_internal_delivery():
     )
 
     assert result.accepted is True
-    assert result.password_reset_delivery is not None
-    assert result.password_reset_delivery.outbox_id == 71
-    assert result.password_reset_delivery.account_id == 41
-    assert result.password_reset_delivery.recipient == "listener@example.test"
-    assert "listener@example.test" not in repr(result)
-    assert result.password_reset_delivery.raw_token not in repr(result)
+    assert result.accepted_job == AcceptedAuthMailJob(71, 91, 1, 1)
+    assert jobs.calls[0][1]["category"] == "password_reset"
     statements = [sql for sql, _params in connection.operations]
-    assert any("update app.password_reset_tokens" in sql and "revoked_at" in sql for sql in statements)
-    assert any("insert into app.password_reset_tokens" in sql for sql in statements)
+    assert not any("password_reset_tokens" in sql for sql in statements)
     assert any("'password_reset'" in sql and "insert into app.mail_outbox" in sql for sql in statements)
     assert any("password_reset_queued" in sql for sql in statements)
 
@@ -216,3 +225,14 @@ def test_inactive_target_has_ambiguous_success_without_issuing_mail_or_token():
     assert result.password_reset_delivery is None
     assert not any("insert into app.password_reset_tokens" in sql for sql, _ in connection.operations)
     assert not any("insert into app.mail_outbox" in sql for sql, _ in connection.operations)
+
+
+def test_job_enqueue_failure_rolls_back_admin_outbox_and_audit():
+    connection = Connection()
+    with pytest.raises(RuntimeError, match="could not be queued"):
+        _service(connection, Jobs(fail=True)).queue_welcome(
+            actor_account_id=7, actor_authenticated_at=NOW, library_id=9,
+            target_account_id=41, request_ref="welcome-enqueue-failure",
+        )
+    assert connection.events == ["begin", "rollback"]
+    assert not any("welcome_resend_queued" in sql for sql, _ in connection.operations)

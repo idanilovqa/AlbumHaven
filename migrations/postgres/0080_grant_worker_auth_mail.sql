@@ -311,6 +311,216 @@ begin
 end;
 $$;
 
+create or replace function ops.begin_claimed_auth_mail_send(
+  p_outbox_id bigint,
+  p_category varchar,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz,
+  p_expected_row_revision bigint
+)
+returns table (row_revision bigint)
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  next_revision bigint;
+begin
+  update app.mail_outbox as outbox
+     set delivery_status = 'sending',
+         delivery_checkpoint = 'send_started',
+         claimed_at = coalesce(outbox.claimed_at, p_now),
+         attempt_count = outbox.accepted_attempt,
+         next_attempt_at = null,
+         row_revision = outbox.row_revision + 1,
+         updated_at = p_now
+   where outbox.id = p_outbox_id
+     and outbox.message_category = p_category
+     and outbox.row_revision = p_expected_row_revision
+     and (
+       (p_category = 'welcome' and outbox.delivery_checkpoint = 'accepted') or
+       (p_category in ('account_invitation', 'password_reset')
+        and outbox.delivery_checkpoint = 'token_issued')
+     )
+     and ops.validate_claimed_auth_mail(
+       p_outbox_id, p_category, p_job_id, p_attempt, p_worker_id,
+       p_lease_token, p_now, p_expected_row_revision,
+       outbox.accepted_attempt
+     )
+  returning outbox.row_revision into next_revision;
+  if next_revision is null then return; end if;
+
+  update ops.jobs
+     set scope_version = next_revision, updated_at = p_now
+   where id = p_job_id
+     and state = 'running'
+     and attempt_count = p_attempt
+     and lease_owner = p_worker_id
+     and lease_token = p_lease_token
+     and lease_expires_at > p_now;
+  if not found then
+    raise exception 'Authentication mail claim changed before send.';
+  end if;
+  return query select next_revision;
+end;
+$$;
+
+create or replace function ops.cancel_claimed_auth_mail_before_send(
+  p_outbox_id bigint,
+  p_category varchar,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz,
+  p_reason_code varchar
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  next_revision bigint;
+begin
+  if octet_length(p_reason_code) not between 1 and 128 then return false; end if;
+  update app.mail_outbox as outbox
+     set delivery_status = 'failed',
+         delivery_checkpoint = 'terminal',
+         provider_disposition = 'canceled_before_send',
+         delivery_reason_code = p_reason_code,
+         next_attempt_at = null,
+         row_revision = outbox.row_revision + 1,
+         updated_at = p_now
+   where outbox.id = p_outbox_id
+     and outbox.message_category = p_category
+     and outbox.delivery_checkpoint = 'accepted'
+     and outbox.current_job_id = p_job_id
+     and exists (
+       select 1 from ops.jobs as job
+        where job.id = p_job_id
+          and job.state = 'running'
+          and job.attempt_count = p_attempt
+          and job.lease_owner = p_worker_id
+          and job.lease_token = p_lease_token
+          and job.lease_expires_at > p_now
+     )
+  returning outbox.row_revision into next_revision;
+  if next_revision is null then return false; end if;
+  update ops.jobs set scope_version = next_revision, updated_at = p_now
+   where id = p_job_id;
+  return true;
+end;
+$$;
+
+create or replace function ops.finish_claimed_auth_mail(
+  p_outbox_id bigint,
+  p_category varchar,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz,
+  p_expected_row_revision bigint,
+  p_disposition varchar,
+  p_reason_code varchar
+)
+returns table (domain_status varchar, next_job_id bigint, row_revision bigint)
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  outbox_record app.mail_outbox%rowtype;
+  job_record ops.jobs%rowtype;
+  created_job_id bigint;
+  next_revision bigint;
+  next_due_at timestamptz;
+  next_status varchar;
+begin
+  if p_disposition not in (
+    'delivered', 'known_not_sent_retryable', 'known_not_sent_terminal',
+    'possible_send_ambiguous', 'ineligible_before_token',
+    'canceled_before_send'
+  ) or octet_length(p_reason_code) not between 1 and 128 then
+    return;
+  end if;
+  select job.* into job_record from ops.jobs as job
+   where job.id = p_job_id
+     and job.state = 'running'
+     and job.attempt_count = p_attempt
+     and job.lease_owner = p_worker_id
+     and job.lease_token = p_lease_token
+     and job.lease_expires_at > p_now
+   for update;
+  if not found then return; end if;
+  select outbox.* into outbox_record from app.mail_outbox as outbox
+   where outbox.id = p_outbox_id
+     and outbox.current_job_id = p_job_id
+     and outbox.message_category = p_category
+     and outbox.delivery_status = 'sending'
+     and outbox.delivery_checkpoint = 'send_started'
+     and outbox.row_revision = p_expected_row_revision
+     and outbox.row_revision = job_record.scope_version
+     and outbox.accepted_attempt = job_record.resource_revision
+   for update;
+  if not found then return; end if;
+
+  next_revision := outbox_record.row_revision + 1;
+  if p_disposition = 'delivered' then
+    next_status := 'sent';
+  elsif p_disposition = 'possible_send_ambiguous' then
+    next_status := 'unknown';
+  elsif p_category = 'welcome'
+    and p_disposition = 'known_not_sent_retryable'
+    and outbox_record.accepted_attempt < 5 then
+    next_status := 'pending';
+    next_due_at := p_now + make_interval(secs => case outbox_record.accepted_attempt
+      when 1 then 60 when 2 then 300 when 3 then 1800 else 7200 end);
+    insert into ops.jobs (
+      kind, state, subject_kind, subject_ref, parameters, account_id,
+      library_id, capability_key, request_origin_id, deployment_mode,
+      client_surface, scope_version, resource_revision, idempotency_key,
+      priority, scheduled_at, attempt_count, max_attempts, recovery_policy
+    ) values (
+      'auth_welcome_delivery', 'queued', 'mail_outbox', outbox_record.id::text,
+      '{}'::jsonb, job_record.account_id, job_record.library_id,
+      'accounts.welcome.send', job_record.request_origin_id,
+      job_record.deployment_mode, job_record.client_surface,
+      next_revision, outbox_record.accepted_attempt + 1,
+      'auth-mail:welcome:' || outbox_record.id::text || ':attempt:' ||
+        (outbox_record.accepted_attempt + 1)::text,
+      job_record.priority, next_due_at, 0, 3, 'retry_safe'
+    ) returning id into created_job_id;
+  else
+    next_status := 'failed';
+  end if;
+
+  update app.mail_outbox
+     set delivery_status = next_status,
+         delivery_checkpoint = case when next_status = 'pending'
+                                    then 'accepted' else 'terminal' end,
+         provider_disposition = p_disposition,
+         delivery_reason_code = p_reason_code,
+         sent_at = case when next_status = 'sent' then p_now else null end,
+         next_attempt_at = next_due_at,
+         current_job_id = coalesce(created_job_id, current_job_id),
+         accepted_attempt = case when created_job_id is not null
+                                 then accepted_attempt + 1 else accepted_attempt end,
+         row_revision = next_revision,
+         updated_at = p_now
+   where id = outbox_record.id;
+  if created_job_id is null then
+    update ops.jobs set scope_version = next_revision, updated_at = p_now
+     where id = p_job_id;
+  end if;
+  return query select next_status, created_job_id, next_revision;
+end;
+$$;
+
 revoke all on function ops.validate_claimed_auth_mail(
   bigint, varchar, bigint, integer, varchar, varchar,
   timestamptz, bigint, integer
@@ -321,6 +531,16 @@ revoke all on function ops.load_claimed_auth_mail_context(
 revoke all on function ops.issue_claimed_auth_mail_token_hash(
   bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
   bigint, bytea, timestamptz, text
+) from public;
+revoke all on function ops.begin_claimed_auth_mail_send(
+  bigint, varchar, bigint, integer, varchar, varchar, timestamptz, bigint
+) from public;
+revoke all on function ops.cancel_claimed_auth_mail_before_send(
+  bigint, varchar, bigint, integer, varchar, varchar, timestamptz, varchar
+) from public;
+revoke all on function ops.finish_claimed_auth_mail(
+  bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
+  bigint, varchar, varchar
 ) from public;
 
 do $$
@@ -346,6 +566,16 @@ begin
       bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
       bigint, bytea, timestamptz, text
     ) to album_haven_worker;
+    grant execute on function ops.begin_claimed_auth_mail_send(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz, bigint
+    ) to album_haven_worker;
+    grant execute on function ops.cancel_claimed_auth_mail_before_send(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz, varchar
+    ) to album_haven_worker;
+    grant execute on function ops.finish_claimed_auth_mail(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
+      bigint, varchar, varchar
+    ) to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
     revoke execute on function ops.validate_claimed_auth_mail(
@@ -358,6 +588,16 @@ begin
     revoke execute on function ops.issue_claimed_auth_mail_token_hash(
       bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
       bigint, bytea, timestamptz, text
+    ) from album_haven_readonly;
+    revoke execute on function ops.begin_claimed_auth_mail_send(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz, bigint
+    ) from album_haven_readonly;
+    revoke execute on function ops.cancel_claimed_auth_mail_before_send(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz, varchar
+    ) from album_haven_readonly;
+    revoke execute on function ops.finish_claimed_auth_mail(
+      bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
+      bigint, varchar, varchar
     ) from album_haven_readonly;
   end if;
 end $$;

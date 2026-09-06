@@ -87,7 +87,7 @@ def _shutdown_signals() -> tuple[int, ...]:
 def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] | None = None) -> Any:
     """Wire the durable worker with its closed handler set."""
 
-    from config import Config
+    from config import Config, build_mail_config
     from music_app.jobs.dispatch import JobHandlerRegistry
     from music_app.jobs.cover_handlers import (
         build_cover_bulk_refresh_resource_validator,
@@ -105,12 +105,14 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         build_targeted_reconciliation_resource_validator,
     )
     from music_app.jobs.lastfm_handlers import build_lastfm_retry_handler
+    from music_app.jobs.auth_mail_handlers import build_auth_mail_handler
     from music_app.jobs.worker import (
         PostgresWorkerInstanceRepository,
         Worker,
         create_worker_pool,
     )
     from music_app.services.jobs.authorization import (
+        build_auth_mail_resource_validator,
         build_lastfm_retry_resource_validator,
         JobAuthorizationService,
         PostgresJobAuthorizationContextRepository,
@@ -127,6 +129,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
     from music_app.services.lastfm_retry_jobs_postgres import (
         PostgresLastfmRetryJobRepository,
+    )
+    from music_app.services.auth_mail_jobs_postgres import (
+        PostgresAuthMailJobRepository,
     )
     from music_app.services.lastfm import scrobble_track_with_session
     from music_app.services.targeted_library_reconciliation import (
@@ -155,6 +160,11 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         job_repository=repository,
     )
     lastfm_retry_repository = PostgresLastfmRetryJobRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
+        job_repository=repository,
+    )
+    auth_mail_repository = PostgresAuthMailJobRepository(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
         job_repository=repository,
@@ -195,6 +205,17 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     lastfm_retry_validator = build_lastfm_retry_resource_validator(
         retry_repository=lastfm_retry_repository
     )
+    auth_mail_validators = {
+        JobKind.AUTH_WELCOME_DELIVERY.value: build_auth_mail_resource_validator(
+            mail_repository=auth_mail_repository, category="welcome"
+        ),
+        JobKind.AUTH_INVITATION_DELIVERY.value: build_auth_mail_resource_validator(
+            mail_repository=auth_mail_repository, category="account_invitation"
+        ),
+        JobKind.AUTH_PASSWORD_RESET_DELIVERY.value: build_auth_mail_resource_validator(
+            mail_repository=auth_mail_repository, category="password_reset"
+        ),
+    }
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -209,6 +230,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
             JobKind.LASTFM_SCROBBLE_RETRY.value: lastfm_retry_validator,
+            **auth_mail_validators,
         },
     )
     instances = PostgresWorkerInstanceRepository(
@@ -266,6 +288,31 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             retry_repository=lastfm_retry_repository,
             config=scan_config,
             scrobble_with_session=scrobble_track_with_session,
+        ),
+    )
+    mail_config = build_mail_config()
+    handlers.register(
+        JobKind.AUTH_WELCOME_DELIVERY,
+        build_auth_mail_handler(
+            category="welcome",
+            mail_repository=auth_mail_repository,
+            mail_config=mail_config,
+        ),
+    )
+    handlers.register(
+        JobKind.AUTH_INVITATION_DELIVERY,
+        build_auth_mail_handler(
+            category="account_invitation",
+            mail_repository=auth_mail_repository,
+            mail_config=mail_config,
+        ),
+    )
+    handlers.register(
+        JobKind.AUTH_PASSWORD_RESET_DELIVERY,
+        build_auth_mail_handler(
+            category="password_reset",
+            mail_repository=auth_mail_repository,
+            mail_config=mail_config,
         ),
     )
     return Worker(

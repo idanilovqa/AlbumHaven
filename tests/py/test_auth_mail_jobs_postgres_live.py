@@ -596,3 +596,104 @@ def test_live_public_reset_requires_persisted_throttle_lifecycle(
     with isolatedPostgres._connect(setup_url) as connection:
         connection.execute("delete from app.auth_throttles where id = %s", (throttle_id,))
     assert not worker_repository.validate_claimed_delivery(**fence)
+
+
+def test_live_welcome_send_checkpoint_schedules_exact_next_domain_job(
+    live_auth_mail_database,
+):
+    setup_url, runtime_url = live_auth_mail_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    with isolatedPostgres._connect(setup_url) as connection:
+        outbox_id = int(connection.execute(
+            """
+            insert into app.mail_outbox (
+              account_id, actor_account_id, authorization_mode,
+              message_category, delivery_status, attempt_count,
+              next_attempt_at, row_revision, accepted_attempt,
+              delivery_checkpoint, created_at, updated_at
+            ) values (
+              %s, %s, 'actor', 'welcome', 'pending', 0,
+              %s, 0, 1, 'accepted', %s, %s
+            ) returning id
+            """,
+            (account_id, account_id, now, now, now),
+        ).fetchone()["id"])
+    repository = _repository(runtime_url)
+    with isolatedPostgres._connect(runtime_url) as connection:
+        accepted = repository.compose_existing_intent_in_transaction(
+            connection,
+            outbox_id=outbox_id,
+            category="welcome",
+            account_id=account_id,
+            actor_account_id=account_id,
+            library_id=library_id,
+            request_origin_ref=f"browser:{origin_key}",
+            deployment_mode="self_hosted_private_web",
+            client_surface="private_web",
+            scheduled_at=now,
+        )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="welcome-mail-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=120,
+        kinds=("auth_welcome_delivery",),
+    )
+    while claim is not None and claim.job_id != accepted.job_id:
+        assert jobs.finish(
+            claim,
+            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
+            now=now + timedelta(seconds=2),
+        )
+        claim = jobs.claim(
+            worker_id="welcome-mail-live",
+            now=now + timedelta(seconds=3),
+            lease_seconds=120,
+            kinds=("auth_welcome_delivery",),
+        )
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_repository = _repository(worker_url)
+    values = dict(
+        outbox_id=outbox_id,
+        category="welcome",
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=now + timedelta(seconds=4),
+    )
+    context = worker_repository.load_claimed_delivery_context(**values)
+    send_revision = worker_repository.begin_claimed_send(
+        **values, expected_row_revision=context.row_revision
+    )
+    finalized = worker_repository.finalize_claimed_delivery(
+        **values,
+        expected_row_revision=send_revision,
+        disposition="known_not_sent_retryable",
+        reason_code="provider_known_not_sent",
+    )
+
+    assert finalized.next_job_id is not None
+    with isolatedPostgres._connect(setup_url) as connection:
+        outbox = connection.execute(
+            "select delivery_status, accepted_attempt, current_job_id, "
+            "next_attempt_at, row_revision from app.mail_outbox where id = %s",
+            (outbox_id,),
+        ).fetchone()
+        next_job = connection.execute(
+            "select idempotency_key, scheduled_at, scope_version, resource_revision "
+            "from ops.jobs where id = %s",
+            (finalized.next_job_id,),
+        ).fetchone()
+    assert outbox["delivery_status"] == "pending"
+    assert int(outbox["accepted_attempt"]) == 2
+    assert int(outbox["current_job_id"]) == finalized.next_job_id
+    assert outbox["next_attempt_at"] == now + timedelta(seconds=64)
+    assert next_job["idempotency_key"] == f"auth-mail:welcome:{outbox_id}:attempt:2"
+    assert int(next_job["scope_version"]) == int(outbox["row_revision"])
+    assert int(next_job["resource_revision"]) == 2

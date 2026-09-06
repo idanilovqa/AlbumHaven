@@ -75,6 +75,13 @@ class IssuedAuthMailToken:
     row_revision: int
 
 
+@dataclass(frozen=True)
+class AuthMailFinalization:
+    domain_status: str
+    next_job_id: int | None
+    row_revision: int
+
+
 def _default_connect(database_url: str) -> Any:
     if psycopg is None:
         raise RuntimeError("psycopg is required for durable authentication mail")
@@ -260,6 +267,91 @@ class PostgresAuthMailJobRepository:
             token_id=_positive("token_id", row.get("token_id")),
             row_revision=_nonnegative("row_revision", row.get("row_revision")),
         )
+
+    def begin_claimed_send(self, **values: object) -> int:
+        parameters = self._claim_values(**values)
+        parameters["expected_row_revision"] = _nonnegative(
+            "expected_row_revision", values["expected_row_revision"]
+        )
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select * from ops.begin_claimed_auth_mail_send(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s,
+                  %(expected_row_revision)s
+                )
+                """,
+                parameters,
+            ).fetchone())
+        if not row:
+            raise ValueError("authentication mail send checkpoint was rejected")
+        return _nonnegative("row_revision", row.get("row_revision"))
+
+    def finalize_claimed_delivery(self, **values: object) -> AuthMailFinalization:
+        parameters = self._claim_values(**values)
+        disposition = _bounded(
+            "disposition", values.get("disposition"), maximum=48
+        )
+        if disposition not in {
+            "delivered",
+            "known_not_sent_retryable",
+            "known_not_sent_terminal",
+            "possible_send_ambiguous",
+            "ineligible_before_token",
+            "canceled_before_send",
+        }:
+            raise ValueError("disposition is invalid")
+        parameters.update({
+            "expected_row_revision": _nonnegative(
+                "expected_row_revision", values["expected_row_revision"]
+            ),
+            "disposition": disposition,
+            "reason_code": _bounded(
+                "reason_code", values.get("reason_code"), maximum=128
+            ),
+        })
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select * from ops.finish_claimed_auth_mail(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s,
+                  %(expected_row_revision)s, %(disposition)s, %(reason_code)s
+                )
+                """,
+                parameters,
+            ).fetchone())
+        if not row:
+            raise ValueError("authentication mail delivery finalization was rejected")
+        return AuthMailFinalization(
+            domain_status=_bounded(
+                "domain_status", row.get("domain_status"), maximum=32
+            ),
+            next_job_id=(
+                None
+                if row.get("next_job_id") is None
+                else _positive("next_job_id", row.get("next_job_id"))
+            ),
+            row_revision=_nonnegative("row_revision", row.get("row_revision")),
+        )
+
+    def cancel_claimed_before_send(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        parameters["reason_code"] = _bounded(
+            "reason_code", values.get("reason_code"), maximum=128
+        )
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select ops.cancel_claimed_auth_mail_before_send(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s, %(reason_code)s
+                ) as canceled
+                """,
+                parameters,
+            ).fetchone())
+        return bool(row.get("canceled"))
 
     def accept_intent(
         self,

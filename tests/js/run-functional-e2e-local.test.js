@@ -16,6 +16,7 @@ const windowsPowerShell = path.join(
   'v1.0',
   'powershell.exe',
 );
+const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 'pwsh';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -25,7 +26,7 @@ test('local functional runner lists every approved shard and exact case without 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const contract = readJson(shardContractPath);
   const result = spawnSync(
-    windowsPowerShell,
+    powerShellExecutable,
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', runnerPath, '-List'],
     { cwd: repoRoot, encoding: 'utf8', windowsHide: true },
   );

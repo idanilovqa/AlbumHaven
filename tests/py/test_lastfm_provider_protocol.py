@@ -201,3 +201,31 @@ def test_disconnected_scrobble_is_an_explicit_no_send(monkeypatch):
     assert result.sent is False
     assert result.succeeded is False
     assert result.outcome == "not_connected"
+def test_claimed_session_scrobble_does_not_reload_process_global_settings(monkeypatch):
+    import xml.etree.ElementTree as ET
+    from music_app.services import lastfm
+
+    calls = []
+    monkeypatch.setattr(
+        lastfm,
+        "get_saved_lastfm_session",
+        lambda _config: (_ for _ in ()).throw(AssertionError("must not reload session")),
+    )
+    monkeypatch.setattr(
+        lastfm,
+        "_post_lastfm",
+        lambda config, method, params: calls.append((config, method, params))
+        or ET.fromstring(
+            '<lfm status="ok"><scrobbles accepted="1" ignored="0" /></lfm>'
+        ),
+    )
+
+    result = lastfm.scrobble_track_with_session(
+        {"LASTFM_API_KEY": "server-key"},
+        {"artist": "Artist", "track": "Song", "timestamp": 100},
+        "claimed-session-secret",
+    )
+
+    assert result.succeeded is True
+    assert calls[0][1] == "track.scrobble"
+    assert calls[0][2]["sk"] == "claimed-session-secret"

@@ -149,3 +149,14 @@ def test_worker_bootstrap_registers_durable_cover_lookup_handler_and_validator()
     assert "build_cover_lookup_resource_validator" in source
     assert "JobKind.COVER_LOOKUP" in source
     assert "run_claimed_cover_lookup" in source
+
+
+def test_worker_bootstrap_registers_lastfm_retry_handler_and_validator():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "PostgresLastfmRetryJobRepository" in source
+    assert "build_lastfm_retry_resource_validator" in source
+    assert "build_lastfm_retry_handler" in source
+    assert "JobKind.LASTFM_SCROBBLE_RETRY" in source

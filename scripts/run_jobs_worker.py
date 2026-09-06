@@ -104,12 +104,14 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         build_targeted_reconciliation_handler,
         build_targeted_reconciliation_resource_validator,
     )
+    from music_app.jobs.lastfm_handlers import build_lastfm_retry_handler
     from music_app.jobs.worker import (
         PostgresWorkerInstanceRepository,
         Worker,
         create_worker_pool,
     )
     from music_app.services.jobs.authorization import (
+        build_lastfm_retry_resource_validator,
         JobAuthorizationService,
         PostgresJobAuthorizationContextRepository,
     )
@@ -123,6 +125,10 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     from music_app.services.policy_evaluator import PolicyEvaluator
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.lastfm_retry_jobs_postgres import (
+        PostgresLastfmRetryJobRepository,
+    )
+    from music_app.services.lastfm import scrobble_track_with_session
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
     )
@@ -144,6 +150,11 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         job_repository=repository,
     )
     cover_repository = PostgresCoverJobRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
+        job_repository=repository,
+    )
+    lastfm_retry_repository = PostgresLastfmRetryJobRepository(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
         job_repository=repository,
@@ -181,6 +192,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     cover_remote_save_validator = build_cover_remote_save_resource_validator(
         cover_repository=cover_repository
     )
+    lastfm_retry_validator = build_lastfm_retry_resource_validator(
+        retry_repository=lastfm_retry_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -194,6 +208,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             JobKind.FULL_SCAN.value: full_scan_validator,
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
+            JobKind.LASTFM_SCROBBLE_RETRY.value: lastfm_retry_validator,
         },
     )
     instances = PostgresWorkerInstanceRepository(
@@ -243,6 +258,14 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         build_targeted_reconciliation_handler(
             scan_repository=scan_repository,
             reconciler=reconciler,
+        ),
+    )
+    handlers.register(
+        JobKind.LASTFM_SCROBBLE_RETRY,
+        build_lastfm_retry_handler(
+            retry_repository=lastfm_retry_repository,
+            config=scan_config,
+            scrobble_with_session=scrobble_track_with_session,
         ),
     )
     return Worker(

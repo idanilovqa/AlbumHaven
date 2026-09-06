@@ -376,3 +376,118 @@ def test_live_worker_authorizes_exact_session_and_cannot_select_secret_table(
         lease_token=claim.lease_token,
         now=observed_at,
     ) is None
+
+
+@pytest.mark.parametrize(
+    ("disposition", "expected_status", "expects_next_job"),
+    [
+        ("accepted", "completed", False),
+        ("known_not_sent_retryable", "accepted", True),
+        ("possible_send_ambiguous", "ambiguous", False),
+    ],
+)
+def test_live_claimed_attempt_state_machine_is_fenced_and_composes_domain_retry(
+    live_lastfm_database, disposition, expected_status, expects_next_job
+):
+    setup_url, _runtime_url = live_lastfm_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    source_key = f"state-machine-{uuid4().hex}"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into integration.listen_history "
+            "(account_id, library_id, played_at, source_family, source_entry_id, metadata) "
+            "values (%s, %s, %s, 'runtime_lastfm_sync_state_adapter', %s, '{}'::jsonb)",
+            (account_id, library_id, now - timedelta(minutes=5), source_key),
+        )
+    accepted = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).accept_retryable_pending(
+        account_id=account_id,
+        library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=source_key,
+        track_key="opaque-track",
+        played_at=now - timedelta(minutes=5),
+        previous_attempts=1,
+        next_attempt_at=now,
+        active_session_id=session_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        payload={
+            "source_payload": {
+                "artist": "Artist",
+                "title": "Song",
+                "started_at_unix": 12345,
+            }
+        },
+    )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id=f"lastfm-state-{disposition}",
+        now=now + timedelta(seconds=1),
+        lease_seconds=60,
+        kinds=("lastfm_scrobble_retry",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=jobs,
+    )
+    claim_values = dict(
+        pending_scrobble_id=accepted.pending_scrobble_id,
+        active_session_id=session_id,
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=now + timedelta(seconds=2),
+    )
+
+    scope = repository.begin_claimed_attempt(**claim_values)
+    assert scope.row_revision == accepted.row_revision + 1
+    assert scope.payload["artist"] == "Artist"
+    result = repository.finalize_claimed_attempt(
+        **claim_values,
+        expected_row_revision=scope.row_revision,
+        disposition=disposition,
+        reason_code="bounded_test_outcome",
+        history_updates={"durable_test_marker": disposition},
+    )
+
+    assert result.domain_status == expected_status
+    assert (result.next_job_id is not None) is expects_next_job
+    with pytest.raises(ValueError, match="could not be finalized"):
+        repository.finalize_claimed_attempt(
+            **claim_values,
+            expected_row_revision=scope.row_revision,
+            disposition=disposition,
+            reason_code="bounded_test_outcome",
+            history_updates={},
+        )
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select status, attempt_count, accepted_attempt, current_job_id, "
+            "last_provider_disposition from integration.pending_scrobbles where id = %s",
+            (accepted.pending_scrobble_id,),
+        ).fetchone()
+        history = connection.execute(
+            "select scrobble_status, metadata from integration.listen_history "
+            "where source_entry_id = %s",
+            (source_key,),
+        ).fetchone()
+    assert pending["status"] == expected_status
+    assert int(pending["attempt_count"]) == 2
+    assert pending["last_provider_disposition"] == disposition
+    assert history["scrobble_status"] == expected_status
+    assert history["metadata"]["durable_test_marker"] == disposition
+    if expects_next_job:
+        assert int(pending["accepted_attempt"]) == 3
+        assert int(pending["current_job_id"]) == result.next_job_id

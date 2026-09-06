@@ -189,6 +189,220 @@ as $$
      and job.cancel_requested_at is null;
 $$;
 
+create or replace function ops.begin_claimed_lastfm_attempt(
+  p_pending_scrobble_id bigint,
+  p_active_session_id bigint,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz
+)
+returns table (
+  pending_scrobble_id bigint,
+  row_revision bigint,
+  accepted_attempt integer,
+  listen_id text,
+  payload jsonb
+)
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  update integration.pending_scrobbles as pending
+     set status = 'sending',
+         row_revision = pending.row_revision + 1,
+         updated_at = p_now
+    from ops.jobs as job
+   where pending.id = p_pending_scrobble_id
+     and pending.current_job_id = job.id
+     and pending.active_session_id = p_active_session_id
+     and pending.status = 'accepted'
+     and pending.row_revision = job.scope_version
+     and pending.attempt_count < pending.accepted_attempt
+     and job.id = p_job_id
+     and job.kind = 'lastfm_scrobble_retry'
+     and job.subject_kind = 'pending_scrobble'
+     and job.subject_ref = pending.id::text
+     and job.parameters = jsonb_build_object(
+       'active_session_ref', pending.active_session_id::text
+     )
+     and job.resource_revision = pending.accepted_attempt
+     and job.state = 'running'
+     and job.attempt_count = p_attempt
+     and job.lease_owner = p_worker_id
+     and job.lease_token = p_lease_token
+     and job.lease_expires_at > p_now
+     and job.cancel_requested_at is null
+     and exists (
+       select 1 from integration.lastfm_sessions as session
+        where session.id = pending.active_session_id
+          and session.account_id = pending.account_id
+          and session.is_active
+     )
+  returning pending.id,
+            pending.row_revision,
+            pending.accepted_attempt,
+            pending.payload->>'source_key',
+            pending.payload->'source_payload';
+$$;
+
+create or replace function ops.cancel_claimed_lastfm_before_send(
+  p_pending_scrobble_id bigint,
+  p_active_session_id bigint,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz,
+  p_reason_code varchar
+)
+returns boolean
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  with canceled as (
+    update integration.pending_scrobbles as pending
+       set status = 'canceled',
+           last_provider_disposition = 'canceled_before_send',
+           repair_reason_code = p_reason_code,
+           next_attempt_at = null,
+           row_revision = pending.row_revision + 1,
+           updated_at = p_now
+      from ops.jobs as job
+     where pending.id = p_pending_scrobble_id
+       and pending.current_job_id = job.id
+       and pending.active_session_id = p_active_session_id
+       and pending.status = 'accepted'
+       and pending.row_revision = job.scope_version
+       and job.id = p_job_id
+       and job.state = 'running'
+       and job.attempt_count = p_attempt
+       and job.lease_owner = p_worker_id
+       and job.lease_token = p_lease_token
+       and octet_length(p_reason_code) between 1 and 128
+    returning 1
+  )
+  select exists (select 1 from canceled);
+$$;
+
+create or replace function ops.finish_claimed_lastfm_attempt(
+  p_pending_scrobble_id bigint,
+  p_active_session_id bigint,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz,
+  p_expected_row_revision bigint,
+  p_disposition varchar,
+  p_reason_code varchar,
+  p_history_updates jsonb
+)
+returns table (domain_status varchar, next_job_id bigint, row_revision bigint)
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  pending_record integration.pending_scrobbles%rowtype;
+  current_job ops.jobs%rowtype;
+  v_domain_status varchar;
+  scheduled_at timestamptz;
+  created_job_id bigint;
+  final_revision bigint;
+begin
+  if p_disposition not in (
+    'accepted', 'known_not_sent_retryable', 'reauthentication_required',
+    'permanent_rejection', 'possible_send_ambiguous'
+  ) or jsonb_typeof(p_history_updates) <> 'object'
+    or octet_length(p_history_updates::text) > 16384
+    or octet_length(p_reason_code) not between 1 and 128 then
+    return;
+  end if;
+
+  select * into current_job from ops.jobs
+   where id = p_job_id
+     and kind = 'lastfm_scrobble_retry'
+     and state = 'running'
+     and attempt_count = p_attempt
+     and lease_owner = p_worker_id
+     and lease_token = p_lease_token
+     and lease_expires_at > p_now
+     and cancel_requested_at is null
+   for update;
+  if not found then return; end if;
+
+  select pending.* into pending_record
+    from integration.pending_scrobbles as pending
+   where pending.id = p_pending_scrobble_id
+     and pending.current_job_id = p_job_id
+     and pending.active_session_id = p_active_session_id
+     and pending.status = 'sending'
+     and pending.row_revision = p_expected_row_revision
+     and pending.accepted_attempt = current_job.resource_revision
+     and pending.attempt_count < pending.accepted_attempt
+   for update;
+  if not found then return; end if;
+
+  if p_disposition = 'accepted' then v_domain_status := 'completed';
+  elsif p_disposition = 'reauthentication_required' then v_domain_status := 'reauthentication_required';
+  elsif p_disposition = 'permanent_rejection' then v_domain_status := 'permanent';
+  elsif p_disposition = 'possible_send_ambiguous' then v_domain_status := 'ambiguous';
+  elsif pending_record.accepted_attempt >= 5 then v_domain_status := 'exhausted';
+  else v_domain_status := 'accepted';
+  end if;
+
+  final_revision := pending_record.row_revision + 1;
+  if v_domain_status = 'accepted' then
+    scheduled_at := p_now + make_interval(
+      secs => least(1800, 60 * power(2, greatest(0, pending_record.accepted_attempt - 1)))::integer
+    );
+    insert into ops.jobs (
+      kind, state, subject_kind, subject_ref, parameters, account_id,
+      library_id, capability_key, request_origin_id, deployment_mode,
+      client_surface, scope_version, resource_revision, idempotency_key,
+      priority, scheduled_at, attempt_count, max_attempts, recovery_policy
+    ) values (
+      'lastfm_scrobble_retry', 'queued', 'pending_scrobble',
+      pending_record.id::text,
+      jsonb_build_object('active_session_ref', pending_record.active_session_id::text),
+      pending_record.account_id, pending_record.library_id,
+      'integration.lastfm.scrobble', pending_record.request_origin_id,
+      current_job.deployment_mode, current_job.client_surface,
+      final_revision, pending_record.accepted_attempt + 1,
+      'lastfm-scrobble:' || pending_record.id::text || ':attempt:' ||
+        (pending_record.accepted_attempt + 1)::text,
+      current_job.priority, scheduled_at, 0, 1, 'ambiguous_on_stale_lease'
+    ) returning id into created_job_id;
+  end if;
+
+  update integration.pending_scrobbles
+     set status = v_domain_status,
+         attempt_count = pending_record.accepted_attempt,
+         accepted_attempt = case when v_domain_status = 'accepted'
+                                 then pending_record.accepted_attempt + 1
+                                 else pending_record.accepted_attempt end,
+         current_job_id = coalesce(created_job_id, pending_record.current_job_id),
+         next_attempt_at = scheduled_at,
+         last_provider_disposition = p_disposition,
+         repair_reason_code = p_reason_code,
+         row_revision = final_revision,
+         updated_at = p_now
+   where id = pending_record.id;
+
+  update integration.listen_history
+     set scrobble_status = v_domain_status,
+         metadata = metadata || p_history_updates
+   where account_id = pending_record.account_id
+     and library_id = pending_record.library_id
+     and source_entry_id = pending_record.payload->>'source_key';
+
+  return query select v_domain_status, created_job_id, final_revision;
+end;
+$$;
+
 revoke all on function app.load_claimed_job_authorization_context(
   bigint, integer, varchar, varchar, timestamptz
 ) from public;
@@ -198,6 +412,16 @@ revoke all on function ops.validate_claimed_lastfm_retry(
 ) from public;
 revoke all on function ops.load_claimed_lastfm_session_secret(
   bigint, bigint, bigint, integer, varchar, varchar, timestamptz
+) from public;
+revoke all on function ops.begin_claimed_lastfm_attempt(
+  bigint, bigint, bigint, integer, varchar, varchar, timestamptz
+) from public;
+revoke all on function ops.cancel_claimed_lastfm_before_send(
+  bigint, bigint, bigint, integer, varchar, varchar, timestamptz, varchar
+) from public;
+revoke all on function ops.finish_claimed_lastfm_attempt(
+  bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
+  bigint, varchar, varchar, jsonb
 ) from public;
 
 do $$
@@ -218,6 +442,16 @@ begin
     grant execute on function ops.load_claimed_lastfm_session_secret(
       bigint, bigint, bigint, integer, varchar, varchar, timestamptz
     ) to album_haven_worker;
+    grant execute on function ops.begin_claimed_lastfm_attempt(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz
+    ) to album_haven_worker;
+    grant execute on function ops.cancel_claimed_lastfm_before_send(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz, varchar
+    ) to album_haven_worker;
+    grant execute on function ops.finish_claimed_lastfm_attempt(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
+      bigint, varchar, varchar, jsonb
+    ) to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
     revoke execute on function ops.validate_claimed_lastfm_retry(
@@ -226,6 +460,16 @@ begin
     ) from album_haven_readonly;
     revoke execute on function ops.load_claimed_lastfm_session_secret(
       bigint, bigint, bigint, integer, varchar, varchar, timestamptz
+    ) from album_haven_readonly;
+    revoke execute on function ops.begin_claimed_lastfm_attempt(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz
+    ) from album_haven_readonly;
+    revoke execute on function ops.cancel_claimed_lastfm_before_send(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz, varchar
+    ) from album_haven_readonly;
+    revoke execute on function ops.finish_claimed_lastfm_attempt(
+      bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
+      bigint, varchar, varchar, jsonb
     ) from album_haven_readonly;
   end if;
 end $$;

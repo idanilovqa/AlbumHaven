@@ -41,6 +41,22 @@ class DueLastfmPending:
     previous_attempts: int
 
 
+@dataclass(frozen=True)
+class ClaimedLastfmAttempt:
+    pending_scrobble_id: int
+    row_revision: int
+    accepted_attempt: int
+    listen_id: str
+    payload: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class LastfmAttemptFinalization:
+    domain_status: str
+    next_job_id: int | None
+    row_revision: int
+
+
 def _default_connect(database_url: str) -> Any:
     if psycopg is None:
         raise RuntimeError("psycopg is required for durable Last.fm retry jobs")
@@ -177,6 +193,104 @@ class PostgresLastfmRetryJobRepository:
         if not isinstance(secret, str) or not secret or len(secret) > 8192:
             raise RuntimeError("claimed Last.fm session secret is invalid")
         return secret
+
+    def begin_claimed_attempt(self, **values: object) -> ClaimedLastfmAttempt:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select * from ops.begin_claimed_lastfm_attempt(
+                      %(pending_scrobble_id)s, %(active_session_id)s,
+                      %(job_id)s, %(attempt)s, %(worker_id)s,
+                      %(lease_token)s, %(now)s
+                    )
+                    """,
+                    parameters,
+                ).fetchone()
+            )
+        payload = row.get("payload")
+        if not row or not isinstance(payload, Mapping):
+            raise ValueError("claimed Last.fm attempt is stale or malformed")
+        return ClaimedLastfmAttempt(
+            pending_scrobble_id=_positive(
+                "pending_scrobble_id", row.get("pending_scrobble_id")
+            ),
+            row_revision=_nonnegative("row_revision", row.get("row_revision")),
+            accepted_attempt=_positive(
+                "accepted_attempt", row.get("accepted_attempt")
+            ),
+            listen_id=_bounded("listen_id", row.get("listen_id"), maximum=512),
+            payload=dict(payload),
+        )
+
+    def cancel_claimed_before_send(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        parameters["reason_code"] = _bounded(
+            "reason_code", values["reason_code"], maximum=128
+        )
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select ops.cancel_claimed_lastfm_before_send(
+                      %(pending_scrobble_id)s, %(active_session_id)s,
+                      %(job_id)s, %(attempt)s, %(worker_id)s,
+                      %(lease_token)s, %(now)s, %(reason_code)s
+                    ) as canceled
+                    """,
+                    parameters,
+                ).fetchone()
+            )
+        return bool(row.get("canceled"))
+
+    def finalize_claimed_attempt(self, **values: object) -> LastfmAttemptFinalization:
+        parameters = self._claim_values(**values)
+        parameters.update(
+            {
+                "expected_row_revision": _nonnegative(
+                    "expected_row_revision", values["expected_row_revision"]
+                ),
+                "disposition": _bounded(
+                    "disposition", values["disposition"], maximum=48
+                ),
+                "reason_code": _bounded(
+                    "reason_code", values["reason_code"], maximum=128
+                ),
+                "history_updates": json.dumps(
+                    dict(values["history_updates"]),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ),
+            }
+        )
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    """
+                    select * from ops.finish_claimed_lastfm_attempt(
+                      %(pending_scrobble_id)s, %(active_session_id)s,
+                      %(job_id)s, %(attempt)s, %(worker_id)s,
+                      %(lease_token)s, %(now)s, %(expected_row_revision)s,
+                      %(disposition)s, %(reason_code)s,
+                      %(history_updates)s::jsonb
+                    )
+                    """,
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            raise ValueError("claimed Last.fm attempt could not be finalized")
+        next_job_id = row.get("next_job_id")
+        return LastfmAttemptFinalization(
+            domain_status=_bounded(
+                "domain_status", row.get("domain_status"), maximum=48
+            ),
+            next_job_id=(
+                None if next_job_id is None else _positive("next_job_id", next_job_id)
+            ),
+            row_revision=_nonnegative("row_revision", row.get("row_revision")),
+        )
 
     def list_due_pending(
         self, *, now: datetime, limit: int = 100

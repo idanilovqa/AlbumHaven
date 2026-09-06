@@ -300,8 +300,8 @@ export class GlobalPlayerActions {
       const peaks = compactPeaks?.data;
       if (!(canvas instanceof HTMLCanvasElement) || canvas.hidden
           || (path && String(compactPeaks?.path || '') !== path)
-          || !Array.isArray(peaks?.left) || peaks.left.length !== 280
-          || !Array.isArray(peaks?.right) || peaks.right.length !== 280) return false;
+          || !Array.isArray(peaks?.left) || peaks.left.length !== 720
+          || !Array.isArray(peaks?.right) || peaks.right.length !== 720) return false;
       const context = canvas.getContext('2d');
       if (!context || canvas.width <= 0 || canvas.height <= 0) return false;
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;

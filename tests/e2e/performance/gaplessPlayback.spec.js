@@ -151,8 +151,8 @@ test('FTC-PLAYER-016 production playback crosses a sample-exact stable-stream bo
       await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0.02 });
       const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: nearEnd.path });
       expect(waveform.path).toBe(nearEnd.path);
-      expect(waveform.leftBins).toBe(280);
-      expect(waveform.rightBins).toBe(280);
+      expect(waveform.leftBins).toBe(720);
+      expect(waveform.rightBins).toBe(720);
       expect(waveform.nonTransparentPixels).toBeGreaterThan(0);
       expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
 

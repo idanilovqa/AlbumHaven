@@ -911,6 +911,6 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', async ({
 
   const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: selectedTrack.path });
   expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
-  expect(waveform.leftBins).toBe(280);
-  expect(waveform.rightBins).toBe(280);
+  expect(waveform.leftBins).toBe(720);
+  expect(waveform.rightBins).toBe(720);
 });

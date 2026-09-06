@@ -150,6 +150,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0071_grant_worker_full_scan_execution.sql` adds claim-scoped current-root loading, private monotonic full-scan progress, and a lease-fenced same-transaction publication boundary that records the committed inventory revision. That publication transaction also inserts exactly one server-owned, path-free `post_scan_cover_refresh` job keyed by library and resulting revision; an immutable-identity collision aborts the publication instead of accepting mismatched work. A claimed follow-up validator rechecks the exact active lease and current inventory revision. The worker receives only these narrow scan-domain functions; authenticated status reads use a separate application-only projection so private current paths never enter generic job data.
 
+`0072_create_durable_cover_job_state.sql` adds stable album, root, actor, origin, candidate-generation, revision, cancellation, and linked-job identities to cover lookup tasks; adds the bounded bulk-refresh progress projection; and registers retry-safe `cover_bulk_refresh` work without weakening existing job kinds. Historical notification metadata is scrubbed of album payloads and track paths while the private selected-cover column remains in the cover domain.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

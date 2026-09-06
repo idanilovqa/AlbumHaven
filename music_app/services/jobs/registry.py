@@ -27,6 +27,9 @@ JOB_POLICIES: Mapping[str, JobPolicy] = MappingProxyType({
     "cover_lookup": JobPolicy(
         frozenset({"library.covers.lookup"}), 2, RecoveryPolicy.RETRY_SAFE
     ),
+    "cover_bulk_refresh": JobPolicy(
+        frozenset({"library.covers.fetch"}), 2, RecoveryPolicy.RETRY_SAFE
+    ),
     "cover_remote_save": JobPolicy(
         frozenset({"library.covers.write"}),
         1,
@@ -111,6 +114,7 @@ _LIBRARY_SCOPED_KINDS = frozenset(
     {
         JobKind.FULL_SCAN.value,
         JobKind.COVER_LOOKUP.value,
+        JobKind.COVER_BULK_REFRESH.value,
         JobKind.COVER_REMOTE_SAVE.value,
     }
 )

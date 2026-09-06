@@ -162,6 +162,29 @@ def test_postgres_running_save_snapshot_preserves_explicit_lookup_completion():
     assert row["metadata"]["notification_completed_at"] == completed_at
 
 
+def test_postgres_cover_task_metadata_never_persists_album_or_track_paths():
+    row = _task_row(
+        {
+            "id": "path-safe-task",
+            "status": "running",
+            "album_payload": {"name": "Album", "path": "C:/private/Album"},
+            "track_paths": ["C:/private/Album/01.flac"],
+            "artist": "Artist",
+            "album": "Album",
+            "progress": 25,
+        },
+        source_index=0,
+    )
+
+    assert "track_paths" not in row["metadata"]
+    source_payload = row["metadata"]["source_payload"]
+    assert source_payload["artist"] == "Artist"
+    assert source_payload["album"] == "Album"
+    assert source_payload["progress"] == 25
+    assert "track_paths" not in source_payload
+    assert "album_payload" not in source_payload
+
+
 class _FakeCursor:
     def __init__(self, rows=()):
         self._rows = list(rows)

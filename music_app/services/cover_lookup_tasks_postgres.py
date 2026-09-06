@@ -240,6 +240,14 @@ def _provider_payload(payload: dict[str, object]) -> dict[str, object]:
     return {key: payload.get(key) for key in _PROVIDER_PAYLOAD_KEYS if key in payload}
 
 
+def _persistable_source_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"album_payload", "track_paths"}
+    }
+
+
 def _album_key(payload: dict[str, object]) -> str | None:
     album_payload = payload.get("album_payload")
     album_payload_dict = album_payload if isinstance(album_payload, dict) else {}
@@ -305,12 +313,6 @@ def _error_message(payload: dict[str, object], status: str) -> str | None:
     return None
 
 
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list | tuple | set):
-        return []
-    return [_text(item) for item in value if _text(item)]
-
-
 def _task_row(
     payload: dict[str, object],
     *,
@@ -337,8 +339,7 @@ def _task_row(
         "notification_action_taken": bool(payload.get("notification_action_taken")),
         "notification_completed_at": completed_at,
         "notification_expires_at": _text(payload.get("notification_expires_at")),
-        "track_paths": _string_list(payload.get("track_paths")),
-        "source_payload": payload,
+        "source_payload": _persistable_source_payload(payload),
     }
     if persistence_revision is not None:
         metadata["persistence_revision"] = max(0, int(persistence_revision))

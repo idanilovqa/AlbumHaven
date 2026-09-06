@@ -13,6 +13,13 @@ EXPECTED_POLICIES = {
     "targeted_reconciliation": (set(), 3, RecoveryPolicy.RETRY_SAFE, True, False),
     "post_scan_cover_refresh": (set(), 2, RecoveryPolicy.RETRY_SAFE, True, False),
     "cover_lookup": ({"library.covers.lookup"}, 2, RecoveryPolicy.RETRY_SAFE, False, False),
+    "cover_bulk_refresh": (
+        {"library.covers.fetch"},
+        2,
+        RecoveryPolicy.RETRY_SAFE,
+        False,
+        False,
+    ),
     "cover_remote_save": (
         {"library.covers.write"},
         1,

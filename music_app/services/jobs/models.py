@@ -13,6 +13,7 @@ class JobKind(str, Enum):
     TARGETED_RECONCILIATION = "targeted_reconciliation"
     POST_SCAN_COVER_REFRESH = "post_scan_cover_refresh"
     COVER_LOOKUP = "cover_lookup"
+    COVER_BULK_REFRESH = "cover_bulk_refresh"
     COVER_REMOTE_SAVE = "cover_remote_save"
     LASTFM_SCROBBLE_RETRY = "lastfm_scrobble_retry"
     AUTH_WELCOME_DELIVERY = "auth_welcome_delivery"

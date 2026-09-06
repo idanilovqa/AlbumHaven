@@ -54,6 +54,9 @@ FULL_SCAN_LIFECYCLE_MIGRATION = (
 FULL_SCAN_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0071_grant_worker_full_scan_execution.sql"
 )
+DURABLE_COVER_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0072_create_durable_cover_job_state.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -453,7 +456,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-33:] == [
+    assert migration_names[-34:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -487,6 +490,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0069_grant_worker_targeted_reconciliation.sql",
         "0070_authorize_full_scan_lifecycle.sql",
         "0071_grant_worker_full_scan_execution.sql",
+        "0072_create_durable_cover_job_state.sql",
     ]
 
 
@@ -528,6 +532,52 @@ def test_full_scan_publication_uses_shared_account_lifecycle_lock():
 
     assert "for share" in account_lock
     assert "for update" not in account_lock
+
+
+def test_durable_cover_state_migration_extends_jobs_without_weakening_existing_kinds():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "drop constraint if exists jobs_kind_check" in sql
+    assert "drop constraint if exists jobs_kind_attempts_check" in sql
+    assert "drop constraint if exists jobs_kind_recovery_check" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "kind = 'cover_bulk_refresh' and max_attempts = 2" in sql
+    assert "'cover_bulk_refresh'" in sql and "recovery_policy = 'retry_safe'" in sql
+
+
+def test_durable_cover_state_migration_adds_stable_authority_and_scrubs_paths():
+    sql = _normalized_sql(DURABLE_COVER_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "local_album_id",
+        "library_root_id",
+        "initiating_account_id",
+        "request_origin_id",
+        "candidate_generation",
+        "resource_revision",
+        "cancel_requested_at",
+        "row_revision",
+        "job_id",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "create table if not exists ops.cover_bulk_refreshes" in sql
+    assert "cover_bulk_refreshes_one_active_per_library_idx" in sql
+    assert "metadata #- '{track_paths}'" in sql
+    assert "#- '{source_payload,track_paths}'" in sql
+    assert "#- '{source_payload,album_payload}'" in sql
+    assert "drop column if exists selected_cover_private_path" not in sql
 
 
 def test_album_details_appearance_migration_has_closed_defaults():

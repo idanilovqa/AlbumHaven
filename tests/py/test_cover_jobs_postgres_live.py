@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+from urllib.parse import urlparse
+from uuid import uuid4
+
+import pytest
+
+from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
+from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from tests.e2e.support import isolatedPostgres
+
+
+def _skip_or_fail_ci(message: str) -> None:
+    if any(
+        str(os.environ.get(name) or "").strip().casefold() in {"1", "true", "yes"}
+        for name in ("CI", "GITHUB_ACTIONS")
+    ):
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message)
+
+
+def _database_urls_or_skip() -> tuple[str, str]:
+    try:
+        setup_url, runtime_url = isolatedPostgres.resolve_isolated_database_urls()
+    except RuntimeError:
+        _skip_or_fail_ci("Dedicated setup and runtime Postgres URLs are invalid.")
+        raise AssertionError("unreachable")
+    if not Path(str(os.environ.get("PGPASSFILE") or "")).is_file():
+        _skip_or_fail_ci("Dedicated isolated Postgres PGPASSFILE is unavailable.")
+    identities = {
+        ((urlparse(url).hostname or "").casefold(), urlparse(url).port or 5432, urlparse(url).path)
+        for url in (setup_url, runtime_url)
+    }
+    if len(identities) != 1:
+        _skip_or_fail_ci("Dedicated Postgres roles do not share one database.")
+    return setup_url, runtime_url
+
+
+def _drop_schemas(setup_url: str) -> None:
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("drop schema if exists app, integration, library, ops cascade")
+
+
+@pytest.fixture(scope="module")
+def live_cover_database():
+    setup_url, runtime_url = _database_urls_or_skip()
+    try:
+        _drop_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        yield setup_url, runtime_url
+    finally:
+        _drop_schemas(setup_url)
+
+
+def _seed_cover_scope(setup_url: str) -> tuple[int, int, str, str]:
+    suffix = uuid4().hex[:10]
+    album_key = f"cover-album-{suffix}"
+    origin_key = f"cover-origin-{suffix}"
+    with isolatedPostgres._connect(setup_url) as connection:
+        account_id = int(connection.execute(
+            """
+            insert into app.accounts (
+              display_name, username_display, username_normalized,
+              contact_email, contact_email_normalized, account_kind, is_active
+            ) values (%s, %s, %s, %s, %s, 'managed', true)
+            returning id
+            """,
+            (suffix, suffix, suffix, f"{suffix}@example.invalid", f"{suffix}@example.invalid"),
+        ).fetchone()["id"])
+        library_id = int(connection.execute(
+            "insert into library.libraries (owner_account_id, name, library_kind) "
+            "values (%s, %s, 'local') returning id",
+            (account_id, f"Cover {suffix}"),
+        ).fetchone()["id"])
+        connection.execute(
+            "insert into library.library_memberships (library_id, account_id, membership_role) "
+            "values (%s, %s, 'owner')",
+            (library_id, account_id),
+        )
+        connection.execute(
+            "insert into app.capabilities (account_id, capability_key, scope_kind, scope_id) "
+            "values (%s, 'library.covers.lookup', 'library', %s)",
+            (account_id, library_id),
+        )
+        connection.execute(
+            "insert into app.request_origins "
+            "(account_id, client_surface_class, origin_type, origin_key) "
+            "values (%s, 'private_web', 'browser', %s)",
+            (account_id, origin_key),
+        )
+        root_id = int(connection.execute(
+            "insert into library.library_roots "
+            "(library_id, root_path, root_kind, is_active, metadata) "
+            "values (%s, %s, 'main', true, '{}'::jsonb) returning id",
+            (library_id, rf"C:\private\cover-{suffix}"),
+        ).fetchone()["id"])
+        artist_id = int(connection.execute(
+            "insert into library.local_artists (library_id, artist_key, name) "
+            "values (%s, %s, 'Cover Artist') returning id",
+            (library_id, f"artist-{suffix}"),
+        ).fetchone()["id"])
+        album_id = int(connection.execute(
+            "insert into library.local_albums (library_id, artist_id, album_key, title) "
+            "values (%s, %s, %s, 'Cover Album') returning id",
+            (library_id, artist_id, album_key),
+        ).fetchone()["id"])
+        track_id = int(connection.execute(
+            "insert into library.local_tracks (library_id, album_id, artist_id, track_key, title) "
+            "values (%s, %s, %s, %s, 'Track') returning id",
+            (library_id, album_id, artist_id, f"track-{suffix}"),
+        ).fetchone()["id"])
+        connection.execute(
+            "insert into library.local_track_files "
+            "(track_id, library_root_id, private_path, relative_path) "
+            "values (%s, %s, %s, '01.flac')",
+            (track_id, root_id, rf"C:\private\cover-{suffix}\01.flac"),
+        )
+    return account_id, library_id, album_key, origin_key
+
+
+def test_live_cover_acceptance_is_atomic_path_free_restartable_and_revision_fenced(
+    live_cover_database,
+):
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+    jobs = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    repository = PostgresCoverJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=jobs,
+    )
+    generation = uuid4()
+    task_key = f"lookup-{uuid4().hex}"
+    accepted = repository.accept_candidate_lookup(
+        task_key=task_key,
+        library_id=library_id,
+        album_key=album_key,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    repeated = repository.accept_candidate_lookup(
+        task_key=task_key,
+        library_id=library_id,
+        album_key=album_key,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+
+    assert repeated.task_id == accepted.task_id
+    assert repeated.job_id == accepted.job_id
+    restarted = PostgresCoverJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    task = restarted.get_task(task_key=task_key, library_id=library_id)
+    assert task is not None and task["job_id"] == accepted.job_id
+    assert task["local_album_id"] is not None and task["library_root_id"] is not None
+    assert task["candidate_generation"] == generation
+    with isolatedPostgres._connect(setup_url) as connection:
+        generic = connection.execute(
+            "select subject_ref, parameters, idempotency_key from ops.jobs where id = %s",
+            (accepted.job_id,),
+        ).fetchone()
+    encoded = json.dumps(dict(generic), default=str).casefold()
+    assert "private" not in encoded
+    assert "01.flac" not in encoded
+
+    updated = restarted.compare_and_set_task(
+        task_key=task_key,
+        library_id=library_id,
+        expected_row_revision=accepted.row_revision,
+        allowed_statuses=("pending",),
+        next_status="running",
+    )
+    stale = restarted.compare_and_set_task(
+        task_key=task_key,
+        library_id=library_id,
+        expected_row_revision=accepted.row_revision,
+        allowed_statuses=("running",),
+        next_status="failed",
+        completed_at=datetime.now(timezone.utc),
+    )
+    assert updated is not None
+    assert stale is None

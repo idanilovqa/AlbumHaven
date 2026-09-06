@@ -14,6 +14,8 @@ const PLAYER_COLORS = Object.freeze({
   controlBorder: '#456789',
   waveformFill: '#56789A',
   waveformEdge: '#6789AB',
+  pairedControlFill: '#51A1C4',
+  pairedControlBorder: '#2F91D1',
   handle: '#789ABC',
 });
 const INTERACTION_COLORS = Object.freeze({
@@ -195,8 +197,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       'player-surface-start': PLAYER_COLORS.surfaceStart,
       'player-surface-end': PLAYER_COLORS.surfaceEnd,
       'player-surface-angle': '137deg',
-      play: PLAYER_COLORS.controlFill,
-      'player-control-border': PLAYER_COLORS.controlBorder,
+      play: PLAYER_COLORS.pairedControlFill,
+      'player-control-border': PLAYER_COLORS.pairedControlBorder,
       'waveform-fill': PLAYER_COLORS.waveformFill,
       'waveform-edge': PLAYER_COLORS.waveformEdge,
       'player-handle': PLAYER_COLORS.handle,
@@ -209,7 +211,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     expect(savedSnapshot.body.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(savedSnapshot.appBar.backgroundColor).toBe('rgb(230, 230, 230)');
     expect(savedSnapshot.appBar.brandArt).toEqual({ filter: 'brightness(0)', opacity: '0.78' });
-    expect(savedSnapshot.appBar.brandLabel.backgroundColor).toBe('rgb(52, 86, 120)');
+    expect(savedSnapshot.appBar.brandLabel.backgroundColor).toBe('rgb(81, 161, 196)');
     expect(savedSnapshot.appBar.notificationGlyph.imageOpacity).toBe('0');
     expect(savedSnapshot.appBar.notificationGlyph.pseudoBackgroundColor).toBe('rgb(32, 33, 36)');
     expect(savedSnapshot.appBar.notificationGlyph.pseudoMaskImage).not.toBe('none');
@@ -220,8 +222,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     expect(savedSnapshot.player.backgroundImage).toContain('137deg');
     expect(savedSnapshot.player.backgroundImage).toContain('rgb(18, 52, 86)');
     expect(savedSnapshot.player.backgroundImage).toContain('rgb(35, 69, 103)');
-    expect(savedSnapshot.playButton.backgroundColor).toBe('rgb(52, 86, 120)');
-    expect(savedSnapshot.playButton.borderColor).toBe('rgb(69, 103, 137)');
+    expect(savedSnapshot.playButton.backgroundColor).toBe('rgb(81, 161, 196)');
+    expect(savedSnapshot.playButton.borderColor).toBe('rgb(47, 145, 209)');
     expect(savedSnapshot.timeline.accentColor).toBe('rgb(86, 120, 154)');
     expect(savedSnapshot.coverButton.borderColor).toBe('rgb(103, 137, 171)');
     expect(savedSnapshot.loopSelection.borderLeftColor).toBe('rgb(120, 154, 188)');
@@ -282,8 +284,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.playerStyleHex('surface.end')).toHaveValue(PLAYER_COLORS.surfaceEnd);
     await expect(appearance.playerAngleInput).toHaveValue('137');
     await expect(appearance.playerSurfaceModeButton('gradient')).toHaveAttribute('aria-pressed', 'true');
-    await expect(appearance.playerStyleHex('controls.fill')).toHaveValue(PLAYER_COLORS.controlFill);
-    await expect(appearance.playerStyleHex('controls.border')).toHaveValue(PLAYER_COLORS.controlBorder);
+    await expect(appearance.playerStyleHex('controls.fill')).toHaveValue(PLAYER_COLORS.pairedControlFill);
+    await expect(appearance.playerStyleHex('controls.border')).toHaveValue(PLAYER_COLORS.pairedControlBorder);
     await expect(appearance.waveformHex('fill')).toHaveValue(PLAYER_COLORS.waveformFill);
     await expect(appearance.waveformHex('edge')).toHaveValue(PLAYER_COLORS.waveformEdge);
     await expect(appearance.playerStyleHex('handles.color')).toHaveValue(PLAYER_COLORS.handle);

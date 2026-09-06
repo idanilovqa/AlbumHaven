@@ -168,7 +168,6 @@ def test_live_post_scan_cover_refresh_creates_its_durable_scope(
         connect_to_database=isolatedPostgres._connect,
         job_repository=worker_jobs,
     ).begin_claimed_cover_refresh(
-        task_id=0,
         library_id=library_id,
         job_id=claim.job_id,
         attempt=claim.attempt,

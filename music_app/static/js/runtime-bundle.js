@@ -11299,7 +11299,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     attempt <= BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT;
     attempt += 1
   ) {
-    if (state.busy || hasPendingSidebarNavigation()) return false;
+    const tagEditOwnsGalleryResources = Boolean(
+      typeof hasPendingTagEditViewMutations === 'function'
+      && hasPendingTagEditViewMutations()
+    );
+    if (state.busy || hasPendingSidebarNavigation() || tagEditOwnsGalleryResources) {
+      return false;
+    }
     const originatingRevision = readViewStateRevision();
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
       preserveGalleryOptionsMenu: true,
@@ -14140,6 +14146,12 @@ function tagEditViewMutationStillOwnsResources(claim) {
       const claims = tagEditViewMutationResourceClaims.get(String(resourceKey || '')) || [];
       return claims[claims.length - 1] === generation;
     },
+  );
+}
+
+function hasPendingTagEditViewMutations() {
+  return Array.from(tagEditViewMutationResourceClaims.values()).some(
+    (claims) => claims.some((generation) => !settledTagEditViewMutations.has(generation)),
   );
 }
 
@@ -20550,7 +20562,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
     if (!bucket.album_rating) bucket.album_rating = parseOptionalInteger(track?.album_rating) || 0;
   });
 
-  return Array.from(grouped.values())
+  const groupedAlbums = Array.from(grouped.values());
+  const groupedAlbumBaseKeyCounts = groupedAlbums.reduce((counts, groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    counts.set(baseKey, Number(counts.get(baseKey) || 0) + 1);
+    return counts;
+  }, new Map());
+  groupedAlbums.forEach((groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    const year = parseOptionalInteger(groupedAlbum?.year);
+    if (year != null && Number(groupedAlbumBaseKeyCounts.get(baseKey) || 0) > 1) {
+      groupedAlbum.key = `${baseKey}::year::${year}`;
+    }
+  });
+
+  return groupedAlbums
     .map((bucket) => {
       const tracks = bucket.tracks.slice().sort((left, right) => {
         const discCompare = Number(left?.disc_number ?? 999) - Number(right?.disc_number ?? 999);
@@ -33249,10 +33279,23 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
   const artistNameMatchArtists = Array.isArray(searchContext?.artist_name_match_artists)
     ? searchContext.artist_name_match_artists
     : null;
+  const classifiedSearchMatchArtists = [
+    ...(Array.isArray(searchContext?.direct_match_artists)
+      ? searchContext.direct_match_artists
+      : []),
+    ...(Array.isArray(searchContext?.related_match_artists)
+      ? searchContext.related_match_artists
+      : []),
+  ];
+  const hasClassifiedSearchMatchArtists = (
+    Array.isArray(searchContext?.direct_match_artists)
+    && Array.isArray(searchContext?.related_match_artists)
+  );
   const matchesSearchArtist = (candidate) => (
     String(candidate || '').trim() === normalizedArtist
   );
   const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
+  const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
   const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
@@ -33264,6 +33307,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && (
         artistNameMatchArtists === null
         || isArtistNameMatch
+        || (hasClassifiedSearchMatchArtists && !isClassifiedSearchMatch)
       )
     )
     : hasAuthoritativeMountedFamilyContext;

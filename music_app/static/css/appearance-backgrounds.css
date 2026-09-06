@@ -202,7 +202,8 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] .settings-host :is(.password-control, .password-control input, .detail-field > input, .detail-field > select, .invitation-copy-fallback, .invitation-copy-fallback input, .account-button:not(.is-primary), .member-avatar) { color: var(--appearance-ink); background: var(--appearance-control); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host .password-control button { color: var(--appearance-accent); }
 /* Player preferences are one saved group, independent of seekbar display mode. */
-:root[data-appearance-player] .global-player { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); border-color: var(--appearance-player-ink); }
+:root[data-appearance-player] .global-player { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); }
+:root[data-appearance-player] .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
 :root[data-appearance-player] :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
 :root[data-appearance-player] :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
 :root[data-appearance-player] .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }

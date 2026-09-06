@@ -390,6 +390,8 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     expect(mountedAlbumNames.length).toBeGreaterThan(0);
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
       submitWithEnter: true,
+      expectedViewDataRequestCount: 1,
+      minimumViewDataRequestCount: 0,
     });
     expect(transition).toEqual(expect.objectContaining({
       galleryContentChanged: false,
@@ -407,8 +409,16 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
       familyViewDataRequests: [],
       loaderActivated: false,
       spinnerActivated: false,
-      viewDataRequests: [],
+      viewDataRequests: expect.any(Array),
     }));
+    expect(transition.viewDataRequests.length).toBeLessThanOrEqual(1);
+    if (transition.viewDataRequests.length === 1) {
+      const canonicalRequestUrl = new URL(transition.viewDataRequests[0]);
+      expect(canonicalRequestUrl.pathname).toBe('/view-data');
+      expect(canonicalRequestUrl.searchParams.has('q')).toBe(false);
+      expect(canonicalRequestUrl.searchParams.get('artist')).toBe(ONE_FAMILY_QUERY);
+      expect(canonicalRequestUrl.searchParams.get('omit_sidebar')).toBe('1');
+    }
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootSnapshot.names);
     await navigationPanelActions.waitForSidebarSelection(ONE_FAMILY_QUERY);

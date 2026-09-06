@@ -1490,7 +1490,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
       selected_artist: 'Transatlantic',
       selected_artist_source: 'auto_top_match',
       artist_name_match_artists: ['Transatlantic'],
-      direct_match_artists: ['Transatlantic'],
+      direct_match_artists: ['Transatlantic', 'Neal Morse'],
       related_match_artists: [],
     },
     related_artists: ['Neal Morse'],
@@ -1519,7 +1519,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
-test('handleSidebarArtistSelectionClick promotes an already visible family group before reconciling the active search', () => {
+test('handleSidebarArtistSelectionClick reuses an unclassified family group without fetching an empty search reconciliation', () => {
   const speedMenu = { hidden: false };
   const { context, calls } = createContext({
     galleryMenuOpen: true,
@@ -1658,12 +1658,7 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
       selected_artist_source: 'requested_artist',
     },
   }]);
-  assert.equal(calls.fetchAndRender.length, 1);
-  assert.equal(
-    calls.fetchAndRender[0].runtimeOptions.restartIfSameUrl,
-    true,
-    'explicit filtered-sidebar selection must replace an identical in-flight reconcile',
-  );
+  assert.equal(calls.fetchAndRender.length, 0);
   assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.equal(calls.hideVersionContextMenu, 1);
   assert.equal(calls.hideGalleryOptionsMenu, 1);

@@ -577,7 +577,11 @@ export class GlobalPlayerActions {
     if (target === 'cancel') {
       await expect(locator).toHaveCSS('color', 'rgb(239, 68, 68)');
     } else if (target === 'create') {
-      await expect(locator).toHaveCSS('color', 'rgb(74, 222, 128)');
+      const themedPlayerInk = await this.globalPlayer.readThemedPlayerInkColor();
+      await expect(locator).toHaveCSS(
+        'color',
+        themedPlayerInk.active ? themedPlayerInk.color : 'rgb(74, 222, 128)',
+      );
     }
     return this.readLoopActionVisualState();
   }

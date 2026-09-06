@@ -304,7 +304,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     attempt <= BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT;
     attempt += 1
   ) {
-    if (state.busy || hasPendingSidebarNavigation()) return false;
+    const tagEditOwnsGalleryResources = Boolean(
+      typeof hasPendingTagEditViewMutations === 'function'
+      && hasPendingTagEditViewMutations()
+    );
+    if (state.busy || hasPendingSidebarNavigation() || tagEditOwnsGalleryResources) {
+      return false;
+    }
     const originatingRevision = readViewStateRevision();
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
       preserveGalleryOptionsMenu: true,

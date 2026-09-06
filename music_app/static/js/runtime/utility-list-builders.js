@@ -1003,6 +1003,12 @@ function tagEditViewMutationStillOwnsResources(claim) {
   );
 }
 
+function hasPendingTagEditViewMutations() {
+  return Array.from(tagEditViewMutationResourceClaims.values()).some(
+    (claims) => claims.some((generation) => !settledTagEditViewMutations.has(generation)),
+  );
+}
+
 function pruneSettledTagEditViewMutationClaims() {
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     while (claims.length > 1 && settledTagEditViewMutations.has(claims[0])) {

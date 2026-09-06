@@ -1722,7 +1722,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
     if (!bucket.album_rating) bucket.album_rating = parseOptionalInteger(track?.album_rating) || 0;
   });
 
-  return Array.from(grouped.values())
+  const groupedAlbums = Array.from(grouped.values());
+  const groupedAlbumBaseKeyCounts = groupedAlbums.reduce((counts, groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    counts.set(baseKey, Number(counts.get(baseKey) || 0) + 1);
+    return counts;
+  }, new Map());
+  groupedAlbums.forEach((groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    const year = parseOptionalInteger(groupedAlbum?.year);
+    if (year != null && Number(groupedAlbumBaseKeyCounts.get(baseKey) || 0) > 1) {
+      groupedAlbum.key = `${baseKey}::year::${year}`;
+    }
+  });
+
+  return groupedAlbums
     .map((bucket) => {
       const tracks = bucket.tracks.slice().sort((left, right) => {
         const discCompare = Number(left?.disc_number ?? 999) - Number(right?.disc_number ?? 999);

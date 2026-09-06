@@ -236,6 +236,32 @@ test('changing only player colors cannot change Main-elements interaction tokens
   assert.deepEqual(secondInteractions, firstInteractions);
 });
 
+test('themed player boundaries preserve floating hover and focus strength', () => {
+  const basePlayerRule = cssRule(
+    appearanceCss,
+    ':root\\[data-appearance-player\\] \\.global-player(?!:)\\b',
+  );
+  const nonFloatingBoundaryRule = cssRule(
+    appearanceCss,
+    ':root\\[data-appearance-player\\] \\.global-player:not\\(\\.is-floating-compact\\)',
+  );
+
+  assert.doesNotMatch(
+    basePlayerRule,
+    /border-color\s*:/,
+    'the broad theme rule must not flatten the floating component edge state',
+  );
+  assert.match(
+    nonFloatingBoundaryRule,
+    /border-color:\s*var\(--appearance-player-ink\)/,
+    'expanded and docked player boundaries still follow the saved player ink',
+  );
+  assert.match(
+    playerCss,
+    /\.global-player\.is-floating-compact:is\(:hover,:focus-within\)\s*\{[^}]*--compact-floating-edge-strength:\s*30%/s,
+  );
+});
+
 test('NavigationTree, editor tabs, and Save use non-player Appearance tokens', () => {
   const relevantRules = [...appearanceCss.matchAll(/([^{}]*(?:navigation-tree|appearance-editor-tab|background-save|editor-footer)[^{}]*)\{([^}]*)\}/gs)];
   assert.ok(relevantRules.length > 0, 'Appearance must expose rules for its navigation, tabs, and shared footer');

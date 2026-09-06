@@ -497,6 +497,44 @@ test('optimistic source split publishes exact full membership for both resulting
   assert.deepEqual(Array.from(suffix.tracks, (track) => track.path), [sourceTracks[0].path]);
 });
 
+test('optimistic year split publishes distinct request keys for every resulting year', () => {
+  const context = loadHelpers();
+  const firstPath = 'D:\\Synthetic Music\\Rarity Artist\\Year Split\\01.mp3';
+  const secondPath = 'D:\\Synthetic Music\\Rarity Artist\\Year Split\\02.mp3';
+  const album = {
+    key: 'rarity artist::year split',
+    name: 'Year Split',
+    album_artist: 'Rarity Artist',
+    year: 2004,
+    tracks: [
+      {
+        path: firstPath,
+        album: 'Year Split',
+        album_artist: 'Rarity Artist',
+        year: 2004,
+      },
+      {
+        path: secondPath,
+        album: 'Year Split',
+        album_artist: 'Rarity Artist',
+        year: 2004,
+      },
+    ],
+  };
+
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [firstPath]: { year: '2014' },
+  });
+
+  assert.deepEqual(
+    Array.from(candidates, (candidate) => candidate.key).sort(),
+    [
+      'rarity artist::year split::year::2004',
+      'rarity artist::year split::year::2014',
+    ],
+  );
+});
+
 test('album-only split preserves raw album-artist credits without an implicit artist edit', () => {
   const context = loadHelpers();
   const firstPath = 'C:\\Music\\ДДТ\\Студийные записи\\01 First.flac';

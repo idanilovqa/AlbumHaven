@@ -4440,6 +4440,32 @@ test('a pending second move supersedes the first move before either save task co
   assert.equal(context.tagEditViewMutationStillOwnsResources(secondClaim), true);
 });
 
+test('tag-edit mutation claims report pending ownership until they settle', () => {
+  const context = loadHelpers();
+  const track = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\01 First.flac',
+    title: 'First',
+  };
+  const source = {
+    key: 'ordering-source',
+    name: 'Source',
+    album_artist: 'Ordering Artist',
+    tracks: [track],
+  };
+
+  assert.equal(context.hasPendingTagEditViewMutations(), false);
+  const claim = context.claimTagEditViewMutation(
+    source,
+    [track.path],
+    { [track.path]: { album: 'Destination' } },
+  );
+  assert.equal(context.hasPendingTagEditViewMutations(), true);
+
+  context.settleTagEditViewMutation(claim);
+
+  assert.equal(context.hasPendingTagEditViewMutations(), false);
+});
+
 test('watchSaveTask prevents a delayed canonical terminal payload from overwriting a newer overlapping edit', async () => {
   const context = loadHelpers();
   const movedTrack = {

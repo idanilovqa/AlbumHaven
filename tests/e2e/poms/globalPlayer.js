@@ -475,6 +475,14 @@ export class GlobalPlayer extends BasePage {
     };
   }
 
+  async readThemedPlayerInkColor() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the production player theme boundary
+    return this.player.evaluate((player) => ({
+      active: document.documentElement.hasAttribute('data-appearance-player'),
+      color: getComputedStyle(player).color,
+    }));
+  }
+
   async readMainLoopVisualSnapshot() {
     const [waveformBounds, selectionBounds, startHandleBounds, endHandleBounds] = await Promise.all([
       this.waveformCanvas.boundingBox(),

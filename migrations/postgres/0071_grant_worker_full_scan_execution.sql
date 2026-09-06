@@ -554,7 +554,11 @@ begin
              and root.metadata ->> 'root_id' = any(p_observed_root_ids)
              and starts_with(
                library.local_path_key(input.private_path),
-               rtrim(library.local_path_key(root.root_path), '/') || '/'
+               library.local_path_key(root.root_path) || case
+                 library.local_path_style(root.root_path)
+                 when 'windows' then E'\\'
+                 else '/'
+               end
              )
         )
   ) then

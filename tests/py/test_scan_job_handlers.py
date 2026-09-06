@@ -602,6 +602,34 @@ class _FullScanner:
         return result
 
 
+def test_full_scan_resource_validator_initializes_claim_before_loading_scope():
+    from music_app.jobs.scan_handlers import build_full_scan_resource_validator
+
+    repository = _FullScanRepository()
+    decision = build_full_scan_resource_validator(scan_repository=repository)(
+        _full_claim(),
+        SimpleNamespace(),
+        NOW,
+    )
+
+    assert decision.allowed is True
+    assert decision.reason_code == "full_scan_scope_current"
+    assert repository.loads == [
+        {"job_id": 902, "worker_id": "worker-full", "lease_token": "lease-full"}
+    ]
+    assert repository.scope_loads == [
+        {
+            "intent_id": 85,
+            "library_id": 19,
+            "job_id": 902,
+            "attempt": 3,
+            "worker_id": "worker-full",
+            "lease_token": "lease-full",
+            "now": NOW,
+        }
+    ]
+
+
 def _full_handler(repository, scanner, *, logged=None, watcher=None):
     from music_app.jobs.scan_handlers import build_full_scan_handler
 

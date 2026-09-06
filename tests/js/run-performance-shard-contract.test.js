@@ -37,6 +37,16 @@ test('performance profile runner prepares one isolated fixture before compatible
   assert.match(source, /6665[\s\S]*6669/, 'the allocator must reject the browser-forbidden IRC port range');
   assert.match(source, /bootstrap-windows-postgres\.ps1/);
   assert.match(source, /Mode\s*=\s*['"]Provision['"]/i);
+  assert.match(
+    source,
+    /AppPrivilegeMode\s*=\s*['"]Inherited['"]/i,
+    'durable-job performance targets require the app role to inherit the runtime contract role',
+  );
+  assert.match(
+    source,
+    /-AppPrivilegeMode\s+Inherited/i,
+    'teardown must use the same inherited-role contract as provisioning',
+  );
   assert.match(source, /ExpectedMajorVersion\s*=\s*\$ExpectedPostgresMajor/);
   assert.match(source, /Port\s*=\s*\$PostgresPort/);
   assert.match(source, /\$postgresServiceName\s*=\s*["']postgresql-x64-\$ExpectedPostgresMajor["']/);

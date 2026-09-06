@@ -32,11 +32,14 @@ def create_worker_pool(config: Any, *, pool_factory: Callable[..., Any] | None =
         except ImportError:
             raise RuntimeError("psycopg_pool is required for the jobs worker") from None
         pool_factory = ConnectionPool
+    from psycopg.rows import dict_row
+
     return pool_factory(
         config.database_url,
         min_size=1,
         max_size=config.concurrency + 1,
         timeout=10,
+        kwargs={"row_factory": dict_row},
     )
 
 

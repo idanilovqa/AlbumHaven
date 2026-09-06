@@ -225,6 +225,11 @@ def build_full_scan_resource_validator(
         if intent_id is None or claim.library_id is None:
             return AuthorizationDecision(False, "full_scan_scope_invalid")
         try:
+            intent = scan_repository.load_claimed_full_scan(
+                job_id=claim.job_id,
+                worker_id=claim.worker_id,
+                lease_token=claim.lease_token,
+            )
             scope = scan_repository.load_claimed_full_scan_scope(
                 intent_id=intent_id,
                 library_id=claim.library_id,
@@ -236,13 +241,22 @@ def build_full_scan_resource_validator(
             )
         except Exception:
             return AuthorizationDecision(False, "full_scan_scope_invalid")
+        required_root_ids = set(getattr(intent, "root_ids", ()) or ())
         if getattr(scope, "scope_complete", None) is not True:
             return AuthorizationDecision(False, "full_scan_root_invalid")
         roots = getattr(scope, "roots", ())
-        if not _current_roots_valid(
-            roots,
-            required_root_ids={str(root.get("id") or "") for root in roots},
-            library_id=claim.library_id,
+        observed_root_ids = {str(root.get("id") or "") for root in roots}
+        if (
+            getattr(intent, "intent_id", None) != intent_id
+            or getattr(intent, "library_id", None) != claim.library_id
+            or getattr(scope, "inventory_mutation_revision", None)
+            != getattr(intent, "inventory_mutation_revision", None)
+            or not _current_roots_valid(
+                roots,
+                required_root_ids=required_root_ids,
+                library_id=claim.library_id,
+            )
+            or observed_root_ids != required_root_ids
         ):
             return AuthorizationDecision(False, "full_scan_root_invalid")
         return AuthorizationDecision(True, "full_scan_scope_current")
@@ -369,7 +383,17 @@ def build_full_scan_handler(
         except Exception as exc:
             if "revision conflict" in str(exc).lower():
                 return JobTransitionResult(JobState.FAILED, "full_scan_revision_conflict")
-            log("Full scan execution failed.")
+            diagnostic_code = "unclassified"
+            normalized_error = str(exc).casefold()
+            for marker, code in (
+                ("full scan publication input is invalid", "publication_input_invalid"),
+                ("full scan publication file scope is invalid", "publication_file_scope_invalid"),
+                ("full scan publication hierarchy is invalid", "publication_hierarchy_invalid"),
+            ):
+                if marker in normalized_error:
+                    diagnostic_code = code
+                    break
+            log(f"Full scan execution failed ({diagnostic_code}).")
             return JobTransitionResult(JobState.FAILED, "full_scan_failed")
         finally:
             if watcher_coordinator is not None:

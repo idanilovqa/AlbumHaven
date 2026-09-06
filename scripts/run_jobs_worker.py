@@ -83,7 +83,7 @@ def _shutdown_signals() -> tuple[int, ...]:
     return tuple(dict.fromkeys(candidates))
 
 
-def _build_worker(config: Any) -> Any:
+def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] | None = None) -> Any:
     """Wire the durable worker with its closed handler set."""
 
     from config import Config
@@ -179,6 +179,7 @@ def _build_worker(config: Any) -> Any:
                 config=scan_config,
                 scan_repository=scan_repository,
             ),
+            log_event=full_scan_log_event,
         ),
     )
     handlers.register(

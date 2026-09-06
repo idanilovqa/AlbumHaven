@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import ipaddress
 import json
+import multiprocessing
 import os
 import re
 import shutil
@@ -27,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 from tests.e2e.support.isolatedPostgres import (  # noqa: E402
     IsolatedDatabaseOwnershipLock,
+    PERFORMANCE_AUTH_HMAC_SECRET,
     PERFORMANCE_AUTH_PASSWORD,
     PERFORMANCE_AUTH_USERNAME,
     configure_performance_auth_environment,
@@ -34,6 +37,9 @@ from tests.e2e.support.isolatedPostgres import (  # noqa: E402
 )
 from tests.e2e.support.privateFixtureData import (  # noqa: E402
     resolve_approved_cover_by_sha256,
+)
+from tests.e2e.support.scanPerformanceWorker import (  # noqa: E402
+    run_scan_performance_worker as _run_scan_performance_worker,
 )
 
 try:
@@ -373,6 +379,7 @@ def _reset_scan_performance_database_sql() -> str:
 
 
 def _seed_bootstrap_local_library_sql() -> str:
+    request_origin_key = _performance_request_origin_key()
     return """
         with owner_account as (
           insert into app.accounts (
@@ -396,11 +403,33 @@ def _seed_bootstrap_local_library_sql() -> str:
           select id, 'local-bootstrap-owner', '{"source":"scan_performance_harness"}'::jsonb
           from owner_account
           returning account_id
+        ),
+        request_origin as (
+          insert into app.request_origins (
+            account_id, client_surface_class, origin_type, origin_key, metadata
+          )
+          select
+            account_id,
+            'private_web',
+            'network',
+            '__REQUEST_ORIGIN_KEY__',
+            '{"source":"scan_performance_harness"}'::jsonb
+          from bootstrap_owner
+          returning account_id
         )
         insert into library.libraries (owner_account_id, name, library_kind, metadata)
         select account_id, 'Local Library', 'local', '{"source":"scan_performance_harness"}'::jsonb
-        from bootstrap_owner;
-    """
+        from request_origin;
+    """.replace("__REQUEST_ORIGIN_KEY__", request_origin_key)
+
+
+def _performance_request_origin_key(peer: str = "127.0.0.1") -> str:
+    digest = hmac.new(
+        PERFORMANCE_AUTH_HMAC_SECRET.encode("utf-8"),
+        f"policy-origin\0{peer}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"hmac:v1:{digest}"
 
 
 def load_real_cover_manifest() -> dict[str, Any]:
@@ -845,6 +874,75 @@ def create_scan_performance_asgi_app(scenario: str = "cold"):
     return create_asgi_app()
 
 
+def _wait_for_scan_performance_worker_running(
+    process: Any,
+    database_url: str,
+    *,
+    timeout_seconds: float = 15.0,
+) -> None:
+    import psycopg
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not process.is_alive():
+            raise RuntimeError("Scan performance durable worker exited during startup.")
+        with psycopg.connect(database_url) as connection:
+            row = connection.execute(
+                "select exists ("
+                "select 1 from ops.worker_instances where lifecycle_state = 'running'"
+                ")"
+            ).fetchone()
+        if bool((row or (False,))[0]):
+            return
+        time.sleep(0.05)
+    raise RuntimeError("Scan performance durable worker did not become ready.")
+
+
+class ManagedScanPerformanceWorker:
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        diagnostic_path: str = "",
+        process_context: Any | None = None,
+        wait_until_running: Any | None = None,
+    ) -> None:
+        self._database_url = database_url
+        self._diagnostic_path = diagnostic_path
+        self._context = process_context or multiprocessing.get_context("spawn")
+        self._wait_until_running = (
+            wait_until_running or _wait_for_scan_performance_worker_running
+        )
+        self._stop_event = self._context.Event()
+        self._process: Any | None = None
+
+    def start(self) -> None:
+        if self._process is not None:
+            raise RuntimeError("Scan performance durable worker is already started.")
+        process = self._context.Process(
+            target=_run_scan_performance_worker,
+            args=(self._stop_event, self._diagnostic_path),
+            name="album-haven-scan-performance-worker",
+        )
+        self._process = process
+        process.start()
+        self._wait_until_running(process, self._database_url)
+
+    def stop(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        self._stop_event.set()
+        process.join(35.0)
+        self._process = None
+        if process.is_alive():
+            process.terminate()
+            process.join(5.0)
+            raise RuntimeError("Scan performance durable worker did not stop cleanly.")
+        if process.exitcode != 0:
+            raise RuntimeError("Scan performance durable worker failed.")
+
+
 class ProductionStatusFileSampler:
     def __init__(
         self,
@@ -1027,8 +1125,9 @@ def main() -> None:
         samples_path=Path(raw_samples_path).expanduser().resolve(strict=False),
     )
 
-    setup_database_url, _runtime_database_url = resolve_scan_performance_database_urls()
+    setup_database_url, runtime_database_url = resolve_scan_performance_database_urls()
     database_lock = _scan_database_lock(setup_database_url)
+    jobs_worker: ManagedScanPerformanceWorker | None = None
     original_failure: BaseException | None = None
     cleanup_failure: Exception | None = None
     try:
@@ -1036,6 +1135,13 @@ def main() -> None:
         database_lock.acquire()
         status_sampler.start()
         app = create_scan_performance_asgi_app(scenario)
+        jobs_worker = ManagedScanPerformanceWorker(
+            database_url=runtime_database_url,
+            diagnostic_path=str(
+                Path(raw_samples_path).with_suffix(".worker-diagnostic.txt")
+            ),
+        )
+        jobs_worker.start()
 
         print(
             f"Album Haven scan benchmark app listening on http://127.0.0.1:{args.port} "
@@ -1057,6 +1163,14 @@ def main() -> None:
                 print(f"Scan production status sampler cleanup failed: {sampler_exc}", file=sys.stderr)
             elif cleanup_failure is None:
                 cleanup_failure = sampler_exc
+        if jobs_worker is not None:
+            try:
+                jobs_worker.stop()
+            except Exception as worker_exc:
+                if original_failure is not None:
+                    print(f"Scan durable worker cleanup failed: {worker_exc}", file=sys.stderr)
+                elif cleanup_failure is None:
+                    cleanup_failure = worker_exc
         if str(os.environ.get("ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN") or "").strip() != "1":
             cleanup_temp_root()
         try:

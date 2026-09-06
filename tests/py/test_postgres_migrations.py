@@ -508,6 +508,15 @@ def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_priva
         assert private_column not in grant_columns
 
 
+def test_full_scan_publication_uses_the_authorized_root_path_style():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert (
+        "library.local_path_key(root.root_path) || case "
+        "library.local_path_style(root.root_path) when 'windows' then e'\\\\' else '/' end"
+    ) in sql
+
+
 def test_album_details_appearance_migration_has_closed_defaults():
     sql = _normalized_sql(ALBUM_DETAILS_APPEARANCE_MIGRATION.read_text(encoding="utf-8"))
 

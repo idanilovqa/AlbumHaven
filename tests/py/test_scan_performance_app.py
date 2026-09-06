@@ -45,6 +45,72 @@ def test_bootstrap_seed_uses_the_current_required_account_identity_shape():
     assert "scan-performance-owner@example.test" in sql
 
 
+def test_bootstrap_seed_registers_account_bound_privacy_safe_loopback_origin():
+    module = _load_module()
+    sql = module._seed_bootstrap_local_library_sql()
+    origin_key = module._performance_request_origin_key()
+
+    assert "insert into app.request_origins" in sql
+    assert "'private_web'" in sql
+    assert "'network'" in sql
+    assert origin_key in sql
+    assert "127.0.0.1" not in sql
+    assert "from bootstrap_owner" in sql
+    assert "from request_origin" in sql
+
+
+def test_managed_scan_worker_runs_in_a_separate_process_and_stops_cleanly():
+    module = _load_module()
+    events = []
+
+    class FakeEvent:
+        def set(self):
+            events.append("stop.set")
+
+    class FakeProcess:
+        exitcode = 0
+
+        def start(self):
+            events.append("process.start")
+
+        def join(self, timeout):
+            events.append(("process.join", timeout))
+
+        def is_alive(self):
+            return False
+
+        def terminate(self):
+            events.append("process.terminate")
+
+    class FakeContext:
+        def Event(self):
+            return FakeEvent()
+
+        def Process(self, *, target, args, name):
+            events.append(("process.create", target, len(args), name))
+            return FakeProcess()
+
+    worker = module.ManagedScanPerformanceWorker(
+        database_url="postgresql://worker@localhost/isolated",
+        process_context=FakeContext(),
+        wait_until_running=lambda process, database_url: events.append(
+            ("worker.running", process, database_url)
+        ),
+    )
+
+    worker.start()
+    worker.stop()
+
+    assert events[0][0] == "process.create"
+    assert events[0][1] is module._run_scan_performance_worker
+    assert events[0][2] == 2
+    assert events[1] == "process.start"
+    assert events[2][0] == "worker.running"
+    assert events[3] == "stop.set"
+    assert events[4] == ("process.join", 35.0)
+    assert "process.terminate" not in events
+
+
 def test_performance_auth_environment_is_loopback_scoped(monkeypatch):
     module = _load_module()
     monkeypatch.delenv("ALBUM_HAVEN_BOOTSTRAP_USERNAME", raising=False)
@@ -881,7 +947,19 @@ def test_launcher_holds_database_lock_through_server_and_cleanup(setup_fails, mo
         def stop(self):
             events.append("sampler.stop")
 
+    class JobsWorker:
+        def __init__(self, *, database_url, diagnostic_path):
+            assert database_url == "runtime-url"
+            assert diagnostic_path.endswith(".worker-diagnostic.txt")
+
+        def start(self):
+            events.append("worker.start")
+
+        def stop(self):
+            events.append("worker.stop")
+
     monkeypatch.setattr(module, "ProductionStatusFileSampler", Sampler)
+    monkeypatch.setattr(module, "ManagedScanPerformanceWorker", JobsWorker)
 
     if setup_fails:
         with pytest.raises(RuntimeError, match="setup failed"):
@@ -893,6 +971,8 @@ def test_launcher_holds_database_lock_through_server_and_cleanup(setup_fails, mo
     assert "sampler.stop" in events
     assert events[-2:] == ["cleanup", "lock.release"]
     assert ("server" in events) is (not setup_fails)
+    assert ("worker.start" in events) is (not setup_fails)
+    assert ("worker.stop" in events) is (not setup_fails)
 
 
 def test_launcher_preserves_caller_owned_scan_profile_root(monkeypatch):
@@ -916,6 +996,17 @@ def test_launcher_preserves_caller_owned_scan_profile_root(monkeypatch):
         def stop(self):
             events.append("sampler.stop")
 
+    class JobsWorker:
+        def __init__(self, *, database_url, diagnostic_path):
+            assert database_url == "runtime-url"
+            assert diagnostic_path.endswith(".worker-diagnostic.txt")
+
+        def start(self):
+            events.append("worker.start")
+
+        def stop(self):
+            events.append("worker.stop")
+
     monkeypatch.setattr(sys, "argv", ["scanPerformanceApp.py", "--scenario", "cold"])
     monkeypatch.setenv(module._SCAN_STATUS_SAMPLES_ENV, "C:/tmp/scan-status.jsonl")
     monkeypatch.setenv("ALBUM_HAVEN_E2E_PRESERVE_ON_SHUTDOWN", "1")
@@ -924,6 +1015,7 @@ def test_launcher_preserves_caller_owned_scan_profile_root(monkeypatch):
     monkeypatch.setattr(module, "install_shutdown_handlers", lambda: None)
     monkeypatch.setattr(module, "create_scan_performance_asgi_app", lambda _scenario: object())
     monkeypatch.setattr(module, "ProductionStatusFileSampler", Sampler)
+    monkeypatch.setattr(module, "ManagedScanPerformanceWorker", JobsWorker)
     monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: events.append("server"))
     monkeypatch.setattr(module, "cleanup_temp_root", lambda: events.append("cleanup"))
 

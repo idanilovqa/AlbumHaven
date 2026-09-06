@@ -112,3 +112,4 @@ def test_worker_pool_uses_only_worker_url_and_bounded_size():
     assert kwargs["min_size"] == 1
     assert kwargs["max_size"] == 5
     assert 0 < kwargs["timeout"] <= 30
+    assert kwargs["kwargs"]["row_factory"].__name__ == "dict_row"

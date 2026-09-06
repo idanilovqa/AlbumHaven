@@ -672,6 +672,9 @@ async function confirmManualTagEdit() {
     updates,
   );
   closeTagEditConfirmModal();
+  if (typeof claimLocalViewStateNavigation === 'function') {
+    claimLocalViewStateNavigation();
+  }
   const originatingViewStateRevision = readTagEditOriginViewStateRevision();
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()

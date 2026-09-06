@@ -154,6 +154,8 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0073_grant_worker_cover_lookup.sql` adds claim-scoped cover-task validation, current album/root/path reconstruction, bounded cancellation observation, and row-revision-plus-lease-fenced task publication. The worker receives only execute access to these narrow functions; private paths and provider results remain confined to the cover domain.
 
+`0074_grant_worker_cover_refresh.sql` adds atomic user bulk-refresh acceptance, one shared claimed execution scope for manual and post-scan refreshes, durable progress and cancellation, and an authenticated status projection. The worker reconstructs private inventory only through lease-fenced functions, while generic job rows and status retain opaque IDs, counts, and safe labels.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

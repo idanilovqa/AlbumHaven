@@ -60,6 +60,9 @@ DURABLE_COVER_STATE_MIGRATION = (
 COVER_LOOKUP_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0073_grant_worker_cover_lookup.sql"
 )
+COVER_REFRESH_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0074_grant_worker_cover_refresh.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -459,7 +462,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-35:] == [
+    assert migration_names[-36:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -495,6 +498,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0071_grant_worker_full_scan_execution.sql",
         "0072_create_durable_cover_job_state.sql",
         "0073_grant_worker_cover_lookup.sql",
+        "0074_grant_worker_cover_refresh.sql",
     ]
 
 
@@ -518,6 +522,26 @@ def test_cover_lookup_worker_migration_keeps_private_scope_behind_claim_fences()
     assert "grant execute on function ops.load_claimed_cover_lookup" in sql
     assert "grant select on library.local_track_files" not in sql
     assert "grant select on ops.cover_lookup_tasks" not in sql
+
+
+def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status():
+    sql = _normalized_sql(COVER_REFRESH_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    for function_name in (
+        "accept_cover_bulk_refresh",
+        "begin_claimed_cover_refresh",
+        "checkpoint_claimed_cover_refresh",
+        "finish_claimed_cover_refresh",
+        "persist_claimed_automatic_cover_selection",
+        "load_authorized_cover_refresh_status",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.kind in ('cover_bulk_refresh', 'post_scan_cover_refresh')" in sql
+    assert "job.lease_expires_at > observed_at" in sql
+    assert "refresh.row_revision = expected_row_revision" in sql
+    assert "grant execute on function ops.begin_claimed_cover_refresh" in sql
+    assert "grant execute on function ops.persist_claimed_automatic_cover_selection" in sql
+    assert "grant select on library.local_track_files" not in sql
 
 
 def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():

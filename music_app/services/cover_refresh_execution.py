@@ -64,6 +64,26 @@ def _build_automatic_cover_write_guard(
     folder: Path,
     track_paths: set[str],
 ) -> Callable[..., object]:
+    claimed_persister = config.get("CLAIMED_COVER_SELECTION_PERSISTER")
+
+    def persist_selection(
+        selected_track_paths: set[str],
+        selected_cover_path: Path,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        if callable(claimed_persister):
+            return claimed_persister(
+                selected_track_paths,
+                selected_cover_path,
+                **kwargs,
+            )
+        return persist_cover_selection_for_tracks_for_config(
+            config,
+            selected_track_paths,
+            selected_cover_path,
+            **kwargs,
+        )
+
     def automatic_write_guard(
         write_action: Callable[[], object],
         *,
@@ -120,8 +140,7 @@ def _build_automatic_cover_write_guard(
                 return result
 
             persistence_origin = "user" if preserve_user_ownership else "automatic"
-            persistence_result = persist_cover_selection_for_tracks_for_config(
-                config,
+            persistence_result = persist_selection(
                 track_paths,
                 selected_cover_path,
                 cover_revision=provisional_revision,
@@ -146,8 +165,7 @@ def _build_automatic_cover_write_guard(
 
             exact_revision = cover_revision_for_path(written_path)
             if exact_revision != provisional_revision:
-                persist_cover_selection_for_tracks_for_config(
-                    config,
+                persist_selection(
                     track_paths,
                     written_path,
                     cover_revision=exact_revision,

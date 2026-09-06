@@ -194,4 +194,209 @@ def build_cover_lookup_handler(
     return handle
 
 
-__all__ = ["build_cover_lookup_handler", "build_cover_lookup_resource_validator"]
+def _cover_refresh_claim_valid(claim: ClaimedJob) -> bool:
+    if claim.library_id is None or claim.max_attempts != 2:
+        return False
+    if claim.kind in {
+        JobKind.POST_SCAN_COVER_REFRESH,
+        "post_scan_cover_refresh",
+    }:
+        revision = claim.resource_revision
+        return bool(
+            isinstance(revision, int)
+            and revision >= 0
+            and claim.subject_kind == "inventory_revision"
+            and claim.subject_ref == f"revision-{revision}"
+            and claim.parameters == {"inventory_revision": revision}
+            and claim.idempotency_key
+            == f"post-scan-cover-refresh:{claim.library_id}:{revision}"
+            and claim.account_id is None
+            and claim.capability_key is None
+        )
+    task_key = str(claim.subject_ref or "").strip()
+    task_id = claim.parameters.get("task_id")
+    mode = claim.parameters.get("mode")
+    return bool(
+        claim.kind in {JobKind.COVER_BULK_REFRESH, "cover_bulk_refresh"}
+        and claim.subject_kind == "cover_bulk_refresh"
+        and task_key
+        and isinstance(task_id, int)
+        and not isinstance(task_id, bool)
+        and task_id > 0
+        and mode in {"manual", "background"}
+        and isinstance(claim.parameters.get("force_search"), bool)
+        and claim.capability_key == "library.covers.fetch"
+        and claim.account_id is not None
+        and isinstance(claim.resource_revision, int)
+        and claim.resource_revision >= 0
+        and claim.idempotency_key
+        == f"cover-bulk-refresh:{claim.library_id}:{task_key}"
+    )
+
+
+def _refresh_claim_parameters(claim: ClaimedJob, now: datetime) -> dict[str, object]:
+    return {
+        "library_id": int(claim.library_id or 0),
+        "job_id": claim.job_id,
+        "attempt": claim.attempt,
+        "worker_id": claim.worker_id,
+        "lease_token": claim.lease_token,
+        "now": now,
+    }
+
+
+def build_cover_refresh_handler(
+    *,
+    cover_repository: Any,
+    config: Mapping[str, object],
+    logger: Any,
+    run_refresh: Callable[..., Mapping[str, object]],
+    clock: Callable[[], datetime] | None = None,
+) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
+    """Run user and post-scan bulk refreshes through one durable core."""
+
+    now = clock or (lambda: datetime.now(timezone.utc))
+
+    def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
+        if not _cover_refresh_claim_valid(claim):
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_scope_invalid")
+        try:
+            scope = cover_repository.begin_claimed_cover_refresh(
+                **_refresh_claim_parameters(claim, now()),
+                mode=(
+                    "post_scan"
+                    if claim.kind
+                    in {JobKind.POST_SCAN_COVER_REFRESH, "post_scan_cover_refresh"}
+                    else None
+                ),
+                inventory_revision=claim.resource_revision,
+                task_key=str(claim.subject_ref),
+            )
+        except Exception:
+            return JobTransitionResult(JobState.FAILED, "cover_refresh_scope_unavailable")
+        if scope is None:
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_scope_stale")
+
+        row_revision = int(scope.row_revision)
+        fence_lost = False
+
+        def should_cancel() -> bool:
+            nonlocal fence_lost
+            if fence_lost or context.cancel_requested or not context.lease_active:
+                return True
+            if not context.reauthorize().allowed:
+                return True
+            try:
+                return bool(
+                    cover_repository.cover_refresh_cancel_requested(
+                        **_refresh_claim_parameters(claim, now()),
+                        task_id=scope.task_id,
+                    )
+                )
+            except Exception:
+                fence_lost = True
+                return True
+
+        def progress(
+            *, current: int, total: int, downloaded: int, safe_label: str
+        ) -> bool:
+            nonlocal fence_lost, row_revision
+            if should_cancel():
+                return False
+            try:
+                next_revision = cover_repository.checkpoint_claimed_cover_refresh(
+                    **_refresh_claim_parameters(claim, now()),
+                    task_id=scope.task_id,
+                    expected_row_revision=row_revision,
+                    progress_current=current,
+                    progress_total=total,
+                    downloaded_count=downloaded,
+                    safe_display_label=safe_label,
+                )
+            except Exception:
+                next_revision = None
+            if next_revision is None:
+                fence_lost = True
+                return False
+            row_revision = int(next_revision)
+            return True
+
+        if should_cancel():
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_canceled")
+        execution_config = dict(config)
+
+        def persist_claimed_selection(
+            track_paths: set[str], selected_cover_path: Any, **options: object
+        ) -> dict[str, object]:
+            if should_cancel():
+                raise RuntimeError("cover refresh claim is no longer active")
+            return cover_repository.persist_claimed_automatic_cover_selection(
+                **_refresh_claim_parameters(claim, now()),
+                task_id=scope.task_id,
+                track_paths=track_paths,
+                selected_cover_path=selected_cover_path,
+                **options,
+            )
+
+        execution_config["CLAIMED_COVER_SELECTION_PERSISTER"] = (
+            persist_claimed_selection
+        )
+        try:
+            result = run_refresh(
+                scope=scope,
+                config=execution_config,
+                logger=logger,
+                should_cancel=should_cancel,
+                progress=progress,
+            )
+        except Exception:
+            result = {"failed": 1}
+
+        if fence_lost or not context.lease_active:
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_lease_lost")
+        canceled = should_cancel()
+        next_status = "canceled" if canceled else "completed"
+        try:
+            finished = cover_repository.finish_claimed_cover_refresh(
+                **_refresh_claim_parameters(claim, now()),
+                task_id=scope.task_id,
+                expected_row_revision=row_revision,
+                next_status=next_status,
+                processed_count=max(0, int(result.get("processed") or 0)),
+                downloaded_count=max(0, int(result.get("downloaded") or 0)),
+                failed_count=max(0, int(result.get("failed") or 0)),
+            )
+        except Exception:
+            finished = False
+        if not finished:
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_lease_lost")
+        if canceled:
+            return JobTransitionResult(JobState.CANCELED, "cover_refresh_canceled")
+        return JobTransitionResult(JobState.SUCCEEDED, "cover_refresh_completed")
+
+    return handle
+
+
+def build_cover_bulk_refresh_resource_validator(
+    *, cover_repository: Any
+) -> Callable[[ClaimedJob, Any, datetime], AuthorizationDecision]:
+    """Fail closed for malformed bulk claims; the handler loads live domain scope."""
+
+    del cover_repository
+
+    def validate(
+        claim: ClaimedJob, _authorization_context: Any, _now: datetime
+    ) -> AuthorizationDecision:
+        if not _cover_refresh_claim_valid(claim):
+            return AuthorizationDecision(False, "cover_refresh_scope_invalid")
+        return AuthorizationDecision(True, "cover_refresh_scope_current")
+
+    return validate
+
+
+__all__ = [
+    "build_cover_lookup_handler",
+    "build_cover_lookup_resource_validator",
+    "build_cover_refresh_handler",
+    "build_cover_bulk_refresh_resource_validator",
+]

@@ -88,6 +88,10 @@ def _scan_job_repository(request: Request):
     return getattr(request.app.state, "scan_job_repository", None)
 
 
+def _cover_job_repository(request: Request):
+    return getattr(request.app.state, "cover_job_repository", None)
+
+
 def _authorized_scan_request(
     request: Request,
 ) -> tuple[object, int, str, tuple[str, ...]]:
@@ -894,6 +898,24 @@ async def index(request: Request) -> Response:
                 bootstrap_library_state.update(
                     project_durable_full_scan_status(durable_status)
                 )
+        except Exception:
+            pass
+    cover_jobs = _cover_job_repository(request)
+    if cover_jobs is not None:
+        try:
+            status_evaluation = evaluate_action_for_request(
+                request, "app.status.read"
+            )
+            status_library_id = getattr(status_evaluation.audit, "library_id", None)
+            if status_evaluation.decision.allowed and isinstance(
+                status_library_id, int
+            ) and status_library_id > 0:
+                cover_status = await run_in_threadpool(
+                    cover_jobs.load_cover_refresh_status,
+                    library_id=status_library_id,
+                )
+                if isinstance(cover_status, dict):
+                    bootstrap_library_state.update(cover_status)
         except Exception:
             pass
     query_raw = query_args.get("q", "").strip()

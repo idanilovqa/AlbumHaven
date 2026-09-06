@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from music_app.services.jobs.models import ClaimedJob, JobState
@@ -207,3 +208,136 @@ def test_cover_lookup_handler_stops_after_lost_publication_fence():
     assert observed == [False]
     assert outcome.next_state == JobState.CANCELED
     assert outcome.reason_code == "cover_lookup_lease_lost"
+
+
+def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress():
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+
+    claim = _claim(
+        job_id=88,
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-12",
+        parameters={"inventory_revision": 12},
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        idempotency_key="post-scan-cover-refresh:9:12",
+    )
+    scope = SimpleNamespace(
+        task_id=51,
+        task_key="post-scan-12",
+        row_revision=1,
+        file_cache={"C:/Music/Artist/Album/01.flac": {"path": "C:/Music/Artist/Album/01.flac"}},
+        progress_total=1,
+        mode="post_scan",
+        force_search=False,
+    )
+
+    class Repository:
+        def __init__(self):
+            self.checkpoints = []
+            self.finished = []
+            self.selections = []
+
+        def begin_claimed_cover_refresh(self, **_kwargs):
+            return scope
+
+        def cover_refresh_cancel_requested(self, **_kwargs):
+            return False
+
+        def checkpoint_claimed_cover_refresh(self, **kwargs):
+            self.checkpoints.append(kwargs)
+            return kwargs["expected_row_revision"] + 1
+
+        def finish_claimed_cover_refresh(self, **kwargs):
+            self.finished.append(kwargs)
+            return True
+
+        def persist_claimed_automatic_cover_selection(self, **kwargs):
+            self.selections.append(kwargs)
+            return {"album_rows_updated": 1, "track_file_rows_updated": 1}
+
+    repository = Repository()
+    runs = []
+
+    def run_refresh(**kwargs):
+        runs.append(kwargs)
+        kwargs["config"]["CLAIMED_COVER_SELECTION_PERSISTER"](
+            {"C:/Music/Artist/Album/01.flac"},
+            Path("C:/Music/Artist/Album/cover.jpg"),
+            cover_revision="revision-1",
+            cover_selection_origin="automatic",
+            reject_if_user_controlled=True,
+        )
+        kwargs["progress"](current=1, total=1, downloaded=0, safe_label="Album")
+        return {"processed": 1, "downloaded": 0, "failed": 0}
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository,
+        config={},
+        logger=SimpleNamespace(),
+        run_refresh=run_refresh,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert outcome.reason_code == "cover_refresh_completed"
+    assert runs[0]["scope"] is scope
+    assert repository.checkpoints[0]["safe_display_label"] == "Album"
+    assert repository.selections[0]["job_id"] == claim.job_id
+    assert repository.selections[0]["task_id"] == scope.task_id
+    assert repository.finished[0]["next_status"] == "completed"
+
+
+def test_shared_cover_refresh_core_cancels_when_projection_fence_is_lost():
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+
+    claim = _claim(
+        job_id=88,
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-12",
+        parameters={"inventory_revision": 12},
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        idempotency_key="post-scan-cover-refresh:9:12",
+    )
+
+    class Repository:
+        def begin_claimed_cover_refresh(self, **_kwargs):
+            return SimpleNamespace(
+                task_id=51,
+                task_key="post-scan-12",
+                row_revision=1,
+                file_cache={},
+                progress_total=0,
+                mode="post_scan",
+                force_search=False,
+            )
+
+        def cover_refresh_cancel_requested(self, **_kwargs):
+            return False
+
+        def checkpoint_claimed_cover_refresh(self, **_kwargs):
+            return None
+
+        def finish_claimed_cover_refresh(self, **_kwargs):
+            return False
+
+    def run_refresh(**kwargs):
+        assert kwargs["progress"](current=0, total=0, downloaded=0, safe_label="") is False
+        assert kwargs["should_cancel"]() is True
+        return {"processed": 0, "downloaded": 0, "failed": 0}
+
+    outcome = build_cover_refresh_handler(
+        cover_repository=Repository(),
+        config={},
+        logger=SimpleNamespace(),
+        run_refresh=run_refresh,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state == JobState.CANCELED
+    assert outcome.reason_code == "cover_refresh_lease_lost"

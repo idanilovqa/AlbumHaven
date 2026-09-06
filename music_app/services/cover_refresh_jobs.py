@@ -117,8 +117,6 @@ def log_cover_refresh_completion(
         "failed": result.get("failed", 0),
         "not_touched": result.get("skipped", 0),
         "not_found": result.get("failed", 0),
-        "downloaded_paths": result.get("downloaded_paths", []),
-        "files": result.get("downloaded_paths", []),
         "mode": mode,
     }
     if mode != "background":

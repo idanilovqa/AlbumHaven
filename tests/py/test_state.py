@@ -362,6 +362,44 @@ def test_automatic_write_guard_rolls_back_cover_and_new_reserve_when_commit_fail
     assert reserve_path.exists() is False
 
 
+def test_automatic_write_guard_uses_claimed_selection_persister(tmp_path: Path):
+    folder = tmp_path / "Artist" / "Album"
+    folder.mkdir(parents=True)
+    cover_path = folder / "cover.jpg"
+    replacement_bytes = b"claimed-cover-bytes"
+    captured = {}
+
+    def write_action():
+        cover_path.write_bytes(replacement_bytes)
+        return cover_path
+
+    write_action.selected_cover_path = cover_path
+    write_action.provisional_cover_revision = hashlib.sha256(
+        replacement_bytes
+    ).hexdigest()
+
+    def persist(track_paths, selected_cover_path, **kwargs):
+        captured.update(
+            track_paths=track_paths,
+            selected_cover_path=selected_cover_path,
+            **kwargs,
+        )
+        return kwargs["commit_guard"](lambda: None) or {
+            "album_rows_updated": 1,
+            "track_file_rows_updated": 1,
+        }
+
+    guard = cover_refresh_execution._build_automatic_cover_write_guard(
+        config={"CLAIMED_COVER_SELECTION_PERSISTER": persist},
+        folder=folder,
+        track_paths={str(folder / "song.mp3")},
+    )
+
+    assert guard(write_action, cover_selection_origin="automatic") == cover_path
+    assert captured["selected_cover_path"] == cover_path
+    assert captured["cover_selection_origin"] == "automatic"
+
+
 def test_automatic_write_guard_removes_new_cover_when_commit_fails_without_prior_cover(
     tmp_path: Path,
     monkeypatch,

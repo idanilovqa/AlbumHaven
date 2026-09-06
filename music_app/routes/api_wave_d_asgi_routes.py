@@ -93,6 +93,8 @@ def _durable_cover_request_context(request: Request):
             "library.covers.tasks.read",
             "library.covers.tasks.manage",
             "library.covers.write",
+            "library.covers.fetch",
+            "library.covers.fetch.cancel",
         }
         or not isinstance(getattr(audit, "account_id", None), int)
         or not isinstance(getattr(audit, "library_id", None), int)
@@ -1318,32 +1320,59 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
     library_state = _library_state(request)
     payload = await _json_payload(request)
     force_search = bool(payload.get("force_search")) if isinstance(payload, dict) else False
+    durable = _durable_cover_request_context(request)
     try:
-        start_result = start_manual_cover_refresh_request(
-            config=config,
-            logger=logger,
-            get_state=lambda: library_state,
-            start_background_refresh=(
-                lambda force=False, scan_mode="background": state_service.start_background_refresh_for_state(
-                    library_state,
-                    config,
-                    logger,
-                    force=force,
-                    scan_mode=scan_mode,
-                )
-            ),
-            get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(library_state),
-            submit_cover_job=state_service._COVER_EXECUTOR.submit,
-            refresh_unsuccessful_cover_artwork=(
-                lambda force_search=False: state_service.refresh_unsuccessful_cover_artwork_for_state(
-                    library_state,
-                    config,
-                    logger,
-                    force_search=force_search,
-                )
-            ),
-            force_search=force_search,
-        )
+        if durable is not None:
+            repository, audit = durable
+            accepted = repository.accept_bulk_refresh(
+                task_key=uuid.uuid4().hex,
+                library_id=audit.library_id,
+                account_id=audit.account_id,
+                request_origin_ref=request_origin_ref_for_request(request),
+                deployment_mode=audit.deployment_mode,
+                client_surface=audit.client_surface_class,
+                mode="manual",
+                force_search=force_search,
+                resource_revision=repository.current_inventory_revision(
+                    library_id=audit.library_id
+                ),
+                scheduled_at=datetime.now(timezone.utc),
+            )
+            start_result = {
+                "started": not accepted.already_running,
+                "already_running": accepted.already_running,
+                "queued_after_indexing": False,
+                "queued_count": 0,
+                "current_folder": "",
+            }
+        else:
+            start_result = start_manual_cover_refresh_request(
+                config=config,
+                logger=logger,
+                get_state=lambda: library_state,
+                start_background_refresh=(
+                    lambda force=False, scan_mode="background": state_service.start_background_refresh_for_state(
+                        library_state,
+                        config,
+                        logger,
+                        force=force,
+                        scan_mode=scan_mode,
+                    )
+                ),
+                get_file_cache_snapshot=lambda: state_service.cover_file_cache_snapshot_for_state(
+                    library_state
+                ),
+                submit_cover_job=state_service._COVER_EXECUTOR.submit,
+                refresh_unsuccessful_cover_artwork=(
+                    lambda force_search=False: state_service.refresh_unsuccessful_cover_artwork_for_state(
+                        library_state,
+                        config,
+                        logger,
+                        force_search=force_search,
+                    )
+                ),
+                force_search=force_search,
+            )
     except Exception as exc:
         log_app_event(
             config,
@@ -1377,4 +1406,19 @@ async def utilities_fetch_covers_unsuccessful(request: Request) -> JSONResponse:
 
 @router.post("/utilities/cancel-cover-scan")
 async def utilities_cancel_cover_scan(request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, **cancel_cover_refresh_status(get_state=lambda: _library_state(request))})
+    durable = _durable_cover_request_context(request)
+    if durable is not None:
+        repository, audit = durable
+        try:
+            result = repository.request_bulk_refresh_cancellation(
+                library_id=audit.library_id,
+                account_id=audit.account_id,
+                now=datetime.now(timezone.utc),
+            )
+        except Exception:
+            result = {"cancelled": False, "covers_in_progress": False}
+    else:
+        result = cancel_cover_refresh_status(
+            get_state=lambda: _library_state(request)
+        )
+    return JSONResponse({"ok": True, **result})

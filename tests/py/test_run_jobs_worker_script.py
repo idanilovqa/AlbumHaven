@@ -126,16 +126,17 @@ def test_worker_bootstrap_registers_the_closed_targeted_reconciliation_handler()
     assert "resource_validators" in source
 
 
-def test_worker_bootstrap_registers_post_scan_cover_bridge_and_validator():
+def test_worker_bootstrap_registers_shared_post_scan_cover_handler_and_validator():
     import inspect
 
     source = inspect.getsource(run_jobs_worker._build_worker)
 
-    assert "build_post_scan_cover_refresh_handler" in source
+    assert "build_cover_refresh_handler" in source
     assert "build_post_scan_cover_refresh_resource_validator" in source
     assert "JobKind.POST_SCAN_COVER_REFRESH" in source
-    assert "run_post_scan_cover_refresh_for_state" in source
-    assert "if callable(post_scan_cover_bridge)" in source
+    assert "run_claimed_cover_refresh" in source
+    assert "handlers.register(JobKind.POST_SCAN_COVER_REFRESH" in source
+    assert "handlers.register(JobKind.COVER_BULK_REFRESH" in source
     assert "claim_kinds=handlers.registered_kinds" in source
 
 

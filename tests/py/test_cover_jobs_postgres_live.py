@@ -296,3 +296,184 @@ def test_live_claimed_cover_lookup_is_worker_scoped_cancelable_and_fenced(
         task_payload={**running.task_payload, "status": "completed"},
     )
     assert stale is None
+
+
+def test_live_bulk_cover_refresh_is_restartable_worker_scoped_and_cancelable(
+    live_cover_database,
+):
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, _album_key, origin_key = _seed_cover_scope(setup_url)
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update library.libraries set metadata = jsonb_set(metadata, "
+            "'{inventory_mutation_revision}', '12'::jsonb) where id = %s",
+            (library_id,),
+        )
+
+    app_jobs = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    app_covers = PostgresCoverJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=app_jobs,
+    )
+    requested_at = datetime.now(timezone.utc)
+    task_key = f"bulk-{uuid4().hex}"
+    accepted = app_covers.accept_bulk_refresh(
+        task_key=task_key,
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        mode="manual",
+        force_search=True,
+        resource_revision=12,
+        scheduled_at=requested_at,
+    )
+    repeated = app_covers.accept_bulk_refresh(
+        task_key=f"ignored-{uuid4().hex}",
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        mode="manual",
+        force_search=True,
+        resource_revision=12,
+        scheduled_at=requested_at,
+    )
+    assert repeated.task_id == accepted.task_id
+    assert repeated.job_id == accepted.job_id
+    assert repeated.already_running is True
+
+    worker_jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claimed_at = requested_at + timedelta(seconds=1)
+    claim = worker_jobs.claim(
+        worker_id="cover-refresh-live",
+        now=claimed_at,
+        lease_seconds=60,
+        kinds=("cover_bulk_refresh",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_covers = PostgresCoverJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=worker_jobs,
+    )
+    claim_values = {
+        "task_id": accepted.task_id,
+        "library_id": library_id,
+        "job_id": claim.job_id,
+        "attempt": claim.attempt,
+        "worker_id": claim.worker_id,
+        "lease_token": claim.lease_token,
+        "now": claimed_at + timedelta(seconds=1),
+    }
+    scope = worker_covers.begin_claimed_cover_refresh(
+        **claim_values,
+        task_key=task_key,
+        mode="manual",
+        inventory_revision=12,
+    )
+    assert scope is not None
+    assert scope.mode == "manual" and scope.force_search is True
+    assert scope.progress_total == 1
+    assert len(scope.file_cache) == 1
+    assert next(iter(scope.file_cache)).endswith("01.flac")
+
+    selected_cover = Path(next(iter(scope.file_cache))).parent / "cover.jpg"
+    persisted = worker_covers.persist_claimed_automatic_cover_selection(
+        **claim_values,
+        track_paths=set(scope.file_cache),
+        selected_cover_path=selected_cover,
+        cover_revision="claimed-revision-1",
+        cover_selection_origin="automatic",
+        reject_if_user_controlled=True,
+    )
+    assert persisted["album_rows_updated"] == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        selected = connection.execute(
+            "select cover_path, metadata ->> 'cover_selection_origin' as origin "
+            "from library.local_albums where library_id = %s",
+            (library_id,),
+        ).fetchone()
+    assert selected["cover_path"] == str(selected_cover)
+    assert selected["origin"] == "automatic"
+
+    running = app_covers.load_cover_refresh_status(library_id=library_id)
+    assert running == {
+        "covers_in_progress": True,
+        "covers_processed": 0,
+        "covers_total": 0,
+        "covers_downloaded": 0,
+        "covers_current_folder": "",
+    }
+    next_revision = worker_covers.checkpoint_claimed_cover_refresh(
+        **claim_values,
+        expected_row_revision=scope.row_revision,
+        progress_current=1,
+        progress_total=1,
+        downloaded_count=1,
+        safe_display_label="Cover Album",
+    )
+    assert next_revision is not None
+    assert worker_covers.finish_claimed_cover_refresh(
+        **claim_values,
+        expected_row_revision=next_revision,
+        next_status="completed",
+        processed_count=1,
+        downloaded_count=1,
+    ) is True
+    completed = app_covers.load_cover_refresh_status(library_id=library_id)
+    assert completed == {
+        "covers_in_progress": False,
+        "covers_processed": 1,
+        "covers_total": 1,
+        "covers_downloaded": 1,
+        "covers_current_folder": "",
+    }
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = %s where id = %s",
+            (requested_at, accepted.job_id),
+        )
+    with pytest.raises(RuntimeError, match="resource or lease fence"):
+        worker_covers.persist_claimed_automatic_cover_selection(
+            **{**claim_values, "now": requested_at + timedelta(seconds=5)},
+            track_paths=set(scope.file_cache),
+            selected_cover_path=selected_cover,
+            cover_revision="stale-revision",
+            cover_selection_origin="automatic",
+            reject_if_user_controlled=True,
+        )
+
+    canceled_task = app_covers.accept_bulk_refresh(
+        task_key=f"cancel-{uuid4().hex}",
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        mode="manual",
+        force_search=False,
+        resource_revision=12,
+        scheduled_at=requested_at + timedelta(seconds=3),
+    )
+    canceled = app_covers.request_bulk_refresh_cancellation(
+        library_id=library_id,
+        account_id=account_id,
+        now=requested_at + timedelta(seconds=4),
+    )
+    assert canceled == {"cancelled": True, "covers_in_progress": False}
+    with isolatedPostgres._connect(setup_url) as connection:
+        state = connection.execute(
+            "select state from ops.jobs where id = %s", (canceled_task.job_id,)
+        ).fetchone()["state"]
+    assert state == "canceled"

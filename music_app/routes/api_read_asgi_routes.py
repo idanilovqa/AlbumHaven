@@ -342,6 +342,7 @@ async def status(request: Request) -> JSONResponse:
     audit = getattr(evaluation, "audit", None)
     library_id = getattr(audit, "library_id", None)
     durable_status = None
+    durable_cover_status = None
     if scan_jobs is not None and isinstance(library_id, int) and library_id > 0:
         try:
             durable_status = await run_in_threadpool(
@@ -351,12 +352,23 @@ async def status(request: Request) -> JSONResponse:
             )
         except Exception:
             durable_status = None
+    cover_jobs = getattr(request.app.state, "cover_job_repository", None)
+    if cover_jobs is not None and isinstance(library_id, int) and library_id > 0:
+        try:
+            durable_cover_status = await run_in_threadpool(
+                cover_jobs.load_cover_refresh_status,
+                library_id=library_id,
+            )
+        except Exception:
+            durable_cover_status = None
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
         payload = _build_status_payload_from_state(library_state)
         if durable_status is not None:
             payload.update(project_durable_full_scan_status(durable_status))
+        if isinstance(durable_cover_status, Mapping):
+            payload.update(durable_cover_status)
         payload["log_history_revision"] = load_log_history_revision(_app_config(request))
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":

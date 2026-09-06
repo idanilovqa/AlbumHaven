@@ -90,13 +90,14 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     from config import Config
     from music_app.jobs.dispatch import JobHandlerRegistry
     from music_app.jobs.cover_handlers import (
+        build_cover_bulk_refresh_resource_validator,
         build_cover_lookup_handler,
         build_cover_lookup_resource_validator,
+        build_cover_refresh_handler,
     )
     from music_app.jobs.scan_handlers import (
         build_full_scan_handler,
         build_full_scan_resource_validator,
-        build_post_scan_cover_refresh_handler,
         build_post_scan_cover_refresh_resource_validator,
         build_targeted_reconciliation_handler,
         build_targeted_reconciliation_resource_validator,
@@ -113,6 +114,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     from music_app.services.jobs.repository_postgres import PostgresJobRepository
     from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
     from music_app.services.cover_lookup_runtime import run_claimed_cover_lookup
+    from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
     from music_app.services.policy_evaluator import PolicyEvaluator
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
     from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
@@ -121,7 +123,6 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     )
     from music_app.services.jobs.models import JobKind
     from music_app.jobs.full_scan_executor import DurableFullScanExecutor
-    from music_app.services.scan_state import run_post_scan_cover_refresh_for_state
 
     pool = create_worker_pool(config)
 
@@ -169,6 +170,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     cover_lookup_validator = build_cover_lookup_resource_validator(
         cover_repository=cover_repository
     )
+    cover_bulk_validator = build_cover_bulk_refresh_resource_validator(
+        cover_repository=cover_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -177,6 +181,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         policy_evaluator=PolicyEvaluator(),
         resource_validators={
             JobKind.COVER_LOOKUP.value: cover_lookup_validator,
+            JobKind.COVER_BULK_REFRESH.value: cover_bulk_validator,
             JobKind.FULL_SCAN.value: full_scan_validator,
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
@@ -196,6 +201,14 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             run_lookup=run_claimed_cover_lookup,
         ),
     )
+    cover_refresh_handler = build_cover_refresh_handler(
+        cover_repository=cover_repository,
+        config=scan_config,
+        logger=logging.getLogger("album_haven.jobs.cover"),
+        run_refresh=run_claimed_cover_refresh,
+    )
+    handlers.register(JobKind.COVER_BULK_REFRESH, cover_refresh_handler)
+    handlers.register(JobKind.POST_SCAN_COVER_REFRESH, cover_refresh_handler)
     handlers.register(
         JobKind.FULL_SCAN,
         build_full_scan_handler(
@@ -214,17 +227,6 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             reconciler=reconciler,
         ),
     )
-    post_scan_cover_bridge = scan_config.get("_POST_SCAN_COVER_REFRESH_CALLBACK")
-    if callable(post_scan_cover_bridge):
-        handlers.register(
-            JobKind.POST_SCAN_COVER_REFRESH,
-            build_post_scan_cover_refresh_handler(
-                run_cover_refresh=lambda **kwargs: run_post_scan_cover_refresh_for_state(
-                    **kwargs,
-                    bridge=post_scan_cover_bridge,
-                )
-            ),
-        )
     return Worker(
         repository=repository,
         authorization_service=authorization,

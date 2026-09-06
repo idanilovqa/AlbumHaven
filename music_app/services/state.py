@@ -407,6 +407,7 @@ def refresh_relation_views_for_state(
     seed_missing_album_ratings: bool = False,
     expected_scan_generation: int | None = None,
     expected_cover_mutation_revision: int | None = None,
+    expected_inventory_mutation_revision: int | None = None,
     publication_state: dict[str, object] | None = None,
 ) -> None:
     guarded_live_repair = (
@@ -446,6 +447,10 @@ def refresh_relation_views_for_state(
     if expected_cover_mutation_revision is not None:
         snapshot_options["expected_cover_mutation_revision"] = (
             expected_cover_mutation_revision
+        )
+    if expected_inventory_mutation_revision is not None:
+        snapshot_options["expected_inventory_mutation_revision"] = (
+            expected_inventory_mutation_revision
         )
     if seed_missing_album_ratings:
         if expected_scan_generation is None:

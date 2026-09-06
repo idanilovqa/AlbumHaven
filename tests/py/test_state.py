@@ -1281,7 +1281,11 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
         save_snapshot,
     )
 
-    state_module.refresh_relation_views_for_state(library_state, config)
+    state_module.refresh_relation_views_for_state(
+        library_state,
+        config,
+        expected_inventory_mutation_revision=23,
+    )
 
     assert saved == [(
         config,
@@ -1292,6 +1296,7 @@ def test_postgres_relation_refresh_uses_canonical_rebuild_and_adopts_committed_s
         {
             "separate_release_keys": {"artist::album"},
             "rebuild_relation_projection": True,
+            "expected_inventory_mutation_revision": 23,
         },
     )]
     assert library_state["relation_views"] == canonical_views

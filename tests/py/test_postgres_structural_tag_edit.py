@@ -406,6 +406,26 @@ def test_postgres_album_split_inserts_covered_destination_and_moves_only_selecte
     )
 
 
+def test_album_edit_restores_display_date_when_watcher_precreates_destination():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._persist_structural_album_tag_edit_sql()
+    )
+
+    assert "normalized_existing_destination_album as" in normalized_sql
+    assert "not %(updates_release_year)s::boolean" in normalized_sql
+    assert "has_display_year_override" in normalized_sql
+    assert "#>> '{scan_cache,file_entry,year}'" in normalized_sql
+    assert "then validated_source_album.release_year" in normalized_sql
+    assert (
+        "jsonb_set( coalesce(library.local_albums.metadata, '{}'::jsonb), "
+        "'{release_date}', to_jsonb(validated_source_album.release_year::text), true )"
+    ) in normalized_sql
+    assert "marked_partial_source_album as" in normalized_sql
+    assert "from normalized_existing_destination_album" in normalized_sql
+
+
 def test_postgres_album_split_projects_destination_for_non_album_exception_track(
     monkeypatch,
 ):
@@ -1161,7 +1181,9 @@ def test_postgres_album_rename_preserves_row_identity_cover_and_unrelated_metada
     )[1].split("inserted_destination_album as (", 1)[0]
     assert "cover_path" not in destination_album_update
     assert "cover_revision" not in destination_album_update
-    assert "metadata =" not in destination_album_update
+    assert "metadata = case" in destination_album_update
+    assert "else library.local_albums.metadata end" in destination_album_update
+    assert "'{release_date}'" in destination_album_update
     assert "not exists" in normalized_sql
     assert "delete from library.local_tracks" not in normalized_sql
     assert "delete from library.local_track_files" not in normalized_sql
@@ -1214,7 +1236,9 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
     assert mutation_params["destination_is_explicit_separate"] is False
     assert "else library.local_albums.release_year" in destination_album_update
     assert "cover_path =" not in destination_album_update
-    assert "metadata =" not in destination_album_update
+    assert "metadata = case" in destination_album_update
+    assert "else library.local_albums.metadata end" in destination_album_update
+    assert "'{release_date}'" in destination_album_update
     assert "%(destination_album_metadata)s" not in destination_album_update
     assert "destination_album_metadata" not in mutation_params
 

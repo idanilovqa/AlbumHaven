@@ -213,22 +213,6 @@ class PostgresScanCacheAdapter:
             for path, entry in active_file_entries.items()
             if str(path).strip() and isinstance(entry, dict)
         }
-        albums = self._build_albums(
-            _file_cache_with_inferred_blank_album_memberships(file_cache),
-            set(),
-        )
-        (
-            artist_rows,
-            album_rows,
-            featured_artist_rows,
-            track_rows,
-            track_file_rows,
-        ) = _inventory_rows_from_albums(file_cache, albums)
-        affected_album_keys = {
-            str(row.get("album_key") or "").strip()
-            for row in album_rows
-            if str(row.get("album_key") or "").strip()
-        }
         stale_by_root: dict[str, dict[str, set[str]]] = {
             normalized_root_id: {
                 "paths": {str(path) for path in deleted_paths if str(path)},
@@ -255,6 +239,23 @@ class PostgresScanCacheAdapter:
         with self._connect_to_database() as connection:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            separate_release_keys = _load_separate_release_keys(connection)
+            albums = self._build_albums(
+                _file_cache_with_inferred_blank_album_memberships(file_cache),
+                separate_release_keys,
+            )
+            (
+                artist_rows,
+                album_rows,
+                featured_artist_rows,
+                track_rows,
+                track_file_rows,
+            ) = _inventory_rows_from_albums(file_cache, albums)
+            affected_album_keys = {
+                str(row.get("album_key") or "").strip()
+                for row in album_rows
+                if str(row.get("album_key") or "").strip()
+            }
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
             _execute_pipeline_batches(
                 connection,
@@ -3645,8 +3646,30 @@ def _persist_structural_album_tag_edit_sql(
     *,
     updates_release_year: bool = False,
 ) -> str:
-    renamed_album_metadata_sql = ""
-    inserted_album_metadata_sql = "validated_source_album.metadata"
+    renamed_album_metadata_sql = """
+              , metadata = case
+                  when validated_source_album.has_display_year_override
+                  then jsonb_set(
+                         coalesce(library.local_albums.metadata, '{}'::jsonb),
+                         '{release_date}',
+                         to_jsonb(validated_source_album.release_year::text),
+                         true
+                       )
+                  else library.local_albums.metadata
+                end
+    """
+    inserted_album_metadata_sql = """
+            case
+              when validated_source_album.has_display_year_override
+              then jsonb_set(
+                     coalesce(validated_source_album.metadata, '{}'::jsonb),
+                     '{release_date}',
+                     to_jsonb(validated_source_album.release_year::text),
+                     true
+                   )
+              else validated_source_album.metadata
+            end
+    """
     if updates_release_year:
         renamed_album_metadata_sql = """
               , metadata = coalesce(library.local_albums.metadata, '{}'::jsonb)
@@ -3848,7 +3871,21 @@ def _persist_structural_album_tag_edit_sql(
             locked_album_scope.artist_id,
             locked_album_scope.release_year,
             locked_album_scope.cover_path,
-            locked_album_scope.metadata
+            locked_album_scope.metadata,
+            exists (
+              select 1
+              from source_album_track_files
+              join library.local_track_files
+                on library.local_track_files.id =
+                   source_album_track_files.track_file_id
+              where locked_album_scope.release_year is not null
+                and library.local_track_files.metadata
+                      #>> '{scan_cache,file_entry,year}' ~ '^[+-]?[0-9]+$'
+                and (
+                      library.local_track_files.metadata
+                        #>> '{scan_cache,file_entry,year}'
+                    )::bigint <> locked_album_scope.release_year
+            ) as has_display_year_override
           from selection_scope
           join locked_album_scope
             on locked_album_scope.id = selection_scope.source_album_id
@@ -3857,6 +3894,47 @@ def _persist_structural_album_tag_edit_sql(
             and selection_scope.input_path_count <= (
                   select count(*) from source_album_track_files
                 )
+        ),
+        marked_partial_source_album as (
+          update library.local_albums
+          set metadata = jsonb_set(
+                coalesce(library.local_albums.metadata, '{}'::jsonb),
+                '{release_date}',
+                to_jsonb(validated_source_album.release_year::text),
+                true
+              )
+          from validated_source_album
+          where library.local_albums.id = validated_source_album.id
+            and validated_source_album.has_display_year_override
+            and (select input_path_count from selection_scope) < (
+                  select count(*) from source_album_track_files
+                )
+          returning library.local_albums.id
+        ),
+        normalized_existing_destination_album as (
+          update library.local_albums
+          set release_year = case
+                when not %(updates_release_year)s::boolean
+                 and validated_source_album.has_display_year_override
+                then validated_source_album.release_year
+                else library.local_albums.release_year
+              end,
+              metadata = case
+                when not %(updates_release_year)s::boolean
+                 and validated_source_album.has_display_year_override
+                then jsonb_set(
+                       coalesce(library.local_albums.metadata, '{}'::jsonb),
+                       '{release_date}',
+                       to_jsonb(validated_source_album.release_year::text),
+                       true
+                     )
+                else library.local_albums.metadata
+              end,
+              last_seen_at = now()
+          from validated_source_album
+          join existing_destination_album on true
+          where library.local_albums.id = existing_destination_album.id
+          returning library.local_albums.id, library.local_albums.album_key
         ),
         updated_album_ratings as (
           update app.album_ratings
@@ -3936,9 +4014,9 @@ def _persist_structural_album_tag_edit_sql(
         ),
         destination_album as materialized (
           select
-            existing_destination_album.id,
-            existing_destination_album.album_key
-          from existing_destination_album
+            normalized_existing_destination_album.id,
+            normalized_existing_destination_album.album_key
+          from normalized_existing_destination_album
           where exists (select 1 from validated_source_album)
           union all
           select

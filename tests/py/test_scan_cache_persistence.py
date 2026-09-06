@@ -136,6 +136,8 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         def execute(self, sql, params=None):
             cursor = super().execute(sql, params)
             normalized = _normalized_sql(sql)
+            if "from library.separate_releases" in normalized:
+                return FakeCursor([{"release_key": "artist::new album"}])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::old album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -144,9 +146,19 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
 
     monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
     connection = TargetedConnection()
+    observed_separate_release_keys = []
+
+    def build_albums(file_cache, separate_release_keys):
+        observed_separate_release_keys.append(set(separate_release_keys))
+        return scan_cache_persistence.build_albums_from_file_cache(
+            file_cache,
+            separate_release_keys,
+        )
+
     adapter = PostgresScanCacheAdapter(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
         connect=lambda _url: connection,
+        build_albums=build_albums,
     )
     active_path = "C:/Music/Artist/New Album/01.flac"
 
@@ -184,6 +196,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         "inventory_mutation_revision": 7,
         "affected_album_keys": ["artist::new album", "artist::old album"],
     }
+    assert observed_separate_release_keys == [{"artist::new album"}]
     normalized_calls = [_normalized_sql(sql) for sql, _ in connection.executed]
     lock_index = next(i for i, sql in enumerate(normalized_calls) if "pg_advisory_xact_lock" in sql)
     upsert_index = next(i for i, sql in enumerate(normalized_calls) if "insert into library.local_track_files" in sql)

@@ -39,6 +39,9 @@ DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
 DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
     MIGRATIONS_DIR / "0066_grant_worker_authorization_reads.sql"
 )
+DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
+    MIGRATIONS_DIR / "0067_add_job_transition_retention_index.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -438,7 +441,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-28:] == [
+    assert migration_names[-29:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -467,6 +470,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0064_request_durable_job_cancellation.sql",
         "0065_harden_durable_job_boundaries.sql",
         "0066_grant_worker_authorization_reads.sql",
+        "0067_add_job_transition_retention_index.sql",
     ]
 
 
@@ -3314,3 +3318,31 @@ def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe()
         "name",
     ):
         assert not re.search(rf"\b{re.escape(private_column)}\b", sql)
+
+
+def test_durable_job_retention_index_migration_file_exists():
+    assert DURABLE_JOB_RETENTION_INDEX_MIGRATION.is_file(), (
+        "Task 7 requires additive migration "
+        "0067_add_job_transition_retention_index.sql"
+    )
+
+
+def test_durable_job_retention_index_is_ordered_and_does_not_broaden_privileges():
+    if not DURABLE_JOB_RETENTION_INDEX_MIGRATION.exists():
+        pytest.skip("durable job transition retention index migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_RETENTION_INDEX_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert re.search(
+        r"create index if not exists job_transitions_retention_idx\s+"
+        r"on ops\.job_transitions\s*\(transitioned_at,\s*id\)",
+        sql,
+    )
+    for runtime_role in (
+        "album_haven_app",
+        "album_haven_worker",
+        "album_haven_readonly",
+    ):
+        assert not re.search(rf"\bgrant\b[^;]*\bto\s+{runtime_role}\b", sql)
+    assert not re.search(r"\bgrant\s+delete\b", sql)

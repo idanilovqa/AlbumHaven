@@ -15,9 +15,22 @@ not need the private repository to build or use Album Haven.
   private fixture assets.
 - Use environment variables for machine-specific paths and credentials.
 - Keep tests independent and give state-mutating tests uniquely owned data.
-- Run focused tests for changed behavior. Run the broader JavaScript and Python
-  suites before proposing a release.
+- Run focused tests locally for changed behavior. Use CI for the broader
+  JavaScript and Python suites before proposing a release.
 - Report security problems through the process in `SECURITY.md`.
+
+## Release test execution
+
+- During release and publish work, limit local execution to focused tests for
+  behavior that changed or for specific failures being diagnosed and fixed.
+- Push the branch and use CI to run every required complete suite and produce the
+  authoritative full-suite failure inventory. Do not run complete release-suite
+  inventories locally unless the owner explicitly requests a local full run.
+- Let the initial CI sweep finish every required suite and collect all genuine
+  failures before making fixes. Do not stop at the first failing CI suite unless
+  continuing would be unsafe or impossible.
+- Fix the complete CI failure set, verify each fix with its focused local tests,
+  then push and rerun all required CI suites. Repeat until CI is fully green.
 
 ## Post-Migration Wave 2+ feature workflow
 

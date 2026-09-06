@@ -37,7 +37,7 @@ async function mountSearchInput(page) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',
     body: `<!doctype html>
-      <html>
+      <html style="--appearance-interaction-outline: rgb(75, 193, 115); --appearance-accent: rgb(75, 193, 115);">
         <body>
           <header class="app-bar">
             <form class="toolbar-left">
@@ -87,4 +87,19 @@ test('focused search input uses one outline around the shared field boundary', a
   await expect(control).toHaveCSS('outline-width', '2px');
   await expect(control).toHaveCSS('outline-offset', '2px');
   await expect(searchButton).toHaveCSS('outline-style', 'none');
+
+  const idleButtonBackground = await searchButton.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  );
+  await page.keyboard.press('Tab');
+
+  await expect(searchButton).toBeFocused();
+  await expect(searchButton).toHaveCSS('outline-style', 'none');
+  await expect(searchButton).toHaveCSS('border-style', 'none');
+  await expect(searchButton).toHaveCSS('box-shadow', 'none');
+  await expect(control).toHaveCSS('outline-style', 'solid');
+  await expect(control).toHaveCSS('outline-width', '2px');
+  expect(await searchButton.evaluate(
+    (element) => getComputedStyle(element).backgroundColor,
+  )).not.toBe(idleButtonBackground);
 });

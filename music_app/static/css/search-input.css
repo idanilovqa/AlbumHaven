@@ -32,7 +32,12 @@
   outline: 2px solid var(--search-field-focus, var(--accent));
   outline-offset: 2px;
 }
-.search-field .search-field-control > input:focus-visible { outline: none; }
+:root .search-field .search-field-control > input[type='search']:focus-visible,
+:root .search-field .search-field-action > .search-field-button:focus-visible {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
 .search-field-action { display: flex; align-items: stretch; padding: 2px; }
 .search-field-action > .search-field-button {
   display: inline-grid;
@@ -50,9 +55,5 @@
 .search-field-action > .search-field-button:is(:hover, :focus-visible):not(:disabled) {
   background: var(--search-field-hover, var(--panel-2));
   color: var(--search-field-color, var(--text));
-}
-.search-field-action > .search-field-button:focus-visible {
-  outline: 2px solid var(--search-field-focus, var(--accent));
-  outline-offset: -2px;
 }
 .search-field-action > .search-field-button:disabled { opacity: .5; cursor: default; }

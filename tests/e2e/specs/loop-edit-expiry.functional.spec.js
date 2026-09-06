@@ -28,7 +28,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
     const playbackMark = await playbackEvidence.playbackMark();
-    selectedTrack = await trackModalActions.playTrackAt(0);
+    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     expect(selectedTrack.title).toBe(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
@@ -112,7 +112,7 @@ test(`${CASE_ID} page reload exits bottom-player loop edit mode`, async ({
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
-    selectedTrack = await trackModalActions.playTrackAt(0);
+    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
       trackTitle: LOOP_TRACK_TITLE,
@@ -153,7 +153,7 @@ test(`${CASE_ID} returning to a suspended tab reconciles an overdue loop edit le
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
-    const selectedTrack = await trackModalActions.playTrackAt(0);
+    const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
       trackTitle: LOOP_TRACK_TITLE,

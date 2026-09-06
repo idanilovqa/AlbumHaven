@@ -1371,7 +1371,7 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
       NAVIGATION_FIXTURE_ALBUM,
     );
     await galleryActions.clickAlbumDetailsByAlbumName(NAVIGATION_FIXTURE_ALBUM);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.expectProblemLinkVisibleForTrack(NAVIGATION_FIXTURE_TRACK);
     const problematicTrackPath = await trackModalActions.readTrackPathByTitle(
       NAVIGATION_FIXTURE_TRACK,

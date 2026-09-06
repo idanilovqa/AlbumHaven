@@ -143,7 +143,7 @@ test('FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-
     destination: {
       credits: [{
         ...EXPECTED_TRACK_CREDITS[0],
-        secondaryArtist: 'Solo Voice / feat. Featured Voice',
+        secondaryArtist: 'feat. Featured Voice',
       }],
       trackRows: 1,
     },

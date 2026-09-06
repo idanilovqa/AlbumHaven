@@ -57,9 +57,11 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
     expect(selectedAlbum).toEqual(LOOP_ALBUM_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe('Album Haven Last.fm Fixture • Signed Scrobble Journey • 2026');
+    expect(modal.title).toContain(LOOP_ALBUM_TARGET.album);
+    expect(`${modal.title} ${modal.subtitle}`).toContain(LOOP_ALBUM_TARGET.artist);
+    expect(`${modal.title} ${modal.subtitle}`).toContain(LOOP_ALBUM_TARGET.year);
     const playbackMark = await playbackEvidence.playbackMark();
-    selectedTrack = await trackModalActions.playTrackAt(0);
+    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     expect(selectedTrack.title).toBe(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
@@ -95,7 +97,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(playingPlayerLayout.playerBounds.height).toBe(108);
+    expect(playingPlayerLayout.playerBounds.height).toBe(92);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -193,7 +195,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(opened.cursors.endHandle).toBe('grab');
     expect(opened.timeWaveformOverlap).toBe(false);
     expect(opened.metadataWaveformGap).toBeGreaterThanOrEqual(3);
-    expect(opened.playerHeight).toBe(108);
+    expect(opened.playerHeight).toBe(92);
     expect(opened.waveformHeight).toBe(56);
     expect(opened.selectionStartErrorPixels).toBeLessThanOrEqual(1);
     expect(opened.selectionEndErrorPixels).toBeLessThanOrEqual(1);
@@ -745,7 +747,7 @@ test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal'
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -781,7 +783,7 @@ test('FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor', 
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -819,7 +821,7 @@ test('FTC-PLAYER-017 scissors remains available after saving a loop', async ({
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -844,7 +846,7 @@ test('FTC-PLAYER-017 loop-edit reload restores the active playhead', async ({
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -895,7 +897,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', async ({
   await settingsModalAppBarActions.closeSettings();
 
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,

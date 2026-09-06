@@ -1488,7 +1488,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
       selected_artist: 'Transatlantic',
       selected_artist_source: 'auto_top_match',
       artist_name_match_artists: ['Transatlantic'],
-      direct_match_artists: ['Transatlantic', 'Neal Morse'],
+      direct_match_artists: ['Transatlantic'],
       related_match_artists: [],
     },
     related_artists: ['Neal Morse'],
@@ -1498,7 +1498,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
     }],
     family_artist_groups: [{
       artist: 'Neal Morse',
-      albums: [{ key: 'neal-transatlantic-demos' }],
+      albums: [{ key: 'neal-transatlantic-demos', preview_only: true }],
     }],
     artist_groups: [],
     artists_sidebar: [
@@ -1517,7 +1517,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
-test('handleSidebarArtistSelectionClick promotes an already visible family group into the primary selected-artist view before the fetch returns', () => {
+test('handleSidebarArtistSelectionClick promotes an already visible family group before reconciling the active search', () => {
   const speedMenu = { hidden: false };
   const { context, calls } = createContext({
     galleryMenuOpen: true,
@@ -1656,7 +1656,7 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
       selected_artist_source: 'requested_artist',
     },
   }]);
-  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.fetchAndRender.length, 1);
   assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.equal(calls.hideVersionContextMenu, 1);
   assert.equal(calls.hideGalleryOptionsMenu, 1);

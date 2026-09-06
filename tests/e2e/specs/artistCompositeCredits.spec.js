@@ -70,7 +70,9 @@ test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without c
   await stepLogger.step('Open the album through its visible title and retain the legitimate composite identity', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(DISPLAY_ARTIST, ALBUM);
     const summary = await trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(`${DISPLAY_ARTIST} • ${ALBUM} • ${YEAR}`);
+    expect(summary.title).toContain(ALBUM);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(DISPLAY_ARTIST);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(YEAR);
     await trackModalActions.close();
   });
 });

@@ -86,7 +86,7 @@ export class TrackModal extends BasePage {
   }
 
   get coverPlaceholderSelector() {
-    return '#track-modal-cover .cover-placeholder';
+    return '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]';
   }
 
   get playButtonSelector() {
@@ -221,6 +221,10 @@ export class TrackModal extends BasePage {
     return this.trackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({ hasText: exactNormalizedText(trackTitle) }),
     }).first();
+  }
+
+  playButtonByTrackTitle(trackTitle) {
+    return this.trackRowByTitle(trackTitle).locator('.play-track-button').first();
   }
 
   async readAlbumTrackTableTotal() {

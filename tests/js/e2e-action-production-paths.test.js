@@ -4304,7 +4304,7 @@ test('track modal cover readiness rejects loading placeholders and requires a fi
   assert.match(trackModal, /naturalWidth\s*>\s*0/);
   assert.match(trackModal, /getBoundingClientRect\(\)\.width\s*>\s*0/);
   assert.match(trackModal, /albumCoverImage\.evaluateAll/);
-  assert.match(trackModal, /String\(coverPlaceholder\.textContent\s*\|\|\s*''\)\.trim\(\)\s*===\s*'No cover art'/);
+  assert.match(trackModal, /coverPlaceholder\.getAttribute\('data-album-artbox-state'\)\s*===\s*'empty'/);
   assert.doesNotMatch(trackModal, /return coverLoaded \|\| coverPlaceholderVisible/);
 });
 
@@ -5061,7 +5061,7 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   }
 
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
-  assert.match(spec, /opened\.playerHeight\)\.toBe\(108\)/);
+  assert.match(spec, /opened\.playerHeight\)\.toBe\(92\)/);
   assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
   assert.match(spec, /opened\.metadataWaveformGap\)\.toBeGreaterThanOrEqual\(3\)/);

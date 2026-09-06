@@ -202,10 +202,8 @@ export class TrackModalActions {
       && image.getBoundingClientRect().width > 0
       && image.getBoundingClientRect().height > 0
     )));
-    const coverPlaceholderText = await this.trackModal.coverPlaceholder.isVisible()
-      ? String(await this.trackModal.coverPlaceholder.textContent() || '').trim()
-      : '';
-    const coverPlaceholderVisible = coverPlaceholderText === 'No cover art';
+    const coverPlaceholderVisible = await this.trackModal.coverPlaceholder.isVisible()
+      && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty';
     return {
       title: String(await this.trackModal.title.textContent() || '').trim(),
       subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),
@@ -233,7 +231,7 @@ export class TrackModalActions {
         && !coverPlaceholder.hidden
         && coverPlaceholder.getBoundingClientRect().width > 0
         && coverPlaceholder.getBoundingClientRect().height > 0
-        && String(coverPlaceholder.textContent || '').trim() === 'No cover art';
+        && coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty';
       return coverLoaded || finalNoCoverState;
     }, {
       timeout: options.coverTimeout || options.timeout || 15000,
@@ -457,6 +455,22 @@ export class TrackModalActions {
   async playTrackAt(index, options = {}) {
     const track = await this.readTrackAt(index);
     const playButton = this.trackModal.playButtonAt(index);
+    if (typeof options.recordClickBoundary === 'function') {
+      await playButton.click({ trial: true });
+      await options.recordClickBoundary(track);
+    }
+    await playButton.click();
+    return track;
+  }
+
+  async playTrackByTitle(trackTitle, options = {}) {
+    const row = this.trackModal.trackRowByTitle(trackTitle);
+    const playButton = this.trackModal.playButtonByTrackTitle(trackTitle);
+    const track = {
+      path: String(await row.getAttribute('data-track-row-path') || ''),
+      title: String(await playButton.getAttribute('data-track-title') || ''),
+      artist: String(await playButton.getAttribute('data-track-artist') || ''),
+    };
     if (typeof options.recordClickBoundary === 'function') {
       await playButton.click({ trial: true });
       await options.recordClickBoundary(track);

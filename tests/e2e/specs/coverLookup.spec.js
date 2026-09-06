@@ -1005,7 +1005,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     const reopenedGalleryRequests = [];
     page.on('request', (request) => {
       if (
@@ -1129,7 +1129,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
     );
     expect(opened.selected).toEqual(AUTOMATIC_CANDIDATE_TARGET);
     expect(opened.album.cover_path).toBeNull();
-    expect((await trackModalActions.waitForInteractiveSummary()).coverPlaceholderVisible).toBe(true);
+    expect((await trackModalActions.waitForLoadedSummary()).coverPlaceholderVisible).toBe(true);
     await trackModalActions.close();
   });
 

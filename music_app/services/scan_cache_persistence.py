@@ -25,6 +25,7 @@ from music_app.services.library import (
     safe_int,
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
+from music_app.services.metadata import normalize_exception_value
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.relation_projection_postgres import (
@@ -843,6 +844,30 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in updated_entries.values()
         }
+        restores_exception_detached_album = (
+            normalized_changed_fields == frozenset({"album"})
+            and len(destination_album_names) == 1
+            and bool(next(iter(destination_album_names), ""))
+            and all(
+                normalize_exception_value(entry.get("exception_type"))
+                for entry in previous_entries.values()
+            )
+        )
+        if restores_exception_detached_album:
+            with self._connect_to_database() as connection:
+                connection.execute(_inventory_publication_advisory_lock_sql())
+                _ensure_bootstrap_context(connection)
+                membership = _row_mapping(_first_row(connection.execute(
+                    _validate_blank_album_tag_edit_sql(),
+                    {"changed_paths": normalized_paths},
+                )))
+            input_path_count = int(membership.get("input_path_count") or 0)
+            resolved_path_count = int(membership.get("resolved_path_count") or 0)
+            if input_path_count != len(normalized_paths) or resolved_path_count != input_path_count:
+                raise RuntimeError("Structural tag persistence must resolve every changed path.")
+            restores_exception_detached_album = int(
+                membership.get("source_album_count") or 0
+            ) == 0
         if len(previous_album_names) != 1:
             raise RuntimeError("Structural tag persistence requires one source album.")
         if normalized_changed_fields == frozenset({"album"}) and destination_album_names == {""}:
@@ -856,7 +881,7 @@ class PostgresScanCacheAdapter:
             )
         if (
             normalized_changed_fields == frozenset({"album"})
-            and previous_album_names == {""}
+            and (previous_album_names == {""} or restores_exception_detached_album)
             and len(destination_album_names) == 1
         ):
             return self._persist_detached_album_restore(
@@ -1084,6 +1109,15 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in previous_entries.values()
         }
+        restores_exception_detached_album = (
+            normalized_changed_fields == frozenset({"album"})
+            and len(destination_album_names) == 1
+            and bool(next(iter(destination_album_names), ""))
+            and all(
+                normalize_exception_value(entry.get("exception_type"))
+                for entry in previous_entries.values()
+            )
+        )
         uses_blank_album_persistence = (
             normalized_changed_fields == frozenset({"album"})
             and (
@@ -1161,11 +1195,16 @@ class PostgresScanCacheAdapter:
             raise RuntimeError(
                 "Structural tag persistence must resolve every changed path."
             )
-        if source_album_count != 1:
+        if source_album_count != 1 and not (
+            restores_exception_detached_album and source_album_count == 0
+        ):
             raise RuntimeError(
                 "Structural tag persistence requires one source album."
             )
-        if source_album_track_file_count < input_path_count:
+        if (
+            source_album_track_file_count < input_path_count
+            and not (restores_exception_detached_album and source_album_count == 0)
+        ):
             raise RuntimeError(
                 "Structural tag persistence selected more files than exist in the source album."
             )

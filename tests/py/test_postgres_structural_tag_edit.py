@@ -449,7 +449,7 @@ def test_postgres_album_split_projects_destination_for_non_album_exception_track
     mutation_params = next(
         params
         for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
+        if isinstance(params, dict) and "destination_album_title" in params
     )
     assert mutation_params["destination_album_title"] == "Problematic Files Rename Probe"
     assert mutation_params["changed_paths"] == [selected_path]
@@ -619,6 +619,40 @@ def test_postgres_album_restore_accepts_an_already_detached_blank_album_track(
         changed_paths={selected_path},
         previous_file_entries=previous,
         updated_file_entries=updated,
+        changed_field_names={"album"},
+    )
+
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
+    assert result["destination_album_id"] == 41
+    executed_sql = [_normalized_sql(sql) for sql, _params in connection.executed]
+    assert any("insert into library.local_albums" in sql for sql in executed_sql)
+    _assert_album_restore_updates_existing_track_identity_in_place(connection)
+
+
+def test_postgres_album_restore_accepts_a_detached_track_with_a_nonempty_album_tag(
+    monkeypatch,
+):
+    paths, restored, previous = _entries(album="Problematic Files Rename Probe")
+    selected_path = paths[0]
+    previous = {selected_path: previous[selected_path]}
+    previous[selected_path]["exception_type"] = "Non-album rarity"
+    restored = {selected_path: {**restored[selected_path], "album": "Recovered Album"}}
+    result_row = _successful_result(path_count=1)
+    result_row.update(source_album_count=0, source_album_track_file_count=0)
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.validate_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"album"},
+    )
+    result = adapter.persist_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
         changed_field_names={"album"},
     )
 

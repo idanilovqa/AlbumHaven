@@ -1347,23 +1347,11 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
   const artistNameMatchArtists = Array.isArray(searchContext?.artist_name_match_artists)
     ? searchContext.artist_name_match_artists
     : null;
-  const classifiedSearchMatchArtists = [
-    ...(Array.isArray(searchContext?.direct_match_artists)
-      ? searchContext.direct_match_artists
-      : []),
-    ...(Array.isArray(searchContext?.related_match_artists)
-      ? searchContext.related_match_artists
-      : []),
-  ];
-  const hasClassifiedSearchMatchArtists = (
-    Array.isArray(searchContext?.direct_match_artists)
-    && Array.isArray(searchContext?.related_match_artists)
-  );
   const matchesSearchArtist = (candidate) => (
     String(candidate || '').trim() === normalizedArtist
   );
   const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
-  const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
+  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -1374,11 +1362,9 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && (
         artistNameMatchArtists === null
         || isArtistNameMatch
-        || (hasClassifiedSearchMatchArtists && !isClassifiedSearchMatch)
       )
     )
     : hasAuthoritativeMountedFamilyContext;
-  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
   if (matchedSelectedArtistGroupIndex >= 0) {
     const matchedSelectedArtistGroup = deepCloneJson(currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]);
     const familyGroups = currentSelectedArtistGroups

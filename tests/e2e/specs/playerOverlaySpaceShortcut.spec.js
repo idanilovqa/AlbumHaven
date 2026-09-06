@@ -38,7 +38,7 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     expect(albumDetailsStack).toMatchObject({ appBarCoveredByAlbumDetails: true });
     expect(albumDetailsStack.modalZIndex).toBeGreaterThan(albumDetailsStack.appBarZIndex);
     const playbackMark = await playbackEvidence.playbackMark();
-    const track = await trackModalActions.playTrackAt(0);
+    const track = await trackModalActions.playTrackByTitle(TRACK_TITLE);
     playbackPath = track.path;
     expect(track.title).toBe(TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({

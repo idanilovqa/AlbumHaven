@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 
-function createLocator({ text = '', visible = true, count = 0, evaluateAll = null } = {}) {
+function createLocator({ text = '', visible = true, count = 0, evaluateAll = null, attributes = {} } = {}) {
   return {
     async textContent() {
       return text;
@@ -12,6 +12,9 @@ function createLocator({ text = '', visible = true, count = 0, evaluateAll = nul
     },
     async count() {
       return count;
+    },
+    async getAttribute(name) {
+      return attributes[name] ?? null;
     },
     async evaluateAll(callback) {
       if (evaluateAll !== null) return evaluateAll;
@@ -26,7 +29,7 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
   return {
     waitCalls,
     trackModal: {
-      coverPlaceholderSelector: '#track-modal-cover .cover-placeholder',
+      coverPlaceholderSelector: '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]',
       detailedCoverImageSelector: '#track-modal-cover .track-modal-cover-visual img',
       dialogSelector: '#track-modal',
       loadingRowSelector: '#track-modal .track-modal-loading-row',
@@ -50,8 +53,9 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
       playButtons: createLocator({ count: 4 }),
       trackRows: createLocator({ count: 12 }),
       coverPlaceholder: createLocator({
-        text: noCover ? 'No cover art' : '',
+        text: '',
         visible: noCover,
+        attributes: noCover ? { 'data-album-artbox-state': 'empty' } : {},
       }),
       async readDetailedCoverImageCheckpoint() {
         return coverCheckpoint;
@@ -235,6 +239,42 @@ test('TrackModalActions validates the exact track before installing Last.fm resp
   );
   assert.equal(waiterCount, 0);
   assert.equal(clickCount, 0);
+});
+
+test('TrackModalActions plays the named track without assuming its rendered row order', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  let clicked = false;
+  const playButton = {
+    async getAttribute(name) {
+      if (name === 'data-track-title') return 'Fake Loop Source';
+      if (name === 'data-track-artist') return 'Album Haven Last.fm Fixture';
+      return '';
+    },
+    async click() {
+      clicked = true;
+    },
+  };
+  const actions = new TrackModalActions({
+    trackRowByTitle() {
+      return {
+        async getAttribute(name) {
+          return name === 'data-track-row-path' ? '01 - Fake Loop Source.mp3' : '';
+        },
+      };
+    },
+    playButtonByTrackTitle() {
+      return playButton;
+    },
+  });
+
+  const track = await actions.playTrackByTitle('Fake Loop Source');
+
+  assert.deepEqual(track, {
+    path: '01 - Fake Loop Source.mp3',
+    title: 'Fake Loop Source',
+    artist: 'Album Haven Last.fm Fixture',
+  });
+  assert.equal(clicked, true);
 });
 
 test('Last.fm journey observation preserves request order for responses published after the pause UI flips and removes every listener', async () => {

@@ -634,6 +634,33 @@ def test_queued_cache_update_accepts_already_committed_numeric_year_value():
     assert rebased[track_path]["year"] == "1999"
 
 
+def test_queued_cache_update_accepts_already_committed_numeric_track_number_value():
+    track_path = "C:/Music/song.mp3"
+
+    rebased = cache_module._rebase_non_cover_cache_entry_changes(
+        baseline_file_cache={
+            track_path: {
+                "path": track_path,
+                "track_number": 14,
+            }
+        },
+        changed_entries={
+            track_path: {
+                "path": track_path,
+                "track_number": "4",
+            }
+        },
+        latest_file_cache={
+            track_path: {
+                "path": track_path,
+                "track_number": 4,
+            }
+        },
+    )
+
+    assert rebased[track_path]["track_number"] == "4"
+
+
 def test_queued_cache_update_repeated_revision_conflict_fails_after_one_rebase(
     tmp_path,
     monkeypatch,

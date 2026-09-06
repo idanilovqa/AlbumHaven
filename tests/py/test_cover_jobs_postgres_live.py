@@ -477,3 +477,160 @@ def test_live_bulk_cover_refresh_is_restartable_worker_scoped_and_cancelable(
             "select state from ops.jobs where id = %s", (canceled_task.job_id,)
         ).fetchone()["state"]
     assert state == "canceled"
+
+
+def test_live_remote_cover_save_accepts_candidate_and_fences_checkpoints(
+    live_cover_database,
+):
+    setup_url, runtime_url = live_cover_database
+    account_id, library_id, album_key, origin_key = _seed_cover_scope(setup_url)
+    worker_url = os.environ["ALBUM_HAVEN_FAKE_E2E_WORKER_DATABASE_URL"]
+    app_jobs = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    app_covers = PostgresCoverJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=app_jobs,
+    )
+    generation = uuid4()
+    task_key = str(generation)
+    lookup = app_covers.accept_candidate_lookup(
+        task_key=task_key,
+        library_id=library_id,
+        album_key=album_key,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    candidate_id = f"candidate-{uuid4().hex}"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.cover_lookup_tasks set status = 'completed', completed_at = now(), "
+            "provider_payload = jsonb_build_object('possible_matches', jsonb_build_array("
+            "jsonb_build_object('id', %s::text, 'url', 'https://covers.invalid/private.jpg', "
+            "'thumbnail_url', 'https://covers.invalid/thumb.jpg', 'art_kind', 'cover'))), "
+            "row_revision = row_revision + 1 where id = %s",
+            (candidate_id, lookup.task_id),
+        )
+        connection.execute(
+            "update ops.jobs set state = 'succeeded', started_at = now(), "
+            "completed_at = now(), outcome_code = 'seeded' where id = %s",
+            (lookup.job_id,),
+        )
+
+    accepted = app_covers.accept_remote_save(
+        task_key=task_key,
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        candidate_id=candidate_id,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    repeated = app_covers.accept_remote_save(
+        task_key=task_key,
+        library_id=library_id,
+        account_id=account_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        candidate_generation=generation,
+        candidate_id=candidate_id,
+        resource_revision=0,
+        scheduled_at=datetime.now(timezone.utc),
+    )
+    assert repeated.job_id == accepted.job_id
+    with isolatedPostgres._connect(setup_url) as connection:
+        generic = connection.execute(
+            "select parameters from ops.jobs where id = %s", (accepted.job_id,)
+        ).fetchone()["parameters"]
+    assert "covers.invalid" not in json.dumps(generic)
+
+    worker_jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claimed_at = datetime.now(timezone.utc)
+    claim = worker_jobs.claim(
+        worker_id="cover-save-live",
+        now=claimed_at,
+        lease_seconds=60,
+        kinds=("cover_remote_save",),
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_covers = PostgresCoverJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+        job_repository=worker_jobs,
+    )
+    claim_values = {
+        "task_key": task_key,
+        "task_id": accepted.task_id,
+        "library_id": library_id,
+        "job_id": claim.job_id,
+        "attempt": claim.attempt,
+        "worker_id": claim.worker_id,
+        "lease_token": claim.lease_token,
+        "now": claimed_at + timedelta(seconds=1),
+    }
+    scope = worker_covers.load_claimed_remote_save(**claim_values)
+    assert scope is not None
+    assert scope.candidate_id == candidate_id
+    assert scope.selected_candidate["url"].startswith("https://covers.invalid/")
+    assert len(scope.track_paths) == 1 and scope.track_paths[0].endswith("01.flac")
+
+    revision = scope.checkpoint_revision
+    for checkpoint in ("download_started", "artifact_written"):
+        next_revision = worker_covers.checkpoint_claimed_remote_save(
+            **claim_values,
+            checkpoint_id=scope.checkpoint_id,
+            expected_row_revision=revision,
+            next_checkpoint=checkpoint,
+            artifact_key=uuid4() if checkpoint == "artifact_written" else None,
+        )
+        assert next_revision is not None
+        revision = next_revision
+    next_revision = worker_covers.persist_claimed_remote_cover_selection(
+        **claim_values,
+        checkpoint_id=scope.checkpoint_id,
+        expected_checkpoint_revision=revision,
+        selected_cover_path=r"C:\private\cover.jpg",
+        selected_cover_revision="cover-revision",
+        linked_remote=False,
+    )
+    assert next_revision is not None
+    revision = next_revision
+    next_revision = worker_covers.checkpoint_claimed_remote_save(
+        **claim_values,
+        checkpoint_id=scope.checkpoint_id,
+        expected_row_revision=revision,
+        next_checkpoint="promotion_completed",
+    )
+    assert next_revision is not None
+    revision = next_revision
+    published = worker_covers.publish_claimed_remote_save(
+        **claim_values,
+        checkpoint_id=scope.checkpoint_id,
+        expected_checkpoint_revision=revision,
+        expected_task_revision=scope.task_revision,
+        selected_cover_path=r"C:\private\cover.jpg",
+        linked_remote=False,
+    )
+    assert published is not None
+    with isolatedPostgres._connect(setup_url) as connection:
+        completed = connection.execute(
+            "select status, selected_cover_private_path from ops.cover_lookup_tasks "
+            "where id = %s",
+            (accepted.task_id,),
+        ).fetchone()
+    assert completed["status"] == "completed"
+    assert completed["selected_cover_private_path"].endswith("cover.jpg")

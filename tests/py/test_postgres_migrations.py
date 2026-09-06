@@ -63,6 +63,9 @@ COVER_LOOKUP_WORKER_MIGRATION = (
 COVER_REFRESH_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0074_grant_worker_cover_refresh.sql"
 )
+REMOTE_COVER_SAVE_MIGRATION = (
+    MIGRATIONS_DIR / "0075_create_remote_cover_save_checkpoints.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -462,7 +465,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-36:] == [
+    assert migration_names[-37:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -499,6 +502,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0072_create_durable_cover_job_state.sql",
         "0073_grant_worker_cover_lookup.sql",
         "0074_grant_worker_cover_refresh.sql",
+        "0075_create_remote_cover_save_checkpoints.sql",
     ]
 
 
@@ -541,6 +545,34 @@ def test_cover_refresh_worker_migration_uses_one_fenced_core_and_private_status(
     assert "refresh.row_revision = expected_row_revision" in sql
     assert "grant execute on function ops.begin_claimed_cover_refresh" in sql
     assert "grant execute on function ops.persist_claimed_automatic_cover_selection" in sql
+    assert "grant select on library.local_track_files" not in sql
+
+
+def test_remote_cover_save_migration_has_private_checkpoints_and_claim_fences():
+    sql = _normalized_sql(REMOTE_COVER_SAVE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create table if not exists ops.cover_remote_save_checkpoints" in sql
+    for checkpoint in (
+        "accepted",
+        "download_started",
+        "artifact_written",
+        "selection_committed",
+        "promotion_completed",
+        "publication_completed",
+        "rolled_back",
+        "ambiguous",
+    ):
+        assert f"'{checkpoint}'" in sql
+    for function_name in (
+        "accept_cover_remote_save",
+        "load_claimed_cover_remote_save",
+        "checkpoint_claimed_cover_remote_save",
+        "persist_claimed_remote_cover_selection",
+        "publish_claimed_cover_remote_save",
+    ):
+        assert f"function ops.{function_name}" in sql
+    assert "job.lease_token = requested_lease_token" in sql
+    assert "job.lease_expires_at > observed_at" in sql
     assert "grant select on library.local_track_files" not in sql
 
 

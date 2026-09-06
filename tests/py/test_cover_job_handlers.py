@@ -341,3 +341,86 @@ def test_shared_cover_refresh_core_cancels_when_projection_fence_is_lost():
 
     assert outcome.next_state == JobState.CANCELED
     assert outcome.reason_code == "cover_refresh_lease_lost"
+
+
+def test_remote_cover_save_handler_uses_claimed_scope_and_checkpoint_callbacks():
+    from music_app.jobs.cover_handlers import build_cover_remote_save_handler
+
+    claim = _claim(
+        job_id=99,
+        kind="cover_remote_save",
+        parameters={
+            "task_id": 31,
+            "candidate_generation": "11111111-1111-4111-8111-111111111111",
+            "candidate_id": "candidate-1",
+        },
+        capability_key="library.covers.write",
+        idempotency_key=(
+            "cover-remote-save:9:lookup-abc:"
+            "11111111-1111-4111-8111-111111111111:candidate-1"
+        ),
+        max_attempts=1,
+    )
+    scope = SimpleNamespace(
+        checkpoint_id=61,
+        checkpoint="accepted",
+        checkpoint_revision=0,
+        task_revision=4,
+        candidate_generation="11111111-1111-4111-8111-111111111111",
+        candidate_id="candidate-1",
+        selected_candidate={"id": "candidate-1", "url": "https://covers.invalid/a.jpg"},
+        library_root_path="C:/Music/Artist/Album",
+        track_paths=("C:/Music/Artist/Album/01.flac",),
+    )
+
+    class Repository:
+        def __init__(self):
+            self.checkpoints = []
+            self.persisted = []
+            self.published = []
+
+        def load_claimed_remote_save(self, **_kwargs):
+            return scope
+
+        def checkpoint_claimed_remote_save(self, **kwargs):
+            self.checkpoints.append(kwargs)
+            return kwargs["expected_row_revision"] + 1
+
+        def persist_claimed_remote_cover_selection(self, **kwargs):
+            self.persisted.append(kwargs)
+            return kwargs["expected_checkpoint_revision"] + 1
+
+        def publish_claimed_remote_save(self, **kwargs):
+            self.published.append(kwargs)
+            return kwargs["expected_checkpoint_revision"] + 1, 5
+
+    repository = Repository()
+
+    def run_save(**kwargs):
+        assert kwargs["scope"] is scope
+        revision = kwargs["checkpoint"]("download_started")
+        revision = kwargs["persist_selection"](
+            expected_checkpoint_revision=revision,
+            selected_cover_path="C:/Music/Artist/Album/cover.jpg",
+            selected_cover_revision="revision-1",
+            linked_remote=False,
+        )
+        assert kwargs["publish"](
+            expected_checkpoint_revision=revision,
+            selected_cover_path="C:/Music/Artist/Album/cover.jpg",
+            linked_remote=False,
+        )
+        return {"status": "succeeded"}
+
+    outcome = build_cover_remote_save_handler(
+        cover_repository=repository,
+        config={},
+        logger=SimpleNamespace(),
+        run_save=run_save,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert repository.checkpoints[0]["next_checkpoint"] == "download_started"
+    assert repository.persisted[0]["checkpoint_id"] == scope.checkpoint_id
+    assert repository.published[0]["expected_task_revision"] == scope.task_revision

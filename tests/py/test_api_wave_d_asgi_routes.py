@@ -9,6 +9,7 @@ import importlib
 from pathlib import Path
 from threading import Event, Timer
 from types import SimpleNamespace
+import uuid
 
 from fastapi import FastAPI
 import pytest
@@ -2147,6 +2148,103 @@ def test_asgi_cover_lookup_save_remote_queues_selected_candidate(app, monkeypatc
     assert queued_calls[0]["kwargs"]["library_state"] is asgi_app.state.library_state
     assert queued_calls[0]["kwargs"]["user_agent"] == app.config["MUSICBRAINZ_USER_AGENT"]
     assert queued_calls[0]["kwargs"]["cover_selection_origin"] == "user"
+
+
+def test_asgi_cover_lookup_save_remote_uses_atomic_durable_acceptance(app, monkeypatch):
+    from music_app.routes import api_wave_d_asgi_routes as asgi_routes
+
+    track_path = (app.config["MUSIC_DIR"] / "Artist" / "Album" / "song.mp3").resolve()
+    track_path.parent.mkdir(parents=True, exist_ok=True)
+    track_path.write_bytes(b"track")
+    task_id = "11111111-1111-4111-8111-111111111111"
+    candidate = {
+        "id": "candidate-1",
+        "art_kind": "cover",
+        "url": "https://images.example/cover.jpg",
+        "thumbnail_url": "https://images.example/thumb.jpg",
+        "source": "manual",
+        "source_label": "Manual URL",
+        "width": 1000,
+        "height": 1000,
+    }
+
+    class Repository:
+        def __init__(self):
+            self.accepted = []
+            self.status = "completed"
+
+        def get_task(self, **_kwargs):
+            return {
+                "candidate_generation": task_id,
+                "resource_revision": 0,
+                "local_album_id": 1,
+                "status": self.status,
+                "provider_payload": {
+                    "id": task_id,
+                    "status": self.status,
+                    "possible_matches": [candidate],
+                    "selected_candidate_id": (
+                        "candidate-1" if self.status == "running" else ""
+                    ),
+                },
+            }
+
+        def accept_remote_save(self, **kwargs):
+            self.accepted.append(kwargs)
+            self.status = "running"
+            return SimpleNamespace(job_id=91)
+
+    repository = Repository()
+    queued = []
+    monkeypatch.setattr(
+        asgi_routes,
+        "_durable_cover_request_context",
+        lambda _request: (
+            repository,
+            SimpleNamespace(
+                library_id=1,
+                account_id=2,
+                deployment_mode="self_hosted_private_web",
+                client_surface_class="private_web",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_cover_lookup_save_remote_task",
+        lambda *_args, **_kwargs: queued.append(True),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "_task_matches_album_context",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "request_origin_ref_for_request",
+        lambda _request: "browser:test-origin",
+    )
+    asgi_app = _make_wave_d_app(app)
+    asgi_app.state.flask_app = _FatalFlaskBridge()
+    asgi_app.state.cover_job_repository = repository
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app,
+        "POST",
+        "/utilities/cover-lookup/save-remote",
+        json_body={
+            "album": _album_payload(track_path),
+            "task_id": task_id,
+            "candidate_id": "candidate-1",
+        },
+    )
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["task"]["status"] == "running"
+    assert repository.accepted[0]["candidate_id"] == "candidate-1"
+    assert repository.accepted[0]["candidate_generation"] == uuid.UUID(task_id)
+    assert queued == []
 
 
 @pytest.mark.parametrize(

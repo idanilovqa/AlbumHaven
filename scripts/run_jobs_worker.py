@@ -93,6 +93,8 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         build_cover_bulk_refresh_resource_validator,
         build_cover_lookup_handler,
         build_cover_lookup_resource_validator,
+        build_cover_remote_save_handler,
+        build_cover_remote_save_resource_validator,
         build_cover_refresh_handler,
     )
     from music_app.jobs.scan_handlers import (
@@ -113,7 +115,10 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     )
     from music_app.services.jobs.repository_postgres import PostgresJobRepository
     from music_app.services.cover_jobs_postgres import PostgresCoverJobRepository
-    from music_app.services.cover_lookup_runtime import run_claimed_cover_lookup
+    from music_app.services.cover_lookup_runtime import (
+        run_claimed_cover_lookup,
+        run_claimed_cover_remote_save,
+    )
     from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
     from music_app.services.policy_evaluator import PolicyEvaluator
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
@@ -173,6 +178,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     cover_bulk_validator = build_cover_bulk_refresh_resource_validator(
         cover_repository=cover_repository
     )
+    cover_remote_save_validator = build_cover_remote_save_resource_validator(
+        cover_repository=cover_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -182,6 +190,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         resource_validators={
             JobKind.COVER_LOOKUP.value: cover_lookup_validator,
             JobKind.COVER_BULK_REFRESH.value: cover_bulk_validator,
+            JobKind.COVER_REMOTE_SAVE.value: cover_remote_save_validator,
             JobKind.FULL_SCAN.value: full_scan_validator,
             JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
@@ -209,6 +218,15 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     )
     handlers.register(JobKind.COVER_BULK_REFRESH, cover_refresh_handler)
     handlers.register(JobKind.POST_SCAN_COVER_REFRESH, cover_refresh_handler)
+    handlers.register(
+        JobKind.COVER_REMOTE_SAVE,
+        build_cover_remote_save_handler(
+            cover_repository=cover_repository,
+            config=scan_config,
+            logger=logging.getLogger("album_haven.jobs.cover_save"),
+            run_save=run_claimed_cover_remote_save,
+        ),
+    )
     handlers.register(
         JobKind.FULL_SCAN,
         build_full_scan_handler(

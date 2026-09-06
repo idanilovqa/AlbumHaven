@@ -61,6 +61,28 @@ class ClaimedCoverRefreshScope:
     force_search: bool
 
 
+@dataclass(frozen=True)
+class AcceptedCoverRemoteSave:
+    task_key: str
+    task_id: int
+    job_id: int
+    row_revision: int
+    checkpoint_revision: int
+
+
+@dataclass(frozen=True)
+class ClaimedCoverRemoteSaveScope:
+    checkpoint_id: int
+    checkpoint: str
+    checkpoint_revision: int
+    task_revision: int
+    candidate_generation: UUID
+    candidate_id: str
+    selected_candidate: Mapping[str, object]
+    library_root_path: str
+    track_paths: tuple[str, ...]
+
+
 def _default_connect(database_url: str) -> Any:
     if psycopg is None:
         raise RuntimeError("psycopg is required for durable cover jobs")
@@ -641,6 +663,195 @@ class PostgresCoverJobRepository:
             )
         return row or None
 
+    def accept_remote_save(
+        self,
+        *,
+        task_key: str,
+        library_id: int,
+        account_id: int,
+        request_origin_ref: str,
+        deployment_mode: str,
+        client_surface: str,
+        candidate_generation: UUID,
+        candidate_id: str,
+        resource_revision: int,
+        scheduled_at: datetime,
+    ) -> AcceptedCoverRemoteSave:
+        origin_type, separator, origin_key = _bounded(
+            "request_origin_ref", request_origin_ref, maximum=1024
+        ).partition(":")
+        if not separator or not isinstance(candidate_generation, UUID):
+            raise ValueError("remote save origin or candidate generation is invalid")
+        values = {
+            "task_key": _bounded("task_key", task_key, maximum=128),
+            "library_id": _positive("library_id", library_id),
+            "account_id": _positive("account_id", account_id),
+            "origin_type": _bounded("origin_type", origin_type, maximum=64),
+            "origin_key": _bounded("origin_key", origin_key, maximum=512),
+            "deployment_mode": _bounded(
+                "deployment_mode", deployment_mode, maximum=128
+            ),
+            "client_surface": _bounded(
+                "client_surface", client_surface, maximum=128
+            ),
+            "candidate_generation": candidate_generation,
+            "candidate_id": _bounded("candidate_id", candidate_id, maximum=256),
+            "resource_revision": max(0, int(resource_revision)),
+            "scheduled_at": scheduled_at,
+        }
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.accept_cover_remote_save(%(task_key)s, %(library_id)s, %(account_id)s, %(origin_type)s, %(origin_key)s, %(deployment_mode)s, %(client_surface)s, %(candidate_generation)s, %(candidate_id)s, %(resource_revision)s, %(scheduled_at)s)",
+                    values,
+                ).fetchone()
+            )
+        if not row:
+            raise ValueError("remote cover candidate scope is unavailable")
+        return AcceptedCoverRemoteSave(
+            task_key=str(values["task_key"]),
+            task_id=_positive("task_id", row.get("task_id")),
+            job_id=_positive("job_id", row.get("job_id")),
+            row_revision=max(0, int(row.get("row_revision") or 0)),
+            checkpoint_revision=max(
+                0, int(row.get("checkpoint_revision") or 0)
+            ),
+        )
+
+    def load_claimed_remote_save(self, **values: object) -> ClaimedCoverRemoteSaveScope | None:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.load_claimed_cover_remote_save(%(task_key)s, %(task_id)s, %(library_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        candidate = row.get("selected_candidate")
+        generation = row.get("candidate_generation")
+        return ClaimedCoverRemoteSaveScope(
+            checkpoint_id=_positive("checkpoint_id", row.get("checkpoint_id")),
+            checkpoint=_bounded("checkpoint", row.get("checkpoint"), maximum=32),
+            checkpoint_revision=max(
+                0, int(row.get("checkpoint_revision") or 0)
+            ),
+            task_revision=max(0, int(row.get("task_revision") or 0)),
+            candidate_generation=(
+                generation if isinstance(generation, UUID) else UUID(str(generation))
+            ),
+            candidate_id=_bounded("candidate_id", row.get("candidate_id"), maximum=256),
+            selected_candidate=(dict(candidate) if isinstance(candidate, Mapping) else {}),
+            library_root_path=_bounded(
+                "library_root_path", row.get("library_root_path"), maximum=8192
+            ),
+            track_paths=tuple(str(path) for path in (row.get("track_paths") or ())),
+        )
+
+    def checkpoint_claimed_remote_save(
+        self,
+        *,
+        checkpoint_id: int,
+        expected_row_revision: int,
+        next_checkpoint: str,
+        artifact_key: UUID | None = None,
+        cover_revision: str | None = None,
+        reason_code: str | None = None,
+        **values: object,
+    ) -> int | None:
+        parameters = self._refresh_claim_values(**values)
+        parameters.update(
+            {
+                "checkpoint_id": _positive("checkpoint_id", checkpoint_id),
+                "expected_row_revision": max(0, int(expected_row_revision)),
+                "next_checkpoint": _bounded(
+                    "next_checkpoint", next_checkpoint, maximum=32
+                ),
+                "artifact_key": artifact_key,
+                "cover_revision": str(cover_revision or "").strip() or None,
+                "reason_code": str(reason_code or "").strip() or None,
+            }
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.checkpoint_claimed_cover_remote_save(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_row_revision)s, %(next_checkpoint)s, %(artifact_key)s, %(cover_revision)s, %(reason_code)s) as row_revision",
+                parameters,
+            ).fetchone()
+        revision = _mapping(row).get("row_revision")
+        return int(revision) if revision is not None else None
+
+    def publish_claimed_remote_save(
+        self,
+        *,
+        checkpoint_id: int,
+        task_id: int,
+        expected_checkpoint_revision: int,
+        expected_task_revision: int,
+        selected_cover_path: str | None,
+        linked_remote: bool,
+        **values: object,
+    ) -> tuple[int, int] | None:
+        parameters = self._refresh_claim_values(**values)
+        parameters.update(
+            {
+                "checkpoint_id": _positive("checkpoint_id", checkpoint_id),
+                "task_id": _positive("task_id", task_id),
+                "expected_checkpoint_revision": max(
+                    0, int(expected_checkpoint_revision)
+                ),
+                "expected_task_revision": max(0, int(expected_task_revision)),
+                "selected_cover_path": str(selected_cover_path or "") or None,
+                "linked_remote": bool(linked_remote),
+            }
+        )
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select * from ops.publish_claimed_cover_remote_save(%(checkpoint_id)s, %(task_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_checkpoint_revision)s, %(expected_task_revision)s, %(selected_cover_path)s, %(linked_remote)s)",
+                    parameters,
+                ).fetchone()
+            )
+        if not row:
+            return None
+        return (
+            max(0, int(row.get("checkpoint_revision") or 0)),
+            max(0, int(row.get("task_revision") or 0)),
+        )
+
+    def persist_claimed_remote_cover_selection(
+        self,
+        *,
+        checkpoint_id: int,
+        expected_checkpoint_revision: int,
+        selected_cover_path: str | None,
+        selected_cover_revision: str | None,
+        linked_remote: bool,
+        **values: object,
+    ) -> int | None:
+        parameters = self._refresh_claim_values(**values)
+        parameters.update(
+            {
+                "checkpoint_id": _positive("checkpoint_id", checkpoint_id),
+                "expected_checkpoint_revision": max(
+                    0, int(expected_checkpoint_revision)
+                ),
+                "selected_cover_path": str(selected_cover_path or "") or None,
+                "selected_cover_revision": str(
+                    selected_cover_revision or ""
+                ).strip()
+                or None,
+                "linked_remote": bool(linked_remote),
+            }
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "select ops.persist_claimed_remote_cover_selection(%(checkpoint_id)s, %(job_id)s, %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s, %(expected_checkpoint_revision)s, %(selected_cover_path)s, %(selected_cover_revision)s, %(linked_remote)s) as row_revision",
+                parameters,
+            ).fetchone()
+        revision = _mapping(row).get("row_revision")
+        return int(revision) if revision is not None else None
+
     def get_task(self, *, task_key: str, library_id: int) -> dict[str, object] | None:
         values = {
             "library_id": _positive("library_id", library_id),
@@ -700,5 +911,7 @@ __all__ = [
     "AcceptedCoverBulkRefresh",
     "ClaimedCoverLookupScope",
     "ClaimedCoverRefreshScope",
+    "AcceptedCoverRemoteSave",
+    "ClaimedCoverRemoteSaveScope",
     "PostgresCoverJobRepository",
 ]

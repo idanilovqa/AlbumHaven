@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from threading import Event, Lock
 import time
+import uuid
 
 from music_app.services import cover_provider_matching
 from music_app.services.album_cover_candidate_publisher import AlbumCoverCandidatePublisher
@@ -287,6 +288,105 @@ def queue_cover_lookup_save_remote_task(
         persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
     )
     register_cover_lookup_future(task_id, future)
+
+
+def run_claimed_cover_remote_save(
+    *,
+    scope,
+    config: Mapping[str, object],
+    logger,
+    should_cancel: Callable[[], bool],
+    checkpoint: Callable[..., int | None],
+    persist_selection: Callable[..., int | None],
+    publish: Callable[..., bool],
+) -> dict[str, object]:
+    """Execute one claimed remote selection with conservative crash recovery."""
+
+    del logger
+    album_root = Path(scope.library_root_path)
+    track_paths = {str(path) for path in scope.track_paths}
+    try:
+        common_parent = Path(os.path.commonpath([str(Path(path).parent) for path in track_paths]))
+    except (ValueError, TypeError):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    if not track_paths or common_parent.resolve(strict=False) != album_root.resolve(strict=False):
+        return {"status": "failed", "reason_code": "album_scope_invalid"}
+    selected_image = selected_remote_image_from_lookup_match(
+        dict(scope.selected_candidate)
+    )
+    if should_cancel():
+        return {"status": "canceled", "reason_code": "canceled_before_download"}
+
+    if selected_image.display_only:
+        revision = checkpoint("artifact_written")
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "artifact_checkpoint_lost"}
+        revision = persist_selection(
+            expected_checkpoint_revision=revision,
+            selected_cover_path=None,
+            selected_cover_revision=None,
+            linked_remote=True,
+        )
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "selection_commit_uncertain"}
+        revision = checkpoint("promotion_completed")
+        if revision is None:
+            return {"status": "ambiguous", "reason_code": "promotion_checkpoint_lost"}
+        if not publish(
+            expected_checkpoint_revision=revision,
+            selected_cover_path=None,
+            linked_remote=True,
+        ):
+            return {"status": "ambiguous", "reason_code": "publication_uncertain"}
+        return {"status": "succeeded"}
+
+    revision = checkpoint("download_started")
+    if revision is None:
+        return {"status": "ambiguous", "reason_code": "download_checkpoint_lost"}
+    if should_cancel():
+        return {"status": "canceled", "reason_code": "canceled_before_fetch"}
+    raw_bytes, _mime_type = fetch_remote_cover_bytes(
+        selected_image.url,
+        config=config,
+    )
+    if not raw_bytes:
+        return {"status": "failed", "reason_code": "download_failed"}
+    promotion = begin_remote_cover_promotion(
+        album_root,
+        raw_bytes,
+        serialize_selection=True,
+    )
+    if promotion is None:
+        return {"status": "failed", "reason_code": "image_validation_failed"}
+    artifact_revision = str(promotion.promoted_cover_revision or "").strip()
+    revision = checkpoint(
+        "artifact_written",
+        artifact_key=uuid.uuid4(),
+        cover_revision=artifact_revision,
+    )
+    if revision is None:
+        rollback_local_image_promotion(promotion)
+        return {"status": "ambiguous", "reason_code": "artifact_checkpoint_lost"}
+    revision = persist_selection(
+        expected_checkpoint_revision=revision,
+        selected_cover_path=str(promotion.cover_path),
+        selected_cover_revision=artifact_revision,
+        linked_remote=False,
+    )
+    if revision is None:
+        complete_local_image_promotion(promotion)
+        return {"status": "ambiguous", "reason_code": "selection_commit_uncertain"}
+    complete_local_image_promotion(promotion)
+    revision = checkpoint("promotion_completed")
+    if revision is None:
+        return {"status": "ambiguous", "reason_code": "promotion_checkpoint_lost"}
+    if not publish(
+        expected_checkpoint_revision=revision,
+        selected_cover_path=str(promotion.cover_path),
+        linked_remote=False,
+    ):
+        return {"status": "ambiguous", "reason_code": "publication_uncertain"}
+    return {"status": "succeeded"}
 
 
 def _run_cover_lookup_job(runtime_job: CoverLookupRuntimeJob) -> None:

@@ -394,9 +394,181 @@ def build_cover_bulk_refresh_resource_validator(
     return validate
 
 
+def _cover_remote_save_claim_valid(claim: ClaimedJob) -> bool:
+    task_key = str(claim.subject_ref or "").strip()
+    task_id = claim.parameters.get("task_id")
+    generation = str(claim.parameters.get("candidate_generation") or "").strip()
+    candidate_id = str(claim.parameters.get("candidate_id") or "").strip()
+    return bool(
+        claim.kind in {JobKind.COVER_REMOTE_SAVE, "cover_remote_save"}
+        and claim.subject_kind == "cover_lookup_task"
+        and task_key
+        and isinstance(task_id, int)
+        and not isinstance(task_id, bool)
+        and task_id > 0
+        and generation
+        and candidate_id
+        and claim.library_id is not None
+        and claim.account_id is not None
+        and claim.capability_key == "library.covers.write"
+        and claim.max_attempts == 1
+        and claim.idempotency_key
+        == f"cover-remote-save:{claim.library_id}:{task_key}:{generation}:{candidate_id}"
+    )
+
+
+def build_cover_remote_save_resource_validator(
+    *, cover_repository: Any
+) -> Callable[[ClaimedJob, Any, datetime], AuthorizationDecision]:
+    del cover_repository
+
+    def validate(
+        claim: ClaimedJob, _authorization_context: Any, _now: datetime
+    ) -> AuthorizationDecision:
+        return AuthorizationDecision(
+            _cover_remote_save_claim_valid(claim),
+            "cover_remote_save_scope_current"
+            if _cover_remote_save_claim_valid(claim)
+            else "cover_remote_save_scope_invalid",
+        )
+
+    return validate
+
+
+def build_cover_remote_save_handler(
+    *,
+    cover_repository: Any,
+    config: Mapping[str, object],
+    logger: Any,
+    run_save: Callable[..., Mapping[str, object]],
+    clock: Callable[[], datetime] | None = None,
+) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
+    """Execute one remote selection through private recovery checkpoints."""
+
+    now = clock or (lambda: datetime.now(timezone.utc))
+
+    def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
+        if not _cover_remote_save_claim_valid(claim):
+            return JobTransitionResult(JobState.CANCELED, "cover_remote_save_scope_invalid")
+        claim_values = _claim_parameters(claim, now())
+        try:
+            scope = cover_repository.load_claimed_remote_save(**claim_values)
+        except Exception:
+            return JobTransitionResult(JobState.FAILED, "cover_remote_save_scope_unavailable")
+        if scope is None:
+            return JobTransitionResult(JobState.CANCELED, "cover_remote_save_scope_stale")
+        checkpoint_revision = int(scope.checkpoint_revision)
+        fence_lost = False
+
+        def should_cancel() -> bool:
+            return bool(
+                fence_lost
+                or context.cancel_requested
+                or not context.lease_active
+                or not context.reauthorize().allowed
+            )
+
+        def checkpoint(
+            next_checkpoint: str,
+            *,
+            artifact_key: Any = None,
+            cover_revision: str | None = None,
+            reason_code: str | None = None,
+        ) -> int | None:
+            nonlocal checkpoint_revision, fence_lost
+            if should_cancel():
+                return None
+            try:
+                next_revision = cover_repository.checkpoint_claimed_remote_save(
+                    **_refresh_claim_parameters(claim, now()),
+                    checkpoint_id=scope.checkpoint_id,
+                    expected_row_revision=checkpoint_revision,
+                    next_checkpoint=next_checkpoint,
+                    artifact_key=artifact_key,
+                    cover_revision=cover_revision,
+                    reason_code=reason_code,
+                )
+            except Exception:
+                next_revision = None
+            if next_revision is None:
+                fence_lost = True
+                return None
+            checkpoint_revision = int(next_revision)
+            return checkpoint_revision
+
+        def persist_selection(**options: object) -> int | None:
+            nonlocal checkpoint_revision, fence_lost
+            options.pop("expected_checkpoint_revision", None)
+            if should_cancel():
+                return None
+            try:
+                next_revision = cover_repository.persist_claimed_remote_cover_selection(
+                    **_refresh_claim_parameters(claim, now()),
+                    checkpoint_id=scope.checkpoint_id,
+                    expected_checkpoint_revision=checkpoint_revision,
+                    **options,
+                )
+            except Exception:
+                next_revision = None
+            if next_revision is None:
+                fence_lost = True
+                return None
+            checkpoint_revision = int(next_revision)
+            return checkpoint_revision
+
+        def publish(**options: object) -> bool:
+            nonlocal checkpoint_revision, fence_lost
+            options.pop("expected_checkpoint_revision", None)
+            if should_cancel():
+                return False
+            try:
+                published = cover_repository.publish_claimed_remote_save(
+                    **_refresh_claim_parameters(claim, now()),
+                    checkpoint_id=scope.checkpoint_id,
+                    task_id=int(claim.parameters["task_id"]),
+                    expected_checkpoint_revision=checkpoint_revision,
+                    expected_task_revision=int(scope.task_revision),
+                    **options,
+                )
+            except Exception:
+                published = None
+            if published is None:
+                fence_lost = True
+                return False
+            checkpoint_revision = int(published[0])
+            return True
+
+        if should_cancel():
+            return JobTransitionResult(JobState.CANCELED, "cover_remote_save_canceled")
+        try:
+            result = run_save(
+                scope=scope,
+                config=dict(config),
+                logger=logger,
+                should_cancel=should_cancel,
+                checkpoint=checkpoint,
+                persist_selection=persist_selection,
+                publish=publish,
+            )
+        except Exception:
+            result = {"status": "ambiguous" if checkpoint_revision > 0 else "failed"}
+        status = str(result.get("status") or "failed")
+        if fence_lost or status == "ambiguous":
+            return JobTransitionResult(JobState.AMBIGUOUS, "cover_remote_save_ambiguous")
+        if status == "succeeded":
+            return JobTransitionResult(JobState.SUCCEEDED, "cover_remote_save_completed")
+        if status == "canceled":
+            return JobTransitionResult(JobState.CANCELED, "cover_remote_save_canceled")
+        return JobTransitionResult(JobState.FAILED, "cover_remote_save_failed")
+
+    return handle
+
+
 __all__ = [
     "build_cover_lookup_handler",
     "build_cover_lookup_resource_validator",
     "build_cover_refresh_handler",
     "build_cover_bulk_refresh_resource_validator",
+    "build_cover_remote_save_handler",
+    "build_cover_remote_save_resource_validator",
 ]

@@ -115,7 +115,12 @@ def _lookup_task_payload_for_request(
             row = None
         payload = row.get("provider_payload") if isinstance(row, Mapping) else None
         if isinstance(payload, Mapping):
-            return dict(payload)
+            return {
+                **dict(payload),
+                "id": task_id,
+                "status": str(row.get("status") or payload.get("status") or ""),
+                "album_id": row.get("local_album_id"),
+            }
     return cover_lookup_result(task_id) if task_id else {}
 
 
@@ -1090,21 +1095,54 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
                 400,
             )
         )
-    update_cover_lookup_task(
-        task_id,
-        config=config,
-        status="running",
-        progress=92,
-        progress_label="Saving selected cover art...",
-        selected_candidate_id=candidate_id,
-        notification_completed_at=str(
-            task_payload.get("notification_completed_at") or task_payload.get("finished_at") or ""
-        ).strip(),
-        message="Saving selected cover art...",
-        job_contract=build_cover_lookup_job_contract("save_remote_selection"),
-    )
+    durable = _durable_cover_request_context(request)
+    accepted_durably = False
+    if durable is not None:
+        repository, audit = durable
+        try:
+            durable_task = repository.get_task(
+                task_key=task_id, library_id=audit.library_id
+            )
+            generation = uuid.UUID(str(durable_task["candidate_generation"]))
+            repository.accept_remote_save(
+                task_key=task_id,
+                library_id=audit.library_id,
+                account_id=audit.account_id,
+                request_origin_ref=request_origin_ref_for_request(request),
+                deployment_mode=audit.deployment_mode,
+                client_surface=audit.client_surface_class,
+                candidate_generation=generation,
+                candidate_id=candidate_id,
+                resource_revision=int(durable_task.get("resource_revision") or 0),
+                scheduled_at=datetime.now(timezone.utc),
+            )
+            accepted_durably = True
+        except (KeyError, TypeError, ValueError):
+            return _json_response(
+                ({"ok": False, "error": "Selected remote candidate is stale"}, 409)
+            )
+        except Exception:
+            return _json_response(
+                ({"ok": False, "error": "Selected remote cover could not be queued"}, 503)
+            )
+    else:
+        update_cover_lookup_task(
+            task_id,
+            config=config,
+            status="running",
+            progress=92,
+            progress_label="Saving selected cover art...",
+            selected_candidate_id=candidate_id,
+            notification_completed_at=str(
+                task_payload.get("notification_completed_at")
+                or task_payload.get("finished_at")
+                or ""
+            ).strip(),
+            message="Saving selected cover art...",
+            job_contract=build_cover_lookup_job_contract("save_remote_selection"),
+        )
     response_task_payload = serialize_cover_lookup_task_payload(
-        cover_lookup_result(task_id)
+        _lookup_task_payload_for_request(request, task_id)
     )
     response_gallery_payload = _serialize_cover_gallery_from_asgi(
         request,
@@ -1112,20 +1150,21 @@ async def utilities_cover_lookup_save_remote(request: Request) -> JSONResponse:
         album_context.track_paths,
         task_id,
     )
-    queue_cover_lookup_save_remote_task(
-        task_id,
-        album_context.album_root,
-        album_context.track_paths,
-        candidate_id,
-        selected_match,
-        config=config,
-        logger=logger,
-        library_state=library_state,
-        user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
-        cover_selection_origin="user",
-        apply_cover_selection_for_tracks=apply_cover_path_for_tracks,
-        persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
-    )
+    if not accepted_durably:
+        queue_cover_lookup_save_remote_task(
+            task_id,
+            album_context.album_root,
+            album_context.track_paths,
+            candidate_id,
+            selected_match,
+            config=config,
+            logger=logger,
+            library_state=library_state,
+            user_agent=str(config["MUSICBRAINZ_USER_AGENT"]),
+            cover_selection_origin="user",
+            apply_cover_selection_for_tracks=apply_cover_path_for_tracks,
+            persist_cover_selection_for_tracks=persist_cover_selection_for_tracks,
+        )
     return JSONResponse(
         {
             "ok": True,

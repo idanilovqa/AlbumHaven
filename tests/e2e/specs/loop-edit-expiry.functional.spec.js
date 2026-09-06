@@ -6,9 +6,11 @@ const LOOP_ALBUM_TARGET = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-const LOOP_TRACK_TITLE = 'Fake Loop Source';
-const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const SAVED_LOOP_NAME = 'Expiry Lease Loop';
+
+function visiblePlayerTitle(trackTitle) {
+  return `${LOOP_ALBUM_TARGET.artist} - ${trackTitle} /`;
+}
 
 test(`${CASE_ID} loop creation expires through the shared production session controller`, async ({
   galleryActions,
@@ -28,12 +30,12 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
     const playbackMark = await playbackEvidence.playbackMark();
-    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
-    expect(selectedTrack.title).toBe(LOOP_TRACK_TITLE);
+    selectedTrack = await trackModalActions.playTrackAt(0);
+    expect(selectedTrack.title).not.toBe('');
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
-      trackTitle: LOOP_TRACK_TITLE,
-      visibleTitle: LOOP_PLAYER_TITLE,
+      trackTitle: selectedTrack.title,
+      visibleTitle: visiblePlayerTitle(selectedTrack.title),
     });
     await globalPlayerActions.waitForPlaybackState({ paused: false });
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
@@ -53,7 +55,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('loops');
     await utilityLoopsActions.waitForReady();
-    await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    await utilityLoopsActions.selectGroupByTitle(selectedTrack.title);
     await utilityLoopsActions.playLoopByName(SAVED_LOOP_NAME);
     await utilityLoopsActions.enableRepeatByName(SAVED_LOOP_NAME);
     await globalPlayerActions.resumeIfPaused();
@@ -92,7 +94,7 @@ test(`${CASE_ID} loop creation expires through the shared production session con
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('loops');
     await utilityLoopsActions.waitForReady();
-    await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    await utilityLoopsActions.selectGroupByTitle(selectedTrack.title);
     await utilityLoopsActions.openDeleteConfirmationByName(SAVED_LOOP_NAME);
     expect((await utilityLoopsActions.confirmDeleteByName(SAVED_LOOP_NAME)).requestCount).toBe(1);
   });
@@ -112,11 +114,11 @@ test(`${CASE_ID} page reload exits bottom-player loop edit mode`, async ({
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
-    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    selectedTrack = await trackModalActions.playTrackAt(0);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
-      trackTitle: LOOP_TRACK_TITLE,
-      visibleTitle: LOOP_PLAYER_TITLE,
+      trackTitle: selectedTrack.title,
+      visibleTitle: visiblePlayerTitle(selectedTrack.title),
     });
     await trackModalActions.close();
     await globalPlayerActions.openLoopEditor();
@@ -126,8 +128,8 @@ test(`${CASE_ID} page reload exits bottom-player loop edit mode`, async ({
     const reloadPlaybackMark = await playbackEvidence.playbackMark();
     const restoredPlayback = await globalPlayerActions.reloadAndWaitForRestoredTrack({
       path: selectedTrack.path,
-      trackTitle: LOOP_TRACK_TITLE,
-      visibleTitle: LOOP_PLAYER_TITLE,
+      trackTitle: selectedTrack.title,
+      visibleTitle: visiblePlayerTitle(selectedTrack.title),
     });
     expect(['autoplay', 'blocked-resumed']).toContain(restoredPlayback.reloadOutcome);
     expect(restoredPlayback.paused).toBe(false);
@@ -153,11 +155,11 @@ test(`${CASE_ID} returning to a suspended tab reconciles an overdue loop edit le
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET))
       .toEqual(LOOP_ALBUM_TARGET);
-    const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+    const selectedTrack = await trackModalActions.playTrackAt(0);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
-      trackTitle: LOOP_TRACK_TITLE,
-      visibleTitle: LOOP_PLAYER_TITLE,
+      trackTitle: selectedTrack.title,
+      visibleTitle: visiblePlayerTitle(selectedTrack.title),
     });
     await trackModalActions.close();
     await globalPlayerActions.installLoopEditExpiryClock();

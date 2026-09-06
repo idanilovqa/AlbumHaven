@@ -2266,6 +2266,65 @@ test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist sourc
   }
 });
 
+test('applyUpdatedAlbumsToCurrentView retains compact destination membership during a structural merge', () => {
+  const context = loadHelpers();
+  const movedTracks = Array.from({ length: 3 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`,
+    title: `Moved Track ${index + 1}`,
+  }));
+  const destinationPaths = Array.from({ length: 16 }, (_value, index) => (
+    `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`
+  ));
+  const compactDestination = {
+    key: 'ddt::studio-records',
+    album_ref: 'ddt::studio-records',
+    name: 'Studio Records',
+    album_artist: 'DDT',
+    preview_only: true,
+    track_count_preview: 13,
+    track_paths: destinationPaths,
+    tracks: [],
+  };
+  const temporarySource = {
+    key: 'ddt::temporary-split',
+    album_ref: 'ddt::temporary-split',
+    name: 'Temporary Split',
+    album_artist: 'DDT',
+    preview_only: false,
+    track_count_preview: 3,
+    track_paths: movedTracks.map((track) => track.path),
+    tracks: movedTracks,
+  };
+  const optimisticDestination = {
+    ...compactDestination,
+    preview_only: false,
+    track_count_preview: 3,
+    track_paths: movedTracks.map((track) => track.path),
+    tracks: movedTracks,
+  };
+  context.state.view.selected_artist = 'DDT';
+  context.state.view.related_artists = [];
+  context.state.view.primary_artist_groups = [{
+    artist: 'DDT',
+    albums: [compactDestination, temporarySource],
+  }];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = context.state.view.primary_artist_groups;
+  context.getAlbumRequestKey = (album) => String(album?.album_ref || album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(
+    [optimisticDestination],
+    { originalAlbum: temporarySource, skipRender: true },
+  );
+
+  const albums = context.lastMergedPayload.artist_groups[0].albums;
+  const destination = albums.find((album) => album.name === 'Studio Records');
+  assert.equal(albums.some((album) => album.name === temporarySource.name), false);
+  assert.equal(destination.track_count_preview, 16);
+  assert.deepEqual(new Set(destination.track_paths), new Set(destinationPaths));
+});
+
 test('updateOpenTrackModalAfterTagEdit keeps source aliases on the remaining album when source is first', () => {
   const context = loadHelpers();
   const movedTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Source\\01 Move.mp3';

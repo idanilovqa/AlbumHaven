@@ -237,7 +237,10 @@ test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after p
     const summary = await trackModalActions.waitForLoadedSummary();
     expect(summary.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
     const playbackMark = await playbackEvidence.playbackMark();
-    playedTrack = await trackModalActions.playTrackAt(0);
+    const creditedTrackIndex = (await trackModalActions.readTrackTitles())
+      .indexOf(EXPECTED_TRACK_CREDITS[0].rawTitle);
+    expect(creditedTrackIndex).toBeGreaterThanOrEqual(0);
+    playedTrack = await trackModalActions.playTrackAt(creditedTrackIndex);
     expect(playedTrack.artist).toBe('Solo Voice');
     await globalPlayerActions.waitForCurrentTrack({
       path: playedTrack.path,
@@ -257,7 +260,9 @@ test('FTC-PLAYER-012 reopens a Various Artists album from player artwork after p
     await globalPlayerActions.openCurrentAlbumFromCover();
     const reopened = await trackModalActions.waitForLoadedSummary();
     expect(reopened.title).toContain(`${ALBUM_ARTIST} • ${ALBUM}`);
-    expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
+    const reopenedTrackIndex = (await trackModalActions.readTrackTitles()).indexOf(playedTrack.title);
+    expect(reopenedTrackIndex).toBeGreaterThanOrEqual(0);
+    expect((await trackModalActions.readTrackAt(reopenedTrackIndex)).path).toBe(playedTrack.path);
   });
 });
 

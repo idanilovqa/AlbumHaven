@@ -1525,6 +1525,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     omitSidebar: true,
   }), false, {
     preserveScroll: true,
+    restartIfSameUrl: true,
     skipPendingViewTransition: true,
   });
   return true;

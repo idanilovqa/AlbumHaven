@@ -610,6 +610,59 @@ test('album-only split preserves server-owned per-track artist rows in optimisti
   );
 });
 
+test('single-artist split from Various Artists matches the authoritative album header credit', () => {
+  const context = loadHelpers();
+  const soloPath = 'C:\\Music\\Various Artists\\Signals\\01 Signal.flac';
+  const ensemblePaths = Array.from({ length: 4 }, (_value, index) => (
+    `C:\\Music\\Various Artists\\Signals\\${index + 2} Ensemble.flac`
+  ));
+  const album = {
+    key: 'various artists::signals',
+    name: 'Signals',
+    album_artist: 'Various Artists',
+    tracks: [
+      {
+        path: soloPath,
+        album: 'Signals',
+        artist: 'Solo Voice',
+        album_artist: 'Various Artists',
+        title: 'Signal (feat. Featured Voice)',
+      },
+      ...ensemblePaths.map((path, index) => ({
+        path,
+        album: 'Signals',
+        artist: `Ensemble ${index + 1}`,
+        album_artist: 'Various Artists',
+        title: `Ensemble Signal ${index + 1}`,
+      })),
+    ],
+    track_rows: [
+      {
+        path: soloPath,
+        title: 'Signal',
+        secondary_artist: 'Solo Voice / feat. Featured Voice',
+      },
+      ...ensemblePaths.map((path, index) => ({
+        path,
+        title: `Ensemble Signal ${index + 1}`,
+        secondary_artist: `Ensemble ${index + 1}`,
+      })),
+    ],
+  };
+
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [soloPath]: { album: 'Signals Solo' },
+  });
+  const destination = candidates.find((candidate) => candidate.name === 'Signals Solo');
+
+  assert.equal(destination?.album_artist, 'Solo Voice');
+  assert.equal(destination?.key, 'solo voice::signals solo');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(destination?.track_rows || [])),
+    [{ path: soloPath, title: 'Signal', secondary_artist: 'feat. Featured Voice' }],
+  );
+});
+
 test('optimistic album split normalizes legacy album rating into each preference', () => {
   const context = loadHelpers();
   const firstPath = 'C:\\Music\\Artist\\Legacy\\01 First.flac';

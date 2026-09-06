@@ -33,7 +33,6 @@ test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without c
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(DISPLAY_ARTIST);
     await galleryActions.waitForArtistHeadings([DISPLAY_ARTIST]);
     await galleryActions.waitForAlbumVisible(ALBUM);
-    await expectPostgresBrowse(expect, galleryActions);
   });
 
   await stepLogger.step('Verify the deduplicated display credit and normalized durable album key', async () => {

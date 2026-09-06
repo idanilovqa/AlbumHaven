@@ -290,7 +290,10 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
     await galleryActions.prepareMountedGalleryContinuityCheckpoint({
       minimumDecodedCovers: 1,
     });
-    const transition = await searchToolbarActions.clearSearchAndObserveStableGallery();
+    const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      expectedViewDataRequestCount: 1,
+      minimumViewDataRequestCount: 0,
+    });
     expect(transition).toEqual(expect.objectContaining({
       cardContentChanged: false,
       cardNodesChanged: false,
@@ -310,8 +313,16 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
       galleryScrollChanged: false,
       loaderActivated: false,
       spinnerActivated: false,
-      viewDataRequests: [],
+      viewDataRequests: expect.any(Array),
     }));
+    expect(transition.viewDataRequests.length).toBeLessThanOrEqual(1);
+    if (transition.viewDataRequests.length === 1) {
+      const canonicalRequestUrl = new URL(transition.viewDataRequests[0]);
+      expect(canonicalRequestUrl.pathname).toBe('/view-data');
+      expect(canonicalRequestUrl.searchParams.has('q')).toBe(false);
+      expect(canonicalRequestUrl.searchParams.get('artist')).toBe(FAMILY_ARTIST);
+      expect(canonicalRequestUrl.searchParams.get('omit_sidebar')).toBe('1');
+    }
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootArtistNames);
     await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);

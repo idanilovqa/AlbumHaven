@@ -1214,6 +1214,12 @@ function coalesceUniqueVisibleLogicalAlbumCandidates(
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareTrackPath(logicalMatch, getAlbumTrackPaths(candidate))) {
+      if (
+        originalAlbum
+        && !albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+      ) {
+        return mergeVisibleAlbumWithOptimisticCandidate(logicalMatch, candidate);
+      }
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareRuntimeIdentityAlias(logicalMatch, candidate)) {

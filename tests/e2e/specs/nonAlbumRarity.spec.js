@@ -486,6 +486,17 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
       await tagEditorActions.clearException();
       await tagEditorActions.applyAndWaitForSavedFiles();
+
+      await galleryActions.goto('/?surface=albums');
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.search(RARITY_ALBUM, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(RARITY_ALBUM);
+      await galleryActions.selectAlbumDetailsByIdentity({
+        artist: RARITY_ARTIST,
+        album: RARITY_ALBUM,
+        year: RARITY_YEAR,
+      });
+      expect((await trackModalActions.waitForInteractiveSummary()).trackRows).toBe(2);
       fixtureRestored = true;
     });
   } finally {

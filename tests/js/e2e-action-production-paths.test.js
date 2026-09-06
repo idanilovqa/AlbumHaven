@@ -5166,4 +5166,9 @@ test('compact-player Appearance helper enters the owning Player and Seekbar page
     /compactPlayerStyle\.buttons\.count\(\)\s*===\s*0[^]*await this\.openSection\('seekbar'\)/,
     'the shared compact-player control is owned by Player & Seekbar, not the Main elements landing page',
   );
+  assert.match(
+    helper,
+    /documentRoot[^]*data-compact-player-style[^]*if \(alreadySaved\)/,
+    'an already-saved compact-player style must remain an idempotent action',
+  );
 });

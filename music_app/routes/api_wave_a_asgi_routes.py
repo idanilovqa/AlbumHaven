@@ -357,14 +357,48 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         if intent_repository is not None
         else None
     )
-    complete_scoped_persistence = (
-        lambda: intent_repository.complete(
+    scoped_postgres_exception_only = bool(
+        kwargs.get("scoped_postgres_exception_only")
+    )
+    scoped_exception_values = {
+        normalize_exception_value(entry.get("exception_type"))
+        for entry in dict(kwargs.get("updated_file_cache") or {}).values()
+        if isinstance(entry, Mapping)
+    }
+    clears_scoped_exception = (
+        scoped_postgres_exception_only
+        and scoped_exception_values == {""}
+    )
+
+    def persist_scoped_exception_membership() -> object:
+        if not isinstance(config, Mapping):
+            raise RuntimeError(
+                "Scoped PostgreSQL exception persistence requires app configuration."
+            )
+        return persist_structural_tag_edit_for_config(
+            config,
+            changed_paths=set(kwargs.get("changed_paths") or ()),
+            previous_file_entries=dict(
+                kwargs.get("previous_file_cache") or {}
+            ),
+            updated_file_entries=dict(
+                kwargs.get("updated_file_cache") or {}
+            ),
+            changed_field_names=set(
+                kwargs.get("changed_field_names") or ()
+            ),
+            before_commit=before_persistence_commit,
+            rebuild_relation_projection=False,
+        )
+
+    complete_scoped_persistence = None
+    if clears_scoped_exception:
+        complete_scoped_persistence = persist_scoped_exception_membership
+    elif intent_repository is not None:
+        complete_scoped_persistence = lambda: intent_repository.complete(
             tag_edit_intent_id,
             exception_updates=exception_updates,
         )
-        if intent_repository is not None
-        else None
-    )
     record_scoped_persistence_failure = (
         lambda compensation_succeeded, error: (
             intent_repository.mark_terminal(
@@ -381,7 +415,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     rebuild_relation_projection = bool(
         set(kwargs.get("changed_field_names") or ())
         & _RELATION_PROJECTION_EDIT_FIELDS
-    ) and not bool(kwargs.get("scoped_postgres_exception_only"))
+    ) and not scoped_postgres_exception_only
     if find_albums_by_track_paths is None:
         find_albums_by_track_paths = _default_albums_by_track_paths_finder(get_state_provider)
     if find_problematic_album_by_track_paths is None:

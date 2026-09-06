@@ -560,6 +560,9 @@ export class SearchToolbar extends BasePage {
     const expectedViewDataRequestCount = Number(
       options.expectedViewDataRequestCount || 0,
     );
+    const minimumViewDataRequestCount = Number(
+      options.minimumViewDataRequestCount ?? expectedViewDataRequestCount,
+    );
     const deadline = Date.now() + timeout;
     let lastObservedState = null;
     while (Date.now() <= deadline) {
@@ -632,7 +635,9 @@ export class SearchToolbar extends BasePage {
       );
       const transitionStayedLocal = (
         finalTransitionObservation.viewDataRequests.length
-          === expectedViewDataRequestCount
+          >= minimumViewDataRequestCount
+        && finalTransitionObservation.viewDataRequests.length
+          <= expectedViewDataRequestCount
         && finalTransitionObservation.activeViewDataRequestCount === 0
         && !finalTransitionObservation.galleryReplaced
         && !finalTransitionObservation.cardNodesChanged

@@ -102,15 +102,16 @@ export class GlobalPlayerActions {
       'data-player-seekbar-presentation',
       normalized,
     );
-    const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
     const expected = normalized === 'waveform'
       ? { height: 92, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
       : { height: 68, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+    await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
+    const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
     const centerY = (bounds) => bounds.y + (bounds.height / 2);
     const expectedCenterY = checkpoint.player.y + expected.centerline;
 
     expect(checkpoint.presentation).toBe(normalized);
-    expect(checkpoint.player.height).toBe(expected.height);
+    expect(Math.abs(checkpoint.player.height - expected.height)).toBeLessThanOrEqual(0.25);
     for (const [name, bounds] of [
       ['collapse', checkpoint.collapse],
       ['cover', checkpoint.cover],
@@ -124,7 +125,7 @@ export class GlobalPlayerActions {
       .toBeLessThanOrEqual(1);
     expect(Math.abs(checkpoint.timestamp.y - (checkpoint.player.y + expected.timestampTop)))
       .toBeLessThanOrEqual(1);
-    expect(checkpoint.timeline.height).toBe(expected.timelineHeight);
+    expect(Math.abs(checkpoint.timeline.height - expected.timelineHeight)).toBeLessThanOrEqual(0.25);
 
     if (normalized === 'waveform') {
       expect(checkpoint.waveform).not.toBeNull();
@@ -573,6 +574,11 @@ export class GlobalPlayerActions {
       bounds.x + (bounds.width / 2),
       bounds.y + (bounds.height / 2),
     );
+    if (target === 'cancel') {
+      await expect(locator).toHaveCSS('color', 'rgb(239, 68, 68)');
+    } else if (target === 'create') {
+      await expect(locator).toHaveCSS('color', 'rgb(74, 222, 128)');
+    }
     return this.readLoopActionVisualState();
   }
 

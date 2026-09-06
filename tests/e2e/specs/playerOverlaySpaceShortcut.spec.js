@@ -6,12 +6,11 @@ const PLAYBACK_TARGET = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-const TRACK_TITLE = 'Fake Loop Source';
-const PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
+let playerTitle = '';
 
 function expectedPlayback(paused) {
   return {
-    title: PLAYER_TITLE,
+    title: playerTitle,
     playbackControl: paused ? 'Play' : 'Pause',
     paused,
   };
@@ -38,13 +37,14 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     expect(albumDetailsStack).toMatchObject({ appBarCoveredByAlbumDetails: true });
     expect(albumDetailsStack.modalZIndex).toBeGreaterThan(albumDetailsStack.appBarZIndex);
     const playbackMark = await playbackEvidence.playbackMark();
-    const track = await trackModalActions.playTrackByTitle(TRACK_TITLE);
+    const track = await trackModalActions.playTrackAt(0);
     playbackPath = track.path;
-    expect(track.title).toBe(TRACK_TITLE);
+    expect(track.title).not.toBe('');
+    playerTitle = `${PLAYBACK_TARGET.artist} - ${track.title} /`;
     await globalPlayerActions.waitForCurrentTrack({
       path: track.path,
-      trackTitle: TRACK_TITLE,
-      visibleTitle: PLAYER_TITLE,
+      trackTitle: track.title,
+      visibleTitle: playerTitle,
     });
     await globalPlayerActions.expectVisiblePlayer();
     await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0 });

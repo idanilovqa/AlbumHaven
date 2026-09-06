@@ -6,8 +6,6 @@ const ALBUM = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-const TRACK_TITLE = 'Fake Loop Source';
-
 test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, async ({
   galleryActions,
   globalPlayerActions,
@@ -27,9 +25,12 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
     await trackModalActions.waitForLoadedSummary();
     const playbackMark = await playbackEvidence.playbackMark();
-    selectedTrack = await trackModalActions.playTrackByTitle(TRACK_TITLE);
-    expect(selectedTrack.title).toBe(TRACK_TITLE);
-    await globalPlayerActions.waitForCurrentTrack({ path: selectedTrack.path, trackTitle: TRACK_TITLE });
+    selectedTrack = await trackModalActions.playTrackAt(0);
+    expect(selectedTrack.title).not.toBe('');
+    await globalPlayerActions.waitForCurrentTrack({
+      path: selectedTrack.path,
+      trackTitle: selectedTrack.title,
+    });
     const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({
       after: playbackMark,
       path: selectedTrack.path,

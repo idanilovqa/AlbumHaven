@@ -56,6 +56,7 @@ _PIPELINE_BATCH_SIZE = 1_000
 _MISSING_STRUCTURAL_VALUE = object()
 _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"album"}),
+    frozenset({"exception_type"}),
     frozenset({"year"}),
 }
 _TARGETED_INVENTORY_EDIT_FIELDS = frozenset(
@@ -555,9 +556,13 @@ class PostgresScanCacheAdapter:
                         previous_entries[path],
                         updated_file_entries[path],
                     ),
-                    # The refreshed entry may omit an absent TALB frame. Persist
-                    # the requested blank explicitly so the old cache value dies.
-                    "album": "",
+                    # Album membership can be detached either by clearing TALB
+                    # or by applying a non-album exception. Persist the current
+                    # Album value explicitly so the scan-cache metadata remains
+                    # accurate while local_tracks.album_id is null.
+                    "album": str(
+                        updated_file_entries[path].get("album") or ""
+                    ),
                 },
             }
             for path in normalized_paths
@@ -762,8 +767,8 @@ class PostgresScanCacheAdapter:
             and not targeted_inventory_edit
         ):
             raise ValueError(
-                "Targeted tag persistence requires an album-only or year-only "
-                "edit, or a non-identity inventory edit."
+                "Targeted tag persistence requires an album-only, year-only, "
+                "or exception-only edit, or a non-identity inventory edit."
             )
 
         previous_entries = {
@@ -844,33 +849,38 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in updated_entries.values()
         }
-        restores_exception_detached_album = (
+        exception_only_edit = normalized_changed_fields == frozenset(
+            {"exception_type"}
+        )
+        updated_exception_states = {
+            bool(normalize_exception_value(entry.get("exception_type")))
+            for entry in updated_entries.values()
+        }
+        if exception_only_edit and len(updated_exception_states) != 1:
+            raise RuntimeError(
+                "Targeted exception persistence requires one membership state."
+            )
+        applies_non_album_exception = exception_only_edit and bool(
+            next(iter(updated_exception_states), False)
+        )
+        clears_non_album_exception = exception_only_edit and not bool(
+            next(iter(updated_exception_states), False)
+        )
+        keeps_exception_detached_album = (
             normalized_changed_fields == frozenset({"album"})
-            and len(destination_album_names) == 1
-            and bool(next(iter(destination_album_names), ""))
             and all(
                 normalize_exception_value(entry.get("exception_type"))
                 for entry in previous_entries.values()
             )
         )
-        if restores_exception_detached_album:
-            with self._connect_to_database() as connection:
-                connection.execute(_inventory_publication_advisory_lock_sql())
-                _ensure_bootstrap_context(connection)
-                membership = _row_mapping(_first_row(connection.execute(
-                    _validate_blank_album_tag_edit_sql(),
-                    {"changed_paths": normalized_paths},
-                )))
-            input_path_count = int(membership.get("input_path_count") or 0)
-            resolved_path_count = int(membership.get("resolved_path_count") or 0)
-            if input_path_count != len(normalized_paths) or resolved_path_count != input_path_count:
-                raise RuntimeError("Structural tag persistence must resolve every changed path.")
-            restores_exception_detached_album = int(
-                membership.get("source_album_count") or 0
-            ) == 0
         if len(previous_album_names) != 1:
             raise RuntimeError("Structural tag persistence requires one source album.")
-        if normalized_changed_fields == frozenset({"album"}) and destination_album_names == {""}:
+        if (
+            normalized_changed_fields == frozenset({"album"})
+            and destination_album_names == {""}
+        ) or keeps_exception_detached_album or applies_non_album_exception or (
+            clears_non_album_exception and destination_album_names == {""}
+        ):
             return self._persist_blank_album_tag_edit(
                 normalized_paths=normalized_paths,
                 previous_entries=previous_entries,
@@ -880,9 +890,13 @@ class PostgresScanCacheAdapter:
                 rebuild_relation_projection=rebuild_relation_projection,
             )
         if (
-            normalized_changed_fields == frozenset({"album"})
-            and (previous_album_names == {""} or restores_exception_detached_album)
-            and len(destination_album_names) == 1
+            (
+                normalized_changed_fields == frozenset({"album"})
+                and previous_album_names == {""}
+            )
+            or clears_non_album_exception
+        ) and len(destination_album_names) == 1 and bool(
+            next(iter(destination_album_names), "")
         ):
             return self._persist_detached_album_restore(
                 normalized_paths=normalized_paths,
@@ -1079,8 +1093,8 @@ class PostgresScanCacheAdapter:
             )
         ):
             raise ValueError(
-                "Targeted tag prevalidation requires an album-only or year-only "
-                "edit, or a non-identity inventory edit."
+                "Targeted tag prevalidation requires an album-only, year-only, "
+                "or exception-only edit, or a non-identity inventory edit."
             )
         previous_entries = {
             path: dict(previous_file_entries[path])
@@ -1109,30 +1123,49 @@ class PostgresScanCacheAdapter:
             str(entry.get("album") or "").strip()
             for entry in previous_entries.values()
         }
-        restores_exception_detached_album = (
+        exception_only_edit = normalized_changed_fields == frozenset(
+            {"exception_type"}
+        )
+        updated_exception_states = {
+            bool(normalize_exception_value(entry.get("exception_type")))
+            for entry in updated_entries.values()
+        }
+        if exception_only_edit and len(updated_exception_states) != 1:
+            raise RuntimeError(
+                "Targeted exception persistence requires one membership state."
+            )
+        applies_non_album_exception = exception_only_edit and bool(
+            next(iter(updated_exception_states), False)
+        )
+        clears_non_album_exception = exception_only_edit and not bool(
+            next(iter(updated_exception_states), False)
+        )
+        keeps_exception_detached_album = (
             normalized_changed_fields == frozenset({"album"})
-            and len(destination_album_names) == 1
-            and bool(next(iter(destination_album_names), ""))
             and all(
                 normalize_exception_value(entry.get("exception_type"))
                 for entry in previous_entries.values()
             )
         )
-        uses_blank_album_persistence = (
+        restores_blank_album = (
             normalized_changed_fields == frozenset({"album"})
-            and (
-                destination_album_names == {""}
-                or (
-                    previous_album_names == {""}
-                    and len(destination_album_names) == 1
-                )
+            and previous_album_names == {""}
+            and destination_album_names != {""}
+        )
+        uses_blank_album_persistence = (
+            (
+                normalized_changed_fields == frozenset({"album"})
+                and destination_album_names == {""}
+            )
+            or restores_blank_album
+            or keeps_exception_detached_album
+            or applies_non_album_exception
+            or (
+                clears_non_album_exception
+                and destination_album_names == {""}
             )
         )
         if uses_blank_album_persistence:
-            restores_blank_album = (
-                previous_album_names == {""}
-                and destination_album_names != {""}
-            )
             with self._connect_to_database() as connection:
                 connection.execute(_inventory_publication_advisory_lock_sql())
                 _ensure_bootstrap_context(connection)
@@ -1195,15 +1228,22 @@ class PostgresScanCacheAdapter:
             raise RuntimeError(
                 "Structural tag persistence must resolve every changed path."
             )
+        restores_detached_album = (
+            (
+                normalized_changed_fields == frozenset({"album"})
+                and previous_album_names == {""}
+            )
+            or clears_non_album_exception
+        )
         if source_album_count != 1 and not (
-            restores_exception_detached_album and source_album_count == 0
+            restores_detached_album and source_album_count == 0
         ):
             raise RuntimeError(
                 "Structural tag persistence requires one source album."
             )
         if (
             source_album_track_file_count < input_path_count
-            and not (restores_exception_detached_album and source_album_count == 0)
+            and not (restores_detached_album and source_album_count == 0)
         ):
             raise RuntimeError(
                 "Structural tag persistence selected more files than exist in the source album."

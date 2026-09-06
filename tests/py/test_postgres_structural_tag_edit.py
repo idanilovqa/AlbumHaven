@@ -630,7 +630,7 @@ def test_postgres_album_restore_accepts_an_already_detached_blank_album_track(
     _assert_album_restore_updates_existing_track_identity_in_place(connection)
 
 
-def test_postgres_album_restore_accepts_a_detached_track_with_a_nonempty_album_tag(
+def test_postgres_exception_track_album_rename_keeps_inventory_membership_detached(
     monkeypatch,
 ):
     paths, restored, previous = _entries(album="Problematic Files Rename Probe")
@@ -639,7 +639,6 @@ def test_postgres_album_restore_accepts_a_detached_track_with_a_nonempty_album_t
     previous[selected_path]["exception_type"] = "Non-album rarity"
     restored = {selected_path: {**restored[selected_path], "album": "Recovered Album"}}
     result_row = _successful_result(path_count=1)
-    result_row.update(source_album_count=0, source_album_track_file_count=0)
     connection = StructuralTagEditConnection(result_row)
     adapter = _adapter(monkeypatch, connection)
 
@@ -654,6 +653,45 @@ def test_postgres_album_restore_accepts_a_detached_track_with_a_nonempty_album_t
         previous_file_entries=previous,
         updated_file_entries=restored,
         changed_field_names={"album"},
+    )
+
+    assert result["album_rows_updated"] == 0
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
+    executed_sql = [_normalized_sql(sql) for sql, _params in connection.executed]
+    assert not any("insert into library.local_albums" in sql for sql in executed_sql)
+    assert any(
+        isinstance(params, dict)
+        and "input_rows" in params
+        and "destination_album_key" not in params
+        for _sql, params in connection.executed
+    )
+
+
+def test_postgres_exception_clear_restores_detached_track_to_its_nonempty_album(
+    monkeypatch,
+):
+    paths, restored, previous = _entries(album="Two Track Rarity Fixture")
+    selected_path = paths[0]
+    previous = {selected_path: previous[selected_path]}
+    previous[selected_path]["exception_type"] = "Non-album rarity"
+    restored = {selected_path: {**restored[selected_path], "exception_type": ""}}
+    result_row = _successful_result(path_count=1)
+    result_row.update(source_album_count=0, source_album_track_file_count=0)
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.validate_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"exception_type"},
+    )
+    result = adapter.persist_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"exception_type"},
     )
 
     assert result["track_rows_updated"] == 1

@@ -1159,6 +1159,7 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected-artist se
     push: false,
     runtimeOptions: {
       preserveScroll: true,
+      restartIfSameUrl: true,
       skipPendingViewTransition: true,
     },
   }]);
@@ -1240,6 +1241,7 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected artist vi
     push: false,
     runtimeOptions: {
       preserveScroll: true,
+      restartIfSameUrl: true,
       skipPendingViewTransition: true,
     },
   }]);
@@ -1657,6 +1659,11 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
     },
   }]);
   assert.equal(calls.fetchAndRender.length, 1);
+  assert.equal(
+    calls.fetchAndRender[0].runtimeOptions.restartIfSameUrl,
+    true,
+    'explicit filtered-sidebar selection must replace an identical in-flight reconcile',
+  );
   assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.equal(calls.hideVersionContextMenu, 1);
   assert.equal(calls.hideGalleryOptionsMenu, 1);

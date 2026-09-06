@@ -1731,8 +1731,41 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         if (trackCompare) return trackCompare;
         return String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
       });
+      const distinctTrackArtists = new Map();
+      tracks.forEach((track) => {
+        const artist = String(track?.artist || '').trim();
+        const key = artist.toLocaleLowerCase();
+        if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
+      });
+      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const promotesSoleCompilationArtist = (
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        && distinctTrackArtists.size === 1
+      );
+      const promotedAlbumArtist = promotesSoleCompilationArtist
+        ? Array.from(distinctTrackArtists.values())[0]
+        : '';
+      const promotedAlbumArtistKey = promotedAlbumArtist.toLocaleLowerCase();
+      const trackRows = Array.isArray(bucket.track_rows)
+        ? bucket.track_rows.map((row) => {
+          if (!promotedAlbumArtist) return row;
+          const secondaryCredits = String(row?.secondary_artist || '')
+            .split(/\s+\/\s+/)
+            .map((credit) => credit.trim())
+            .filter((credit) => credit && credit.toLocaleLowerCase() !== promotedAlbumArtistKey);
+          return {
+            ...row,
+            secondary_artist: secondaryCredits.join(' / ') || null,
+          };
+        })
+        : null;
       return {
         ...bucket,
+        ...(promotedAlbumArtist ? {
+          album_artist: promotedAlbumArtist,
+          key: [promotedAlbumArtistKey, ...String(bucket.key || '').split('::').slice(1)].join('::'),
+        } : {}),
+        ...(trackRows ? { track_rows: trackRows } : {}),
         preview_only: false,
         track_count_preview: tracks.length,
         track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),

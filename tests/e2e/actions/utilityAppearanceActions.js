@@ -54,6 +54,12 @@ export class UtilityAppearanceActions {
     }
     const button = this.utilityAppearanceTab.compactStyleButton(normalized);
     await expect(button).toBeVisible({ timeout: 60000 });
+    const alreadySaved = await this.utilityAppearanceTab.documentRoot
+      .getAttribute('data-compact-player-style') === normalized;
+    if (alreadySaved) {
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      return;
+    }
     await button.click();
     await expect(button).toHaveAttribute('aria-pressed', 'true');
     await expect(this.utilityAppearanceTab.editorFooter.primary.root).toBeEnabled();

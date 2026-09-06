@@ -4520,6 +4520,67 @@ def test_asgi_bridge_finalize_default_problematic_matcher_uses_explicit_dependen
     assert observed["logger"] is sentinel_logger
 
 
+def test_asgi_bridge_clear_exception_restores_postgres_album_membership(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    track_path = "C:/Music/Artist/Album/01 Restore.flac"
+    persisted: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "persist_structural_tag_edit_for_config",
+        lambda config, **options: persisted.append(
+            {"config": config, **options}
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_finalize_save_task",
+        lambda **kwargs: kwargs["complete_scoped_persistence"](),
+    )
+
+    asgi_routes._bridge_queue_finalize_save_task(
+        task_id="task-clear-exception-membership",
+        config=app.config,
+        logger=SimpleNamespace(name="asgi-save-task-logger"),
+        get_state=lambda: {"albums": [], "file_cache": {}},
+        previous_file_cache={
+            track_path: {
+                "path": track_path,
+                "album": "Album",
+                "exception_type": "Non-album rarity",
+            }
+        },
+        updated_file_cache={
+            track_path: {
+                "path": track_path,
+                "album": "Album",
+                "exception_type": "",
+            }
+        },
+        changed_paths={track_path},
+        requested_track_paths={track_path},
+        changed_field_names={"exception_type"},
+        scoped_postgres_exception_only=True,
+    )
+
+    assert len(persisted) == 1
+    assert persisted[0]["config"] is app.config
+    assert persisted[0]["changed_paths"] == {track_path}
+    assert persisted[0]["previous_file_entries"][track_path][
+        "exception_type"
+    ] == "Non-album rarity"
+    assert persisted[0]["updated_file_entries"][track_path][
+        "exception_type"
+    ] == ""
+    assert persisted[0]["changed_field_names"] == {"exception_type"}
+    assert callable(persisted[0]["before_commit"])
+    assert persisted[0]["rebuild_relation_projection"] is False
+
+
 def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(
     app,
     monkeypatch,

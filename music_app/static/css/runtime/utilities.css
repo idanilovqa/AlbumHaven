@@ -593,18 +593,10 @@
 .utility-problem-exclusion-pill {
   min-height: 22px;
   padding: 3px 8px;
-  border: 1px solid rgba(239, 68, 68, 0.5);
   border-radius: 6px;
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.04);
-  font: inherit;
   font-size: 0.71rem;
-  font-weight: 700;
-  line-height: 1.2;
-  cursor: pointer;
   touch-action: none;
   user-select: none;
-  white-space: nowrap;
 }
 
 .utility-album-problem-list .utility-problem-exclusion-pill {
@@ -612,19 +604,6 @@
   padding: 6px 12px;
   border-radius: 7px;
   font-size: 0.78rem;
-}
-
-.utility-problem-exclusion-pill.is-active,
-.utility-problem-exclusion-pill[aria-pressed="true"] {
-  border-color: #f87171;
-  color: #fee2e2;
-  background: rgba(239, 68, 68, 0.18);
-  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.14);
-}
-
-.utility-problem-exclusion-pill:disabled {
-  cursor: default;
-  opacity: 0.72;
 }
 
 .utility-track-problem-table .compact-data-table {

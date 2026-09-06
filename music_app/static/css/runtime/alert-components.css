@@ -1,4 +1,5 @@
 .small-alert,
+.alert-label,
 .on-page-alert {
   --alert-edge: var(--appearance-error, #ef5350);
   --alert-tint: color-mix(in srgb, var(--alert-edge) 12%, #08090d 88%);
@@ -6,34 +7,40 @@
 }
 
 :root[data-alert-family="signal"] .small-alert,
+:root[data-alert-family="signal"] .alert-label,
 :root[data-alert-family="signal"] .on-page-alert,
 [data-alert-family="signal"] .small-alert,
+[data-alert-family="signal"] .alert-label,
 [data-alert-family="signal"] .on-page-alert {
   --alert-tint: color-mix(in srgb, var(--alert-edge) 9%, var(--appearance-panel-background, #0d1b2b) 91%);
   --alert-ink: color-mix(in srgb, var(--alert-edge) 78%, white 22%);
 }
 
 :root[data-alert-family="quiet"] .small-alert,
+:root[data-alert-family="quiet"] .alert-label,
 :root[data-alert-family="quiet"] .on-page-alert,
 [data-alert-family="quiet"] .small-alert,
+[data-alert-family="quiet"] .alert-label,
 [data-alert-family="quiet"] .on-page-alert {
   --alert-edge: color-mix(in srgb, var(--appearance-muted, #97a6bb) 66%, var(--appearance-error, #ef5350) 34%);
   --alert-tint: color-mix(in srgb, var(--alert-edge) 6%, var(--appearance-panel-background, #111820) 94%);
   --alert-ink: color-mix(in srgb, var(--alert-edge) 62%, white 38%);
 }
 
-:root[data-alert-family="quiet"] :is(.small-alert--warning, .on-page-alert--warning),
-[data-alert-family="quiet"] :is(.small-alert--warning, .on-page-alert--warning) {
+:root[data-alert-family="quiet"] :is(.small-alert--warning, .alert-label--warning, .on-page-alert--warning),
+[data-alert-family="quiet"] :is(.small-alert--warning, .alert-label--warning, .on-page-alert--warning) {
   --alert-edge: color-mix(in srgb, var(--appearance-muted, #97a6bb) 64%, var(--appearance-warning, #f59e0b) 36%);
 }
-:root[data-alert-family="quiet"] :is(.small-alert--info, .on-page-alert--info),
-[data-alert-family="quiet"] :is(.small-alert--info, .on-page-alert--info) {
+:root[data-alert-family="quiet"] :is(.small-alert--info, .alert-label--info, .on-page-alert--info),
+[data-alert-family="quiet"] :is(.small-alert--info, .alert-label--info, .on-page-alert--info) {
   --alert-edge: color-mix(in srgb, var(--appearance-muted, #97a6bb) 64%, var(--appearance-player-accent, #55c7ff) 36%);
 }
 
 .small-alert--warning,
+.alert-label--warning,
 .on-page-alert--warning { --alert-edge: var(--appearance-warning, #f59e0b); }
 .small-alert--info,
+.alert-label--info,
 .on-page-alert--info { --alert-edge: var(--appearance-player-accent, #55c7ff); }
 
 .small-alert {
@@ -59,6 +66,36 @@
   box-shadow: 0 0 20px color-mix(in srgb, var(--alert-edge) 34%, transparent);
   outline: none;
 }
+
+.alert-label {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--alert-edge) 72%, transparent);
+  border-radius: 999px;
+  background: var(--alert-tint);
+  color: var(--alert-ink);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--alert-edge) 14%, transparent);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, outline-color 160ms ease;
+}
+button.alert-label { cursor: pointer; }
+:root button.alert-label:is(:hover, :focus-visible):not(:disabled),
+:root button.alert-label:is(.is-active, [aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--alert-edge) 88%, white 12%) !important;
+  outline: 2px solid color-mix(in srgb, var(--alert-edge) 76%, transparent) !important;
+  outline-offset: 2px;
+  background: color-mix(in srgb, var(--alert-edge) 17%, #08090d 83%) !important;
+  color: var(--alert-ink);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--alert-edge) 28%, transparent);
+}
+button.alert-label:disabled { cursor: default; opacity: .72; }
 
 .small-alert__icon,
 .on-page-alert__icon {
@@ -129,5 +166,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .small-alert,
+  .alert-label,
   .on-page-alert__actions .ui-button { transition: none; }
 }

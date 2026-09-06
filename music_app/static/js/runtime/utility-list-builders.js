@@ -557,7 +557,7 @@ function buildDetectedProblemsHtml(album) {
       <div class="utility-album-problem-list">
         <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
         <div class="utility-album-problem-content">
-          <span class="utility-track-problem-chip">Album not found</span>
+          ${buildAlertLabelHtml({ severity: 'error', message: 'Album not found' })}
         </div>
       </div>
       <div class="utility-detected-actions utility-missing-album-actions">
@@ -595,7 +595,19 @@ function buildDetectedProblemsHtml(album) {
   const albumProblemMarkup = albumRows.map((item) => {
     const rowKey = String(item?.row_key || '');
     const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-    return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="album" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(item?.reason || '')}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(item?.display_reason || item?.reason || '')}</button>`;
+    return buildAlertLabelHtml({
+      severity: 'error',
+      message: item?.display_reason || item?.reason || '',
+      interactive: true,
+      pressed: selected,
+      disabled: !rowKey,
+      className: 'utility-problem-exclusion-pill',
+      attributes: {
+        'data-problem-exclusion-scope': 'album',
+        'data-problem-exclusion-row-key': rowKey,
+        'data-problem-exclusion-reason': item?.reason || '',
+      },
+    });
   }).join('');
   const trackTable = buildUtilityCompactTable({
     id: 'problematic-track-problems',
@@ -619,7 +631,20 @@ function buildDetectedProblemsHtml(album) {
           const match = (Array.isArray(row.ignorable_reasons) ? row.ignorable_reasons : []).find((item) => item.reason === reason);
           const rowKey = String(match?.row_key || '');
           const selected = Boolean(rowKey && state.utility.problemExclusionSelections?.[rowKey]);
-          return `<button class="utility-track-problem-chip utility-problem-exclusion-pill ${selected ? 'is-active' : ''}" type="button" data-problem-exclusion-scope="file" data-problem-exclusion-row-key="${escapeHtml(rowKey)}" data-problem-exclusion-reason="${escapeHtml(reason)}" data-problem-exclusion-row-index="${rowIndex}" aria-pressed="${selected ? 'true' : 'false'}" ${rowKey ? '' : 'disabled'}>${escapeHtml(reason)}</button>`;
+          return buildAlertLabelHtml({
+            severity: 'error',
+            message: reason,
+            interactive: true,
+            pressed: selected,
+            disabled: !rowKey,
+            className: 'utility-problem-exclusion-pill',
+            attributes: {
+              'data-problem-exclusion-scope': 'file',
+              'data-problem-exclusion-row-key': rowKey,
+              'data-problem-exclusion-reason': reason,
+              'data-problem-exclusion-row-index': rowIndex,
+            },
+          });
         }).join('')}</span>`,
       },
     })),

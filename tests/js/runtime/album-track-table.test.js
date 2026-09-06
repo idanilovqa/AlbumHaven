@@ -10,6 +10,7 @@ function loadTrackTable() {
   const context = {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),
     encodeURIComponent,
+    ButtonComponent: require(path.join(repoRoot, 'music_app', 'static', 'js', 'button-component.js')),
   };
   vm.createContext(context);
   for (const filename of ['compact-data-table.js', 'album-track-table.js']) {
@@ -20,6 +21,22 @@ function loadTrackTable() {
   }
   return context;
 }
+
+test('AlbumTrackTable changes only the inner Play and Pause glyphs to centered shared SVGs', () => {
+  const context = loadTrackTable();
+  const idle = context.buildAlbumTrackPlayButtonHtml({ path: 'idle.flac', title: 'Idle' });
+  const playing = context.buildAlbumTrackPlayButtonHtml({ path: 'playing.flac', title: 'Playing', isPlaying: true });
+
+  assert.match(idle, /^<button class="play-track-button album-track-table__play"[^>]*type="button" aria-label="Play track"><svg class="ui-icon album-track-table__play-icon ui-icon--play"/);
+  assert.match(playing, /^<button class="play-track-button album-track-table__play"[^>]*type="button" aria-label="Pause track"><svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(idle, /&#x25B6;|&#x23F8;/);
+  assert.doesNotMatch(playing, /&#x25B6;|&#x23F8;/);
+  assert.match(idle, /aria-hidden="true" focusable="false"/);
+  assert.match(playing, /aria-hidden="true" focusable="false"/);
+  const buttonCss = fs.readFileSync(path.join(repoRoot, 'music_app', 'static', 'css', 'button-component.css'), 'utf8');
+  assert.match(buttonCss, /\.ui-icon\s*\{[^}]*width:\s*1em[^}]*height:\s*1em[^}]*display:\s*block/s);
+  assert.match(buttonCss, /\.ui-icon--play,[\s\S]*\.ui-icon--pause\s*\{[^}]*fill:\s*currentColor[^}]*stroke:\s*none/s);
+});
 
 test('AlbumTrackTable composes CompactDataTable compact rows and preserves playback hooks', () => {
   const context = loadTrackTable();

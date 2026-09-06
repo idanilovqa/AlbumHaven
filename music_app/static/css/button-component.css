@@ -1,4 +1,14 @@
 /* Shared current-web Button primitive. Consumer variants own colors and dimensions. */
+.ui-icon {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+.ui-icon--play,
+.ui-icon--pause {
+  fill: currentColor;
+  stroke: none;
+}
 .ui-button {
   display: inline-flex;
   align-items: center;
@@ -60,6 +70,20 @@
 }
 .action-button__content { display: grid; place-items: center; }
 .action-button__icon { display: block; }
+.action-button__icon.ui-icon {
+  display: block;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+.action-button__icon.ui-icon--play,
+.action-button__icon.ui-icon--pause {
+  stroke: none;
+  fill: currentColor;
+}
+.action-button--round { border-radius: 50%; }
 .action-button:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
@@ -70,6 +94,22 @@
 }
 .action-button:focus-visible {
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
+}
+.action-button--destructive {
+  color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));
+  border-color: var(--alert-error-edge, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent));
+}
+.action-button--destructive:hover:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--alert-error-edge, var(--appearance-error, #ef5350)) !important;
+  outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
+  background: var(--alert-error-tint, color-mix(in srgb, var(--appearance-error, #ef5350) 15%, transparent)) !important;
+}
+.action-button--destructive:active:not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--alert-error-edge, var(--appearance-error, #ef5350)) !important;
+  background: var(--alert-error-pressed, color-mix(in srgb, var(--appearance-error, #ef5350) 22%, transparent)) !important;
+}
+.action-button--destructive:focus-visible {
+  outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
 }
 .action-button:disabled,
 .action-button[aria-disabled='true'] {

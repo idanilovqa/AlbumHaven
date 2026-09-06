@@ -1020,10 +1020,10 @@ test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the sear
   });
 
   await stepLogger.step('Keep the popover aligned, unclipped, and visually stable', async () => {
-    const { input, popover } = await searchToolbarActions.readRecentSearchGeometry();
-    expect(Math.abs(popover.x - input.x)).toBeLessThanOrEqual(1);
-    expect(popover.width).toBe(input.width);
-    expect(popover.y).toBeGreaterThanOrEqual(input.y + input.height);
+    const { control, popover } = await searchToolbarActions.readRecentSearchGeometry();
+    expect(Math.abs(popover.x - control.x)).toBeLessThanOrEqual(1);
+    expect(popover.width).toBe(control.width);
+    expect(popover.y).toBeGreaterThanOrEqual(control.y + control.height);
     expect(popover.x + popover.width).toBeLessThanOrEqual(1440);
     expect(popover.y + popover.height).toBeLessThanOrEqual(900);
   });

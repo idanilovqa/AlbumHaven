@@ -189,6 +189,12 @@ def test_successful_manual_full_scan_clears_only_observed_recovered_roots():
     assert [problem.root_id for problem in remaining] == ["archive-root"]
     assert service.root_allows_destructive_reconciliation("main-root") is True
     assert service.root_allows_destructive_reconciliation("archive-root") is False
+    clear_params = next(
+        params
+        for sql, params in connection.executed
+        if "watch_health_clear" in sql
+    )
+    assert clear_params["root_ids"] == ["main-root"]
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():

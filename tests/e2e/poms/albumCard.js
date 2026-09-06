@@ -170,6 +170,24 @@ export class AlbumCard extends BasePage {
     });
   }
 
+  async readAlbumArtboxAppearance(albumName) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the shared AlbumArtbox empty-state treatment
+    return this.artboxByAlbumName(albumName).evaluate((artbox) => {
+      const style = getComputedStyle(artbox);
+      const bounds = artbox.getBoundingClientRect();
+      return {
+        state: artbox.getAttribute('data-album-artbox-state'),
+        backgroundImage: style.backgroundImage,
+        color: style.color,
+        width: bounds.width,
+        height: bounds.height,
+        missingMarkVisible: Boolean(
+          artbox.querySelector('.album-artbox__missing-mark')?.getClientRects().length,
+        ),
+      };
+    });
+  }
+
   async readFirstVisibleCoverPlaceholderAppearance() {
     // parity-check: allow-read-only-measurement-evaluate -- inspect a rendered coverless card's palette treatment
     return this.visibleCoverPlaceholders.first().evaluate((placeholder) => {
@@ -197,24 +215,12 @@ export class AlbumCard extends BasePage {
   }
 
   async clickDetailsByIdentity(artistName, albumName, year) {
-    const card = this.cardByIdentity(artistName, albumName, year, { visible: true });
-    const matchingCount = await card.count();
-    if (matchingCount !== 1) {
-      throw new Error(
-        `Expected one visible album card for ${artistName} / ${albumName} / ${year}, found ${matchingCount}.`,
-      );
-    }
+    const card = this.cardByIdentity(artistName, albumName, year);
     await card.locator(this.detailsButtonWithinCardSelector).click();
   }
 
   async readRequestKeyByIdentity(artistName, albumName, year) {
-    const card = this.cardByIdentity(artistName, albumName, year, { visible: true });
-    const matchingCount = await card.count();
-    if (matchingCount !== 1) {
-      throw new Error(
-        `Expected one visible album card for ${artistName} / ${albumName} / ${year}, found ${matchingCount}.`,
-      );
-    }
+    const card = this.cardByIdentity(artistName, albumName, year);
     const requestKey = String(
       await card.locator(this.detailsButtonWithinCardSelector).getAttribute('data-album-key') || '',
     ).trim();

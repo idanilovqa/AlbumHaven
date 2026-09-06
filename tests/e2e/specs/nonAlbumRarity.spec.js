@@ -1065,6 +1065,7 @@ test('FTC-TAGS-024 completes a verified Album and Exception intent during app re
     await trackModalActions.closeIfOpen();
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(RARITY_ARTIST)}`);
     await galleryActions.waitForGalleryReady();
+    await galleryActions.waitForAlbumVisibleUnderHeading(RARITY_ARTIST, RARITY_ALBUM);
     expect(await galleryActions.readAlbumIdentityCardCount({
       artist: RARITY_ARTIST,
       album: RECOVERED_RARITY_ALBUM,

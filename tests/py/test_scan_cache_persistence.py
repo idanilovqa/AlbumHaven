@@ -235,6 +235,51 @@ def test_targeted_album_upsert_preserves_existing_user_cover_authority():
     assert "cover_revision" in sql
 
 
+def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/DDT/Studio Records/02.flac"
+    album_rows = [{
+        "artist_key": "ddt",
+        "album_key": "ddt::studio records",
+        "title": "Studio Records",
+        "release_year": 1990,
+    }]
+    featured_rows = [{
+        "album_key": "ddt::studio records",
+        "artist_key": "ddt",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{
+        "album_key": "ddt::studio records",
+        "track_key": path,
+    }]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "yuri shevchuk / ddt::studio records",
+            "album_title": "Studio Records",
+            "artist_key": "yuri shevchuk / ddt",
+        }],
+    )
+
+    assert album_rows[0] == {
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": "yuri shevchuk / ddt::studio records",
+        "title": "Studio Records",
+        "release_year": 1990,
+    }
+    assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records"
+    assert featured_rows[0]["artist_key"] == "yuri shevchuk / ddt"
+    assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records"
+
+
 def test_scan_album_upsert_preserves_structural_release_year_authority():
     from music_app.services import scan_cache_persistence
 

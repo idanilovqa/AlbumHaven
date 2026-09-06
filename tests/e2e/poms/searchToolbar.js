@@ -40,6 +40,7 @@ export class SearchToolbar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.form = page.locator(this.formSelector);
+    this.control = this.form.locator('.search-field-control');
     this.input = page.locator(this.inputSelector);
     this.applyButton = page.locator(this.applyButtonSelector);
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });

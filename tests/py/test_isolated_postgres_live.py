@@ -2610,6 +2610,11 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
             )
             assert split_result["track_rows_updated"] == 1
             assert split_result["track_file_rows_updated"] == 1
+            watcher_result = adapter.persist_targeted_inventory_mutation(
+                root_id="mixed-year-restore-root",
+                active_file_entries=current_entries,
+            )
+            assert watcher_result["inventory_mutation_revision"] >= 1
 
         with isolatedPostgres._connect(setup_url) as connection:
             split_rows = connection.execute(

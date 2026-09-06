@@ -8,7 +8,7 @@ export class SettingsShell {
     this.users = this.navigation.getByRole('link', { name: 'Users', exact: true });
     this.myAccount = this.navigation.getByRole('link', { name: 'My account', exact: true });
     this.signOut = this.navigation.getByRole('button', { name: 'Sign Out', exact: true });
-    this.library = this.navigation.getByRole('link', { name: 'Album Haven library', exact: true });
+    this.library = page.getByRole('link', { name: 'Album Haven library', exact: true });
     this.cancel = page.getByRole('link', { name: 'Cancel', exact: true });
     this.changePassword = page.getByRole('button', { name: 'Change password', exact: true });
     this.alert = page.getByRole('alert');
@@ -35,7 +35,6 @@ export class SettingsShell {
       return {
         bounds: rect(nav),
         heading: rect(nav.querySelector('h2')),
-        logo: rect(nav.querySelector('img')),
         entries: Array.from(nav.querySelectorAll('nav a, nav button'), (entry) => ({
           text: entry.textContent.trim(),
           bounds: rect(entry),

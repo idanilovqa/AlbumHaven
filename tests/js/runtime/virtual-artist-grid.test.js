@@ -2446,7 +2446,7 @@ test('replacing a keyed artist section never transiently mounts both versions', 
   );
 });
 
-test('changed same-artist reconciliation retains an unrelated undecoded card as the scroll anchor', () => {
+test('canonical same-artist reconciliation retains mounted cards without an optimistic preservation hint', () => {
   const {
     context,
     containerEl,
@@ -2569,7 +2569,7 @@ test('changed same-artist reconciliation retains an unrelated undecoded card as 
     key: 'artist:same',
     html: 'canonical',
     node: canonicalSection,
-  }], { preserveExistingChildren: true });
+  }]);
 
   const finalCards = containerEl.children[0].cards;
   assert.deepEqual(

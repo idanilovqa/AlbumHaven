@@ -179,7 +179,7 @@ class PostgresLibraryWatchHealthStore:
         *,
         detected_before: str,
     ) -> int:
-        normalized = tuple(
+        normalized = list(
             dict.fromkeys(
                 root_id
                 for value in root_ids

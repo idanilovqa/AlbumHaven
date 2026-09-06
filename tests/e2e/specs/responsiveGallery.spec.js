@@ -100,13 +100,12 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       allowPlaceholder: true,
       placeholderScenario: `${COVERLESS_ARTIST} / ${COVERLESS_ALBUM} is the projected coverless fixture`,
     });
-    const coverPlaceholder = galleryActions.galleryPage.albumCard
-      .coverPlaceholderByAlbumName(COVERLESS_ALBUM);
-    await expect(coverPlaceholder).toBeVisible();
-    const placeholder = await galleryActions.galleryPage.albumCard
-      .readCoverPlaceholderAppearance(COVERLESS_ALBUM);
-    expect(placeholder.backgroundImage).toContain('linear-gradient');
-    expect(placeholder.borderColor).toBe('rgb(184, 189, 197)');
-    expect(placeholder.color).toBe('rgb(80, 87, 98)');
+    const artbox = await galleryActions.galleryPage.albumCard
+      .readAlbumArtboxAppearance(COVERLESS_ALBUM);
+    expect(artbox.state).toBe('empty');
+    expect(artbox.backgroundImage).toContain('linear-gradient');
+    expect(artbox.color).not.toBe('rgba(0, 0, 0, 0)');
+    expect(Math.abs(artbox.width - artbox.height)).toBeLessThanOrEqual(1);
+    expect(artbox.missingMarkVisible).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ from typing import Any
 from music_app.services.library_indexing import enrich_library_file_entry
 from music_app.services.library_roots import get_library_roots
 from music_app.services.metadata import read_metadata_for_file
+from music_app.services.save_tasks import structural_tag_edit_resource_keys
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,11 @@ class TargetedLibraryReconciler:
         root_definitions: Iterable[dict[str, object]] | None = None,
         metadata_reader: Callable[[Path], dict[str, object]] = read_metadata_for_file,
         exception_overrides: dict[str, object] | None = None,
+        exception_overrides_provider: (
+            Callable[[], dict[str, object]] | None
+        ) = None,
         after_commit: Callable[[TargetedReconciliationResult], object] | None = None,
+        reservation_acquirer: Callable[[set[str]], object] | None = None,
     ) -> None:
         self._config = config
         self._repository = repository
@@ -39,7 +44,9 @@ class TargetedLibraryReconciler:
         self._roots_lock = Lock()
         self._metadata_reader = metadata_reader
         self._exception_overrides = dict(exception_overrides or {})
+        self._exception_overrides_provider = exception_overrides_provider
         self._after_commit = after_commit
+        self._reservation_acquirer = reservation_acquirer
 
     def replace_roots(self, roots: Iterable[dict[str, object]]) -> None:
         with self._roots_lock:
@@ -154,45 +161,65 @@ class TargetedLibraryReconciler:
             )
             for candidate, root in active_targets
         }
-        active_entries: dict[str, dict[str, object]] = {}
-        for path, matched_root in sorted(
-            active_by_path.values(),
-            key=lambda item: str(item[0]).casefold(),
-        ):
-            entry = self._metadata_reader(path)
-            enriched = enrich_library_file_entry(
-                entry,
-                path=path,
-                root_definition=matched_root,
-                image_extensions=set(self._config.get("IMAGE_EXTENSIONS") or set()),
-                exception_overrides=self._exception_overrides,
-                folder_cover_cache=folder_cover_cache,
-                cover_metadata_cache=cover_metadata_cache,
+        reservation_paths = set(active_by_path)
+        reservation_paths.update(str(path) for path in deleted_paths)
+        for move in normalized_moves:
+            reservation_paths.add(str(move["source_path"]))
+            reservation_paths.add(str(move["destination_path"]))
+        reservation = None
+        if self._reservation_acquirer is not None and reservation_paths:
+            reservation = self._reservation_acquirer(
+                structural_tag_edit_resource_keys(None, reservation_paths)
             )
-            active_entries[str(path)] = enriched
-
-        persisted = self._repository.persist_targeted_inventory_mutation(
-            root_id=root_id,
-            active_file_entries=active_entries,
-            deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
-            deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
-            moves=tuple(normalized_moves),
-        )
-        result = TargetedReconciliationResult(
-            int(persisted.get("inventory_mutation_revision") or 0),
-            tuple(
-                sorted(
-                    {
-                        str(key)
-                        for key in persisted.get("affected_album_keys", ())
-                        if str(key)
-                    }
+        try:
+            exception_overrides = (
+                dict(self._exception_overrides_provider() or {})
+                if self._exception_overrides_provider is not None
+                else self._exception_overrides
+            )
+            active_entries: dict[str, dict[str, object]] = {}
+            for path, matched_root in sorted(
+                active_by_path.values(),
+                key=lambda item: str(item[0]).casefold(),
+            ):
+                entry = self._metadata_reader(path)
+                enriched = enrich_library_file_entry(
+                    entry,
+                    path=path,
+                    root_definition=matched_root,
+                    image_extensions=set(self._config.get("IMAGE_EXTENSIONS") or set()),
+                    exception_overrides=exception_overrides,
+                    folder_cover_cache=folder_cover_cache,
+                    cover_metadata_cache=cover_metadata_cache,
                 )
-            ),
-        )
-        if self._after_commit is not None:
-            self._after_commit(result)
-        return result
+                active_entries[str(path)] = enriched
+
+            persisted = self._repository.persist_targeted_inventory_mutation(
+                root_id=root_id,
+                active_file_entries=active_entries,
+                deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
+                deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
+                moves=tuple(normalized_moves),
+            )
+            result = TargetedReconciliationResult(
+                int(persisted.get("inventory_mutation_revision") or 0),
+                tuple(
+                    sorted(
+                        {
+                            str(key)
+                            for key in persisted.get("affected_album_keys", ())
+                            if str(key)
+                        }
+                    )
+                ),
+            )
+            if self._after_commit is not None:
+                self._after_commit(result)
+            return result
+        finally:
+            release = getattr(reservation, "release", None)
+            if callable(release):
+                release()
 
     def _root_by_id(
         self,

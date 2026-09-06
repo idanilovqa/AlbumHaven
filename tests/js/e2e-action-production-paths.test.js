@@ -787,7 +787,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
 
   assert.match(galleryActions, /selectAlbumDetailsByIdentity\(expected/);
   assert.match(galleryActions, /albumCard\.clickDetailsByIdentity\(artist, album, year\)/);
-  assert.match(albumCard, /cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)/);
+  assert.match(albumCard, /const card = this\.cardByIdentity\(artistName, albumName, year\);/);
   assert.doesNotMatch(coverLookup, /clickFirstAlbumDetails\(/);
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
   assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
@@ -3956,6 +3956,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href;
   const { GalleryActions } = await import(moduleUrl);
   const selected = [];
+  const scrolled = [];
   const actions = new GalleryActions({
     albumCard: {
       async clickDetailsByIdentity(artist, album, year) {
@@ -3963,7 +3964,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
       },
     },
   });
-  actions.scrollToAlbumUnderHeading = async () => {};
+  actions.scrollToAlbumUnderHeading = async (...args) => scrolled.push(args);
 
   const identity = await actions.selectAlbumDetailsByIdentity({
     artist: 'Mastodon',
@@ -3972,6 +3973,11 @@ test('exact album selection delegates one retrying Playwright click to the ident
   });
 
   assert.deepEqual(selected, [['Mastodon', 'Crack The Skye', '2009']]);
+  assert.deepEqual(scrolled, [[
+    'Mastodon',
+    'Crack The Skye',
+    { year: '2009' },
+  ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',
     album: 'Crack The Skye',
@@ -3981,7 +3987,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const albumCard = read('tests/e2e/poms/albumCard.js');
   assert.match(
     albumCard,
-    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
+    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year\);[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
   );
 });
 

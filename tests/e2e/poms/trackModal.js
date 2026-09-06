@@ -17,8 +17,8 @@ export class TrackModal extends BasePage {
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
     this.footer = page.locator(this.footerSelector);
-    this.discHeaders = this.dialog.locator('.track-disc-header');
-    this.discTotals = this.dialog.locator('.track-disc-total');
+    this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
+    this.discTotals = this.dialog.locator('.album-track-table__disc-total');
     this.coverImage = page.locator(this.coverImageSelector);
     this.detailedCoverImage = page.locator(this.detailedCoverImageSelector);
     this.coverPlaceholder = page.locator(this.coverPlaceholderSelector);
@@ -221,6 +221,10 @@ export class TrackModal extends BasePage {
     return this.trackRows.filter({
       has: this.page.locator('.album-track-table__title').filter({ hasText: exactNormalizedText(trackTitle) }),
     }).first();
+  }
+
+  async readAlbumTrackTableTotal() {
+    return String(await this.albumTrackTable.total.textContent() || '').trim();
   }
 
   problemButtonByTrackTitle(trackTitle) {

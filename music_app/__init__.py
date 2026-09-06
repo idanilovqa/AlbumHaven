@@ -192,6 +192,7 @@ def create_asgi_app():
     from music_app.services.exception_overrides import load_exception_overrides
     from music_app.services.runtime_shutdown import create_daemon_executor
     from music_app.services.scan_cache_persistence import select_scan_cache_adapter
+    from music_app.services.save_tasks import acquire_structural_tag_edit_reservation
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
     )
@@ -243,13 +244,16 @@ def create_asgi_app():
             runtime.config,
             repository=select_scan_cache_adapter(runtime.config),
             root_definitions=get_library_roots(runtime.config),
-            exception_overrides=load_exception_overrides(runtime.config),
+            exception_overrides_provider=lambda: load_exception_overrides(
+                runtime.config
+            ),
             after_commit=lambda result: invalidate_targeted_library_projections(
                 runtime.library_state,
                 runtime.config,
                 revision=result.revision,
                 affected_album_keys=result.affected_album_keys,
             ),
+            reservation_acquirer=acquire_structural_tag_edit_reservation,
         )
 
         def reconcile_targeted_request(request) -> None:

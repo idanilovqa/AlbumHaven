@@ -240,6 +240,13 @@ class PostgresScanCacheAdapter:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
             separate_release_keys = _load_separate_release_keys(connection)
+            existing_memberships = [
+                _row_mapping(row)
+                for row in connection.execute(
+                    _load_targeted_album_memberships_sql(),
+                    {"active_paths": sorted(file_cache)},
+                ).fetchall()
+            ]
             albums = self._build_albums(
                 _file_cache_with_inferred_blank_album_memberships(file_cache),
                 separate_release_keys,
@@ -251,6 +258,12 @@ class PostgresScanCacheAdapter:
                 track_rows,
                 track_file_rows,
             ) = _inventory_rows_from_albums(file_cache, albums)
+            _remap_targeted_album_identity_rows(
+                album_rows=album_rows,
+                featured_artist_rows=featured_artist_rows,
+                track_rows=track_rows,
+                existing_memberships=existing_memberships,
+            )
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
                 for row in album_rows
@@ -2011,6 +2024,70 @@ def _album_cover_authority_metadata(album: object) -> dict[str, object]:
         for field in fields
         if (value := getattr(album, field, None)) is not None
     }
+
+
+def _remap_targeted_album_identity_rows(
+    *,
+    album_rows: list[dict[str, object]],
+    featured_artist_rows: list[dict[str, object]],
+    track_rows: list[dict[str, object]],
+    existing_memberships: list[dict[str, object]],
+) -> None:
+    """Keep established album keys when watcher context still names that album."""
+    albums_by_key = {
+        str(row.get("album_key") or ""): row
+        for row in album_rows
+        if str(row.get("album_key") or "")
+    }
+    existing_by_path = {
+        str(row.get("private_path") or ""): row
+        for row in existing_memberships
+        if str(row.get("private_path") or "")
+    }
+    candidates_by_generated_key: dict[
+        str, set[tuple[str, str, str]]
+    ] = {}
+    for track_row in track_rows:
+        generated_key = str(track_row.get("album_key") or "")
+        album_row = albums_by_key.get(generated_key)
+        existing = existing_by_path.get(str(track_row.get("track_key") or ""))
+        if album_row is None or existing is None:
+            continue
+        generated_title = str(album_row.get("title") or "").strip()
+        existing_title = str(existing.get("album_title") or "").strip()
+        if not generated_title or generated_title.casefold() != existing_title.casefold():
+            continue
+        existing_key = str(existing.get("album_key") or "").strip()
+        existing_artist_key = str(existing.get("artist_key") or "").strip()
+        if existing_key and existing_artist_key:
+            candidates_by_generated_key.setdefault(generated_key, set()).add(
+                (existing_key, existing_artist_key, existing_title)
+            )
+
+    remapped: dict[str, tuple[str, str, str]] = {
+        generated_key: next(iter(candidates))
+        for generated_key, candidates in candidates_by_generated_key.items()
+        if len(candidates) == 1
+    }
+    for album_row in album_rows:
+        generated_key = str(album_row.get("album_key") or "")
+        target = remapped.get(generated_key)
+        if target is None:
+            continue
+        album_row["album_key"], album_row["artist_key"], album_row["title"] = target
+    for featured_row in featured_artist_rows:
+        generated_key = str(featured_row.get("album_key") or "")
+        target = remapped.get(generated_key)
+        if target is None:
+            continue
+        featured_row["album_key"] = target[0]
+        if str(featured_row.get("featured_kind") or "") == "owner":
+            featured_row["artist_key"] = target[1]
+    for track_row in track_rows:
+        generated_key = str(track_row.get("album_key") or "")
+        target = remapped.get(generated_key)
+        if target is not None:
+            track_row["album_key"] = target[0]
 
 
 def _inventory_rows_from_albums(
@@ -4701,6 +4778,39 @@ def _load_separate_release_keys_sql() -> str:
         join bootstrap_context
           on bootstrap_context.library_id = library.separate_releases.library_id
         order by library.separate_releases.release_key;
+    """
+
+
+def _load_targeted_album_memberships_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        )
+        select
+          library.local_track_files.private_path,
+          library.local_albums.album_key,
+          library.local_albums.title as album_title,
+          library.local_artists.artist_key
+        from bootstrap_context
+        join library.local_track_files
+          on library.local_track_files.private_path = any(%(active_paths)s::text[])
+         and library.local_track_files.scan_cache_stale is false
+        join library.local_tracks
+          on library.local_tracks.id = library.local_track_files.track_id
+         and library.local_tracks.library_id = bootstrap_context.library_id
+        join library.local_albums
+          on library.local_albums.id = library.local_tracks.album_id
+         and library.local_albums.library_id = bootstrap_context.library_id
+        join library.local_artists
+          on library.local_artists.id = library.local_albums.artist_id
+         and library.local_artists.library_id = bootstrap_context.library_id;
     """
 
 

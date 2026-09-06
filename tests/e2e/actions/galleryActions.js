@@ -1088,7 +1088,7 @@ export class GalleryActions {
       throw new Error('Selecting an album requires an exact artist, album, and year.');
     }
 
-    await this.scrollToAlbumUnderHeading(artist, album, options);
+    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year });
     await this.galleryPage.albumCard.clickDetailsByIdentity(artist, album, year);
     return { artist, album, year };
   }

@@ -2,7 +2,7 @@
 
 The durable-jobs worker is a separate process from the Album Haven web server. The shared ledger, transition history, and worker heartbeat live in Postgres; the web process must never be treated as the owner of accepted background work.
 
-The Phase 8 foundation does not route scans, cover work, Last.fm delivery, or authentication mail through this worker yet. Those workflows remain on their existing execution paths until their later migration slices are complete.
+Full scans and filesystem-watcher targeted reconciliation run through this worker. A successful full-scan publication also creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision. That follow-up remains queued until the cover-job slice installs its shared cover executor. Other cover work, Last.fm delivery, and authentication mail remain on their existing execution paths until their later migration slices are complete.
 
 ## Configuration
 
@@ -118,21 +118,34 @@ Public `GET /health` keeps web readiness independent from worker availability:
 
 Authenticated `/status` callers receive only the same coarse `worker_status` unless the server-side policy grants global `ops.jobs.status.read` (the Phase 8 bootstrap owner receives it). Authorized output contains only an opaque worker identity, lifecycle state, heartbeat age, bounded state counts, oldest queue age, and claim lag. It never contains job parameters, account or library identifiers, subject references, request origins, paths, tokens, addresses, or credentials.
 
+## Scan jobs and recovery
+
+`/refresh-api`, `/refresh`, cold-start scan acceptance, cancellation, `/status`, and bootstrap payloads retain their existing HTTP and response shapes. Acceptance commits a private scan intent and its generic job atomically. The generic ledger contains only stable intent identities and bounded orchestration metadata; roots, watcher paths, deleted subtrees, and move endpoints remain in the private `library` domain.
+
+Only registered job kinds are claimable by a worker process. Full-scan and targeted-reconciliation handlers reload current roots and authorization scope after claiming, checkpoint progress with the active lease, and fence authoritative inventory publication with the same job ID, attempt, worker ID, lease token, and unexpired lease. A removed root, unhealthy watcher scope, revoked account or capability, cancellation request, or lost lease therefore prevents stale publication. Metadata reads remain bounded inside one claimed full-scan job rather than consuming additional durable worker slots.
+
+Expired retry-safe scan leases are reconciled before new claims. Recovery repeats only work that did not commit its authoritative publication. A committed full scan and its revision-keyed cover follow-up are one transaction, so recovery can produce neither committed inventory without its follow-up nor duplicate follow-ups for the same library revision. Do not repair scan jobs by editing the ledger or private intent tables.
+
+For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A queued `post_scan_cover_refresh` at attempt zero is expected before the cover-job executor is deployed. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
+
 ## Promotion
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0067_add_job_transition_retention_index.sql` with the migrator role.
-2. Deploy web code that is compatible with the migrated schema.
-3. Configure the dedicated worker-role URL and start the worker.
-4. Verify `/health`, then verify the authorized `/status` projection.
-5. Migrate one workflow family at a time only when its Phase 8 slice is complete. Exactly one execution owner may claim newly accepted work during each cutover.
+1. Back up Postgres and apply migrations through `0071_grant_worker_full_scan_execution.sql` with the migrator role.
+2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
+3. Configure the dedicated worker-role URL, start the worker, and confirm its closed registry and claim filter include full scans and targeted reconciliation but exclude every unwired kind.
+4. Deploy the compatible web artifact that enables durable scan producers. Exactly one execution owner may accept each scan workflow during this cutover.
+5. Verify `/health`, the authorized `/status` projection, and unchanged scan acknowledgement/status responses.
+6. Migrate each later workflow family only when its Phase 8 slice is complete and its handler is registered before its producers are enabled.
 
-No application workflow enqueues these jobs until its migration slice lands. Do not insert jobs manually while the foundation worker's closed registry has no live workflow handlers.
+Do not insert jobs manually. A worker deliberately ignores kinds without registered handlers; deploy the corresponding handler before expecting that backlog to advance.
 
 ## Rollback
 
-Stop new workflow cutovers, signal the worker to stop claims, and allow the bounded drain to finish before deploying a previous compatible web and worker artifact. Preserve `ops.jobs`, `ops.job_transitions`, `ops.worker_instances`, and all applied migrations. Job evidence is forward-only; rollback must not depend on destructive schema reversal or deletion of ambiguous work.
+Stop new workflow cutovers, disable producer-enabled web code, signal the worker to stop claims, and allow the bounded drain to finish before deploying a previous compatible web artifact. Preserve `ops.jobs`, `ops.job_transitions`, `ops.worker_instances`, and all applied migrations. Job evidence is forward-only; rollback must not depend on destructive schema reversal or deletion of ambiguous work.
+
+Keep the current claim-filtering worker artifact or keep the worker stopped. A previous worker is rollback-safe only if it retains the registered-kind claim filter; schema compatibility alone is insufficient because an older worker can claim and fail an unsupported `post_scan_cover_refresh` job. Do not start such an artifact while any unsupported kind can exist.
 
 If the previous artifact is not compatible with the current schema, keep the worker stopped and restore service only with a compatible artifact. Never replay work by editing state, attempt, lease, tombstone, or idempotency columns manually.
 
@@ -154,6 +167,8 @@ The application and worker roles do not receive retention deletion privileges. D
 - Configuration errors: confirm the required URL exists in the correct process environment and integer settings are in range. Do not paste a URL into logs or tickets.
 - `worker_degraded`: check whether a planned drain is active, then inspect the exact worker process and its bounded logs.
 - `worker_unavailable`: confirm the service state and exact process tree, then check Postgres reachability with an approved secret-safe probe. Web readiness may still be healthy.
-- Growing retry or failure counts: use only the authorized aggregate status, bounded reason codes, and opaque job IDs. Do not query or publish raw parameters or subject references for diagnostics.
+- Growing retry or failure counts: use only the authorized aggregate status and opaque job IDs available through approved protected diagnostics. Do not query or publish raw parameters or subject references for diagnostics.
+- Scan backlog: confirm the scan handlers are registered, current roots and watcher health are valid, and the account or server-owned scope remains authorized. Let expired-lease reconciliation recover uncommitted work; do not reset attempts or leases manually.
+- Post-scan cover backlog: attempt-zero rows are expected until the cover worker bridge is installed. Do not run an unwired worker merely to consume them.
 - Shutdown timeout: preserve the ledger and lease evidence. Diagnose the exact handler and owned child process; do not kill unrelated processes or force a state transition.
 - Cleanup failure: verify the migrator connection and migration level. The command intentionally suppresses exception details; inspect protected service logs without copying credentials, URLs, paths, tokens, addresses, media, or private fixtures.

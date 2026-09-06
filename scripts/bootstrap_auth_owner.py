@@ -29,7 +29,6 @@ def main(
     breached_checker: Callable[[str], bool] | None = None,
     password_hasher: Callable[..., Any] | None = None,
     bootstrap_service_factory: Callable[[Mapping[str, object]], Any] | None = None,
-    welcome_delivery_runner: Callable[..., Any] | None = None,
 ) -> int:
     """Provision once without accepting password material from process inputs."""
 
@@ -59,10 +58,6 @@ def main(
             config["ALBUM_HAVEN_APP_DATABASE_URL"] = str(
                 environment.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
             ).strip()
-        delivery_config = dict(mail_config)
-        delivery_config["ALBUM_HAVEN_APP_DATABASE_URL"] = config[
-            "ALBUM_HAVEN_APP_DATABASE_URL"
-        ]
     except Exception:
         print("Bootstrap configuration is invalid.", file=error_stream)
         return 2
@@ -135,34 +130,6 @@ def main(
         print("Rendref bootstrap provisioning failed.", file=error_stream)
         return 1
 
-    if result.welcome_outbox_id is not None:
-        if welcome_delivery_runner is None:
-            welcome_delivery_runner = _deliver_welcome_once
-        try:
-            delivery_result = welcome_delivery_runner(
-                result.welcome_outbox_id,
-                config=delivery_config,
-            )
-            delivery_reason = str(getattr(delivery_result, "reason", "failed"))
-            if delivery_reason == "unknown":
-                print(
-                    "Rendref was provisioned; welcome email delivery outcome is "
-                    "unknown and must not be retried automatically.",
-                    file=error_stream,
-                )
-            elif delivery_reason not in {"delivered", "not_eligible"}:
-                print(
-                    "Rendref was provisioned, but the welcome email was not "
-                    "delivered; its durable delivery status was recorded.",
-                    file=error_stream,
-                )
-        except Exception:
-            print(
-                "Rendref was provisioned, but welcome email delivery status "
-                "could not be confirmed.",
-                file=error_stream,
-            )
-
     if not result.credential_created:
         print(
             "Rendref already provisioned; supplied password was not installed; "
@@ -176,23 +143,5 @@ def main(
         file=output_stream,
     )
     return 0
-
-
-def _deliver_welcome_once(outbox_id: int, *, config: Mapping[str, Any]) -> Any:
-    """Run one bounded outbox attempt after bootstrap has committed."""
-
-    import asyncio
-
-    from music_app.services.auth_mail_outbox_postgres import (
-        PostgresWelcomeOutboxService,
-        deliver_welcome,
-    )
-
-    repository = PostgresWelcomeOutboxService(config)
-    return asyncio.run(
-        deliver_welcome(outbox_id, config=config, repository=repository)
-    )
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

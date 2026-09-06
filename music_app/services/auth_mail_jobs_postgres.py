@@ -148,6 +148,19 @@ class PostgresAuthMailJobRepository:
     def _connect(self) -> Any:
         return self._connect_to_database(self._database_url)
 
+    def reconcile_due_pending(self, *, now: datetime, limit: int = 100) -> int:
+        observed_at = _aware("now", now)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between one and 100")
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select ops.reconcile_auth_mail_jobs(%s, %s) as count",
+                    (observed_at, limit),
+                ).fetchone()
+            )
+        return _nonnegative("count", row.get("count"))
+
     @staticmethod
     def _claim_values(**values: object) -> dict[str, object]:
         return {

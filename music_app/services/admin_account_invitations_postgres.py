@@ -23,7 +23,6 @@ from music_app.services.auth_invitation_models import (
     INVITATION_MESSAGE_CATEGORY,
     INVITATION_URL_PURPOSE,
     CopiedInvitation,
-    InvitationDelivery,
     validated_issued_invitation_token,
 )
 from music_app.services.auth_mail_jobs_postgres import (
@@ -48,7 +47,6 @@ _FUTURE_SKEW = timedelta(minutes=5)
 
 @dataclass(frozen=True, repr=False, slots=True)
 class _RotatedInvitation:
-    outbox_id: int | None
     invitation_token_id: int
     account_id: int
     recipient: str
@@ -58,8 +56,7 @@ class _RotatedInvitation:
 
     def __repr__(self) -> str:
         return (
-            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
-            f"invitation_token_id={self.invitation_token_id!r}, "
+            f"{type(self).__name__}(invitation_token_id={self.invitation_token_id!r}, "
             f"account_id={self.account_id!r}, recipient=<redacted>, "
             f"username={self.username!r}, raw_token=<redacted>, "
             f"expires_at={self.expires_at!r})"
@@ -117,7 +114,6 @@ class PostgresAdminAccountInvitationService:
             library_id=library_id,
             target_account_id=target_account_id,
             request_ref=request_ref,
-            enqueue=False,
         )
         return CopiedInvitation(
             invitation_url=_invitation_url(
@@ -208,10 +204,7 @@ class PostgresAdminAccountInvitationService:
         library_id: object,
         target_account_id: object,
         request_ref: object,
-        enqueue: bool,
     ) -> _RotatedInvitation:
-        if not isinstance(enqueue, bool):
-            raise ValueError("Invitation delivery choice is invalid.")
         now = _aware_utc(self._clock())
         authenticated = _aware_utc(actor_authenticated_at)
         if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
@@ -228,7 +221,6 @@ class PostgresAdminAccountInvitationService:
                     library_id=current_library_id,
                     target_account_id=target_id,
                     request_ref=reference,
-                    enqueue=enqueue,
                     now=now,
                     token_issuer=self._token_issuer,
                     invitation_token_seconds=self._invitation_token_seconds,
@@ -258,7 +250,6 @@ def _rotate_invitation_in_transaction(
     library_id: int,
     target_account_id: int,
     request_ref: str,
-    enqueue: bool,
     now: datetime,
     token_issuer: Callable[[], object],
     invitation_token_seconds: int,
@@ -354,35 +345,11 @@ def _rotate_invitation_in_transaction(
         ).fetchall(),
         "invitation token id",
     )
-    outbox_id = None
-    if enqueue:
-        outbox_id = _single_id(
-            connection.execute(
-                """
-                insert into app.mail_outbox (
-                  account_id, invitation_token_id, message_category,
-                  delivery_status, next_attempt_at
-                ) values (%s, %s, %s, 'pending', %s)
-                returning id
-                """,
-                (
-                    target_account_id,
-                    token_id,
-                    INVITATION_MESSAGE_CATEGORY,
-                    now,
-                ),
-            ).fetchall(),
-            "outbox id",
-        )
     audit_repository.append_in_transaction(
         connection,
         category=SecurityAuditCategory.ACCOUNT_INVITATION,
         outcome=SecurityAuditOutcome.SUCCESS,
-        reason=(
-            InvitationAuditReason.INVITATION_QUEUED
-            if enqueue
-            else InvitationAuditReason.INVITATION_COPIED
-        ),
+        reason=InvitationAuditReason.INVITATION_COPIED,
         actor_account_id=actor_account_id,
         target_account_id=target_account_id,
         request_ref=request_ref,
@@ -390,7 +357,6 @@ def _rotate_invitation_in_transaction(
         metadata=None,
     )
     return _RotatedInvitation(
-        outbox_id=outbox_id,
         invitation_token_id=token_id,
         account_id=target_account_id,
         recipient=recipient,

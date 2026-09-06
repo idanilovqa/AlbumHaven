@@ -35,7 +35,6 @@ class Service:
         self.calls.append(kwargs)
         return CreatedAccount(
             account_id=41,
-            invitation_delivery=None,
             invitation_queued=self.invitation_delivery is not None,
         )
 
@@ -183,41 +182,6 @@ def test_admin_account_route_returns_after_tokenless_invitation_enqueue():
     assert service.calls[0]["send_invitation"] is True
     assert deliveries == []
     assert DELIVERY.raw_token.encode() not in body
-
-
-def test_pending_invitation_delivery_uses_production_outbox_fallback_without_leaking_token(
-    monkeypatch,
-):
-    from music_app.routes import admin_asgi
-    from music_app.services import auth_mail_outbox_postgres as outbox
-
-    app = FastAPI()
-    app.state.mail_config = {
-        "invitation_enabled": True,
-        "public_base_url": "https://music.test",
-    }
-    app.state.repository_config = {
-        "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app@localhost/db"
-    }
-    events = []
-
-    class Repository:
-        def __init__(self, config):
-            events.append(("repository", config))
-
-    async def deliver(delivery, *, config, repository):
-        assert delivery is DELIVERY
-        assert config is app.state.mail_config
-        assert isinstance(repository, Repository)
-        events.append("deliver")
-
-    monkeypatch.setattr(outbox, "PostgresInvitationOutboxService", Repository, raising=False)
-    monkeypatch.setattr(outbox, "deliver_invitation", deliver, raising=False)
-
-    asyncio.run(admin_asgi._deliver_pending_invitation(app, DELIVERY))
-
-    assert events == [("repository", app.state.repository_config), "deliver"]
-    assert DELIVERY.raw_token not in repr(events)
 
 
 def test_admin_account_route_rejects_password_as_an_extra_field_before_service():

@@ -122,7 +122,15 @@ class RecordingConnection:
         return Cursor()
 
 
-def _service(auth_bootstrap, connection, *, config=None):
+class Jobs:
+    def __init__(self):
+        self.calls = []
+
+    def compose_existing_intent_in_transaction(self, connection, **values):
+        self.calls.append((connection, values))
+
+
+def _service(auth_bootstrap, connection, *, config=None, jobs=None):
     values = {
         "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
         "bootstrap_email_normalized": "Rendref+owner@example.test",
@@ -139,7 +147,8 @@ def _service(auth_bootstrap, connection, *, config=None):
     if config is not None:
         values = config
     return auth_bootstrap.PostgresAuthBootstrapService(
-        values, connect=lambda database_url: connection
+        values, connect=lambda database_url: connection,
+        job_repository=jobs or Jobs(),
     )
 
 
@@ -405,6 +414,7 @@ def test_reconcile_requires_the_active_hash_policy_version(auth_bootstrap):
 
 def test_enabled_welcome_is_queued_once_after_credential_lock(auth_bootstrap):
     connection = RecordingConnection()
+    jobs = Jobs()
     config = {
         "ALBUM_HAVEN_APP_DATABASE_URL": DATABASE_URL,
         "bootstrap_email_normalized": "Rendref+owner@example.test",
@@ -419,10 +429,15 @@ def test_enabled_welcome_is_queued_once_after_credential_lock(auth_bootstrap):
         "welcome_enabled": True,
     }
 
-    result = _reconcile(_service(auth_bootstrap, connection, config=config))
+    result = _reconcile(
+        _service(auth_bootstrap, connection, config=config, jobs=jobs)
+    )
 
     assert result.welcome_queued is True
     assert result.welcome_outbox_id == 91
+    assert jobs.calls[0][0] is connection
+    assert jobs.calls[0][1]["outbox_id"] == 91
+    assert jobs.calls[0][1]["request_origin_ref"] == "system:bootstrap-owner"
     outbox_insert = next(
         operation
         for operation in connection.operations

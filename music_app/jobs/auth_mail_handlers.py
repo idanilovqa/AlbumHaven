@@ -104,6 +104,11 @@ def build_auth_mail_handler(
         raise ValueError("authentication mail category is invalid")
     now = clock or (lambda: datetime.now(timezone.utc))
     provider_config = dict(mail_config)
+    enabled_key = {
+        "welcome": "welcome_enabled",
+        "account_invitation": "invitation_enabled",
+        "password_reset": "password_reset_enabled",
+    }[category]
 
     def cancel(claim: ClaimedJob, reason: str, observed_at: datetime):
         mail_repository.cancel_claimed_before_send(
@@ -120,6 +125,8 @@ def build_auth_mail_handler(
         decision = context.reauthorize()
         if not decision.allowed:
             return cancel(claim, decision.reason_code, observed_at)
+        if provider_config.get(enabled_key) is not True:
+            return cancel(claim, "auth_mail_category_disabled", observed_at)
 
         values = _claim_values(claim, category, observed_at)
         delivery_context = mail_repository.load_claimed_delivery_context(**values)

@@ -191,7 +191,6 @@ class PostgresAdminAccountRepository:
             raise
         return CreatedAccount(
             account_id=account_id,
-            invitation_delivery=None,
             invitation_queued=invitation_queued,
         )
 

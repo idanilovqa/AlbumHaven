@@ -7,7 +7,6 @@ import hmac
 import ipaddress
 import threading
 from collections.abc import Mapping
-from inspect import isawaitable
 from pathlib import Path
 from time import monotonic as _monotonic
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -554,32 +553,6 @@ def _generic_recovery_unavailable() -> HTMLResponse:
     response = HTMLResponse("Password recovery is temporarily unavailable.", status_code=503)
     response.headers["Referrer-Policy"] = "no-referrer"
     return _no_store(response)
-
-
-async def _deliver_password_reset(app, delivery) -> None:
-    try:
-        callback = getattr(app.state, "password_reset_delivery", None)
-        if callable(callback):
-            result = callback(delivery)
-            if isawaitable(result):
-                await result
-            return
-        from config import build_mail_config
-        from music_app.services.auth_mail_outbox_postgres import deliver_password_reset
-
-        mail_config = build_mail_config()
-        if mail_config.get("password_reset_enabled") is not True:
-            return
-        await deliver_password_reset(
-            delivery,
-            config=mail_config,
-            database_url=app.state.auth_policy_config[
-                "ALBUM_HAVEN_APP_DATABASE_URL"
-            ],
-        )
-    except Exception:
-        # Public response and token issuance remain independent of SMTP outcome.
-        return
 
 
 @router.get("/reset-password", response_class=HTMLResponse)

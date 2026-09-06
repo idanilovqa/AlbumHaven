@@ -195,6 +195,7 @@ def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
     assert "function ops.validate_claimed_auth_mail(" in sql
     assert "function ops.load_claimed_auth_mail_context(" in sql
     assert "function ops.issue_claimed_auth_mail_token_hash(" in sql
+    assert "function ops.reconcile_auth_mail_jobs(" in sql
     assert "job.kind = expected_job_kind" in sql
     assert "job.state = 'running'" in sql
     assert "job.lease_expires_at > p_now" in sql
@@ -216,6 +217,9 @@ def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
     assert "grant execute on function ops.validate_claimed_auth_mail" in sql
     assert "grant execute on function ops.load_claimed_auth_mail_context" in sql
     assert "grant execute on function ops.issue_claimed_auth_mail_token_hash" in sql
+    assert "grant execute on function ops.reconcile_auth_mail_jobs" in sql
+    assert "for update of outbox skip locked" in sql
+    assert "generic_terminal_converged" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"

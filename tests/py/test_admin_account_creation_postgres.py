@@ -114,8 +114,7 @@ def test_repository_creates_pending_account_and_optionally_links_invitation_outb
     )
 
     assert result == CreatedAccount(
-        account_id=41, invitation_delivery=None,
-        invitation_queued=with_invitation,
+        account_id=41, invitation_queued=with_invitation,
     )
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _params in connection.operations]

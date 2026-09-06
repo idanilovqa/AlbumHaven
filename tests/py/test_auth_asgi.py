@@ -12,7 +12,6 @@ from fastapi import FastAPI
 
 from music_app.services.auth_login_postgres import LoginOutcome, LoginResult
 from music_app.services.auth_password_reset_request_postgres import (
-    PasswordResetDelivery,
     PasswordResetRequestResult,
 )
 from music_app.services.auth_password_reset_lifecycle_postgres import (
@@ -116,12 +115,7 @@ class FakeResetRequests:
 
     def request_reset(self, **kwargs):
         self.calls.append(kwargs)
-        delivery = (
-            PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
-            if self.eligible
-            else None
-        )
-        return PasswordResetRequestResult(delivery=delivery)
+        return PasswordResetRequestResult()
 
 
 class FakeResetLifecycle:

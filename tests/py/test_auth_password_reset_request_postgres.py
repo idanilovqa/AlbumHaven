@@ -1,15 +1,11 @@
 from datetime import datetime, timezone
-import hashlib
 
 import pytest
 
-from music_app.services.auth_tokens import IssuedOpaqueToken
 from music_app.services.auth_mail_jobs_postgres import AcceptedAuthMailJob
 
 
 NOW = datetime(2026, 8, 31, 18, 0, tzinfo=timezone.utc)
-RAW_TOKEN = "A" * 43
-TOKEN_DIGEST = hashlib.sha256(RAW_TOKEN.encode("ascii")).digest()
 
 
 class Cursor:
@@ -116,7 +112,6 @@ def _service(connection, audit, jobs=None):
     return PostgresPasswordResetRequestService(
         _config(),
         connect=lambda _url: connection,
-        token_issuer=lambda: IssuedOpaqueToken(RAW_TOKEN, TOKEN_DIGEST),
         clock=lambda: NOW,
         audit_repository=audit,
         job_repository=jobs or Jobs(),
@@ -143,9 +138,7 @@ def test_eligible_request_charges_three_buckets_and_commits_one_reset_and_outbox
     )
 
     assert result.accepted is True
-    assert result.delivery is None
     assert result.accepted_job == AcceptedAuthMailJob(81, 92, 1, 1)
-    assert RAW_TOKEN not in repr(result)
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _ in connection.operations]
     account_lookup = next(sql for sql in statements if "from app.accounts" in sql)
@@ -171,7 +164,7 @@ def test_unknown_request_charges_candidate_and_source_and_returns_same_public_sh
     )
 
     assert result.accepted is True
-    assert result.delivery is None
+    assert result.accepted_job is None
     assert connection.events == ["begin", "commit"]
     statements = [sql for sql, _ in connection.operations]
     assert sum("insert into app.auth_throttles" in sql for sql in statements) == 2
@@ -198,7 +191,7 @@ def test_blocked_request_is_generic_and_does_not_issue_or_revoke_reset():
     )
 
     assert result.accepted is True
-    assert result.delivery is None
+    assert result.accepted_job is None
     statements = [sql for sql, _ in connection.operations]
     assert not any("password_reset_tokens" in sql for sql in statements)
     assert audit.calls[0]["outcome"].value == "throttled"

@@ -242,6 +242,116 @@ def test_live_generic_enqueue_failure_rolls_back_outbox(live_auth_mail_database)
     assert count == 0
 
 
+def test_live_reconciler_adopts_one_due_legacy_bootstrap_welcome(
+    live_auth_mail_database,
+):
+    setup_url, _runtime_url = live_auth_mail_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    now = datetime.now(timezone.utc)
+    with isolatedPostgres._connect(setup_url) as connection:
+        account_id = int(connection.execute(
+            "select account_id from app.bootstrap_owners "
+            "where owner_key = 'local-bootstrap-owner'"
+        ).fetchone()["account_id"])
+        library_row = connection.execute(
+            "select id from library.libraries where owner_account_id = %s "
+            "order by id limit 1",
+            (account_id,),
+        ).fetchone()
+        library_id = int(library_row["id"]) if library_row is not None else int(
+            connection.execute(
+                "insert into library.libraries "
+                "(owner_account_id, name, library_kind) "
+                "values (%s, 'Legacy Welcome', 'local') returning id",
+                (account_id,),
+            ).fetchone()["id"]
+        )
+        outbox_id = int(connection.execute(
+            "insert into app.mail_outbox "
+            "(account_id, message_category, delivery_status, next_attempt_at, "
+            "created_at, updated_at) "
+            "values (%s, 'welcome', 'pending', %s, %s, %s) returning id",
+            (account_id, now, now, now),
+        ).fetchone()["id"])
+    def reconcile_once(_worker: int) -> int:
+        repository = PostgresAuthMailJobRepository(
+            database_url=worker_url,
+            connect_to_database=isolatedPostgres._connect,
+        )
+        return repository.reconcile_due_pending(now=now, limit=10)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        reconciled = list(pool.map(reconcile_once, range(2)))
+    assert sorted(reconciled) == [0, 1]
+    with isolatedPostgres._connect(setup_url) as connection:
+        row = connection.execute(
+            "select actor_account_id, accepted_attempt, current_job_id, "
+            "delivery_checkpoint from app.mail_outbox where id = %s",
+            (outbox_id,),
+        ).fetchone()
+        job = connection.execute(
+            "select account_id, library_id, kind, parameters from ops.jobs "
+            "where id = %s",
+            (row["current_job_id"],),
+        ).fetchone()
+    assert int(row["actor_account_id"]) == account_id
+    assert int(row["accepted_attempt"]) == 1
+    assert row["delivery_checkpoint"] == "accepted"
+    assert int(job["account_id"]) == account_id
+    assert int(job["library_id"]) == library_id
+    assert job["kind"] == "auth_welcome_delivery"
+    assert job["parameters"] == {}
+
+
+def test_live_reconciler_marks_token_issued_terminal_job_ambiguous_without_replay(
+    live_auth_mail_database,
+):
+    setup_url, runtime_url = live_auth_mail_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    accepted = _repository(runtime_url).accept_intent(
+        category="account_invitation", account_id=account_id,
+        actor_account_id=account_id, library_id=library_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted", client_surface="private_web", now=now,
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.mail_outbox set delivery_status = 'sending', "
+            "delivery_checkpoint = 'token_issued', lifecycle_expires_at = %s, "
+            "row_revision = row_revision + 1, updated_at = %s where id = %s",
+            (now + timedelta(hours=1), now, accepted.outbox_id),
+        )
+        connection.execute(
+            "update ops.jobs set state = 'ambiguous', started_at = %s, "
+            "completed_at = %s, outcome_code = 'lease_outcome_unknown', "
+            "updated_at = %s where id = %s",
+            (now, now, now, accepted.job_id),
+        )
+    repository = PostgresAuthMailJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    assert repository.reconcile_due_pending(now=now, limit=10) == 0
+    with isolatedPostgres._connect(setup_url) as connection:
+        outbox = connection.execute(
+            "select delivery_status, delivery_checkpoint, provider_disposition, "
+            "current_job_id from app.mail_outbox where id = %s",
+            (accepted.outbox_id,),
+        ).fetchone()
+        jobs = connection.execute(
+            "select count(*) as count from ops.jobs where subject_kind = 'mail_outbox' "
+            "and subject_ref = %s",
+            (str(accepted.outbox_id),),
+        ).fetchone()
+    assert outbox["delivery_status"] == "unknown"
+    assert outbox["delivery_checkpoint"] == "terminal"
+    assert outbox["provider_disposition"] == "possible_send_ambiguous"
+    assert int(outbox["current_job_id"]) == accepted.job_id
+    assert int(jobs["count"]) == 1
+
+
 def test_live_concurrent_composition_converges_on_one_job(live_auth_mail_database):
     setup_url, runtime_url = live_auth_mail_database
     account_id, library_id, origin_key = _seed_scope(setup_url)

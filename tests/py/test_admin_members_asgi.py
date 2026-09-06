@@ -14,7 +14,6 @@ from music_app.services.admin_reauthentication_postgres import (
     AdminReauthenticationOutcome,
 )
 from music_app.services.admin_mail_actions_postgres import AdminMailActionResult
-from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
 from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import (
     ActorState,
@@ -123,14 +122,7 @@ class Service:
 
     def queue_password_reset(self, **kwargs):
         self.reset_calls.append(kwargs)
-        return AdminMailActionResult(
-            password_reset_delivery=PasswordResetDelivery(
-                outbox_id=72,
-                account_id=41,
-                recipient="listener@example.test",
-                raw_token="never-render-this-token",
-            )
-        )
+        return AdminMailActionResult()
 
 
 def _app(actor_override=None, *, invitation_enabled=True, member_library_role="member"):
@@ -142,8 +134,6 @@ def _app(actor_override=None, *, invitation_enabled=True, member_library_role="m
     app.state.admin_member_mutation_service = service
     app.state.admin_reauthentication_service = service
     app.state.admin_mail_action_service = service
-    app.state.welcome_delivery = lambda _outbox_id: None
-    app.state.password_reset_delivery = lambda _delivery: None
     app.state.mail_config = {"invitation_enabled": invitation_enabled}
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},

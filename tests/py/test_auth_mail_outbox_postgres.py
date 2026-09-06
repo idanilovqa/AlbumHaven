@@ -379,12 +379,11 @@ def test_delivery_is_non_gating_when_transport_raises(outbox):
 
 
 def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     events = []
-    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    delivery = SimpleNamespace(
+        outbox_id=81, account_id=41,
+        recipient="member@example.test", raw_token="r" * 43,
+    )
     claim = outbox.PasswordResetClaim(
         outbox_id=81,
         account_id=41,
@@ -432,12 +431,11 @@ def test_password_reset_delivery_claims_matching_active_token_and_finalizes_once
 
 
 def test_password_reset_repository_claim_requires_matching_active_digest_and_is_not_retryable(outbox):
-    from music_app.services.auth_password_reset_request_postgres import (
-        PasswordResetDelivery,
-    )
-
     connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one"),))
-    delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
+    delivery = SimpleNamespace(
+        outbox_id=81, account_id=41,
+        recipient="Rendref+owner@example.test", raw_token="s" * 43,
+    )
 
     claim = _reset_service(outbox, connection).claim_password_reset(delivery)
 

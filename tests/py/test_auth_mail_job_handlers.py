@@ -112,6 +112,9 @@ def _handler(category, repository, send, **overrides):
             "public_base_url": "https://example.test",
             "sender_address": "noreply@example.test",
             "sender_name": "Album Haven",
+            "welcome_enabled": True,
+            "invitation_enabled": True,
+            "password_reset_enabled": True,
         },
         send_email=send,
         token_issuer=lambda: issue_opaque_token(random_bytes=lambda _size: b"a" * 32),
@@ -133,6 +136,26 @@ def _handler(category, repository, send, **overrides):
 )
 def test_provider_classification_is_category_specific(category, result, expected):
     assert classify_auth_mail_result(category, result).disposition is expected
+
+
+@pytest.mark.parametrize("category", ["welcome", "account_invitation", "password_reset"])
+def test_disabled_category_cancels_before_context_token_or_send(category):
+    repository = _Repository()
+    sent = []
+    config = {
+        "welcome_enabled": False,
+        "invitation_enabled": False,
+        "password_reset_enabled": False,
+    }
+    outcome = _handler(
+        category, repository, lambda *_args, **_kwargs: sent.append(True),
+        mail_config=config,
+        token_issuer=lambda: (_ for _ in ()).throw(AssertionError("token issued")),
+    )(_claim(category), _Context())
+    assert outcome.next_state is JobState.CANCELED
+    assert outcome.reason_code == "auth_mail_category_disabled"
+    assert [name for name, _values in repository.calls] == ["cancel"]
+    assert sent == []
 
 
 def test_welcome_handler_sends_once_and_fences_success():
@@ -245,7 +268,7 @@ def test_welcome_composition_failure_terminates_before_send_checkpoint():
     handler = build_auth_mail_handler(
         category="welcome",
         mail_repository=repository,
-        mail_config={},
+        mail_config={"welcome_enabled": True},
         send_email=lambda *_a, **_k: sends.append(True),
         clock=lambda: NOW,
     )

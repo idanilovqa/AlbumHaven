@@ -38,7 +38,6 @@ class AdminMailActionResult:
     accepted: bool = True
     welcome_outbox_id: int | None = None
     accepted_job: AcceptedAuthMailJob | None = None
-    password_reset_delivery: object | None = None
     throttled: bool = False
 
     def __repr__(self) -> str:
@@ -377,25 +376,6 @@ def _eligible(row: Mapping[str, object]) -> bool:
         and not isinstance(row.get("credential_version"), bool)
         and int(row.get("credential_version")) >= 1
     )
-
-
-def _issued_token(provider: Callable[[], object]) -> IssuedOpaqueToken:
-    value = provider()
-    if not isinstance(value, IssuedOpaqueToken):
-        raise RuntimeError
-    try:
-        valid = hash_opaque_token(value.raw) == value.digest
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise RuntimeError
-    return value
-
-
-def _recipient(value: object) -> str:
-    if not isinstance(value, str) or not value or "\r" in value or "\n" in value:
-        raise RuntimeError
-    return value
 
 
 def _returned_id(rows: object) -> int:

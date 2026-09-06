@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 import unicodedata
 
 from music_app.services.auth_config import normalize_email_address
-from music_app.services.auth_invitation_models import InvitationDelivery
 from music_app.services.auth_tokens import normalize_login_identifier
 from music_app.services.current_actor import CurrentActor
 
@@ -38,7 +37,6 @@ MANAGED_CAPABILITY_KEYS = frozenset(
 @dataclass(frozen=True, slots=True)
 class CreatedAccount:
     account_id: int
-    invitation_delivery: InvitationDelivery | None
     invitation_queued: bool = False
 
 
@@ -48,7 +46,6 @@ class AdminAccountCreationService:
         *,
         repository,
         invitation_token_seconds: int,
-        token_issuer=None,
         clock=None,
     ) -> None:
         self._repository = repository

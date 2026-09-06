@@ -23,6 +23,31 @@ from .dispatch import JobHandlerRegistry
 _COMPATIBLE_SCHEMA_VERSION = 1
 
 
+def combine_due_reconcilers(
+    *reconcilers: Callable[..., object],
+) -> Callable[..., int]:
+    """Run each bounded domain reconciler without coupling their ownership."""
+
+    if not reconcilers or any(not callable(item) for item in reconcilers):
+        raise ValueError("due reconcilers must be callable")
+
+    def reconcile(*, now: datetime, limit: int) -> int:
+        total = 0
+        first_error: Exception | None = None
+        for item in reconcilers:
+            try:
+                result = item(now=now, limit=limit)
+                if isinstance(result, int) and not isinstance(result, bool):
+                    total += max(0, result)
+            except Exception as exc:
+                first_error = first_error or exc
+        if first_error is not None:
+            raise RuntimeError("one or more due reconcilers failed") from None
+        return total
+
+    return reconcile
+
+
 def create_worker_pool(config: Any, *, pool_factory: Callable[..., Any] | None = None) -> Any:
     """Create the worker's small pool from only its dedicated database URL."""
 

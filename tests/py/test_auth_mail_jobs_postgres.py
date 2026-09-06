@@ -83,6 +83,23 @@ def _accept(repository, *, category="welcome"):
     )
 
 
+def test_reconcile_due_pending_uses_bounded_security_definer_entrypoint():
+    connection = _Connection([{"count": 4}])
+    repository = _repository(connection, _Jobs())
+    assert repository.reconcile_due_pending(now=NOW, limit=17) == 4
+    statement, parameters = connection.executed[0]
+    assert "ops.reconcile_auth_mail_jobs" in statement
+    assert parameters == (NOW, 17)
+
+
+@pytest.mark.parametrize("limit", [0, 101, True])
+def test_reconcile_due_pending_rejects_unbounded_limits(limit):
+    connection = _Connection([])
+    with pytest.raises(ValueError, match="limit"):
+        _repository(connection, _Jobs()).reconcile_due_pending(now=NOW, limit=limit)
+    assert connection.executed == []
+
+
 def test_accept_welcome_intent_inserts_outbox_and_job_in_one_transaction():
     connection = _Connection([
         {"outbox_id": 61, "row_revision": 0, "accepted_attempt": 1},

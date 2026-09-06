@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from music_app.jobs.dispatch import JobHandlerRegistry
-from music_app.jobs.worker import PostgresWorkerInstanceRepository, Worker
+from music_app.jobs.worker import (
+    PostgresWorkerInstanceRepository,
+    Worker,
+    combine_due_reconcilers,
+)
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import (
     ClaimedJob,
@@ -18,6 +22,26 @@ from music_app.services.jobs.models import (
 
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=timezone.utc)
+
+
+def test_combined_due_reconciler_runs_every_domain_even_after_one_failure():
+    calls = []
+
+    def failed(**values):
+        calls.append(("failed", values))
+        raise RuntimeError("private failure")
+
+    def healthy(**values):
+        calls.append(("healthy", values))
+        return 3
+
+    reconcile = combine_due_reconcilers(failed, healthy)
+    with pytest.raises(RuntimeError, match="reconcilers failed"):
+        reconcile(now=NOW, limit=19)
+    assert calls == [
+        ("failed", {"now": NOW, "limit": 19}),
+        ("healthy", {"now": NOW, "limit": 19}),
+    ]
 
 
 def claim(kind: str = JobKind.FULL_SCAN.value) -> ClaimedJob:

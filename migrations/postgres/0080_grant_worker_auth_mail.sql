@@ -521,6 +521,200 @@ begin
 end;
 $$;
 
+create or replace function ops.reconcile_auth_mail_jobs(
+  p_now timestamptz,
+  p_limit integer
+)
+returns integer
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  candidate record;
+  v_actor_id bigint;
+  v_library_id bigint;
+  v_origin_id bigint;
+  v_client_surface varchar;
+  v_attempt integer;
+  v_revision bigint;
+  v_job_id bigint;
+  v_count integer := 0;
+begin
+  if p_limit < 1 or p_limit > 100 then
+    raise exception 'Authentication mail reconciliation limit is invalid.';
+  end if;
+
+  with terminal as (
+    select outbox.id, outbox.message_category, outbox.delivery_checkpoint,
+           outbox.accepted_attempt, job.state
+      from app.mail_outbox as outbox
+      join ops.jobs as job on job.id = outbox.current_job_id
+     where job.state in ('failed', 'canceled', 'ambiguous')
+       and outbox.delivery_status in ('pending', 'sending')
+       and outbox.delivery_checkpoint in (
+         'accepted', 'claimed', 'token_issued', 'send_started'
+       )
+     order by outbox.id
+     for update of outbox skip locked
+     limit p_limit
+  )
+  update app.mail_outbox as outbox
+     set delivery_status = case
+           when terminal.state = 'ambiguous'
+             or terminal.delivery_checkpoint in ('token_issued', 'send_started')
+             then 'unknown'
+           when terminal.message_category = 'welcome'
+             and terminal.accepted_attempt < 5 then 'failed'
+           else 'failed'
+         end,
+         delivery_checkpoint = case
+           when terminal.message_category = 'welcome'
+             and terminal.state <> 'ambiguous'
+             and terminal.delivery_checkpoint in ('accepted', 'claimed')
+             and terminal.accepted_attempt < 5 then 'accepted'
+           else 'terminal'
+         end,
+         attempt_count = greatest(
+           outbox.attempt_count, terminal.accepted_attempt
+         ),
+         accepted_attempt = case
+           when terminal.message_category = 'welcome'
+             and terminal.state <> 'ambiguous'
+             and terminal.delivery_checkpoint in ('accepted', 'claimed')
+             and terminal.accepted_attempt < 5 then null
+           else outbox.accepted_attempt
+         end,
+         current_job_id = case
+           when terminal.message_category = 'welcome'
+             and terminal.state <> 'ambiguous'
+             and terminal.delivery_checkpoint in ('accepted', 'claimed')
+             and terminal.accepted_attempt < 5 then null
+           else outbox.current_job_id
+         end,
+         next_attempt_at = case
+           when terminal.message_category = 'welcome'
+             and terminal.state <> 'ambiguous'
+             and terminal.delivery_checkpoint in ('accepted', 'claimed')
+             and terminal.accepted_attempt < 5 then p_now
+           else null
+         end,
+         provider_disposition = case
+           when terminal.state = 'ambiguous'
+             or terminal.delivery_checkpoint in ('token_issued', 'send_started')
+             then 'possible_send_ambiguous'
+           when terminal.message_category = 'welcome'
+             and terminal.accepted_attempt < 5
+             then 'known_not_sent_retryable'
+           else 'canceled_before_send'
+         end,
+         delivery_reason_code = 'generic_terminal_converged',
+         row_revision = outbox.row_revision + 1,
+         updated_at = p_now
+    from terminal
+   where outbox.id = terminal.id;
+
+  for candidate in
+    select outbox.*
+      from app.mail_outbox as outbox
+      join app.accounts as account
+        on account.id = outbox.account_id
+       and account.is_active
+       and account.disabled_at is null
+      join app.bootstrap_owners as owner
+        on owner.account_id = account.id
+       and owner.owner_key = 'local-bootstrap-owner'
+     where outbox.message_category = 'welcome'
+       and outbox.delivery_status in ('pending', 'failed')
+       and outbox.current_job_id is null
+       and outbox.attempt_count < 5
+       and (outbox.next_attempt_at is null or outbox.next_attempt_at <= p_now)
+     order by outbox.next_attempt_at nulls first, outbox.id
+     for update of outbox skip locked
+     limit p_limit
+  loop
+    select library.id into v_library_id
+      from library.libraries as library
+     where library.owner_account_id = candidate.account_id
+     order by library.id limit 1;
+    if v_library_id is null then continue; end if;
+    v_actor_id := candidate.account_id;
+
+    select origin_record.id, origin_record.client_surface_class
+      into v_origin_id, v_client_surface
+      from app.request_origins as origin_record
+     where origin_record.account_id = v_actor_id
+     order by (origin_record.id = candidate.request_origin_id) desc,
+              origin_record.last_seen_at desc, origin_record.id desc
+     limit 1;
+    if v_origin_id is null then
+      insert into app.request_origins (
+        account_id, client_surface_class, origin_type, origin_key,
+        first_seen_at, last_seen_at
+      ) values (
+        v_actor_id, 'node', 'system', 'bootstrap-owner', p_now, p_now
+      )
+      on conflict (client_surface_class, origin_type, origin_key)
+      do update set last_seen_at = excluded.last_seen_at
+      where app.request_origins.account_id = excluded.account_id
+      returning id, client_surface_class into v_origin_id, v_client_surface;
+    end if;
+    if v_origin_id is null then continue; end if;
+
+    v_attempt := coalesce(candidate.accepted_attempt, candidate.attempt_count + 1);
+    v_revision := candidate.row_revision + 1;
+    update app.mail_outbox
+       set actor_account_id = v_actor_id,
+           authorization_mode = 'actor',
+           accepted_attempt = v_attempt,
+           request_origin_id = v_origin_id,
+           delivery_status = 'pending',
+           delivery_checkpoint = 'accepted',
+           next_attempt_at = p_now,
+           row_revision = v_revision,
+           updated_at = p_now
+     where id = candidate.id;
+
+    insert into ops.jobs (
+      kind, state, subject_kind, subject_ref, parameters, account_id,
+      library_id, capability_key, request_origin_id, deployment_mode,
+      client_surface, scope_version, resource_revision, idempotency_key,
+      priority, scheduled_at, attempt_count, max_attempts, recovery_policy
+    ) values (
+      'auth_welcome_delivery', 'queued', 'mail_outbox', candidate.id::text,
+      '{}'::jsonb, v_actor_id, v_library_id, 'accounts.welcome.send',
+      v_origin_id, 'self_hosted', v_client_surface, v_revision + 1, v_attempt,
+      'auth-mail:welcome:' || candidate.id::text || ':attempt:' || v_attempt::text,
+      0, p_now, 0, 3, 'retry_safe'
+    ) on conflict do nothing returning id into v_job_id;
+    if v_job_id is null then
+      select job.id into v_job_id from ops.jobs as job
+       where job.kind = 'auth_welcome_delivery'
+         and job.account_id = v_actor_id
+         and job.library_id = v_library_id
+         and job.subject_kind = 'mail_outbox'
+         and job.subject_ref = candidate.id::text
+         and job.idempotency_key = 'auth-mail:welcome:' || candidate.id::text ||
+             ':attempt:' || v_attempt::text
+         and job.request_origin_id = v_origin_id;
+    end if;
+    if v_job_id is null then
+      raise exception 'Authentication mail due job could not be composed.';
+    end if;
+    update app.mail_outbox
+       set current_job_id = v_job_id,
+           row_revision = v_revision + 1,
+           updated_at = p_now
+     where id = candidate.id and row_revision = v_revision;
+    v_count := v_count + 1;
+    v_job_id := null;
+    v_origin_id := null;
+    v_library_id := null;
+  end loop;
+  return v_count;
+end;
+$$;
+
 revoke all on function ops.validate_claimed_auth_mail(
   bigint, varchar, bigint, integer, varchar, varchar,
   timestamptz, bigint, integer
@@ -542,6 +736,8 @@ revoke all on function ops.finish_claimed_auth_mail(
   bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
   bigint, varchar, varchar
 ) from public;
+revoke all on function ops.reconcile_auth_mail_jobs(timestamptz, integer)
+  from public;
 
 do $$
 begin
@@ -576,6 +772,8 @@ begin
       bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
       bigint, varchar, varchar
     ) to album_haven_worker;
+    grant execute on function ops.reconcile_auth_mail_jobs(timestamptz, integer)
+      to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
     revoke execute on function ops.validate_claimed_auth_mail(
@@ -599,5 +797,7 @@ begin
       bigint, varchar, bigint, integer, varchar, varchar, timestamptz,
       bigint, varchar, varchar
     ) from album_haven_readonly;
+    revoke execute on function ops.reconcile_auth_mail_jobs(timestamptz, integer)
+      from album_haven_readonly;
   end if;
 end $$;

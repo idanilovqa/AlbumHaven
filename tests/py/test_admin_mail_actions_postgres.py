@@ -222,7 +222,6 @@ def test_inactive_target_has_ambiguous_success_without_issuing_mail_or_token():
     )
 
     assert result.accepted is True
-    assert result.password_reset_delivery is None
     assert not any("insert into app.password_reset_tokens" in sql for sql, _ in connection.operations)
     assert not any("insert into app.mail_outbox" in sql for sql, _ in connection.operations)
 

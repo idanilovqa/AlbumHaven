@@ -36,10 +36,14 @@ def main(
     try:
         if arguments:
             raise ValueError("the durable jobs worker accepts no arguments")
-        from config import build_worker_config
+        from config import build_mail_config, build_worker_config
 
         config = build_worker_config(environment)
-        worker = (worker_factory or _build_worker)(config)
+        worker = (
+            worker_factory(config)
+            if worker_factory is not None
+            else _build_worker(config, mail_config=build_mail_config(environment))
+        )
     except Exception:
         print("Durable jobs worker configuration is invalid.", file=errors)
         return 2
@@ -84,10 +88,15 @@ def _shutdown_signals() -> tuple[int, ...]:
     return tuple(dict.fromkeys(candidates))
 
 
-def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] | None = None) -> Any:
+def _build_worker(
+    config: Any,
+    *,
+    full_scan_log_event: Callable[[str], object] | None = None,
+    mail_config: Mapping[str, Any] | None = None,
+) -> Any:
     """Wire the durable worker with its closed handler set."""
 
-    from config import Config, build_mail_config
+    from config import Config, build_mail_config as build_runtime_mail_config
     from music_app.jobs.dispatch import JobHandlerRegistry
     from music_app.jobs.cover_handlers import (
         build_cover_bulk_refresh_resource_validator,
@@ -109,6 +118,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
     from music_app.jobs.worker import (
         PostgresWorkerInstanceRepository,
         Worker,
+        combine_due_reconcilers,
         create_worker_pool,
     )
     from music_app.services.jobs.authorization import (
@@ -290,7 +300,9 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
             scrobble_with_session=scrobble_track_with_session,
         ),
     )
-    mail_config = build_mail_config()
+    mail_config = (
+        build_runtime_mail_config() if mail_config is None else dict(mail_config)
+    )
     handlers.register(
         JobKind.AUTH_WELCOME_DELIVERY,
         build_auth_mail_handler(
@@ -328,7 +340,10 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         worker_instances=instances,
         closeables=(pool,),
         claim_kinds=handlers.registered_kinds,
-        due_reconciler=lastfm_retry_repository.reconcile_due_pending,
+        due_reconciler=combine_due_reconcilers(
+            lastfm_retry_repository.reconcile_due_pending,
+            auth_mail_repository.reconcile_due_pending,
+        ),
     )
 
 

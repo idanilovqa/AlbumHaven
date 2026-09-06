@@ -18,13 +18,7 @@ from music_app.services.auth_mail_jobs_postgres import (
     AcceptedAuthMailJob,
     PostgresAuthMailJobRepository,
 )
-from music_app.services.auth_tokens import (
-    IssuedOpaqueToken,
-    hash_opaque_token,
-    issue_opaque_token,
-    keyed_bucket_digest,
-    normalize_login_identifier,
-)
+from music_app.services.auth_tokens import keyed_bucket_digest, normalize_login_identifier
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
     import psycopg
@@ -50,27 +44,12 @@ _THROTTLE_COLUMNS = (
 
 
 @dataclass(frozen=True, repr=False, slots=True)
-class PasswordResetDelivery:
-    outbox_id: int
-    account_id: int
-    recipient: str
-    raw_token: str
-
-    def __repr__(self) -> str:
-        return (
-            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
-            f"account_id={self.account_id!r}, recipient=<redacted>, raw_token=<redacted>)"
-        )
-
-
-@dataclass(frozen=True, repr=False, slots=True)
 class PasswordResetRequestResult:
     accepted: bool = True
-    delivery: PasswordResetDelivery | None = None
     accepted_job: AcceptedAuthMailJob | None = None
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}(accepted=True, delivery=<redacted>)"
+        return f"{type(self).__name__}(accepted=True, accepted_job={self.accepted_job!r})"
 
 
 class PostgresPasswordResetRequestService:
@@ -81,7 +60,6 @@ class PostgresPasswordResetRequestService:
         config: Mapping[str, object] | None,
         *,
         connect: Callable[[str], Any] | None = None,
-        token_issuer: Callable[[], object] = issue_opaque_token,
         clock: Callable[[], datetime] | None = None,
         audit_repository: Any,
         job_repository: Any | None = None,
@@ -119,12 +97,9 @@ class PostgresPasswordResetRequestService:
         )
         if self._token_seconds > 1800:
             raise ValueError("Password recovery configuration is invalid.")
-        if not callable(token_issuer):
-            raise TypeError("Password recovery token provider is invalid.")
         if not callable(getattr(audit_repository, "append_in_transaction", None)):
             raise TypeError("Password recovery audit repository is invalid.")
         self._connect = connect or _connect
-        self._token_issuer = token_issuer
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._audit = audit_repository
         self._jobs = job_repository or PostgresAuthMailJobRepository(
@@ -448,19 +423,6 @@ def _eligible(account: Mapping[str, object] | None) -> bool:
     )
 
 
-def _issued_token(provider: Callable[[], object]) -> IssuedOpaqueToken:
-    value = provider()
-    if not isinstance(value, IssuedOpaqueToken):
-        raise RuntimeError("Password recovery token issuance failed.")
-    try:
-        valid = hash_opaque_token(value.raw) == value.digest
-    except (TypeError, ValueError):
-        valid = False
-    if not valid:
-        raise RuntimeError("Password recovery token issuance failed.")
-    return value
-
-
 def _request_ref(value: object) -> str:
     if not isinstance(value, str) or _REQUEST_REFERENCE.fullmatch(value) is None:
         raise ValueError("Password recovery request reference is invalid.")
@@ -472,12 +434,6 @@ def _source_class(value: object) -> str | None:
         return None
     if not isinstance(value, str) or value not in _SOURCE_CLASSES:
         raise ValueError("Password recovery source class is invalid.")
-    return value
-
-
-def _recipient(value: object) -> str:
-    if not isinstance(value, str) or not value or "\r" in value or "\n" in value:
-        raise RuntimeError
     return value
 
 

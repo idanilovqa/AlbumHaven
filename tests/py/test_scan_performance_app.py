@@ -904,6 +904,54 @@ def test_launch_sampler_persists_error_event_after_successful_prefix(tmp_path, m
     assert entries[-1]["error"]
 
 
+def test_launch_sampler_timeout_reports_only_bounded_last_checkpoint(tmp_path, monkeypatch):
+    module = _load_module()
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return (
+                b'{"scan_in_progress":true,"scan_phase":"indexing",'
+                b'"scan_processed":417,"scan_total":3000,'
+                b'"scan_current_path":"C:/private/Artist/Album/01.flac"}'
+            )
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise TimeoutError("private transport detail")
+        return Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    samples_path = tmp_path / "status-timeout.jsonl"
+    sampler = module.ProductionStatusFileSampler(
+        status_url="http://127.0.0.1:4174/status",
+        samples_path=samples_path,
+        interval_seconds=0.005,
+    )
+    sampler._session_cookie = "test-session"
+    sampler.start()
+    deadline = time.time() + 1
+    while time.time() < deadline and sampler.error is None:
+        time.sleep(0.005)
+    with pytest.raises(RuntimeError, match="Production status sampler failed"):
+        sampler.stop()
+
+    error = json.loads(samples_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert error["event"] == "error"
+    assert "last_phase=indexing" in error["error"]
+    assert "last_processed=417/3000" in error["error"]
+    assert "C:/private" not in error["error"]
+    assert "private transport detail" not in error["error"]
+
+
 @pytest.mark.parametrize("setup_fails", [False, True])
 def test_launcher_holds_database_lock_through_server_and_cleanup(setup_fails, monkeypatch):
     module = _load_module()

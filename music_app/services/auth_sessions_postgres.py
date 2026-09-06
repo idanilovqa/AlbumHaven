@@ -576,7 +576,7 @@ def _discover_and_lock_session(
         select id, is_active, disabled_at
         from app.accounts
         where id = %s
-        for update
+        for share
         """,
         (account_id,),
     )

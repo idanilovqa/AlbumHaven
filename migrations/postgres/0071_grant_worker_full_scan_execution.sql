@@ -461,7 +461,7 @@ begin
   perform 1 from app.accounts as account
    where account.id = claimed_account_id
      and account.is_active is true and account.disabled_at is null
-   for update;
+   for share;
   if not found then
     return query select false, null::bigint;
     return;

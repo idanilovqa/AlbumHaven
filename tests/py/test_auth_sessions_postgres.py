@@ -432,6 +432,8 @@ def test_digest_operations_discover_then_lock_account_before_session(sessions, m
         if "session_token_hash" in statement and "for update" in statement
     )
     assert discovery < account < locked_session
+    assert "for share" in sql[account]
+    assert "for update" not in sql[account]
     assert "order by" in sql[locked_session]
 
 

@@ -961,6 +961,7 @@ class ProductionStatusFileSampler:
         self.error: Exception | None = None
         self._observed_response = False
         self._session_cookie: str | None = None
+        self._last_checkpoint: dict[str, Any] | None = None
 
     @staticmethod
     def _read_set_cookie(headers: Any, cookie_name: str) -> str:
@@ -1050,13 +1051,23 @@ class ProductionStatusFileSampler:
                     try:
                         payload = self._read_status()
                         self._observed_response = True
+                        self._last_checkpoint = {
+                            "phase": payload.get("scan_phase"),
+                            "processed": payload.get("scan_processed"),
+                            "total": payload.get("scan_total"),
+                        }
                         stream.write(json.dumps({
                             "recordedAtEpochMs": int(time.time() * 1000),
                             "status": payload,
                         }, separators=(",", ":")) + "\n")
-                    except (urllib.error.URLError, TimeoutError, ConnectionError):
+                    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                         if self._observed_response:
-                            raise
+                            checkpoint = self._last_checkpoint or {}
+                            raise RuntimeError(
+                                f"Production status request failed ({type(exc).__name__}); "
+                                f"last_phase={checkpoint.get('phase')}; "
+                                f"last_processed={checkpoint.get('processed')}/{checkpoint.get('total')}"
+                            ) from exc
                     self._stop.wait(self.interval_seconds)
         except Exception as exc:
             self.error = exc

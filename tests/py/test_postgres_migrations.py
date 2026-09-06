@@ -517,6 +517,19 @@ def test_full_scan_publication_uses_the_authorized_root_path_style():
     ) in sql
 
 
+def test_full_scan_publication_uses_shared_account_lifecycle_lock():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_full_scan(", 1
+    )[1].split("create or replace function library.full_scan_publication_scope_current(", 1)[0]
+    account_lock = function_sql.split(
+        "perform 1 from app.accounts as account", 1
+    )[1].split("if not found", 1)[0]
+
+    assert "for share" in account_lock
+    assert "for update" not in account_lock
+
+
 def test_album_details_appearance_migration_has_closed_defaults():
     sql = _normalized_sql(ALBUM_DETAILS_APPEARANCE_MIGRATION.read_text(encoding="utf-8"))
 

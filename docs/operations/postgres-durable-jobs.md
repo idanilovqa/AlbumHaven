@@ -2,7 +2,7 @@
 
 The durable-jobs worker is a separate process from the Album Haven web server. The shared ledger, transition history, and worker heartbeat live in Postgres; the web process must never be treated as the owner of accepted background work.
 
-Full scans, filesystem-watcher targeted reconciliation, candidate cover lookup, bulk cover refresh, post-scan cover refresh, remote cover save, and Last.fm retry delivery run through this worker. A successful full-scan publication creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision and the shared cover-refresh handler executes it. Authentication mail remains on its existing execution path until its migration slice is complete.
+Full scans, filesystem-watcher targeted reconciliation, candidate cover lookup, bulk cover refresh, post-scan cover refresh, remote cover save, Last.fm retry delivery, and authentication-mail delivery run through this worker. A successful full-scan publication creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision and the shared cover-refresh handler executes it. Welcome, invitation, and password-reset routes commit an outbox intent and its generic job atomically; the web process never owns SMTP delivery.
 
 ## Configuration
 
@@ -148,16 +148,28 @@ Known-not-sent failures schedule at most five domain attempts with exponential d
 
 For a Last.fm backlog, use only authorized aggregate job status and bounded reason codes. Confirm that `lastfm_scrobble_retry` is registered, the worker is ready, current membership and capability remain valid, and the account has an active session. Do not expose scrobble payloads, track metadata, usernames, session keys, provider responses, or raw pending rows in logs or tickets. Do not reset an ambiguous row or manufacture another attempt. During drain, already-dispatched provider calls retain their conservative outcome; unclaimed work remains durable for a later worker.
 
+## Authentication mail and recovery
+
+`app.mail_outbox` is authoritative for welcome, account-invitation, and password-reset delivery. Its stable ID is the generic job subject. Generic job rows and transitions contain no recipient, username, candidate address, bearer token or hash, link, message content, provider response, or SMTP setting. SMTP configuration is loaded only by the worker. Invitation and reset intents remain tokenless until a claimed worker revalidates current authority and lifecycle state; it then stores only a token hash and keeps the raw token and composed message in local memory for the provider call.
+
+Welcome delivery alone permits automatic domain retries. A provider result proving no send occurred schedules attempts two through five after 60, 300, 1,800, and 7,200 seconds. Do not manufacture another job after exhaustion. A stale welcome that reached `send_started` is ambiguous rather than assumed unsent.
+
+Invitation and password-reset work is non-replayable after token issuance. Provider timeout, connection loss after dispatch, lease loss, process loss, or stale reconciliation at or beyond `token_issued` becomes `unknown` in the outbox and `ambiguous` in the generic ledger. Preserve the token hash, job, outbox, and audit evidence. Revoke the affected token through the existing authorized lifecycle if required, but never reset the row or enqueue a replacement merely because delivery cannot be confirmed.
+
+The bounded reconciler runs before normal claims. It converges terminal generic jobs with their outboxes and adopts eligible legacy bootstrap-welcome rows using skip-locked row ownership. It never reconstructs a raw token from a hash. Legacy invitation or reset state that cannot prove a safe unsent checkpoint remains terminal and non-replayable.
+
+For an authentication-mail backlog, inspect only authorized aggregate status and bounded job kind, state, age, disposition, and reason labels. Confirm the three handlers are registered, the worker is ready, the mail category is enabled, the target lifecycle remains eligible, and the accepted actor still has the category capability. Do not include recipient details, token material, message text, SMTP values, provider responses, raw outbox rows, or request-origin keys in commands, logs, or tickets. Ordinary status readers receive no mail-category or target detail.
+
 ## Promotion
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0078_grant_worker_lastfm_retry.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0080_grant_worker_auth_mail.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
-3. Configure the dedicated worker-role URL, start the worker, and confirm its closed registry and claim filter include the completed scan and cover kinds but exclude every unwired kind.
-4. Deploy the compatible web artifact that enables durable scan and cover producers. Exactly one execution owner may accept each workflow during this cutover.
-5. Verify `/health`, the authorized `/status` projection, and unchanged scan, cover-task, notification, cancellation, and acknowledgement responses.
-6. Migrate each later workflow family only when its Phase 8 slice is complete and its handler is registered before its producers are enabled.
+3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm its closed registry and claim filter include every completed scan, cover, Last.fm, and authentication-mail kind.
+4. Verify the worker fingerprint and role checks before deploying the compatible web artifact that enables durable producers. Drain any old request-owned mail tasks first. Exactly one execution owner may accept each workflow during cutover.
+5. Verify `/health`, the authorized `/status` projection, unchanged scan and cover contracts, unchanged Last.fm summaries, unchanged administrator mail responses, the padded public forgot-password response, and synchronous invitation-link copying.
+6. Keep prior web artifacts out of service after mail producers are cut over; they must not reclaim job-owned outboxes.
 
 Do not insert jobs manually. A worker deliberately ignores kinds without registered handlers; deploy the corresponding handler before expecting that backlog to advance.
 
@@ -180,6 +192,8 @@ python scripts/cleanup_jobs.py --batch-size 1000
 
 Each invocation processes at most the requested `1..10000` rows in each category. It removes eligible transition detail and compacts non-held succeeded, failed, or canceled jobs after 90 days; deletes those idempotency tombstones after 365 days; and removes stopped, unleased worker records after seven days. It never automatically removes queued, running, retry-wait, ambiguous, audit-held, or active-lease work. The command prints only category counts.
 
+Generic mail-job cleanup follows those same 90-day transition/job and 365-day idempotency-tombstone windows. This command does not delete `app.mail_outbox`, authentication tokens, or security-audit evidence. Preserve every outbox and token record needed to explain an ambiguous delivery and retain security-audit evidence for its independently defined window. Any future domain-record deletion requires a separate bounded migrator-owned procedure and tests proving it cannot cascade into active or ambiguous evidence.
+
 The application and worker roles do not receive retention deletion privileges. Do not substitute `ALBUM_HAVEN_APP_DATABASE_URL` or `ALBUM_HAVEN_WORKER_DATABASE_URL` for the migrator URL.
 
 ## Troubleshooting
@@ -193,5 +207,8 @@ The application and worker roles do not receive retention deletion privileges. D
 - Cover lookup or bulk backlog: verify current album/root authority, the actor capability for user-owned work, worker readiness, and provider configuration using secret-safe checks. Preserve provider order and deadlines; do not bypass them with manual ledger changes.
 - Ambiguous remote save: stop automatic intervention, preserve the job and checkpoint evidence, and reconcile whether download, owned-artifact write, selection commit, promotion, rollback, and task publication completed. Remove only an exactly owned artifact after the authorized root containment check succeeds.
 - Last.fm retry backlog: verify the handler registration, active session, account/library authority, and bounded attempt state. Reauthentication-held work is released only by a successful new session; possible-send ambiguity must remain held and must not be replayed.
+- Authentication-mail backlog: verify all three handlers, category configuration, current actor/target eligibility, and aggregate due age. A tokenless accepted intent may be reconciled safely; a token-issued or send-started invitation/reset must remain non-replayable when its outcome is uncertain.
+- Exhausted welcome: confirm five domain attempts and the documented delay sequence. Do not edit attempt counters or create an additional job.
+- Ambiguous invitation or reset: preserve the outbox, job, transition, token-hash, and audit records; revoke the token through an authorized lifecycle action if needed, and do not resend automatically.
 - Shutdown timeout: preserve the ledger and lease evidence. Diagnose the exact handler and owned child process; do not kill unrelated processes or force a state transition.
 - Cleanup failure: verify the migrator connection and migration level. The command intentionally suppresses exception details; inspect protected service logs without copying credentials, URLs, paths, tokens, addresses, media, or private fixtures.

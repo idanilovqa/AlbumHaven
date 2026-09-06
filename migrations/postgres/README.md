@@ -175,6 +175,10 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0078_grant_worker_lastfm_retry.sql` adds the lease-fenced validation, secret-loading, attempt transition, terminal convergence, and bounded legacy-adoption functions used by the worker. The worker receives execute access only and retains no direct Last.fm table access; possible-send outcomes converge to held ambiguity instead of automatic replay.
 
+`0079_create_auth_mail_job_state.sql` extends the existing mail outbox with stable actor, origin, accepted-attempt, checkpoint, revision, provider-disposition, and current-job fences. It classifies legacy token-bearing invitation and reset work as non-replayable, preserves completed evidence, and supports atomic tokenless intent plus generic-job composition without copying recipients, tokens, links, messages, or SMTP settings into the generic ledger.
+
+`0080_grant_worker_auth_mail.sql` adds category-specific claimed authorization, minimum delivery-context loading, hash-only token issuance, send checkpoints, terminal convergence, welcome retry scheduling, and bounded legacy-welcome adoption. The dedicated worker receives execute access only to lease-fenced functions and no broad reads of accounts, credentials, tokens, mail outbox, throttles, audit records, or settings; uncertain invitation and reset delivery remains ambiguous and is never replayed automatically.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

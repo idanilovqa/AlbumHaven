@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,12 @@ from music_app.services.library_event_coordinator import (
     TargetedMove,
     TargetedReconciliationRequest,
 )
+from music_app.services.allowed_actions import PolicyDecision
+from music_app.services.jobs.models import (
+    JobCancellationDisposition,
+    JobCancellationResult,
+)
+from music_app.services.policy_evaluator import PolicyAudit, PolicyEvaluationResult
 
 
 NOW = datetime(2026, 9, 6, 18, 0, tzinfo=timezone.utc)
@@ -72,6 +79,7 @@ class _JobRepository:
         self.job_id = job_id
         self.error = error
         self.calls = []
+        self.cancel_calls = []
         self.sql_seen_at_enqueue = []
 
     def enqueue_in_transaction(self, connection, command):
@@ -82,6 +90,15 @@ class _JobRepository:
         if self.error is not None:
             raise self.error
         return self.job_id
+
+    def request_cancel(self, job_id, *, actor_account_id, now):
+        self.cancel_calls.append((job_id, actor_account_id, now))
+        if self.error is not None:
+            raise self.error
+        return JobCancellationResult(
+            job_id=job_id,
+            disposition=JobCancellationDisposition.RUNNING_REQUESTED,
+        )
 
 
 def _repository(connection, *, jobs=None):
@@ -140,6 +157,41 @@ def _targeted_request():
     )
 
 
+def _policy_evaluation(
+    action="library.refresh",
+    *,
+    allowed=True,
+    account_id=7,
+    library_id=19,
+    bootstrap_owner=False,
+    deployment_mode="self_hosted_private_web",
+    client_surface="private_web",
+    request_origin_type="browser",
+    request_origin_key="refresh-42",
+):
+    return PolicyEvaluationResult(
+        decision=PolicyDecision(
+            action=action,
+            allowed=allowed,
+            reason_code="granted" if allowed else "capability_denied",
+        ),
+        audit=PolicyAudit(
+            action=action,
+            actor_class="active",
+            account_id=account_id,
+            bootstrap_owner=bootstrap_owner,
+            reason_code="granted" if allowed else "capability_denied",
+            deployment_mode=deployment_mode,
+            client_surface_class=client_surface,
+            request_origin_type=request_origin_type,
+            request_origin_ref_digest=sha256(
+                f"{request_origin_type}:{request_origin_key}".encode("utf-8")
+            ).hexdigest(),
+            library_id=library_id,
+        ),
+    )
+
+
 def test_full_scan_domain_record_is_created_before_path_free_job_in_one_transaction():
     connection = _RecordingConnection(
         [
@@ -149,7 +201,7 @@ def test_full_scan_domain_record_is_created_before_path_free_job_in_one_transact
                     _root_row("root-b", 32),
                 )
             ),
-            _Result(one={"intent_id": 71}),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
             _Result(one={"intent_id": 71}),
         ]
     )
@@ -574,7 +626,7 @@ def test_scan_intent_create_functions_receive_exact_accepted_context():
     full_connection = _RecordingConnection(
         [
             _Result(all_rows=(_root_row("root-a", 31),)),
-            _Result(one={"intent_id": 71, "job_id": None}),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
             _Result(one={"intent_id": 71}),
         ]
     )
@@ -683,3 +735,197 @@ def test_targeted_same_producer_key_with_different_payload_fails_closed():
         "link_scan_intent_job" in _normalized(statement)
         for statement, _ in connection.executed
     ) == 1
+
+
+def test_authorized_full_scan_producer_persists_exact_approved_context():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31), _root_row("root-b", 32))),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    accepted = repository.enqueue_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(),
+        library_id=19,
+        request_origin_ref="browser:refresh-42",
+        root_ids=("root-a", "root-b"),
+        mode="manual_full_rescan",
+        force=True,
+        scheduled_at=NOW,
+    )
+
+    assert accepted == type(accepted)(intent_id=71, job_id=901, created=True)
+    command = jobs.calls[0][1]
+    assert command.account_id == 7
+    assert command.library_id == 19
+    assert command.capability_key == "library.refresh"
+    assert command.request_origin_ref == "browser:refresh-42"
+    assert command.deployment_mode == "self_hosted_private_web"
+    assert command.client_surface == "private_web"
+    assert command.parameters == {"intent_id": 71}
+    assert command.idempotency_key == "full-scan-intent:71"
+
+
+def test_authorized_full_scan_accepts_bootstrap_owner_for_cold_start():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 72, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 72}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    repository.enqueue_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(
+            bootstrap_owner=True, request_origin_key="cold-start-owner"
+        ),
+        library_id=19,
+        request_origin_ref="browser:cold-start-owner",
+        root_ids=("root-a",),
+        mode="background",
+        force=False,
+        scheduled_at=NOW,
+        cold_start=True,
+    )
+
+    assert jobs.calls[0][1].account_id == 7
+
+
+@pytest.mark.parametrize(
+    ("evaluation", "library_id", "origin_ref", "cold_start", "message"),
+    [
+        (_policy_evaluation(allowed=False), 19, "browser:refresh-42", False, "not authorized"),
+        (_policy_evaluation(action="library.refresh.cancel"), 19, "browser:refresh-42", False, "library.refresh"),
+        (_policy_evaluation(library_id=27), 19, "browser:refresh-42", False, "library"),
+        (_policy_evaluation(request_origin_type="tauri"), 19, "browser:refresh-42", False, "origin"),
+        (_policy_evaluation(), 19, "browser:different-origin", False, "origin"),
+        (_policy_evaluation(bootstrap_owner=False), 19, "browser:refresh-42", True, "bootstrap"),
+    ],
+)
+def test_authorized_full_scan_fails_closed_before_database_write(
+    evaluation, library_id, origin_ref, cold_start, message
+):
+    connection = _RecordingConnection()
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(PermissionError, match=message):
+        repository.enqueue_authorized_full_scan(
+            policy_evaluation=evaluation,
+            library_id=library_id,
+            request_origin_ref=origin_ref,
+            root_ids=("root-a",),
+            mode="background",
+            force=False,
+            scheduled_at=NOW,
+            cold_start=cold_start,
+        )
+
+    assert connection.executed == []
+    assert jobs.calls == []
+
+
+def test_duplicate_authorized_full_scan_requests_converge_on_database_active_job():
+    connection = _RecordingConnection(
+        [
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 71, "job_id": None, "created": True}),
+            _Result(one={"intent_id": 71}),
+            _Result(all_rows=(_root_row("root-a", 31),)),
+            _Result(one={"intent_id": 71, "job_id": 901, "created": False}),
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+    arguments = {
+        "policy_evaluation": _policy_evaluation(),
+        "library_id": 19,
+        "request_origin_ref": "browser:refresh-42",
+        "root_ids": ("root-a",),
+        "mode": "background",
+        "force": False,
+        "scheduled_at": NOW,
+    }
+
+    first = repository.enqueue_authorized_full_scan(**arguments)
+    second = repository.enqueue_authorized_full_scan(**arguments)
+
+    assert first == second
+    assert first.created is True
+    assert second.created is False
+    assert len(jobs.calls) == 1
+    assert sum(
+        "create_full_scan_intent" in _normalized(statement)
+        for statement, _ in connection.executed
+    ) == 2
+
+
+def test_authorized_full_scan_cancellation_targets_database_active_job_only():
+    connection = _RecordingConnection(
+        [
+            _Result(
+                one={
+                    "job_id": 901,
+                    "prior_state": "running",
+                    "next_state": "running",
+                    "reason_code": "running_requested",
+                    "transition_recorded": False,
+                }
+            )
+        ]
+    )
+    repository, _, jobs = _repository(connection)
+
+    result = repository.cancel_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(action="library.refresh.cancel"),
+        library_id=19,
+        now=NOW,
+    )
+
+    assert result is not None
+    assert result.disposition is JobCancellationDisposition.RUNNING_REQUESTED
+    assert jobs.cancel_calls == []
+    [(statement, values)] = connection.executed
+    assert "request_active_full_scan_cancellation" in _normalized(statement)
+    assert "progress_current" not in _normalized(statement)
+    assert values == {"library_id": 19, "account_id": 7, "now": NOW}
+
+
+def test_authorized_full_scan_cancellation_is_noop_without_active_job():
+    connection = _RecordingConnection([_Result(one=None)])
+    repository, _, jobs = _repository(connection)
+
+    result = repository.cancel_authorized_full_scan(
+        policy_evaluation=_policy_evaluation(action="library.refresh.cancel"),
+        library_id=19,
+        now=NOW,
+    )
+
+    assert result is None
+    assert jobs.cancel_calls == []
+
+
+@pytest.mark.parametrize(
+    "evaluation",
+    [
+        _policy_evaluation(action="library.refresh"),
+        _policy_evaluation(action="library.refresh.cancel", allowed=False),
+        _policy_evaluation(action="library.refresh.cancel", account_id=None),
+        _policy_evaluation(action="library.refresh.cancel", library_id=27),
+    ],
+)
+def test_authorized_full_scan_cancellation_fails_closed(evaluation):
+    connection = _RecordingConnection()
+    repository, _, jobs = _repository(connection)
+
+    with pytest.raises(PermissionError):
+        repository.cancel_authorized_full_scan(
+            policy_evaluation=evaluation,
+            library_id=19,
+            now=NOW,
+        )
+
+    assert connection.executed == []
+    assert jobs.cancel_calls == []

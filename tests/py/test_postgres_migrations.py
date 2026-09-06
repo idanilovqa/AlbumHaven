@@ -48,6 +48,9 @@ SCAN_JOB_INTENTS_MIGRATION = (
 TARGETED_RECONCILIATION_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0069_grant_worker_targeted_reconciliation.sql"
 )
+FULL_SCAN_LIFECYCLE_MIGRATION = (
+    MIGRATIONS_DIR / "0070_authorize_full_scan_lifecycle.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -447,7 +450,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-31:] == [
+    assert migration_names[-32:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -479,6 +482,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0067_add_job_transition_retention_index.sql",
         "0068_create_scan_job_intents.sql",
         "0069_grant_worker_targeted_reconciliation.sql",
+        "0070_authorize_full_scan_lifecycle.sql",
     ]
 
 
@@ -3820,3 +3824,41 @@ def test_claimed_targeted_scope_revalidates_library_roots_and_watcher_health():
         "job.lease_expires_at > p_now",
     ):
         assert predicate in function_sql
+        assert predicate in function_sql
+
+
+def test_full_scan_lifecycle_migration_returns_atomic_acceptance_disposition():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "create or replace function library.create_full_scan_intent_v2(" in sql
+    assert "returns table (intent_id bigint, job_id bigint, created boolean)" in sql
+    assert "from library.create_full_scan_intent(" in sql
+    assert "accepted.job_id is null" in sql
+    assert "grant execute on function library.create_full_scan_intent_v2(" in sql
+
+
+def test_full_scan_lifecycle_cancellation_is_domain_linked_and_progress_preserving():
+    sql = _normalized_sql(FULL_SCAN_LIFECYCLE_MIGRATION.read_text(encoding="utf-8"))
+    function_sql = sql.split(
+        "create or replace function library.request_active_full_scan_cancellation(",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "security definer" in function_sql
+    assert "from library.full_scan_intents as intent" in function_sql
+    assert "join ops.jobs as job on job.id = intent.job_id" in function_sql
+    assert "job.subject_kind = 'full_scan_intent'" in function_sql
+    assert "job.subject_ref = intent.id::text" in function_sql
+    assert "job.parameters = jsonb_build_object('intent_id', intent.id)" in function_sql
+    assert "cancel_requested_by_account_id = p_actor_account_id" in function_sql
+    assert "job.account_id = p_actor_account_id" not in function_sql
+    assert "progress_current" not in function_sql
+    assert "progress_total" not in function_sql
+    assert (
+        "grant execute on function library.request_active_full_scan_cancellation("
+        in sql
+    )
+    worker_privileges = sql.split(
+        "rolname = 'album_haven_worker'", 1
+    )[1].split("rolname = 'album_haven_readonly'", 1)[0]
+    assert "grant execute" not in worker_privileges

@@ -3,28 +3,36 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
+import hmac
 import json
 from pathlib import Path
 from types import MappingProxyType
 import re
 from typing import Any
 
-from music_app.services.jobs.models import EnqueueJob, JobKind
+from music_app.services.jobs.models import (
+    EnqueueJob,
+    JobCancellationDisposition,
+    JobCancellationResult,
+    JobKind,
+)
 from music_app.services.jobs.registry import policy_for
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
 from music_app.services.library_event_coordinator import (
     TargetedMove,
     TargetedReconciliationRequest,
 )
+from music_app.services.policy_evaluator import PolicyAudit, PolicyEvaluationResult
 
 
 @dataclass(frozen=True, slots=True)
 class ScanJobEnqueueResult:
     intent_id: int
     job_id: int
+    created: bool = field(compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +123,34 @@ def _row_mapping(row: object) -> Mapping[str, Any]:
     return row
 
 
+def _approved_policy(
+    value: object,
+    *,
+    action: str,
+    library_id: int,
+    require_bootstrap_owner: bool = False,
+) -> PolicyAudit:
+    if not isinstance(value, PolicyEvaluationResult):
+        raise PermissionError("scan request is not authorized")
+    decision = value.decision
+    audit = value.audit
+    if (
+        not decision.allowed
+        or decision.action != action
+        or audit.action != action
+        or audit.actor_class != "active"
+        or audit.library_id != library_id
+    ):
+        raise PermissionError(f"scan request is not authorized for {action} or library")
+    if require_bootstrap_owner and not audit.bootstrap_owner:
+        raise PermissionError("cold-start scan requires the bootstrap owner")
+    try:
+        _positive_id(audit.account_id, "policy account_id")
+    except ValueError:
+        raise PermissionError("scan request has no authorized account") from None
+    return audit
+
+
 class PostgresScanJobRepository:
     """Compose private scan intent writes with path-free generic jobs."""
 
@@ -158,6 +194,109 @@ class PostgresScanJobRepository:
             raise RuntimeError("local library scope is unavailable")
         return _positive_id(_row_mapping(rows[0]).get("library_id"), "library_id")
 
+    def enqueue_authorized_full_scan(
+        self,
+        *,
+        policy_evaluation: PolicyEvaluationResult,
+        library_id: int,
+        request_origin_ref: str,
+        root_ids: Iterable[str],
+        mode: str,
+        force: bool,
+        scheduled_at: datetime,
+        cold_start: bool = False,
+    ) -> ScanJobEnqueueResult:
+        """Persist a full-scan request only from its request-scoped policy result."""
+
+        library_id = _positive_id(library_id, "library_id")
+        if not isinstance(cold_start, bool):
+            raise ValueError("cold_start must be a boolean")
+        audit = _approved_policy(
+            policy_evaluation,
+            action="library.refresh",
+            library_id=library_id,
+            require_bootstrap_owner=cold_start,
+        )
+        origin_ref = _bounded_text(
+            request_origin_ref, "request_origin_ref", maximum=1024
+        )
+        origin_type, separator, origin_key = origin_ref.partition(":")
+        if (
+            separator != ":"
+            or not origin_key
+            or origin_type != audit.request_origin_type
+            or not hmac.compare_digest(
+                sha256(origin_ref.encode("utf-8")).hexdigest(),
+                audit.request_origin_ref_digest,
+            )
+        ):
+            raise PermissionError("scan request origin does not match authorization")
+        return self.enqueue_full_scan(
+            library_id=library_id,
+            account_id=_positive_id(audit.account_id, "policy account_id"),
+            capability_key="library.refresh",
+            request_origin_ref=origin_ref,
+            deployment_mode=audit.deployment_mode,
+            client_surface=audit.client_surface_class,
+            root_ids=root_ids,
+            mode=mode,
+            force=force,
+            scheduled_at=scheduled_at,
+        )
+
+    def cancel_authorized_full_scan(
+        self,
+        *,
+        policy_evaluation: PolicyEvaluationResult,
+        library_id: int,
+        now: datetime,
+    ) -> JobCancellationResult | None:
+        """Request cancellation for the active durable scan in one library."""
+
+        library_id = _positive_id(library_id, "library_id")
+        audit = _approved_policy(
+            policy_evaluation,
+            action="library.refresh.cancel",
+            library_id=library_id,
+        )
+        account_id = _positive_id(audit.account_id, "policy account_id")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select job_id, prior_state, next_state, reason_code,
+                       transition_recorded
+                  from library.request_active_full_scan_cancellation(
+                    %(library_id)s, %(account_id)s, %(now)s
+                  )
+                """,
+                {"library_id": library_id, "account_id": account_id, "now": now},
+            ).fetchone()
+        if row is None:
+            return None
+        payload = _row_mapping(row)
+        job_id = _positive_id(payload.get("job_id"), "job_id")
+        reason_code = str(payload.get("reason_code") or "")
+        prior_state = payload.get("prior_state")
+        next_state = payload.get("next_state")
+        transition_recorded = bool(payload.get("transition_recorded"))
+        if (
+            reason_code == "immediate_canceled"
+            and prior_state in {"queued", "retry_wait"}
+            and next_state == "canceled"
+            and transition_recorded
+        ):
+            disposition = JobCancellationDisposition.IMMEDIATE_CANCELED
+        elif (
+            reason_code == "running_requested"
+            and prior_state == "running"
+            and next_state == "running"
+            and not transition_recorded
+        ):
+            disposition = JobCancellationDisposition.RUNNING_REQUESTED
+        else:
+            raise RuntimeError("full scan cancellation result coherence failure")
+        return JobCancellationResult(job_id=job_id, disposition=disposition)
+
     def enqueue_full_scan(
         self,
         *,
@@ -195,8 +334,8 @@ class PostgresScanJobRepository:
             try:
                 row = connection.execute(
                     """
-                    select intent_id, job_id
-                      from library.create_full_scan_intent(
+                    select intent_id, job_id, created
+                      from library.create_full_scan_intent_v2(
                         %(library_id)s, %(account_id)s, %(capability_key)s,
                         %(request_origin_ref)s, %(deployment_mode)s,
                         %(client_surface)s, %(mode)s, %(force)s,
@@ -231,8 +370,15 @@ class PostgresScanJobRepository:
             existing_job_id = _optional_positive_id(
                 _row_mapping(row).get("job_id"), "job_id"
             )
+            created = _row_mapping(row).get("created")
+            if not isinstance(created, bool):
+                raise RuntimeError("full scan acceptance disposition is invalid")
             if existing_job_id is not None:
-                return ScanJobEnqueueResult(intent_id, existing_job_id)
+                if created:
+                    raise RuntimeError("full scan acceptance disposition is incoherent")
+                return ScanJobEnqueueResult(intent_id, existing_job_id, False)
+            if not created:
+                raise RuntimeError("full scan acceptance disposition is incoherent")
             policy = policy_for(JobKind.FULL_SCAN)
             job_id = self._job_repository.enqueue_in_transaction(
                 connection,
@@ -253,7 +399,7 @@ class PostgresScanJobRepository:
                 ),
             )
             self._link_intent(connection, "full_scan", intent_id, job_id)
-            return ScanJobEnqueueResult(intent_id, job_id)
+            return ScanJobEnqueueResult(intent_id, job_id, True)
 
     def enqueue_targeted_reconciliation(
         self,
@@ -351,7 +497,7 @@ class PostgresScanJobRepository:
                 _row_mapping(row).get("job_id"), "job_id"
             )
             if existing_job_id is not None:
-                return ScanJobEnqueueResult(intent_id, existing_job_id)
+                return ScanJobEnqueueResult(intent_id, existing_job_id, False)
             policy = policy_for(JobKind.TARGETED_RECONCILIATION)
             job_id = self._job_repository.enqueue_in_transaction(
                 connection,
@@ -374,7 +520,7 @@ class PostgresScanJobRepository:
                 ),
             )
             self._link_intent(connection, "targeted_reconciliation", intent_id, job_id)
-            return ScanJobEnqueueResult(intent_id, job_id)
+            return ScanJobEnqueueResult(intent_id, job_id, True)
 
     def load_claimed_full_scan(
         self, *, job_id: int, worker_id: str, lease_token: str

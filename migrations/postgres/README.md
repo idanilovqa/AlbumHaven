@@ -142,6 +142,12 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0067_add_job_transition_retention_index.sql` adds the timestamp-and-ID index used by bounded migrator-owned transition retention. It grants no runtime deletion privilege.
 
+`0068_create_scan_job_intents.sql` adds private full-scan and targeted-reconciliation intent records, stable root references, active full-scan exclusion, lifecycle synchronization, bounded checkpointing, orphan recovery, and claimed-intent loaders. Generic jobs retain only stable intent identities; raw paths remain in the private scan domain.
+
+`0069_grant_worker_targeted_reconciliation.sql` adds claimed-scope revalidation and a lease-fenced targeted inventory publication boundary. The worker receives only the narrow functions and columns needed to reconstruct authorized roots and publish one claimed reconciliation.
+
+`0070_authorize_full_scan_lifecycle.sql` adds an atomic created-versus-already-active acceptance result and domain-linked active full-scan cancellation. Authorized library operators can request cancellation without direct scan-domain table access, while malformed or unlinked generic jobs remain outside the cancellation boundary.
+
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

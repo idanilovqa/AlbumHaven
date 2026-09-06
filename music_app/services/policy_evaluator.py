@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 
 from music_app.services.allowed_actions import PolicyDecision
 from music_app.services.current_actor import ActorState, CapabilityGrant
@@ -40,6 +41,8 @@ class PolicyAudit:
     deployment_mode: str
     client_surface_class: str
     request_origin_type: str
+    request_origin_ref_digest: str
+    library_id: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,13 @@ class PolicyEvaluator:
                 deployment_mode=context.deployment_mode,
                 client_surface_class=context.client_surface_class,
                 request_origin_type=context.request_origin.origin_type,
+                request_origin_ref_digest=sha256(
+                    (
+                        f"{context.request_origin.origin_type}:"
+                        f"{context.request_origin.origin_key}"
+                    ).encode("utf-8")
+                ).hexdigest(),
+                library_id=context.library_id,
             ),
         )
 

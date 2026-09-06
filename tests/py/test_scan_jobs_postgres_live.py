@@ -10,11 +10,20 @@ from urllib.parse import urlparse
 import pytest
 
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.current_actor import (
+    ActorState,
+    CapabilityGrant,
+    CurrentActor,
+    LibraryRelationship,
+)
+from music_app.services.jobs.models import EnqueueJob, JobCancellationDisposition, JobKind
 from music_app.services.library_event_coordinator import (
     TargetedMove,
     TargetedReconciliationRequest,
 )
 from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+from music_app.services.policy import PolicyContext, RequestOrigin
+from music_app.services.policy_evaluator import PolicyEvaluator
 from tests.e2e.support import isolatedPostgres
 
 
@@ -168,6 +177,28 @@ def _full_scan_arguments(account_id: int, library_id: int, suffix: str) -> dict:
     }
 
 
+def _cancel_evaluation(account_id: int, library_id: int):
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=account_id,
+        current_library_id=library_id,
+        library_relationships=(LibraryRelationship(library_id, "operator", False),),
+        capability_grants=(
+            CapabilityGrant("library.refresh.cancel", "library", library_id),
+        ),
+    )
+    return PolicyEvaluator().evaluate(
+        PolicyContext.build(
+            actor=actor,
+            action="library.refresh.cancel",
+            library_id=library_id,
+            deployment_mode="self_hosted_private_web",
+            request_origin=RequestOrigin("browser", "cancel-origin"),
+            client_surface_class="private_web",
+        )
+    )
+
+
 def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
     live_scan_database,
 ):
@@ -185,15 +216,17 @@ def test_live_scan_migration_compiles_and_effectively_denies_private_storage(
     )
     procedures = (
         "library.create_full_scan_intent(bigint,bigint,varchar,varchar,varchar,varchar,varchar,boolean,bigint[],timestamptz)",
+        "library.create_full_scan_intent_v2(bigint,bigint,varchar,varchar,varchar,varchar,varchar,boolean,bigint[],timestamptz)",
         "library.create_targeted_reconciliation_intent(bigint,bigint,varchar,varchar,varchar,varchar,text[],text[],text[],jsonb,timestamptz)",
         "library.link_scan_intent_job(varchar,bigint,bigint)",
+        "library.request_active_full_scan_cancellation(bigint,bigint,timestamptz)",
         "library.load_claimed_full_scan_intent(bigint,varchar,varchar)",
         "library.load_claimed_targeted_reconciliation_intent(bigint,varchar,varchar)",
         "library.checkpoint_claimed_scan_intent(varchar,bigint,bigint,integer,varchar,varchar,varchar,bigint,bigint,bigint,timestamptz)",
         "library.repair_orphaned_scan_intents(timestamptz,integer)",
     )
-    producer_procedures = procedures[:3]
-    loader_procedures = procedures[3:]
+    producer_procedures = procedures[:5]
+    loader_procedures = procedures[5:]
     with isolatedPostgres._connect(setup_url) as connection:
         for procedure in procedures:
             assert connection.execute(
@@ -370,6 +403,125 @@ def test_live_targeted_paths_and_moves_round_trip_exactly_through_claimed_loader
             "ordinal": 0,
         }
     ]
+
+
+def test_live_authorized_operator_cancels_linked_scan_without_resetting_progress(
+    live_scan_database,
+):
+    setup_url, runtime_url, _ = live_scan_database
+    initiating_account_id, library_id = _seed_scope(setup_url, "operator-cancel")
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(
+        **_full_scan_arguments(
+            initiating_account_id, library_id, "operator-cancel"
+        )
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        operator_account_id = int(
+            connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, username_display, username_normalized,
+                  contact_email, contact_email_normalized, account_kind, is_active
+                ) values (%s, %s, %s, %s, %s, 'managed', true)
+                returning id
+                """,
+                (
+                    "Scan Operator",
+                    "scan-operator-cancel",
+                    "scan-operator-cancel",
+                    "scan-operator-cancel@example.invalid",
+                    "scan-operator-cancel@example.invalid",
+                ),
+            ).fetchone()["id"]
+        )
+        connection.execute(
+            """
+            insert into library.library_memberships (
+              library_id, account_id, membership_role
+            ) values (%s, %s, 'operator')
+            """,
+            (library_id, operator_account_id),
+        )
+        connection.execute(
+            """
+            insert into app.capabilities (
+              account_id, capability_key, scope_kind, scope_id
+            ) values (%s, 'library.refresh.cancel', 'library', %s)
+            """,
+            (operator_account_id, library_id),
+        )
+        connection.execute(
+            """
+            update library.full_scan_intents
+               set progress_current = 3, progress_total = 5
+             where id = %s
+            """,
+            (accepted.intent_id,),
+        )
+
+    result = _scan_repository(runtime_url).cancel_authorized_full_scan(
+        policy_evaluation=_cancel_evaluation(operator_account_id, library_id),
+        library_id=library_id,
+        now=datetime(2099, 1, 2, tzinfo=timezone.utc),
+    )
+
+    assert result is not None
+    assert result.job_id == accepted.job_id
+    assert result.disposition is JobCancellationDisposition.IMMEDIATE_CANCELED
+    with isolatedPostgres._connect(setup_url) as connection:
+        row = connection.execute(
+            """
+            select intent.state, intent.progress_current, intent.progress_total,
+                   job.cancel_requested_by_account_id
+              from library.full_scan_intents as intent
+              join ops.jobs as job on job.id = intent.job_id
+             where intent.id = %s
+            """,
+            (accepted.intent_id,),
+        ).fetchone()
+    assert row == {
+        "state": "canceled",
+        "progress_current": 3,
+        "progress_total": 5,
+        "cancel_requested_by_account_id": operator_account_id,
+    }
+
+
+def test_live_cancellation_ignores_unlinked_full_scan_job(live_scan_database):
+    setup_url, runtime_url, _ = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "unlinked-cancel")
+    job_id = PostgresJobRepository(
+        database_url=runtime_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).enqueue(
+        EnqueueJob(
+            kind=JobKind.FULL_SCAN,
+            subject_kind="full_scan_intent",
+            subject_ref="999999",
+            parameters={"intent_id": 999999},
+            account_id=account_id,
+            library_id=library_id,
+            capability_key="library.refresh",
+            request_origin_ref="browser:scan-jobs-unlinked-cancel",
+            deployment_mode="self_hosted_private_web",
+            client_surface="private_web",
+            idempotency_key="full-scan-unlinked-live",
+            scheduled_at=datetime(2099, 1, 1, tzinfo=timezone.utc),
+            max_attempts=2,
+        )
+    )
+
+    result = _scan_repository(runtime_url).cancel_authorized_full_scan(
+        policy_evaluation=_cancel_evaluation(account_id, library_id),
+        library_id=library_id,
+        now=datetime(2099, 1, 2, tzinfo=timezone.utc),
+    )
+
+    assert result is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select state from ops.jobs where id = %s", (job_id,)
+        ).fetchone()["state"] == "queued"
 
 
 def test_live_targeted_producer_key_collision_rolls_back_without_extra_rows(

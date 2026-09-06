@@ -932,7 +932,9 @@ def test_refresh_library_for_state_runs_without_flask_context(config, logger, li
     def fake_refresh_library_state(library_state, **kwargs):
         refresh_kwargs.append((library_state, kwargs))
         kwargs["scan_music_incremental"](use_existing_cache=False, expected_scan_generation=9)
-        kwargs["refresh_relation_views"]()
+        kwargs["refresh_relation_views"](
+            expected_inventory_mutation_revision=23,
+        )
         kwargs["start_manual_cover_refresh"](force_search=True)
         kwargs["start_background_cover_refresh"]()
         kwargs["queue_problematic_albums_prewarm"]()
@@ -948,7 +950,9 @@ def test_refresh_library_for_state_runs_without_flask_context(config, logger, li
     monkeypatch.setattr(
         state_module,
         "refresh_relation_views_for_state",
-        lambda library_state, config: relation_calls.append((library_state, config)),
+        lambda library_state, config, **kwargs: relation_calls.append(
+            (library_state, config, kwargs)
+        ),
     )
     monkeypatch.setattr(
         state_module,
@@ -998,7 +1002,11 @@ def test_refresh_library_for_state_runs_without_flask_context(config, logger, li
     assert scan_calls[0]["config"] is config
     assert scan_calls[0]["logger"] is logger
     assert scan_calls[0]["library_state"] is library_state
-    assert relation_calls == [(library_state, config)]
+    assert relation_calls == [(
+        library_state,
+        config,
+        {"expected_inventory_mutation_revision": 23},
+    )]
     assert manual_cover_calls[0]["config"] is config
     assert manual_cover_calls[0]["logger"] is logger
     assert "app" not in manual_cover_calls[0]

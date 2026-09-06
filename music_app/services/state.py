@@ -767,6 +767,7 @@ def refresh_library_for_state(
         seed_missing_album_ratings: bool = False,
         expected_scan_generation: int | None = None,
         expected_cover_mutation_revision: int | None = None,
+        expected_inventory_mutation_revision: int | None = None,
         publication_state: dict[str, object] | None = None,
     ) -> None:
         options: dict[str, object] = {}
@@ -776,6 +777,10 @@ def refresh_library_for_state(
             options["expected_scan_generation"] = expected_scan_generation
         if expected_cover_mutation_revision is not None:
             options["expected_cover_mutation_revision"] = expected_cover_mutation_revision
+        if expected_inventory_mutation_revision is not None:
+            options["expected_inventory_mutation_revision"] = (
+                expected_inventory_mutation_revision
+            )
         if publication_state is not None:
             options["publication_state"] = publication_state
         refresh_relation_views_for_state(

@@ -1479,6 +1479,13 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
     all_artists_active: false,
     related_filter_artists: ['Cosmic Cathedral', 'The Neal Morse Band'],
     primary_filter_active: false,
+    search_context: {
+      selected_artist: 'Neal Morse',
+      selected_artist_source: 'auto_top_match',
+      artist_name_match_artists: ['Neal Morse'],
+      direct_match_artists: ['Neal Morse'],
+      related_match_artists: [],
+    },
     related_artists: ['Cosmic Cathedral', 'The Neal Morse Band'],
     primary_artist_groups: [{
       artist: 'Neal Morse',
@@ -1527,6 +1534,7 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
       related_filter_artists: [],
       primary_filter_active: false,
       search_context: {
+        ...initialView.search_context,
         selected_artist: 'Cosmic Cathedral',
         selected_artist_source: 'requested_artist',
       },
@@ -1590,6 +1598,7 @@ test('handleSidebarArtistSelectionClick promotes an already visible family group
     related_filter_artists: [],
     primary_filter_active: false,
     search_context: {
+      ...initialView.search_context,
       selected_artist: 'Cosmic Cathedral',
       selected_artist_source: 'requested_artist',
     },

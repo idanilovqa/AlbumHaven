@@ -11769,8 +11769,13 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('render_started', requestOptions);
     attachModalEvents();
     state.ui.activeViewPayloadReady = true;
+    const mountedGalleryContainer = document.getElementById('artist-groups');
+    const hasMountedGalleryContent = Boolean(
+      mountedGalleryContainer?.querySelector('.artist-section, .album-card'),
+    );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
         state.view?.artist_groups,
@@ -33203,6 +33208,27 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && state.view.related_filter_artists.length)
     && sameArtistSet(currentSelectedArtistGroupNames, expectedFamilyArtistNames)
   );
+  const searchContext = state.view?.search_context;
+  const artistNameMatchArtists = Array.isArray(searchContext?.artist_name_match_artists)
+    ? searchContext.artist_name_match_artists
+    : null;
+  const classifiedSearchMatchArtists = [
+    ...(Array.isArray(searchContext?.direct_match_artists)
+      ? searchContext.direct_match_artists
+      : []),
+    ...(Array.isArray(searchContext?.related_match_artists)
+      ? searchContext.related_match_artists
+      : []),
+  ];
+  const hasClassifiedSearchMatchArtists = (
+    Array.isArray(searchContext?.direct_match_artists)
+    && Array.isArray(searchContext?.related_match_artists)
+  );
+  const matchesSearchArtist = (candidate) => (
+    String(candidate || '').trim() === normalizedArtist
+  );
+  const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
+  const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -33211,10 +33237,9 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         || currentRelatedArtists.length
       )
       && (
-        !Array.isArray(state.view?.search_context?.artist_name_match_artists)
-        || state.view.search_context.artist_name_match_artists.some(
-          (artistNameMatch) => String(artistNameMatch || '').trim() === normalizedArtist,
-        )
+        artistNameMatchArtists === null
+        || isArtistNameMatch
+        || (hasClassifiedSearchMatchArtists && !isClassifiedSearchMatch)
       )
     )
     : hasAuthoritativeMountedFamilyContext;

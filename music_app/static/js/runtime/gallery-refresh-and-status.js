@@ -774,8 +774,13 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('render_started', requestOptions);
     attachModalEvents();
     state.ui.activeViewPayloadReady = true;
+    const mountedGalleryContainer = document.getElementById('artist-groups');
+    const hasMountedGalleryContent = Boolean(
+      mountedGalleryContainer?.querySelector('.artist-section, .album-card'),
+    );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
         state.view?.artist_groups,

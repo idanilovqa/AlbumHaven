@@ -50,6 +50,12 @@ function createContext() {
   let transitionImage = null;
   const artistGroups = {
     innerHTML: '<section class="artist-section"></section>',
+    querySelector(selector) {
+      return selector === '.artist-section, .album-card'
+        && this.innerHTML.includes('artist-section')
+        ? { className: 'artist-section' }
+        : null;
+    },
     querySelectorAll(selector) {
       return selector === 'img' && transitionImage ? [transitionImage] : [];
     },
@@ -1388,6 +1394,51 @@ test('fetchAndRender applies equivalent committed-search state without rebuildin
   assert.equal(calls.animationFrames.length, 1);
   calls.animationFrames[0]();
   assert.equal(calls.renderSidebar, 1);
+});
+
+test('fetchAndRender remounts equivalent canonical search state when the optimistic gallery has no attached content', async () => {
+  const {
+    context,
+    runtimeRenderView,
+    calls,
+    pendingRequests,
+  } = createContext();
+  const retainedGroups = [{
+    artist: 'Cosmic Cathedral',
+    albums: [{ key: 'cosmic-cathedral::deep-water', name: 'Deep Water' }],
+  }];
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  };
+  context.document.getElementById('artist-groups').innerHTML = '';
+  context.renderView = runtimeRenderView;
+
+  const requestPromise = context.fetchAndRender(
+    '/view-data?surface=albums&q=Neal%20Morse&artist=Cosmic%20Cathedral',
+    false,
+    { preserveScroll: true, skipPendingViewTransition: true },
+  );
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  });
+  await requestPromise;
+
+  assert.equal(
+    calls.renderArtistGroups,
+    1,
+    'Equivalent data must still render when the optimistic virtual gallery never attached.',
+  );
 });
 
 test('q-empty retained-artist reconciliation preserves mounted nodes only for equivalent canonical groups', async () => {

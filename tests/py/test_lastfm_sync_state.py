@@ -4,6 +4,7 @@ import pytest
 
 from music_app.services import lastfm_listen_sync
 from music_app.services.lastfm_postgres import (
+    _delete_absent_pending_scrobbles_sql,
     _delete_scrobble_retry_state_sql,
     _load_scrobble_retry_state_sql,
     _upsert_pending_scrobble_sql,
@@ -212,3 +213,14 @@ def test_postgres_sync_state_retry_sql_is_bootstrap_scoped():
     assert "and metadata ? 'source_key'" in upsert_sql
     assert "'account_id', bootstrap_context.account_id::text" in upsert_sql
     assert "'library_id', bootstrap_context.library_id::text" in upsert_sql
+
+
+def test_postgres_sync_state_prunes_absent_pending_rows_without_replacing_stable_ids():
+    prune_sql = _delete_absent_pending_scrobbles_sql()
+    upsert_sql = _upsert_pending_scrobble_sql()
+
+    assert "delete from integration.pending_scrobbles" in prune_sql
+    assert "payload ->> 'source_key' <> all" in prune_sql
+    assert "on conflict (" in upsert_sql
+    assert "do update" in upsert_sql
+    assert "delete from integration.pending_scrobbles" not in upsert_sql

@@ -69,6 +69,9 @@ REMOTE_COVER_SAVE_MIGRATION = (
 DURABLE_SCAN_STATUS_MIGRATION = (
     MIGRATIONS_DIR / "0076_complete_durable_scan_status_projection.sql"
 )
+LASTFM_RETRY_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0077_create_lastfm_retry_job_state.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -85,6 +88,36 @@ def test_durable_scan_status_closes_inventory_relation_and_cover_handoff_gaps():
     assert "job.kind = 'post_scan_cover_refresh'" in sql
     assert "job.state in ('queued', 'running', 'retry_wait')" in sql
     assert "coalesce(active_refresh.covers_in_progress, pending_follow_up.covers_in_progress, false)" in sql
+
+
+def test_lastfm_retry_job_state_preserves_stable_pending_identity_and_fences_attempts():
+    sql = _normalized_sql(LASTFM_RETRY_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "active_session_id",
+        "request_origin_id",
+        "last_provider_disposition",
+        "repair_reason_code",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "pending_scrobbles_source_identity_idx" in sql
+    assert "pending_scrobbles_due_retry_idx" in sql
+    assert "pending_scrobbles_current_job_id_key" in sql
+    assert "attempt_count >= 0" in sql
+    assert "accepted_attempt >= 1" in sql
+    assert "accepted_attempt <= 5" in sql
+    assert "orphaned_repair" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references integration.lastfm_sessions(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "legacy_attempt_repaired" in sql
+    assert "legacy_status_repaired" in sql
+    due_index = sql.split("create index if not exists pending_scrobbles_due_retry_idx", 1)[1]
+    assert "where status in ('pending', 'retry_wait')" in due_index
+    assert "where status in ('pending', 'retry_wait', 'orphaned_repair')" not in due_index
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"

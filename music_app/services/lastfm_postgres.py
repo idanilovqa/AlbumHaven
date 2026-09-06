@@ -119,7 +119,6 @@ class LastfmPostgresAdapter:
         with self._connect_to_database() as connection:
             with _transaction(connection):
                 _ensure_bootstrap_library_context(connection)
-                connection.execute(_delete_pending_scrobbles_sql())
                 connection.execute(_delete_scrobble_retry_state_sql())
                 for source_key, payload in sorted(normalized["pending_scrobbles"].items()):
                     if not isinstance(payload, dict):
@@ -139,6 +138,10 @@ class LastfmPostgresAdapter:
                             ),
                         ),
                     )
+                connection.execute(
+                    _delete_absent_pending_scrobbles_sql(),
+                    (list(sorted(normalized["pending_scrobbles"])),),
+                )
                 for source_key, payload in sorted(normalized["sync_problems"].items()):
                     if not isinstance(payload, dict):
                         continue
@@ -514,7 +517,7 @@ def _load_scrobble_retry_state_sql() -> str:
     )
 
 
-def _delete_pending_scrobbles_sql() -> str:
+def _delete_absent_pending_scrobbles_sql() -> str:
     return (
         _bootstrap_library_context_sql()
         + f"""
@@ -522,7 +525,8 @@ def _delete_pending_scrobbles_sql() -> str:
         using bootstrap_context
         where integration.pending_scrobbles.library_id = bootstrap_context.library_id
           and integration.pending_scrobbles.account_id = bootstrap_context.account_id
-          and integration.pending_scrobbles.payload ->> 'source_family' in ('{_SYNC_SOURCE}', '{_SYNC_BACKFILL_SOURCE}');
+          and integration.pending_scrobbles.payload ->> 'source_family' in ('{_SYNC_SOURCE}', '{_SYNC_BACKFILL_SOURCE}')
+          and integration.pending_scrobbles.payload ->> 'source_key' <> all(%s::text[]);
     """
     )
 

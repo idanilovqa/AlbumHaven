@@ -1,5 +1,7 @@
 import os
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from music_app.services.musicbrainz_http import default_user_agent
@@ -11,6 +13,86 @@ from music_app.services.cover_provider_deadline import (
     DEFAULT_COVER_LOOKUP_PROVIDER_DEADLINE_SECONDS,
 )
 from version import RELEASE_VERSION
+
+
+_WORKER_DATABASE_URL_KEY = "ALBUM_HAVEN_WORKER_DATABASE_URL"
+_WORKER_INTEGER_BOUNDS = {
+    "ALBUM_HAVEN_WORKER_CONCURRENCY": (1, 32, 1),
+    "ALBUM_HAVEN_WORKER_LEASE_SECONDS": (1, 86_400, 300),
+    "ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS": (1, 28_800, 30),
+    "ALBUM_HAVEN_WORKER_POLL_SECONDS": (1, 300, 1),
+    "ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS": (1, 300, 5),
+    "ALBUM_HAVEN_WORKER_DRAIN_SECONDS": (0, 300, 30),
+}
+
+
+@dataclass(frozen=True)
+class WorkerConfig:
+    """Validated configuration for the separate durable-jobs worker."""
+
+    database_url: str
+    concurrency: int
+    lease_seconds: int
+    heartbeat_seconds: int
+    poll_seconds: int
+    max_idle_backoff_seconds: int
+    drain_seconds: int
+
+    def __repr__(self) -> str:
+        return (
+            "WorkerConfig(database_url='<redacted>', "
+            f"concurrency={self.concurrency}, "
+            f"lease_seconds={self.lease_seconds}, "
+            f"heartbeat_seconds={self.heartbeat_seconds}, "
+            f"poll_seconds={self.poll_seconds}, "
+            f"max_idle_backoff_seconds={self.max_idle_backoff_seconds}, "
+            f"drain_seconds={self.drain_seconds})"
+        )
+
+
+def _worker_integer(environ: Mapping[str, str], key: str) -> int:
+    minimum, maximum, default = _WORKER_INTEGER_BOUNDS[key]
+    raw_value = environ.get(key)
+    try:
+        value = default if raw_value is None else int(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{key} must be an integer") from None
+    if value < minimum or value > maximum:
+        raise ValueError(f"{key} must be between {minimum} and {maximum}")
+    return value
+
+
+def build_worker_config(environ: Mapping[str, str] | None = None) -> WorkerConfig:
+    """Build bounded worker configuration from its dedicated environment."""
+
+    env = os.environ if environ is None else environ
+    database_url = str(env.get(_WORKER_DATABASE_URL_KEY) or "").strip()
+    if not database_url:
+        raise ValueError("worker database URL is required")
+
+    concurrency = _worker_integer(env, "ALBUM_HAVEN_WORKER_CONCURRENCY")
+    lease_seconds = _worker_integer(env, "ALBUM_HAVEN_WORKER_LEASE_SECONDS")
+    heartbeat_seconds = _worker_integer(env, "ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS")
+    poll_seconds = _worker_integer(env, "ALBUM_HAVEN_WORKER_POLL_SECONDS")
+    max_idle_backoff_seconds = _worker_integer(
+        env, "ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"
+    )
+    drain_seconds = _worker_integer(env, "ALBUM_HAVEN_WORKER_DRAIN_SECONDS")
+
+    if heartbeat_seconds * 3 > lease_seconds:
+        raise ValueError("worker heartbeat must be no greater than one third of the lease")
+    if poll_seconds > max_idle_backoff_seconds:
+        raise ValueError("worker poll interval must not exceed maximum idle backoff")
+
+    return WorkerConfig(
+        database_url=database_url,
+        concurrency=concurrency,
+        lease_seconds=lease_seconds,
+        heartbeat_seconds=heartbeat_seconds,
+        poll_seconds=poll_seconds,
+        max_idle_backoff_seconds=max_idle_backoff_seconds,
+        drain_seconds=drain_seconds,
+    )
 
 
 def build_auth_config(environ: dict[str, str] | None = None):

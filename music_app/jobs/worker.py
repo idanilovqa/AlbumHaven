@@ -265,6 +265,7 @@ class Worker:
         wait: Callable[[threading.Event, float], bool] | None = None,
         closeables: tuple[Any, ...] = (),
         claim_kinds: tuple[str, ...] | None = None,
+        due_reconciler: Callable[..., object] | None = None,
     ) -> None:
         self._repository = repository
         self._authorization_service = authorization_service
@@ -281,6 +282,8 @@ class Worker:
         self._wait = wait or (lambda event, seconds: event.wait(seconds))
         self._closeables = closeables
         self._claim_kinds = claim_kinds
+        self._due_reconciler = due_reconciler
+        self._due_reconciliation_failures = 0
         self._contexts_lock = threading.Lock()
         self._active_contexts: set[ExecutionContext] = set()
         self._owned_threads_lock = threading.Lock()
@@ -302,6 +305,10 @@ class Worker:
                 if callable(close):
                     close()
             self._closed = True
+
+    @property
+    def due_reconciliation_failures(self) -> int:
+        return self._due_reconciliation_failures
 
     def run_once(self) -> bool:
         claim_arguments = {
@@ -382,6 +389,11 @@ class Worker:
                     now=self._clock(),
                     limit=1000,
                 )
+                if self._due_reconciler is not None:
+                    try:
+                        self._due_reconciler(now=self._clock(), limit=100)
+                    except Exception:
+                        self._due_reconciliation_failures += 1
                 if stop_event.is_set():
                     break
                 batch = self._launch_batch(results)

@@ -185,7 +185,6 @@ def create_asgi_app():
     from fastapi import FastAPI
 
     from config import APP_NAME, APP_VERSION
-    from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
         WatchdogLibraryEventSource,
@@ -232,7 +231,6 @@ def create_asgi_app():
                 library_state["cold_scan_pending"] = True
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
-        start_lastfm_retry_worker(runtime)
         targeted_database_url = str(
             runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
         ).strip()
@@ -246,8 +244,10 @@ def create_asgi_app():
             database_url=targeted_database_url
         )
         _app.state.scan_job_repository = scan_jobs
-        _app.state.cover_job_repository = PostgresCoverJobRepository(
-            database_url=targeted_database_url
+        _app.state.cover_job_repository = (
+            PostgresCoverJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
         )
         from music_app.services.lastfm_retry_jobs_postgres import (
             PostgresLastfmRetryJobRepository,
@@ -342,7 +342,6 @@ def create_asgi_app():
                     "library filesystem watcher",
                     stop_library_watch,
                 ),
-                ("Last.fm retry worker", lambda: stop_lastfm_retry_worker(runtime)),
                 ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
                 ("playback PCM", _app.state.playback_pcm_registry.shutdown),
                 ("runtime", lambda: request_runtime_shutdown(runtime)),

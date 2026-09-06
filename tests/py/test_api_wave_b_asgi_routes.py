@@ -295,7 +295,9 @@ def test_asgi_integrations_lastfm_enrichment_uses_route_sources(app, monkeypatch
         return {"listen_history_count": 42, "pending_scrobble_count": 7}
 
     monkeypatch.setattr(asgi_routes, "run_in_threadpool", fake_run_in_threadpool)
-    monkeypatch.setattr(asgi_routes, "retry_pending_lastfm_scrobbles", fail_if_retried)
+    monkeypatch.setattr(
+        asgi_routes, "retry_pending_lastfm_scrobbles", fail_if_retried, raising=False
+    )
     monkeypatch.setattr(
         asgi_routes,
         "build_lastfm_status",
@@ -630,6 +632,7 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
         asgi_routes,
         "retry_pending_lastfm_scrobbles",
         lambda config, *, reauthenticated=False: retry_calls.append((config, reauthenticated)),
+        raising=False,
     )
     monkeypatch.setattr(asgi_routes, "count_scrobbled_listen_history_entries", lambda _config: 0)
     monkeypatch.setattr(asgi_routes, "pending_scrobble_count", lambda _config: 0)

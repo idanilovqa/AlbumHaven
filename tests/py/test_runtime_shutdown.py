@@ -7,6 +7,16 @@ from pathlib import Path
 
 import pytest
 
+
+def test_application_lifespan_has_no_process_local_lastfm_retry_daemon():
+    import inspect
+    from music_app import create_asgi_app
+
+    source = inspect.getsource(create_asgi_app)
+    assert "start_lastfm_retry_worker" not in source
+    assert "stop_lastfm_retry_worker" not in source
+    assert "albumhaven-lastfm-retry" not in source
+
 from music_app.services import runtime_shutdown
 
 
@@ -269,7 +279,6 @@ def test_asgi_lifespan_awaits_peak_and_pcm_registry_shutdown_before_runtime_shut
     asyncio.run(scenario())
 
     assert calls == [
-        "lastfm-stop",
         "waveform-shutdown",
         "pcm-shutdown",
         "runtime-shutdown",
@@ -340,7 +349,6 @@ def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, 
     asyncio.run(scenario())
 
     assert calls == [
-        "lastfm-stop",
         "waveform-shutdown",
         "pcm-shutdown",
         "runtime-shutdown",

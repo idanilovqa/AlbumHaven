@@ -160,3 +160,4 @@ def test_worker_bootstrap_registers_lastfm_retry_handler_and_validator():
     assert "build_lastfm_retry_resource_validator" in source
     assert "build_lastfm_retry_handler" in source
     assert "JobKind.LASTFM_SCROBBLE_RETRY" in source
+    assert "due_reconciler=lastfm_retry_repository.reconcile_due_pending" in source

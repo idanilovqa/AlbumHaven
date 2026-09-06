@@ -39,10 +39,7 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
-from music_app.services.lastfm_retry import (
-    pending_scrobble_count,
-    retry_pending_lastfm_scrobbles,  # compatibility seam; no route invokes it
-)
+from music_app.services.lastfm_retry import pending_scrobble_count
 from music_app.services.policy_asgi import request_origin_ref_for_request
 from music_app.services.lastfm_sync_bridge import (
     build_lastfm_integration_status,

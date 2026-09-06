@@ -403,6 +403,148 @@ begin
 end;
 $$;
 
+create or replace function ops.reconcile_due_lastfm_jobs(
+  p_now timestamptz,
+  p_limit integer
+)
+returns integer
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $$
+declare
+  candidate record;
+  v_job_id bigint;
+  v_origin_id bigint;
+  v_client_surface varchar;
+  v_session_id bigint;
+  v_accepted_attempt integer;
+  v_accepted_revision bigint;
+  v_count integer := 0;
+begin
+  if p_limit < 1 or p_limit > 100 then
+    raise exception 'Last.fm reconciliation limit is invalid.';
+  end if;
+
+  with terminal as (
+    select pending.id,
+           case
+             when job.state = 'ambiguous' or pending.status = 'sending'
+               then 'ambiguous'
+             when job.state = 'canceled' then 'canceled'
+             when job.state = 'failed' then 'retry_wait'
+             else pending.status
+           end as next_status,
+           job.state
+      from integration.pending_scrobbles as pending
+      join ops.jobs as job on job.id = pending.current_job_id
+     where job.state in ('failed', 'canceled', 'ambiguous')
+       and pending.status in ('accepted', 'sending')
+     order by pending.id
+     for update of pending skip locked
+     limit p_limit
+  )
+  update integration.pending_scrobbles as pending
+     set status = terminal.next_status,
+         attempt_count = case when terminal.next_status = 'ambiguous'
+                              then pending.accepted_attempt
+                              else pending.attempt_count end,
+         accepted_attempt = case when terminal.next_status = 'retry_wait'
+                                 then null else pending.accepted_attempt end,
+         current_job_id = case when terminal.next_status = 'retry_wait'
+                               then null else pending.current_job_id end,
+         next_attempt_at = case when terminal.next_status = 'retry_wait'
+                                then p_now else null end,
+         last_provider_disposition = case
+           when terminal.next_status = 'ambiguous' then 'possible_send_ambiguous'
+           when terminal.next_status = 'canceled' then 'canceled_before_send'
+           else pending.last_provider_disposition end,
+         repair_reason_code = 'generic_terminal_converged',
+         row_revision = pending.row_revision + 1,
+         updated_at = p_now
+    from terminal
+   where pending.id = terminal.id;
+
+  for candidate in
+    select pending.*
+      from integration.pending_scrobbles as pending
+     where pending.status in ('pending', 'retry_wait')
+       and pending.current_job_id is null
+       and pending.attempt_count < 5
+       and (pending.next_attempt_at is null or pending.next_attempt_at <= p_now)
+     order by pending.next_attempt_at nulls first, pending.id
+     for update skip locked
+     limit p_limit
+  loop
+    select session.id into v_session_id
+      from integration.lastfm_sessions as session
+     where session.account_id = candidate.account_id and session.is_active
+     order by session.updated_at desc, session.id desc limit 1;
+    if v_session_id is null then continue; end if;
+
+    select origin_record.id, origin_record.client_surface_class
+      into v_origin_id, v_client_surface
+      from app.request_origins as origin_record
+     where origin_record.account_id = candidate.account_id
+       and (candidate.request_origin_id is null
+            or origin_record.id = candidate.request_origin_id)
+     order by (origin_record.id = candidate.request_origin_id) desc,
+              origin_record.id desc
+     limit 1;
+    if v_origin_id is null then continue; end if;
+
+    v_accepted_attempt := candidate.attempt_count + 1;
+    v_accepted_revision := candidate.row_revision + 1;
+    update integration.pending_scrobbles
+       set status = 'accepted', accepted_attempt = v_accepted_attempt,
+           active_session_id = v_session_id, request_origin_id = v_origin_id,
+           row_revision = v_accepted_revision, updated_at = p_now
+     where id = candidate.id;
+
+    insert into ops.jobs (
+      kind, state, subject_kind, subject_ref, parameters, account_id,
+      library_id, capability_key, request_origin_id, deployment_mode,
+      client_surface, scope_version, resource_revision, idempotency_key,
+      priority, scheduled_at, attempt_count, max_attempts, recovery_policy
+    ) values (
+      'lastfm_scrobble_retry', 'queued', 'pending_scrobble', candidate.id::text,
+      jsonb_build_object('active_session_ref', v_session_id::text),
+      candidate.account_id, candidate.library_id,
+      'integration.lastfm.scrobble', v_origin_id, 'self_hosted',
+      v_client_surface, v_accepted_revision + 1, v_accepted_attempt,
+      'lastfm-scrobble:' || candidate.id::text || ':attempt:' || v_accepted_attempt::text,
+      0, p_now, 0, 1, 'ambiguous_on_stale_lease'
+    )
+    on conflict do nothing
+    returning id into v_job_id;
+    if v_job_id is null then
+      select job.id into v_job_id from ops.jobs as job
+       where job.kind = 'lastfm_scrobble_retry'
+         and job.account_id = candidate.account_id
+         and job.library_id = candidate.library_id
+         and job.subject_kind = 'pending_scrobble'
+         and job.subject_ref = candidate.id::text
+         and job.idempotency_key = 'lastfm-scrobble:' || candidate.id::text ||
+             ':attempt:' || v_accepted_attempt::text
+         and job.request_origin_id = v_origin_id;
+    end if;
+    if v_job_id is null then
+      raise exception 'Last.fm due job could not be composed.';
+    end if;
+    update integration.pending_scrobbles
+       set current_job_id = v_job_id,
+           row_revision = v_accepted_revision + 1,
+           updated_at = p_now
+     where id = candidate.id and row_revision = v_accepted_revision;
+    v_count := v_count + 1;
+    v_job_id := null;
+    v_origin_id := null;
+    v_session_id := null;
+  end loop;
+  return v_count;
+end;
+$$;
+
 revoke all on function app.load_claimed_job_authorization_context(
   bigint, integer, varchar, varchar, timestamptz
 ) from public;
@@ -423,6 +565,8 @@ revoke all on function ops.finish_claimed_lastfm_attempt(
   bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
   bigint, varchar, varchar, jsonb
 ) from public;
+revoke all on function ops.reconcile_due_lastfm_jobs(timestamptz, integer)
+  from public;
 
 do $$
 begin
@@ -452,6 +596,8 @@ begin
       bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
       bigint, varchar, varchar, jsonb
     ) to album_haven_worker;
+    grant execute on function ops.reconcile_due_lastfm_jobs(timestamptz, integer)
+      to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_readonly') then
     revoke execute on function ops.validate_claimed_lastfm_retry(
@@ -471,5 +617,7 @@ begin
       bigint, bigint, bigint, integer, varchar, varchar, timestamptz,
       bigint, varchar, varchar, jsonb
     ) from album_haven_readonly;
+    revoke execute on function ops.reconcile_due_lastfm_jobs(timestamptz, integer)
+      from album_haven_readonly;
   end if;
 end $$;

@@ -322,6 +322,19 @@ class PostgresLastfmRetryJobRepository:
             )
         return tuple(due)
 
+    def reconcile_due_pending(self, *, now: datetime, limit: int = 100) -> int:
+        now = _aware("now", now)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between one and 100")
+        with self._connect() as connection:
+            row = _mapping(
+                connection.execute(
+                    "select ops.reconcile_due_lastfm_jobs(%s, %s) as count",
+                    (now, limit),
+                ).fetchone()
+            )
+        return _nonnegative("count", row.get("count"))
+
     def accept_retryable_pending(
         self,
         *,

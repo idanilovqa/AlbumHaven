@@ -14,6 +14,7 @@ from music_app.services.lastfm_retry_jobs_postgres import (
 )
 from music_app.services.lastfm_postgres import LastfmPostgresAdapter
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.jobs.models import JobState, JobTransitionResult
 from music_app.services.jobs.authorization import (
     AuthorizationDecision,
     JobAuthorizationService,
@@ -644,3 +645,130 @@ def test_live_reauthentication_releases_only_scoped_held_rows_to_new_session(
     assert int(pending["accepted_attempt"]) == 4
     assert int(pending["current_job_id"]) == released[0].job_id
     assert job["parameters"] == {"active_session_ref": str(new_session_id)}
+
+
+def test_live_worker_reconciliation_adopts_legacy_due_once_across_workers(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, session_id, _origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending_id = int(
+            connection.execute(
+                "insert into integration.pending_scrobbles "
+                "(account_id, library_id, track_key, played_at, attempt_count, "
+                "next_attempt_at, status, payload) values "
+                "(%s, %s, 'legacy-opaque', %s, 1, %s, 'pending', "
+                "jsonb_build_object('source_family', 'phase_6_json_file_backfill', "
+                "'source_key', %s::text, 'source_payload', jsonb_build_object("
+                "'artist', 'Artist', 'title', 'Song', 'started_at_unix', 12345))) "
+                "returning id",
+                (
+                    account_id,
+                    library_id,
+                    now - timedelta(minutes=5),
+                    now,
+                    f"legacy-{uuid4().hex}",
+                ),
+            ).fetchone()["id"]
+        )
+    repositories = [
+        PostgresLastfmRetryJobRepository(
+            database_url=worker_url,
+            connect_to_database=isolatedPostgres._connect,
+        )
+        for _ in range(2)
+    ]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        counts = list(
+            executor.map(
+                lambda repository: repository.reconcile_due_pending(now=now, limit=100),
+                repositories,
+            )
+        )
+
+    assert sum(counts) == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select current_job_id, active_session_id, accepted_attempt "
+            "from integration.pending_scrobbles where id = %s",
+            (pending_id,),
+        ).fetchone()
+    assert pending["current_job_id"] is not None
+    assert int(pending["active_session_id"]) == session_id
+    assert int(pending["accepted_attempt"]) == 2
+
+
+def test_live_worker_reconciliation_converges_ambiguous_generic_terminal_state(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    accepted = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).accept_retryable_pending(
+        account_id=account_id,
+        library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=f"terminal-{uuid4().hex}",
+        track_key="opaque",
+        played_at=now,
+        previous_attempts=1,
+        next_attempt_at=now,
+        active_session_id=session_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        payload={"source_payload": {"artist": "Artist", "title": "Song"}},
+    )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="lastfm-terminal-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=60,
+        kinds=("lastfm_scrobble_retry",),
+    )
+    while claim is not None and claim.job_id != accepted.job_id:
+        assert jobs.finish(
+            claim,
+            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
+            now=now + timedelta(seconds=2),
+        )
+        claim = jobs.claim(
+            worker_id="lastfm-terminal-live",
+            now=now + timedelta(seconds=3),
+            lease_seconds=60,
+            kinds=("lastfm_scrobble_retry",),
+        )
+    assert claim is not None and claim.job_id == accepted.job_id
+    assert jobs.finish(
+        claim,
+        JobTransitionResult(JobState.AMBIGUOUS, "stale_lease_ambiguous"),
+        now=now + timedelta(seconds=2),
+    )
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+
+    assert repository.reconcile_due_pending(now=now + timedelta(seconds=3)) == 0
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select status, attempt_count, last_provider_disposition "
+            "from integration.pending_scrobbles where id = %s",
+            (accepted.pending_scrobble_id,),
+        ).fetchone()
+        job_state = connection.execute(
+            "select state from ops.jobs where id = %s", (accepted.job_id,)
+        ).fetchone()["state"]
+    assert pending["status"] == "ambiguous", (pending, job_state)
+    assert int(pending["attempt_count"]) == 2
+    assert pending["last_provider_disposition"] == "possible_send_ambiguous"

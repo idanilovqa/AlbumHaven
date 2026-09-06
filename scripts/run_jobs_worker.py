@@ -281,6 +281,7 @@ def _build_worker(config: Any, *, full_scan_log_event: Callable[[str], object] |
         worker_instances=instances,
         closeables=(pool,),
         claim_kinds=handlers.registered_kinds,
+        due_reconciler=lastfm_retry_repository.reconcile_due_pending,
     )
 
 

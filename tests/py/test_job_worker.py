@@ -75,6 +75,76 @@ class Repository:
         return True
 
 
+class DueReconciler:
+    def __init__(self, *, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def __call__(self, *, now, limit):
+        self.calls.append((now, limit))
+        if self.fail:
+            raise RuntimeError("bounded due reconciliation failure")
+        return 0
+
+
+def test_worker_reconciles_bounded_domain_due_work_before_claim_selection():
+    repository = Repository()
+    reconciler = DueReconciler()
+    stop = threading.Event()
+
+    def wait(_event, _seconds):
+        stop.set()
+        return True
+
+    worker = Worker(
+        repository=repository,
+        authorization_service=Authorization(),
+        handlers=JobHandlerRegistry(),
+        lease_seconds=30,
+        heartbeat_seconds=5,
+        poll_seconds=1,
+        max_idle_backoff_seconds=2,
+        drain_seconds=1,
+        due_reconciler=reconciler,
+        wait=wait,
+        clock=lambda: NOW,
+    )
+    worker.run(stop)
+
+    assert reconciler.calls == [(NOW, 100)]
+    assert repository.calls[0][0] == "reconcile_stale_leases"
+    assert repository.calls[1][0] == "claim"
+
+
+def test_due_reconciliation_failure_is_bounded_and_does_not_block_generic_claims():
+    repository = Repository()
+    reconciler = DueReconciler(fail=True)
+    stop = threading.Event()
+
+    def wait(_event, _seconds):
+        stop.set()
+        return True
+
+    worker = Worker(
+        repository=repository,
+        authorization_service=Authorization(),
+        handlers=JobHandlerRegistry(),
+        lease_seconds=30,
+        heartbeat_seconds=5,
+        poll_seconds=1,
+        max_idle_backoff_seconds=2,
+        drain_seconds=1,
+        due_reconciler=reconciler,
+        wait=wait,
+        clock=lambda: NOW,
+    )
+
+    worker.run(stop)
+
+    assert worker.due_reconciliation_failures == 1
+    assert any(call[0] == "claim" for call in repository.calls)
+
+
 class Authorization:
     def __init__(self, decision=AuthorizationDecision(True, "authorized")):
         self.decision = decision

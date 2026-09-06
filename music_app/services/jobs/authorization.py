@@ -165,6 +165,85 @@ def build_lastfm_retry_resource_validator(
     return validate
 
 
+def build_auth_mail_resource_validator(
+    *, mail_repository: Any, category: str
+) -> ResourceValidator:
+    """Validate one authentication-mail outbox attempt behind its active claim."""
+
+    policies = {
+        "welcome": (
+            "auth_welcome_delivery",
+            "accounts.welcome.send",
+            3,
+        ),
+        "account_invitation": (
+            "auth_invitation_delivery",
+            "accounts.invitation.send",
+            1,
+        ),
+        "password_reset": (
+            "auth_password_reset_delivery",
+            "accounts.password_reset.send",
+            1,
+        ),
+    }
+    if category not in policies:
+        raise ValueError("authentication mail category is invalid")
+    expected_kind, expected_capability, expected_maximum = policies[category]
+
+    def validate(
+        claim: ClaimedJob, _context: Any, now: datetime
+    ) -> AuthorizationDecision:
+        try:
+            outbox_id = int(claim.subject_ref)
+        except (TypeError, ValueError):
+            return AuthorizationDecision(False, "auth_mail_scope_invalid")
+        actor_owned = claim.account_id is not None
+        if (
+            claim.kind not in {expected_kind, JobKind(expected_kind)}
+            or claim.subject_kind != "mail_outbox"
+            or outbox_id < 1
+            or claim.parameters != {}
+            or claim.max_attempts != expected_maximum
+            or claim.scope_version is None
+            or claim.resource_revision is None
+            or not 1 <= claim.resource_revision <= 5
+            or claim.idempotency_key
+            != f"auth-mail:{category}:{outbox_id}:attempt:{claim.resource_revision}"
+            or (
+                actor_owned and claim.capability_key != expected_capability
+            )
+            or (
+                not actor_owned
+                and (
+                    category != "password_reset"
+                    or claim.capability_key is not None
+                    or claim.library_id is not None
+                )
+            )
+        ):
+            return AuthorizationDecision(False, "auth_mail_scope_invalid")
+        try:
+            valid = mail_repository.validate_claimed_delivery(
+                outbox_id=outbox_id,
+                category=category,
+                job_id=claim.job_id,
+                attempt=claim.attempt,
+                worker_id=claim.worker_id,
+                lease_token=claim.lease_token,
+                now=now,
+                row_revision=claim.scope_version,
+                accepted_attempt=claim.resource_revision,
+            )
+        except Exception:
+            return AuthorizationDecision(False, "auth_mail_scope_invalid")
+        if valid is not True:
+            return AuthorizationDecision(False, "auth_mail_scope_stale")
+        return AuthorizationDecision(True, "auth_mail_scope_current")
+
+    return validate
+
+
 class JobAuthorizationService:
     """Revalidate durable authority without reviving an initiating session."""
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -12,6 +12,15 @@ import pytest
 from music_app.services.auth_mail_jobs_postgres import PostgresAuthMailJobRepository
 from music_app.services.auth_mail import DeliveryResult
 from music_app.services.auth_mail_outbox_postgres import PostgresWelcomeOutboxService
+from music_app.services.jobs.models import JobState, JobTransitionResult
+from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.jobs.authorization import (
+    AuthorizationDecision,
+    JobAuthorizationService,
+    PostgresJobAuthorizationContextRepository,
+    build_auth_mail_resource_validator,
+)
+from music_app.services.policy_evaluator import PolicyEvaluator
 from tests.e2e.support import isolatedPostgres
 
 
@@ -76,6 +85,11 @@ def _seed_scope(setup_url: str) -> tuple[int, int, str]:
             "values (%s, %s, 'local') returning id",
             (account_id, f"Mail {suffix}"),
         ).fetchone()["id"])
+        connection.execute(
+            "insert into library.library_memberships "
+            "(library_id, account_id, membership_role) values (%s, %s, 'owner')",
+            (library_id, account_id),
+        )
         connection.execute(
             "insert into app.request_origins "
             "(account_id, client_surface_class, origin_type, origin_key) "
@@ -314,3 +328,271 @@ def test_live_additive_schema_remains_compatible_with_pre_cutover_welcome_delive
         ).fetchone()
     assert row["delivery_status"] == expected_status
     assert (row["next_attempt_at"] is not None) is expects_due
+
+
+def test_live_worker_claim_is_exact_secret_scoped_and_role_denied(
+    live_auth_mail_database,
+):
+    import psycopg
+
+    setup_url, runtime_url = live_auth_mail_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, library_id, origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=30)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into app.account_credentials "
+            "(account_id, encoded_hash, credential_version) values (%s, 'opaque', 4)",
+            (account_id,),
+        )
+        connection.execute(
+            "insert into app.capabilities "
+            "(account_id, capability_key, scope_kind, scope_id) "
+            "values (%s, 'accounts.password_reset.send', 'library', %s)",
+            (account_id, library_id),
+        )
+        outbox_id = int(connection.execute(
+            """
+            insert into app.mail_outbox (
+              account_id, actor_account_id, authorization_mode,
+              message_category, delivery_status, attempt_count,
+              next_attempt_at, row_revision, accepted_attempt,
+              delivery_checkpoint, target_credential_version,
+              lifecycle_expires_at, created_at, updated_at
+            ) values (
+              %s, %s, 'actor', 'password_reset', 'pending', 0,
+              %s, 0, 1, 'accepted', 4, %s, %s, %s
+            ) returning id
+            """,
+            (account_id, account_id, now, expires_at, now, now),
+        ).fetchone()["id"])
+    repository = _repository(runtime_url)
+    with isolatedPostgres._connect(runtime_url) as connection:
+        accepted = repository.compose_existing_intent_in_transaction(
+            connection,
+            outbox_id=outbox_id,
+            category="password_reset",
+            account_id=account_id,
+            actor_account_id=account_id,
+            library_id=library_id,
+            request_origin_ref=f"browser:{origin_key}",
+            deployment_mode="self_hosted_private_web",
+            client_surface="private_web",
+            scheduled_at=now,
+        )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="auth-mail-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=120,
+        kinds=("auth_password_reset_delivery",),
+    )
+    while claim is not None and claim.job_id != accepted.job_id:
+        assert jobs.finish(
+            claim,
+            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
+            now=now + timedelta(seconds=2),
+        )
+        claim = jobs.claim(
+            worker_id="auth-mail-live",
+            now=now + timedelta(seconds=3),
+            lease_seconds=120,
+            kinds=("auth_password_reset_delivery",),
+        )
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_repository = _repository(worker_url)
+    fence = dict(
+        outbox_id=outbox_id,
+        category="password_reset",
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=now + timedelta(seconds=4),
+    )
+
+    assert worker_repository.validate_claimed_delivery(
+        **fence,
+        row_revision=accepted.row_revision,
+        accepted_attempt=1,
+    )
+    authorization = JobAuthorizationService(
+        context_repository=PostgresJobAuthorizationContextRepository(
+            worker_url, connect_to_database=isolatedPostgres._connect
+        ),
+        policy_evaluator=PolicyEvaluator(),
+        resource_validators={
+            "auth_password_reset_delivery": build_auth_mail_resource_validator(
+                mail_repository=worker_repository, category="password_reset"
+            )
+        },
+    )
+    assert authorization.authorize(claim, fence["now"]) in {
+        AuthorizationDecision(True, "authorized"),
+        AuthorizationDecision(True, "bootstrap_owner"),
+    }
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.capabilities set revoked_at = %s "
+            "where account_id = %s and capability_key = 'accounts.password_reset.send'",
+            (now + timedelta(seconds=5), account_id),
+        )
+    assert authorization.authorize(
+        claim, now + timedelta(seconds=6)
+    ) == AuthorizationDecision(False, "capability_revoked")
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.capabilities set revoked_at = null "
+            "where account_id = %s and capability_key = 'accounts.password_reset.send'",
+            (account_id,),
+        )
+    context = worker_repository.load_claimed_delivery_context(**fence)
+    assert context.target_account_id == account_id
+    assert context.target_credential_version == 4
+    assert "@example.invalid" not in repr(context)
+    digest = bytes(reversed(range(32)))
+    issued = worker_repository.issue_claimed_token_hash(
+        **fence,
+        expected_row_revision=accepted.row_revision,
+        token_hash=digest,
+        expires_at=expires_at,
+        request_ref="opaque-live-request",
+    )
+    assert issued.row_revision == accepted.row_revision + 1
+    assert worker_repository.validate_claimed_delivery(
+        **fence,
+        row_revision=issued.row_revision,
+        accepted_attempt=1,
+    )
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        token = connection.execute(
+            "select token_hash from app.password_reset_tokens where id = %s",
+            (issued.token_id,),
+        ).fetchone()
+    assert bytes(token["token_hash"]) == digest
+    for statement in (
+        "select contact_email from app.accounts",
+        "select * from app.mail_outbox",
+        "select token_hash from app.password_reset_tokens",
+    ):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with isolatedPostgres._connect(worker_url) as connection:
+                connection.execute(statement).fetchall()
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update app.accounts set is_active = false, disabled_at = %s where id = %s",
+            (now + timedelta(seconds=5), account_id),
+        )
+    assert not worker_repository.validate_claimed_delivery(
+        **fence,
+        row_revision=issued.row_revision,
+        accepted_attempt=1,
+    )
+
+
+def test_live_public_reset_requires_persisted_throttle_lifecycle(
+    live_auth_mail_database,
+):
+    setup_url, runtime_url = live_auth_mail_database
+    worker_url = str(os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or "")
+    account_id, _library_id, _origin_key = _seed_scope(setup_url)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=30)
+    public_origin_key = f"public-mail-{uuid4().hex}"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into app.account_credentials "
+            "(account_id, encoded_hash, credential_version) values (%s, 'opaque', 2)",
+            (account_id,),
+        )
+        connection.execute(
+            "insert into app.request_origins "
+            "(account_id, client_surface_class, origin_type, origin_key) "
+            "values (null, 'private_web', 'browser', %s)",
+            (public_origin_key,),
+        )
+        throttle_id = int(connection.execute(
+            """
+            insert into app.auth_throttles (
+              bucket_kind, bucket_hash, window_started_at,
+              window_expires_at, updated_at
+            ) values ('reset_account', %s, %s, %s, %s)
+            returning id
+            """,
+            (bytes(range(32)), now, expires_at, now),
+        ).fetchone()["id"])
+        outbox_id = int(connection.execute(
+            """
+            insert into app.mail_outbox (
+              account_id, actor_account_id, authorization_mode,
+              message_category, delivery_status, attempt_count,
+              next_attempt_at, row_revision, accepted_attempt,
+              delivery_checkpoint, target_credential_version,
+              lifecycle_expires_at, public_throttle_id, created_at, updated_at
+            ) values (
+              %s, null, 'public_lifecycle', 'password_reset', 'pending', 0,
+              %s, 0, 1, 'accepted', 2, %s, %s, %s, %s
+            ) returning id
+            """,
+            (account_id, now, expires_at, throttle_id, now, now),
+        ).fetchone()["id"])
+    repository = _repository(runtime_url)
+    with isolatedPostgres._connect(runtime_url) as connection:
+        accepted = repository.compose_existing_intent_in_transaction(
+            connection,
+            outbox_id=outbox_id,
+            category="password_reset",
+            account_id=account_id,
+            actor_account_id=None,
+            library_id=None,
+            request_origin_ref=f"browser:{public_origin_key}",
+            deployment_mode="self_hosted_private_web",
+            client_surface="private_web",
+            scheduled_at=now,
+        )
+    jobs = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    claim = jobs.claim(
+        worker_id="public-auth-mail-live",
+        now=now + timedelta(seconds=1),
+        lease_seconds=120,
+        kinds=("auth_password_reset_delivery",),
+    )
+    while claim is not None and claim.job_id != accepted.job_id:
+        assert jobs.finish(
+            claim,
+            JobTransitionResult(JobState.CANCELED, "test_scope_cleanup"),
+            now=now + timedelta(seconds=2),
+        )
+        claim = jobs.claim(
+            worker_id="public-auth-mail-live",
+            now=now + timedelta(seconds=3),
+            lease_seconds=120,
+            kinds=("auth_password_reset_delivery",),
+        )
+    assert claim is not None and claim.job_id == accepted.job_id
+    worker_repository = _repository(worker_url)
+    fence = dict(
+        outbox_id=outbox_id,
+        category="password_reset",
+        job_id=claim.job_id,
+        attempt=claim.attempt,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+        now=now + timedelta(seconds=4),
+        row_revision=accepted.row_revision,
+        accepted_attempt=1,
+    )
+
+    assert worker_repository.validate_claimed_delivery(**fence)
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute("delete from app.auth_throttles where id = %s", (throttle_id,))
+    assert not worker_repository.validate_claimed_delivery(**fence)

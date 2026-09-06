@@ -78,6 +78,9 @@ LASTFM_RETRY_WORKER_MIGRATION = (
 AUTH_MAIL_JOB_STATE_MIGRATION = (
     MIGRATIONS_DIR / "0079_create_auth_mail_job_state.sql"
 )
+AUTH_MAIL_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0080_grant_worker_auth_mail.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -179,6 +182,40 @@ def test_auth_mail_job_state_adds_stable_checkpointed_outbox_ownership():
     assert "message_category in ('account_invitation', 'password_reset')" in sql
     assert "reset_token_id is null" in sql
     assert "invitation_token_id is null" in sql
+
+
+def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
+    assert AUTH_MAIL_WORKER_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_WORKER_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "add column if not exists target_credential_version" in sql
+    assert "add column if not exists lifecycle_expires_at" in sql
+    assert "add column if not exists public_throttle_id" in sql
+    assert "mail_outbox_public_throttle_id_idx" in sql
+    assert "function ops.validate_claimed_auth_mail(" in sql
+    assert "function ops.load_claimed_auth_mail_context(" in sql
+    assert "function ops.issue_claimed_auth_mail_token_hash(" in sql
+    assert "job.kind = expected_job_kind" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "outbox.current_job_id = job.id" in sql
+    assert "outbox.row_revision = job.scope_version" in sql
+    assert "outbox.accepted_attempt = job.resource_revision" in sql
+    assert "throttle.id = outbox.public_throttle_id" in sql
+    assert "octet_length(p_token_hash) <> 32" in sql
+    for table in (
+        "app.accounts",
+        "app.account_credentials",
+        "app.password_reset_tokens",
+        "app.account_invitation_tokens",
+        "app.auth_throttles",
+        "app.mail_outbox",
+        "app.security_audit_events",
+    ):
+        assert f"revoke all on table {table} from album_haven_worker" in sql
+    assert "grant execute on function ops.validate_claimed_auth_mail" in sql
+    assert "grant execute on function ops.load_claimed_auth_mail_context" in sql
+    assert "grant execute on function ops.issue_claimed_auth_mail_token_hash" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -578,7 +615,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
     assert migration_names[-40:] == [
-        "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -618,6 +654,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0077_create_lastfm_retry_job_state.sql",
         "0078_grant_worker_lastfm_retry.sql",
         "0079_create_auth_mail_job_state.sql",
+        "0080_grant_worker_auth_mail.sql",
     ]
 
 

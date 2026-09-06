@@ -15,6 +15,7 @@ from music_app.services.current_actor import (
 from music_app.services.jobs.authorization import (
     AuthorizationDecision,
     JobAuthorizationService,
+    build_auth_mail_resource_validator,
     build_lastfm_retry_resource_validator,
 )
 from music_app.services.jobs.models import ClaimedJob
@@ -460,6 +461,134 @@ def test_public_password_reset_uses_lifecycle_without_synthesizing_actor_grant(
 
     assert service.authorize(claim, NOW) == expected
     assert repository.actor is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "category", "capability", "maximum"),
+    [
+        ("auth_welcome_delivery", "welcome", "accounts.welcome.send", 3),
+        (
+            "auth_invitation_delivery",
+            "account_invitation",
+            "accounts.invitation.send",
+            1,
+        ),
+        (
+            "auth_password_reset_delivery",
+            "password_reset",
+            "accounts.password_reset.send",
+            1,
+        ),
+    ],
+)
+def test_auth_mail_validator_revalidates_exact_category_claim_and_outbox_fence(
+    kind, category, capability, maximum
+):
+    class Repository:
+        calls = []
+
+        def validate_claimed_delivery(self, **values):
+            self.calls.append(values)
+            return True
+
+    repository = Repository()
+    validator = build_auth_mail_resource_validator(
+        mail_repository=repository, category=category
+    )
+    claim = _claim(
+        kind=kind,
+        subject_kind="mail_outbox",
+        subject_ref="61",
+        parameters={},
+        capability_key=capability,
+        max_attempts=maximum,
+        scope_version=4,
+        resource_revision=1,
+        idempotency_key=f"auth-mail:{category}:61:attempt:1",
+    )
+
+    assert validator(claim, SimpleNamespace(), NOW) == AuthorizationDecision(
+        True, "auth_mail_scope_current"
+    )
+    assert repository.calls == [{
+        "outbox_id": 61,
+        "category": category,
+        "job_id": 41,
+        "attempt": 1,
+        "worker_id": "worker-a",
+        "lease_token": "opaque-lease-token",
+        "now": NOW,
+        "row_revision": 4,
+        "accepted_attempt": 1,
+    }]
+
+
+def test_auth_mail_validator_rejects_category_substitution_before_repository_access():
+    class Repository:
+        calls = []
+
+        def validate_claimed_delivery(self, **values):
+            self.calls.append(values)
+            return True
+
+    repository = Repository()
+    validator = build_auth_mail_resource_validator(
+        mail_repository=repository, category="welcome"
+    )
+    forged = _claim(
+        kind="auth_invitation_delivery",
+        subject_kind="mail_outbox",
+        subject_ref="61",
+        parameters={},
+        capability_key="accounts.welcome.send",
+        max_attempts=3,
+        scope_version=4,
+        resource_revision=1,
+        idempotency_key="auth-mail:welcome:61:attempt:1",
+    )
+
+    assert validator(forged, SimpleNamespace(), NOW) == AuthorizationDecision(
+        False, "auth_mail_scope_invalid"
+    )
+    assert repository.calls == []
+
+
+def test_public_auth_mail_validator_keeps_target_identity_in_private_repository():
+    class Repository:
+        calls = []
+
+        def validate_claimed_delivery(self, **values):
+            self.calls.append(values)
+            return True
+
+    repository = Repository()
+    service, context = _service(
+        validators={
+            "auth_password_reset_delivery": build_auth_mail_resource_validator(
+                mail_repository=repository, category="password_reset"
+            )
+        }
+    )
+    context.actor = None
+    context.request_origin_account_id = None
+    claim = _claim(
+        kind="auth_password_reset_delivery",
+        subject_kind="mail_outbox",
+        subject_ref="62",
+        parameters={},
+        account_id=None,
+        library_id=None,
+        capability_key=None,
+        max_attempts=1,
+        scope_version=2,
+        resource_revision=1,
+        idempotency_key="auth-mail:password_reset:62:attempt:1",
+    )
+
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        True, "auth_mail_scope_current"
+    )
+    assert repository.calls[0]["outbox_id"] == 62
 
 
 @pytest.mark.parametrize(

@@ -44,6 +44,37 @@ class AcceptedAuthMailJob:
     accepted_attempt: int
 
 
+@dataclass(frozen=True, repr=False)
+class ClaimedAuthMailDeliveryContext:
+    outbox_id: int
+    target_account_id: int
+    username: str
+    recipient: str
+    target_credential_version: int | None
+    lifecycle_expires_at: datetime | None
+    delivery_checkpoint: str
+    row_revision: int
+    accepted_attempt: int
+
+    def __repr__(self) -> str:
+        return (
+            f"{type(self).__name__}(outbox_id={self.outbox_id!r}, "
+            f"target_account_id={self.target_account_id!r}, "
+            "username=<redacted>, recipient=<redacted>, "
+            f"target_credential_version={self.target_credential_version!r}, "
+            f"lifecycle_expires_at={self.lifecycle_expires_at!r}, "
+            f"delivery_checkpoint={self.delivery_checkpoint!r}, "
+            f"row_revision={self.row_revision!r}, "
+            f"accepted_attempt={self.accepted_attempt!r})"
+        )
+
+
+@dataclass(frozen=True)
+class IssuedAuthMailToken:
+    token_id: int
+    row_revision: int
+
+
 def _default_connect(database_url: str) -> Any:
     if psycopg is None:
         raise RuntimeError("psycopg is required for durable authentication mail")
@@ -109,6 +140,126 @@ class PostgresAuthMailJobRepository:
 
     def _connect(self) -> Any:
         return self._connect_to_database(self._database_url)
+
+    @staticmethod
+    def _claim_values(**values: object) -> dict[str, object]:
+        return {
+            "outbox_id": _positive("outbox_id", values["outbox_id"]),
+            "category": _category(values["category"]),
+            "job_id": _positive("job_id", values["job_id"]),
+            "attempt": _positive("attempt", values["attempt"]),
+            "worker_id": _bounded("worker_id", values["worker_id"]),
+            "lease_token": _bounded(
+                "lease_token", values["lease_token"], maximum=256
+            ),
+            "now": _aware("now", values["now"]),
+        }
+
+    def validate_claimed_delivery(self, **values: object) -> bool:
+        parameters = self._claim_values(**values)
+        parameters.update({
+            "row_revision": _nonnegative(
+                "row_revision", values["row_revision"]
+            ),
+            "accepted_attempt": _positive(
+                "accepted_attempt", values["accepted_attempt"]
+            ),
+        })
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select ops.validate_claimed_auth_mail(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s,
+                  %(row_revision)s, %(accepted_attempt)s
+                ) as valid
+                """,
+                parameters,
+            ).fetchone())
+        return bool(row.get("valid"))
+
+    def load_claimed_delivery_context(
+        self, **values: object
+    ) -> ClaimedAuthMailDeliveryContext:
+        parameters = self._claim_values(**values)
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select * from ops.load_claimed_auth_mail_context(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s
+                )
+                """,
+                parameters,
+            ).fetchone())
+        if not row:
+            raise ValueError("claimed authentication mail context is stale")
+        credential_version = row.get("target_credential_version")
+        expires_at = row.get("lifecycle_expires_at")
+        return ClaimedAuthMailDeliveryContext(
+            outbox_id=_positive("outbox_id", row.get("outbox_id")),
+            target_account_id=_positive(
+                "target_account_id", row.get("target_account_id")
+            ),
+            username=_bounded("username", row.get("username_display"), maximum=512),
+            recipient=_bounded("recipient", row.get("contact_email"), maximum=1024),
+            target_credential_version=(
+                None
+                if credential_version is None
+                else _positive("target_credential_version", credential_version)
+            ),
+            lifecycle_expires_at=(
+                None
+                if expires_at is None
+                else _aware("lifecycle_expires_at", expires_at)
+            ),
+            delivery_checkpoint=_bounded(
+                "delivery_checkpoint", row.get("delivery_checkpoint"), maximum=32
+            ),
+            row_revision=_nonnegative("row_revision", row.get("row_revision")),
+            accepted_attempt=_positive(
+                "accepted_attempt", row.get("accepted_attempt")
+            ),
+        )
+
+    def issue_claimed_token_hash(self, **values: object) -> IssuedAuthMailToken:
+        parameters = self._claim_values(**values)
+        if parameters["category"] not in {"account_invitation", "password_reset"}:
+            raise ValueError("mail category does not issue bearer tokens")
+        digest = values.get("token_hash")
+        if not isinstance(digest, bytes) or len(digest) != 32:
+            raise ValueError("token_hash must be a 32-byte digest")
+        expires_at = _aware("expires_at", values.get("expires_at"))
+        if expires_at <= parameters["now"]:
+            raise ValueError("expires_at must be later than now")
+        parameters.update({
+            "expected_row_revision": _nonnegative(
+                "expected_row_revision", values["expected_row_revision"]
+            ),
+            "token_hash": digest,
+            "expires_at": expires_at,
+            "request_ref": _bounded(
+                "request_ref", values.get("request_ref"), maximum=256
+            ),
+        })
+        with self._connect() as connection:
+            row = _mapping(connection.execute(
+                """
+                select * from ops.issue_claimed_auth_mail_token_hash(
+                  %(outbox_id)s, %(category)s, %(job_id)s, %(attempt)s,
+                  %(worker_id)s, %(lease_token)s, %(now)s,
+                  %(expected_row_revision)s, %(token_hash)s,
+                  %(expires_at)s, %(request_ref)s
+                )
+                """,
+                parameters,
+            ).fetchone())
+        if not row:
+            raise ValueError("authentication mail token issuance was rejected")
+        return IssuedAuthMailToken(
+            token_id=_positive("token_id", row.get("token_id")),
+            row_revision=_nonnegative("row_revision", row.get("row_revision")),
+        )
 
     def accept_intent(
         self,

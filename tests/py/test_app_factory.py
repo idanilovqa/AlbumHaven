@@ -649,6 +649,18 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
                 }
             )
 
+    class FakeScanJobRepository:
+        def __init__(self, *, database_url):
+            assert database_url == "postgresql://album_haven_app@localhost/app"
+
+        @staticmethod
+        def resolve_local_library_id():
+            return 1
+
+        @staticmethod
+        def enqueue_targeted_reconciliation(**_kwargs):
+            raise AssertionError("startup without watcher events must not enqueue")
+
     submissions = []
     monkeypatch.setattr(
         Config,
@@ -659,6 +671,10 @@ def test_empty_postgres_startup_submits_one_scan_and_keeps_root_and_status_avail
     monkeypatch.setattr(
         "music_app.services.library_roots.PostgresLibraryRootSettingsStore",
         FakePostgresLibraryRootSettingsStore,
+    )
+    monkeypatch.setattr(
+        "music_app.services.scan_jobs_postgres.PostgresScanJobRepository",
+        FakeScanJobRepository,
     )
     monkeypatch.setattr(state, "select_scan_cache_adapter", lambda _config: MissingSnapshotAdapter())
     monkeypatch.setattr(state, "load_exception_overrides", lambda _config: {})

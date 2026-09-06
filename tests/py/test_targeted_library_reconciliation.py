@@ -466,3 +466,117 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
     assert invalidated == ["problems", "rules", "postgres"]
+
+
+def test_durable_inventory_revision_advance_invalidates_web_process_caches(monkeypatch):
+    from music_app.services import state
+
+    invalidated = []
+
+    class Adapter:
+        @staticmethod
+        def load_inventory_mutation_revision():
+            return 8
+
+    monkeypatch.setattr(
+        state, "select_scan_cache_adapter", lambda _config: Adapter()
+    )
+    monkeypatch.setattr(
+        state,
+        "invalidate_targeted_library_projections",
+        lambda library_state, config, **kwargs: (
+            invalidated.append((config, kwargs)),
+            library_state.__setitem__(
+                "inventory_mutation_revision", kwargs["revision"]
+            ),
+        ),
+    )
+    library_state = {
+        "inventory_mutation_revision": 7,
+        "relation_projection_ready": True,
+    }
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"}
+
+    assert state.sync_durable_inventory_revision(library_state, config) == 8
+    assert invalidated == [
+        (
+            config,
+            {"revision": 8, "affected_album_keys": ()},
+        )
+    ]
+    assert library_state["relation_projection_ready"] is False
+
+
+def test_targeted_inventory_publication_uses_the_claim_fence_in_the_same_transaction(
+    tmp_path,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    deleted = root / "Artist" / "Album" / "01.flac"
+    connection = object()
+    events = []
+
+    class FencedRepository:
+        def persist_targeted_inventory_mutation(self, *, publication_guard, **kwargs):
+            def commit():
+                events.append(("mutation", kwargs["root_id"]))
+                return {
+                    "inventory_mutation_revision": 22,
+                    "affected_album_keys": ["artist::album"],
+                }
+
+            return publication_guard(connection, commit)
+
+    def claim_fence(actual_connection, commit):
+        events.append(("fence", actual_connection))
+        return commit()
+
+    reconciler = TargetedLibraryReconciler(
+        {},
+        repository=FencedRepository(),
+        root_definitions=[{"id": "main", "path": root}],
+    )
+
+    result = reconciler.reconcile(
+        _request(deleted_paths=(deleted,)),
+        publication_guard=claim_fence,
+    )
+
+    assert events == [("fence", connection), ("mutation", "main")]
+    assert result.revision == 22
+
+
+def test_rejected_claim_fence_prevents_inventory_mutation_and_projection_publication(
+    tmp_path,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    events = []
+
+    class FencedRepository:
+        def persist_targeted_inventory_mutation(self, *, publication_guard, **_kwargs):
+            return publication_guard(
+                object(),
+                lambda: events.append("mutation"),
+            )
+
+    reconciler = TargetedLibraryReconciler(
+        {},
+        repository=FencedRepository(),
+        root_definitions=[{"id": "main", "path": root}],
+        after_commit=lambda _result: events.append("projection"),
+    )
+
+    result = reconciler.reconcile(
+        _request(deleted_paths=(root / "missing.flac",)),
+        publication_guard=lambda _connection, _commit: None,
+    )
+
+    assert result.revision == 0
+    assert events == []

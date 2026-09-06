@@ -382,6 +382,7 @@ def test_targeted_enqueue_rejects_invalid_inactive_or_cross_library_roots(root_r
 def test_claimed_targeted_intent_reload_is_immutable_and_exact():
     loaded = {
         "intent_id": 84,
+        "library_id": 19,
         "logical_root_id": "root-a",
         "active_paths": [
             str(Path("C:/Music/Alpha/01.flac")),
@@ -398,6 +399,9 @@ def test_claimed_targeted_intent_reload_is_immutable_and_exact():
                 "is_directory": True,
             }
         ],
+        "exception_overrides": {
+            str(Path("C:/Music/Alpha/01.flac")): "Interview"
+        },
     }
     connection = _RecordingConnection(
         [_Result(one=dict(loaded)), _Result(one=dict(loaded))]
@@ -433,6 +437,9 @@ def test_claimed_targeted_intent_reload_is_immutable_and_exact():
             is_directory=True,
         ),
     )
+    assert first.exception_overrides == {
+        str(Path("C:/Music/Alpha/01.flac")): "Interview"
+    }
     for statement, values in connection.executed:
         sql = _normalized(statement)
         assert "load_claimed_targeted_reconciliation_intent" in sql

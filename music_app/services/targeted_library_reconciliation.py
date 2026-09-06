@@ -35,7 +35,11 @@ class TargetedLibraryReconciler:
     ) -> None:
         self._config = config
         self._repository = repository
-        self._roots = tuple(root_definitions or get_library_roots(config))
+        self._roots = tuple(
+            get_library_roots(config)
+            if root_definitions is None
+            else root_definitions
+        )
         self._roots_lock = Lock()
         self._metadata_reader = metadata_reader
         self._exception_overrides = dict(exception_overrides or {})
@@ -45,16 +49,34 @@ class TargetedLibraryReconciler:
         with self._roots_lock:
             self._roots = tuple(dict(root) for root in roots)
 
+    def replace_exception_overrides(
+        self, overrides: dict[str, object]
+    ) -> None:
+        with self._roots_lock:
+            self._exception_overrides = dict(overrides)
+
     def reconcile(
         self,
         request: object,
         *,
         root_healthy: bool = True,
+        publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
+        root_definitions: Iterable[dict[str, object]] | None = None,
+        exception_overrides: dict[str, object] | None = None,
     ) -> TargetedReconciliationResult:
         root_id = str(getattr(request, "root_id", "") or "").strip()
         with self._roots_lock:
-            root_definitions = self._roots
-        primary_root = self._root_by_id(root_id, root_definitions)
+            selected_roots = tuple(
+                self._roots
+                if root_definitions is None
+                else (dict(root) for root in root_definitions)
+            )
+            selected_overrides = dict(
+                self._exception_overrides
+                if exception_overrides is None
+                else exception_overrides
+            )
+        primary_root = self._root_by_id(root_id, selected_roots)
         if primary_root is None:
             return TargetedReconciliationResult(0, (), "invalid_path")
 
@@ -98,8 +120,8 @@ class TargetedLibraryReconciler:
             destination_root_id = str(
                 getattr(move, "destination_root_id", root_id) or root_id
             )
-            source_root = self._root_by_id(source_root_id, root_definitions)
-            destination_root = self._root_by_id(destination_root_id, root_definitions)
+            source_root = self._root_by_id(source_root_id, selected_roots)
+            destination_root = self._root_by_id(destination_root_id, selected_roots)
             if (
                 source_root is None
                 or destination_root is None
@@ -165,7 +187,7 @@ class TargetedLibraryReconciler:
                 path=path,
                 root_definition=matched_root,
                 image_extensions=set(self._config.get("IMAGE_EXTENSIONS") or set()),
-                exception_overrides=self._exception_overrides,
+                exception_overrides=selected_overrides,
                 folder_cover_cache=folder_cover_cache,
                 cover_metadata_cache=cover_metadata_cache,
             )
@@ -177,7 +199,20 @@ class TargetedLibraryReconciler:
             deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
             deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
             moves=tuple(normalized_moves),
+            **(
+                {"publication_guard": publication_guard}
+                if publication_guard is not None
+                else {}
+            ),
         )
+        if not isinstance(persisted, dict):
+            return TargetedReconciliationResult(0, (), "already_published")
+        if persisted.get("publication_won") is False:
+            return TargetedReconciliationResult(
+                int(persisted.get("inventory_mutation_revision") or 0),
+                tuple(persisted.get("affected_album_keys") or ()),
+                "already_published",
+            )
         result = TargetedReconciliationResult(
             int(persisted.get("inventory_mutation_revision") or 0),
             tuple(

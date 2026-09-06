@@ -88,6 +88,28 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert revision_counter == "0"
 
 
+def test_asgi_status_syncs_worker_committed_inventory_revision(monkeypatch, app):
+    from music_app.routes import api_read_asgi_routes
+
+    calls = []
+
+    def sync(library_state, config):
+        calls.append((library_state, config))
+        library_state["inventory_mutation_revision"] = 27
+        return 27
+
+    monkeypatch.setattr(
+        api_read_asgi_routes, "sync_durable_inventory_revision", sync
+    )
+    asgi_app = _make_asgi_app()
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    assert _decode_json(body)["inventory_mutation_revision"] == 27
+    assert len(calls) == 1
+
+
 class _ActorResolver:
     def __init__(self, actor):
         self.actor = actor

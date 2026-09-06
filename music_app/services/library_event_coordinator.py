@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock, Timer
 from time import sleep
+from uuid import uuid4
 
 from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
 
@@ -23,6 +24,7 @@ class TargetedMove:
 @dataclass(frozen=True, slots=True)
 class TargetedReconciliationRequest:
     root_id: str
+    producer_request_key: str | None = None
     paths: frozenset[Path] = frozenset()
     deleted_paths: frozenset[Path] = frozenset()
     deleted_subtrees: frozenset[Path] = frozenset()
@@ -39,6 +41,7 @@ class CoordinatorProblem:
 class _PendingGroup:
     root_id: str
     directory: Path
+    producer_request_key: str
     active_paths: set[Path] = field(default_factory=set)
     deleted_paths: set[Path] = field(default_factory=set)
     deleted_subtrees: set[Path] = field(default_factory=set)
@@ -59,6 +62,7 @@ class LibraryEventCoordinator:
         stable_sample_interval: float = 0.1,
         debounce_seconds: float = 0.5,
         auto_schedule: bool = False,
+        producer_request_key_factory: Callable[[], str] | None = None,
     ) -> None:
         self._emit_request = emit_request
         self._emit_health_event = emit_health_event or (lambda _event: None)
@@ -70,6 +74,9 @@ class LibraryEventCoordinator:
         self._stable_sample_interval = max(0.0, float(stable_sample_interval))
         self._debounce_seconds = max(0.0, float(debounce_seconds))
         self._auto_schedule = bool(auto_schedule)
+        self._producer_request_key_factory = producer_request_key_factory or (
+            lambda: f"watcher-{uuid4().hex}"
+        )
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
         self._lock = Lock()
         self._timer: Timer | None = None
@@ -95,7 +102,11 @@ class LibraryEventCoordinator:
                         )
                     )
                     return False
-                group = _PendingGroup(event.root_id, event.path.parent)
+                group = _PendingGroup(
+                    event.root_id,
+                    event.path.parent,
+                    str(self._producer_request_key_factory()),
+                )
                 self._pending[group_key] = group
             self._coalesce(group, event)
             if self._auto_schedule:
@@ -147,11 +158,30 @@ class LibraryEventCoordinator:
             self._timer = None
         if timer is not None:
             timer.cancel()
-        for group in sorted(
+        ordered = sorted(
             pending,
             key=lambda item: (item.root_id, str(item.directory).casefold()),
-        ):
-            self._emit_group(group)
+        )
+        for index, group in enumerate(ordered):
+            try:
+                self._emit_group(group)
+            except Exception:
+                with self._lock:
+                    for uncommitted in ordered[index:]:
+                        key = (uncommitted.root_id, uncommitted.directory)
+                        current = self._pending.get(key)
+                        if current is None:
+                            self._pending[key] = uncommitted
+                        else:
+                            current.active_paths.update(uncommitted.active_paths)
+                            current.deleted_paths.update(uncommitted.deleted_paths)
+                            current.deleted_subtrees.update(
+                                uncommitted.deleted_subtrees
+                            )
+                            current.moves.update(uncommitted.moves)
+                    if self._auto_schedule and not self._stopped:
+                        self._schedule_flush_locked()
+                raise
 
     def _emit_group(self, group: _PendingGroup) -> None:
         ready: set[Path] = set()
@@ -182,6 +212,7 @@ class LibraryEventCoordinator:
         self._emit_request(
             TargetedReconciliationRequest(
                 root_id=group.root_id,
+                producer_request_key=group.producer_request_key,
                 paths=frozenset(ready),
                 deleted_paths=frozenset(deleted),
                 deleted_subtrees=frozenset(deleted_subtrees),

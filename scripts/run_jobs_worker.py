@@ -84,9 +84,14 @@ def _shutdown_signals() -> tuple[int, ...]:
 
 
 def _build_worker(config: Any) -> Any:
-    """Wire the foundation; workflow slices later register closed handlers."""
+    """Wire the durable worker with its closed handler set."""
 
+    from config import Config
     from music_app.jobs.dispatch import JobHandlerRegistry
+    from music_app.jobs.scan_handlers import (
+        build_targeted_reconciliation_handler,
+        build_targeted_reconciliation_resource_validator,
+    )
     from music_app.jobs.worker import (
         PostgresWorkerInstanceRepository,
         Worker,
@@ -98,6 +103,12 @@ def _build_worker(config: Any) -> Any:
     )
     from music_app.services.jobs.repository_postgres import PostgresJobRepository
     from music_app.services.policy_evaluator import PolicyEvaluator
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+    from music_app.services.jobs.models import JobKind
 
     pool = create_worker_pool(config)
 
@@ -108,22 +119,55 @@ def _build_worker(config: Any) -> Any:
         database_url=config.database_url,
         connect_to_database=connect_to_database,
     )
+    scan_repository = PostgresScanJobRepository(
+        database_url=config.database_url,
+        connect_to_database=connect_to_database,
+        job_repository=repository,
+    )
+    if not callable(scan_repository.load_claimed_targeted_reconciliation_scope):
+        raise RuntimeError("targeted reconciliation scope loader is unavailable")
+    scan_config = {
+        key: value for key, value in vars(Config).items() if key.isupper()
+    }
+    scan_config["ALBUM_HAVEN_APP_DATABASE_URL"] = config.database_url
+    reconciler = TargetedLibraryReconciler(
+        scan_config,
+        repository=PostgresScanCacheAdapter(
+            scan_config,
+            connect=connect_to_database,
+        ),
+        root_definitions=(),
+        exception_overrides={},
+    )
+    targeted_validator = build_targeted_reconciliation_resource_validator(
+        scan_repository=scan_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
             connect_to_database=connect_to_database,
         ),
         policy_evaluator=PolicyEvaluator(),
-        resource_validators={},
+        resource_validators={
+            JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
+        },
     )
     instances = PostgresWorkerInstanceRepository(
         database_url=config.database_url,
         connect_to_database=connect_to_database,
     )
+    handlers = JobHandlerRegistry()
+    handlers.register(
+        JobKind.TARGETED_RECONCILIATION,
+        build_targeted_reconciliation_handler(
+            scan_repository=scan_repository,
+            reconciler=reconciler,
+        ),
+    )
     return Worker(
         repository=repository,
         authorization_service=authorization,
-        handlers=JobHandlerRegistry(),
+        handlers=handlers,
         lease_seconds=config.lease_seconds,
         heartbeat_seconds=config.heartbeat_seconds,
         poll_seconds=config.poll_seconds,

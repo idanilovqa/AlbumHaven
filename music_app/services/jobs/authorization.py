@@ -212,10 +212,33 @@ class JobAuthorizationService:
         ):
             return AuthorizationDecision(False, "capability_revoked")
 
-        try:
-            context = self._context_repository.load_authorization_context(claim, now)
-        except Exception:
-            return AuthorizationDecision(False, "authorization_context_invalid")
+        if (
+            server_owned
+            and kind == JobKind.TARGETED_RECONCILIATION.value
+            and claim.client_surface == "library_watcher"
+        ):
+            context = JobAuthorizationContext(
+                actor=None,
+                session_is_expired=True,
+                membership_current=False,
+                request_origin_id=None,
+                request_origin_account_id=None,
+                request_origin=None,
+                deployment_allowed=(
+                    claim.deployment_mode in _APPROVED_DEPLOYMENT_MODES
+                ),
+                client_surface_allowed=True,
+                library_current=True,
+            )
+        else:
+            try:
+                context = self._context_repository.load_authorization_context(
+                    claim, now
+                )
+            except Exception:
+                return AuthorizationDecision(
+                    False, "authorization_context_invalid"
+                )
         if not _valid_context(context):
             return AuthorizationDecision(False, "authorization_context_invalid")
         if server_owned or public_lifecycle:
@@ -535,9 +558,20 @@ def _authorization_context_from_row(
 
     policy = policy_for(claim.kind)
     origin_matches_surface = origin_surface == claim.client_surface
-    client_surface_allowed = claim.client_surface == "private_web" and (
-        origin_matches_surface or (policy.server_owned and origin_id is None)
+    server_owned_surface_allowed = (
+        policy.server_owned
+        and origin_id is None
+        and (
+            claim.client_surface == "private_web"
+            or (
+                claim.kind in {JobKind.TARGETED_RECONCILIATION, "targeted_reconciliation"}
+                and claim.client_surface == "library_watcher"
+            )
+        )
     )
+    client_surface_allowed = (
+        claim.client_surface == "private_web" and origin_matches_surface
+    ) or server_owned_surface_allowed
     return JobAuthorizationContext(
         actor=actor,
         session_is_expired=True,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from inspect import isawaitable
 import logging
 import threading
@@ -13,7 +14,7 @@ def _stop_library_watch_runtime(
     *,
     watch_service,
     event_coordinator,
-    targeted_executor,
+    targeted_executor=None,
 ) -> None:
     try:
         watch_service.stop()
@@ -21,7 +22,8 @@ def _stop_library_watch_runtime(
         try:
             event_coordinator.stop()
         finally:
-            targeted_executor.shutdown(wait=False, cancel_futures=True)
+            if targeted_executor is not None:
+                targeted_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _recover_library_watch_after_manual_scan(
@@ -45,7 +47,8 @@ def _recover_library_watch_after_manual_scan(
     except Exception as exc:
         clear_error = exc
     normalized_roots = tuple(dict(root) for root in root_definitions)
-    targeted_reconciler.replace_roots(normalized_roots)
+    if targeted_reconciler is not None:
+        targeted_reconciler.replace_roots(normalized_roots)
     watch_service.replace_roots(normalized_roots)
     if clear_error is not None:
         raise clear_error
@@ -189,17 +192,11 @@ def create_asgi_app():
     )
     from music_app.services.library_roots import get_library_roots
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
-    from music_app.services.exception_overrides import load_exception_overrides
-    from music_app.services.runtime_shutdown import create_daemon_executor
-    from music_app.services.scan_cache_persistence import select_scan_cache_adapter
-    from music_app.services.targeted_library_reconciliation import (
-        TargetedLibraryReconciler,
-    )
+    from music_app.services.scan_jobs_postgres import PostgresScanJobRepository
     from music_app.services.runtime_shutdown import request_runtime_shutdown
     from music_app.services.state import (
         ensure_runtime_relation_projection_ready,
         hydrate_runtime_library_state_on_startup,
-        invalidate_targeted_library_projections,
         start_background_refresh_for_state,
     )
 
@@ -235,45 +232,33 @@ def create_asgi_app():
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
         start_lastfm_retry_worker(runtime)
-        targeted_executor = create_daemon_executor(
-            max_workers=1,
-            thread_name_prefix="albumhaven-targeted-reconciliation",
-        )
-        targeted_reconciler = TargetedLibraryReconciler(
-            runtime.config,
-            repository=select_scan_cache_adapter(runtime.config),
-            root_definitions=get_library_roots(runtime.config),
-            exception_overrides=load_exception_overrides(runtime.config),
-            after_commit=lambda result: invalidate_targeted_library_projections(
-                runtime.library_state,
-                runtime.config,
-                revision=result.revision,
-                affected_album_keys=result.affected_album_keys,
-            ),
+        targeted_database_url = str(
+            runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+        ).strip()
+        targeted_roots = (
+            tuple(get_library_roots(runtime.config))
+            if targeted_database_url
+            else ()
         )
 
-        def reconcile_targeted_request(request) -> None:
-            root_healthy = (
-                runtime.library_watch_health_service
-                .root_allows_destructive_reconciliation(request.root_id)
+        scan_jobs = PostgresScanJobRepository(
+            database_url=targeted_database_url
+        )
+        watcher_library_id = (
+            scan_jobs.resolve_local_library_id() if targeted_database_url else None
+        )
+
+        def create_targeted_reconciliation(request) -> None:
+            if watcher_library_id is None:
+                return
+            scan_jobs.enqueue_targeted_reconciliation(
+                library_id=watcher_library_id,
+                request=request,
+                producer_request_key=request.producer_request_key,
+                deployment_mode="self_hosted_private_web",
+                client_surface="library_watcher",
+                scheduled_at=datetime.now(timezone.utc),
             )
-            targeted_reconciler.reconcile(
-                request,
-                root_healthy=root_healthy,
-            )
-
-        def submit_targeted_reconciliation(request) -> None:
-            future = targeted_executor.submit(reconcile_targeted_request, request)
-
-            def report_reconciliation_failure(completed) -> None:
-                try:
-                    completed.result()
-                except Exception:
-                    runtime.logger.exception(
-                        "Targeted library reconciliation failed."
-                    )
-
-            future.add_done_callback(report_reconciliation_failure)
 
         def persist_library_watch_health(event) -> None:
             try:
@@ -284,7 +269,7 @@ def create_asgi_app():
                 )
 
         runtime.library_event_coordinator = LibraryEventCoordinator(
-            emit_request=submit_targeted_reconciliation,
+            emit_request=create_targeted_reconciliation,
             emit_health_event=persist_library_watch_health,
             emit_problem=lambda problem: runtime.library_state.setdefault(
                 "pending_library_watch_problems", []
@@ -292,14 +277,13 @@ def create_asgi_app():
             auto_schedule=True,
         )
         runtime.library_watch_service = LibraryWatchService(
-            WatchdogLibraryEventSource(get_library_roots(runtime.config)),
+            WatchdogLibraryEventSource(targeted_roots),
             runtime.library_event_coordinator.accept,
         )
         _app.state.library_watch_service = runtime.library_watch_service
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
-            targeted_reconciler.replace_roots(root_definitions)
             runtime.library_watch_service.replace_roots(root_definitions)
 
         runtime.replace_library_watch_roots = replace_live_library_roots
@@ -313,7 +297,7 @@ def create_asgi_app():
         ) -> int:
             return _recover_library_watch_after_manual_scan(
                 health_service=runtime.library_watch_health_service,
-                targeted_reconciler=targeted_reconciler,
+                targeted_reconciler=None,
                 watch_service=runtime.library_watch_service,
                 root_definitions=get_library_roots(runtime.config),
                 scan_mode=scan_mode,
@@ -330,7 +314,6 @@ def create_asgi_app():
             _stop_library_watch_runtime(
                 watch_service=runtime.library_watch_service,
                 event_coordinator=runtime.library_event_coordinator,
-                targeted_executor=targeted_executor,
             )
         try:
             yield

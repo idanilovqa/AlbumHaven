@@ -23,6 +23,7 @@ from music_app.services.state import (
     format_timestamp,
     hydrate_library_state_for_config,
     refresh_relation_views_for_state,
+    sync_durable_inventory_revision,
 )
 from music_app.services.opinion_read_seams import build_crowd_opinion_modal_payload
 from music_app.services.page_resource_seams import (
@@ -328,6 +329,11 @@ def _client_surface_class_from_asgi(request: Request) -> str:
 @router.get("/status")
 async def status(request: Request) -> JSONResponse:
     library_state = _library_state(request)
+    await run_in_threadpool(
+        sync_durable_inventory_revision,
+        library_state,
+        _app_config(request),
+    )
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:

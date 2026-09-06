@@ -45,6 +45,9 @@ DURABLE_JOB_RETENTION_INDEX_MIGRATION = (
 SCAN_JOB_INTENTS_MIGRATION = (
     MIGRATIONS_DIR / "0068_create_scan_job_intents.sql"
 )
+TARGETED_RECONCILIATION_WORKER_MIGRATION = (
+    MIGRATIONS_DIR / "0069_grant_worker_targeted_reconciliation.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -444,7 +447,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-30:] == [
+    assert migration_names[-31:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -475,6 +478,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0066_grant_worker_authorization_reads.sql",
         "0067_add_job_transition_retention_index.sql",
         "0068_create_scan_job_intents.sql",
+        "0069_grant_worker_targeted_reconciliation.sql",
     ]
 
 
@@ -3712,3 +3716,107 @@ def test_full_scan_intent_stores_and_link_validates_exact_accepted_authority():
         assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", full_branch)
     for field in ("deployment_mode", "client_surface"):
         assert re.search(rf"job\.{field}\s*=\s*intent\.{field}", targeted_branch)
+
+
+def targeted_reconciliation_worker_sql() -> str:
+    assert TARGETED_RECONCILIATION_WORKER_MIGRATION.is_file(), (
+        "Task 2 requires migration 0069_grant_worker_targeted_reconciliation.sql"
+    )
+    return TARGETED_RECONCILIATION_WORKER_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_targeted_worker_migration_exposes_only_claim_scoped_functions():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    scope_function = "library.load_claimed_targeted_reconciliation_scope"
+    fence_function = "library.fence_targeted_reconciliation_publication"
+
+    for function in (scope_function, fence_function):
+        assert f"create or replace function {function}" in sql
+        assert re.search(
+            rf"revoke all on function {re.escape(function)}\([^;]+from public", sql
+        )
+        assert re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_worker",
+            sql,
+        )
+        assert not re.search(
+            rf"grant execute on function {re.escape(function)}\([^;]+"
+            r"to album_haven_(?:app|readonly)",
+            sql,
+        )
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for sensitive_table in (
+        "library.library_roots",
+        "library.libraries",
+        "app.accounts",
+        "app.capabilities",
+        "app.request_origins",
+    ):
+        assert not re.search(
+            rf"grant\s+(?:select|insert|update|delete|all)[^;]*"
+            rf"on table {re.escape(sensitive_table)}[^;]*to album_haven_worker",
+            sql,
+        )
+    for fragment in (
+        "revoke select (id, is_active, disabled_at) on table app.accounts from album_haven_worker",
+        "revoke select (account_id, owner_key) on table app.bootstrap_owners from album_haven_worker",
+        "revoke select (id, owner_account_id) on table library.libraries from album_haven_worker",
+        "revoke select (library_id, account_id, membership_role) on table library.library_memberships from album_haven_worker",
+        "revoke select (account_id, capability_key, scope_kind, scope_id, revoked_at) on table app.capabilities from album_haven_worker",
+        "revoke select (id, account_id, client_surface_class, origin_type) on table app.request_origins from album_haven_worker",
+    ):
+        assert fragment in sql
+
+
+def test_targeted_publication_fence_checks_exact_live_claim_in_mutation_transaction():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.fence_targeted_reconciliation_publication",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+    for parameter in (
+        "p_intent_id bigint",
+        "p_job_id bigint",
+        "p_attempt integer",
+        "p_worker_id varchar",
+        "p_lease_token varchar",
+        "p_now timestamptz",
+    ):
+        assert parameter in function_sql
+    for predicate in (
+        "job.id = p_job_id",
+        "job.kind = 'targeted_reconciliation'",
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+        "intent.id = p_intent_id",
+        "intent.job_id = p_job_id",
+        "intent.state = 'running'",
+    ):
+        assert predicate in function_sql
+    assert "publication_attempt" in function_sql
+    assert "return" in function_sql
+
+
+def test_claimed_targeted_scope_revalidates_library_roots_and_watcher_health():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.load_claimed_targeted_reconciliation_scope",
+        1,
+    )[1].split("create or replace function", 1)[0]
+    assert "library.library_roots" in function_sql
+    assert "is_active is true" in function_sql
+    assert "library_id" in function_sql
+    assert "library_watch_health" in function_sql
+    for predicate in (
+        "job.state = 'running'",
+        "job.attempt_count = p_attempt",
+        "job.lease_owner = p_worker_id",
+        "job.lease_token = p_lease_token",
+        "job.lease_expires_at > p_now",
+    ):
+        assert predicate in function_sql

@@ -116,6 +116,7 @@ class ScanCacheAdapter(Protocol):
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
+        publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -204,6 +205,7 @@ class PostgresScanCacheAdapter:
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
+        publication_guard: Callable[[Any, Callable[[], object]], object] | None = None,
     ) -> dict[str, object]:
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
@@ -250,6 +252,27 @@ class PostgresScanCacheAdapter:
             )
             target["subtrees" if move.get("is_directory") else "paths"].add(
                 source_path
+            )
+
+        durable_publisher = getattr(publication_guard, "publish_prepared", None)
+        if callable(durable_publisher):
+            return durable_publisher(
+                inventory={
+                    "artists": _jsonb_compatible(artist_rows),
+                    "albums": _jsonb_compatible(album_rows),
+                    "featured_artists": _jsonb_compatible(featured_artist_rows),
+                    "tracks": _jsonb_compatible(track_rows),
+                    "track_files": _jsonb_compatible(track_file_rows),
+                },
+                stale_scopes=[
+                    {
+                        "root_id": stale_root_id,
+                        "paths": sorted(stale_targets["paths"]),
+                        "subtrees": sorted(stale_targets["subtrees"]),
+                    }
+                    for stale_root_id, stale_targets in sorted(stale_by_root.items())
+                    if stale_targets["paths"] or stale_targets["subtrees"]
+                ],
             )
 
         with self._connect_to_database() as connection:
@@ -299,11 +322,17 @@ class PostgresScanCacheAdapter:
             revision = int(
                 _row_mapping(revision_row).get("inventory_mutation_revision") or 0
             )
-            connection.commit()
-        return {
-            "inventory_mutation_revision": revision,
-            "affected_album_keys": sorted(affected_album_keys),
-        }
+            result = {
+                "inventory_mutation_revision": revision,
+                "affected_album_keys": sorted(affected_album_keys),
+            }
+            if publication_guard is None:
+                connection.commit()
+            else:
+                published = publication_guard(connection, connection.commit)
+                if not published:
+                    return {}
+        return result
 
     def load_snapshot_strict(self, cache_path: Path, root_identity: object) -> ScanCacheSnapshot:
         del cache_path

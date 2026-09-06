@@ -328,7 +328,9 @@ def test_live_targeted_paths_and_moves_round_trip_exactly_through_claimed_loader
         worker_id=claimed.worker_id,
         lease_token=claimed.lease_token,
     )
-    assert loaded == request
+    assert loaded.request == request
+    assert loaded.intent_id == enqueue_result.intent_id
+    assert loaded.exception_overrides == {}
     with isolatedPostgres._connect(setup_url) as connection:
         path_rows = connection.execute(
             """
@@ -702,3 +704,438 @@ def test_live_full_scan_link_rejects_wrong_capability_without_mutating_intent(
         assert connection.execute(
             "select job_id from library.full_scan_intents where id = %s", (intent_id,)
         ).fetchone()["job_id"] is None
+
+
+def _enqueue_and_claim_targeted(
+    *, setup_url: str, runtime_url: str, worker_url: str, suffix: str
+):
+    _, library_id = _seed_scope(setup_url, suffix)
+    accepted_root = rf"C:\private\scan-jobs-{suffix}\a"
+    accepted = _scan_repository(runtime_url).enqueue_targeted_reconciliation(
+        library_id=library_id,
+        request=TargetedReconciliationRequest(
+            root_id="root-a",
+            paths=frozenset({Path(accepted_root) / "Artist" / "Album" / "01.flac"}),
+        ),
+        producer_request_key=f"watcher-{suffix}-0001",
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    claimed = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id=f"scan-{suffix}-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claimed is not None and claimed.job_id == accepted.job_id
+    return library_id, accepted, claimed
+
+
+def test_live_worker_reconstructs_claimed_paths_from_current_root_and_scope(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = "current-root"
+    library_id, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix=suffix,
+    )
+    current_root = rf"E:\relocated\scan-jobs-{suffix}\a"
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "insert into library.exception_overrides (library_id, track_key, override_payload) values (%s, %s, %s::jsonb)",
+            (
+                library_id,
+                rf"C:\private\scan-jobs-{suffix}\a\Artist\Album\02.flac",
+                json.dumps({"exception_type": "Interview"}),
+            ),
+        )
+        connection.execute(
+            """
+            update library.library_roots set root_path = %s
+             where library_id = %s and metadata ->> 'root_id' = 'root-a'
+            """,
+            (current_root, library_id),
+        )
+
+    worker_repository = _scan_repository(worker_url)
+    loaded = worker_repository.load_claimed_targeted_reconciliation(
+        job_id=claimed.job_id,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
+    )
+    scope = worker_repository.load_claimed_targeted_reconciliation_scope(
+        intent_id=accepted.intent_id,
+        library_id=library_id,
+        job_id=claimed.job_id,
+        attempt=claimed.attempt,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert loaded.paths == frozenset(
+        {Path(current_root) / "Artist" / "Album" / "01.flac"}
+    )
+    assert loaded.exception_overrides == {
+        str(Path(current_root) / "Artist" / "Album" / "02.flac"): "Interview"
+    }
+    assert scope.root_healthy is True
+    assert scope.roots == (
+        {
+            "id": "root-a",
+            "path": Path(current_root),
+            "category": "main",
+            "library_id": library_id,
+            "is_active": True,
+        },
+    )
+
+
+def test_live_worker_scope_reports_persisted_unhealthy_root(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    library_id, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix="unhealthy-root",
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            """
+            update library.libraries
+               set metadata = metadata || jsonb_build_object(
+                 'library_watch_health',
+                 jsonb_build_object('root-a', jsonb_build_object(
+                   'state', 'unavailable'
+                 ))
+               )
+             where id = %s
+            """,
+            (library_id,),
+        )
+
+    scope = _scan_repository(worker_url).load_claimed_targeted_reconciliation_scope(
+        intent_id=accepted.intent_id,
+        library_id=library_id,
+        job_id=claimed.job_id,
+        attempt=claimed.attempt,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert scope.root_healthy is False
+
+
+def test_live_worker_scope_fails_closed_when_one_move_root_was_removed(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    _, library_id = _seed_scope(setup_url, "removed-move-root")
+    accepted = _scan_repository(runtime_url).enqueue_targeted_reconciliation(
+        library_id=library_id,
+        request=TargetedReconciliationRequest(
+            root_id="root-a",
+            moves=(
+                TargetedMove(
+                    source=Path(
+                        r"C:\private\scan-jobs-removed-move-root\a\Artist\01.flac"
+                    ),
+                    destination=Path(
+                        r"D:\private\scan-jobs-removed-move-root\b\Artist\01.flac"
+                    ),
+                    source_root_id="root-a",
+                    destination_root_id="root-b",
+                ),
+            ),
+        ),
+        producer_request_key="watcher-removed-move-root-0001",
+        deployment_mode="self_hosted_private_web",
+        client_surface="library_watcher",
+        scheduled_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    claimed = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id="scan-removed-move-root-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claimed is not None and claimed.job_id == accepted.job_id
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update library.library_roots set is_active = false where library_id = %s and metadata ->> 'root_id' = 'root-b'",
+            (library_id,),
+        )
+
+    scope = _scan_repository(worker_url).load_claimed_targeted_reconciliation_scope(
+        intent_id=accepted.intent_id,
+        library_id=library_id,
+        job_id=claimed.job_id,
+        attempt=claimed.attempt,
+        worker_id=claimed.worker_id,
+        lease_token=claimed.lease_token,
+        now=datetime.now(timezone.utc),
+    )
+
+    assert {root["id"] for root in scope.roots} == {"root-a"}
+    assert scope.scope_complete is False
+
+
+def test_live_claim_fence_publishes_once_for_the_exact_attempt(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    _, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix="publication-once",
+    )
+    repository = _scan_repository(worker_url)
+    with isolatedPostgres._connect(worker_url) as connection:
+        assert repository.fence_targeted_reconciliation_publication(
+            connection=connection,
+            claim=claimed,
+            intent_id=accepted.intent_id,
+            commit=connection.commit,
+            now=datetime.now(timezone.utc),
+        ) is True
+        assert repository.fence_targeted_reconciliation_publication(
+            connection=connection,
+            claim=claimed,
+            intent_id=accepted.intent_id,
+            commit=connection.commit,
+            now=datetime.now(timezone.utc),
+        ) is False
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select publication_attempt from library.targeted_reconciliation_intents where id = %s",
+            (accepted.intent_id,),
+        ).fetchone()["publication_attempt"] == claimed.attempt
+
+
+def test_live_claimed_publication_commits_inventory_revision_exactly_once(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    library_id, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix="authoritative-publication",
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        owner_account_id = connection.execute(
+            "select owner_account_id from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["owner_account_id"]
+        connection.execute(
+            "update app.bootstrap_owners set account_id = %s where owner_key = 'local-bootstrap-owner'",
+            (owner_account_id,),
+        )
+        connection.execute(
+            "update library.libraries set name = 'Local Library' where id = %s",
+            (library_id,),
+        )
+
+    repository = _scan_repository(worker_url)
+    private_path = rf"C:\private\scan-jobs-authoritative-publication\a\Artist\Album\01.flac"
+    inventory = {
+        "artists": [
+            {
+                "artist_key": "artist",
+                "name": "Artist",
+                "sort_name": "Artist",
+                "metadata": {},
+            }
+        ],
+        "albums": [
+            {
+                "artist_key": "artist",
+                "album_key": "artist::album",
+                "title": "Album",
+                "release_year": 2026,
+                "cover_path": None,
+                "metadata": {},
+            }
+        ],
+        "featured_artists": [],
+        "tracks": [
+            {
+                "album_key": "artist::album",
+                "artist_key": "artist",
+                "track_key": "artist::album::01",
+                "title": "Track",
+                "disc_number": 1,
+                "track_number": 1,
+                "duration_seconds": 180,
+                "metadata": {},
+            }
+        ],
+        "track_files": [
+            {
+                "track_key": "artist::album::01",
+                "private_path": private_path,
+                "relative_path": r"Artist\Album\01.flac",
+                "file_size_bytes": 1024,
+                "modified_at_epoch": 1_788_710_400.0,
+                "metadata": {},
+            }
+        ],
+    }
+    first = repository.publish_claimed_targeted_reconciliation(
+        claim=claimed,
+        intent_id=accepted.intent_id,
+        inventory=inventory,
+        stale_scopes=(),
+        now=datetime.now(timezone.utc),
+    )
+    second = repository.publish_claimed_targeted_reconciliation(
+        claim=claimed,
+        intent_id=accepted.intent_id,
+        inventory=inventory,
+        stale_scopes=(),
+        now=datetime.now(timezone.utc),
+    )
+
+    import psycopg
+
+    tampered_inventory = json.loads(json.dumps(inventory))
+    tampered_inventory["track_files"][0]["private_path"] = (
+        r"C:\private\unrelated\Secret\01.flac"
+    )
+    with pytest.raises(psycopg.errors.RaiseException, match="file scope"):
+        repository.publish_claimed_targeted_reconciliation(
+            claim=claimed,
+            intent_id=accepted.intent_id,
+            inventory=tampered_inventory,
+            stale_scopes=(),
+            now=datetime.now(timezone.utc),
+        )
+    with pytest.raises(psycopg.errors.RaiseException, match="stale scope"):
+        repository.publish_claimed_targeted_reconciliation(
+            claim=claimed,
+            intent_id=accepted.intent_id,
+            inventory=inventory,
+            stale_scopes=(
+                {
+                    "root_id": "root-a",
+                    "paths": [r"C:\private\unrelated\Secret\01.flac"],
+                    "subtrees": [],
+                },
+            ),
+            now=datetime.now(timezone.utc),
+        )
+
+    assert first["publication_won"] is True
+    assert first["inventory_mutation_revision"] == 1
+    assert second == {
+        "publication_won": False,
+        "inventory_mutation_revision": 1,
+        "affected_album_keys": ("artist::album",),
+    }
+    with isolatedPostgres._connect(setup_url) as connection:
+        intent = connection.execute(
+            "select publication_attempt, committed_inventory_revision from library.targeted_reconciliation_intents where id = %s",
+            (accepted.intent_id,),
+        ).fetchone()
+        assert intent == {
+            "publication_attempt": claimed.attempt,
+            "committed_inventory_revision": 1,
+        }
+        assert connection.execute(
+            "select metadata #>> '{scan_cache,relation_projection,status}' as status from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["status"] == "stale"
+        assert connection.execute(
+            "select count(*) as count from library.local_track_files where private_path = %s",
+            (private_path,),
+        ).fetchone()["count"] == 1
+
+
+def test_live_lost_lease_rolls_back_pending_publication_transaction(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    _, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix="lease-loss",
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set lease_expires_at = now() - interval '1 second' where id = %s",
+            (claimed.job_id,),
+        )
+
+    repository = _scan_repository(worker_url)
+    with isolatedPostgres._connect(worker_url) as connection:
+        assert repository.fence_targeted_reconciliation_publication(
+            connection=connection,
+            claim=claimed,
+            intent_id=accepted.intent_id,
+            commit=connection.commit,
+            now=datetime.now(timezone.utc),
+        ) is False
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select publication_attempt from library.targeted_reconciliation_intents where id = %s",
+            (accepted.intent_id,),
+        ).fetchone()["publication_attempt"] is None
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "select id from library.library_roots limit 1",
+        "select id from library.libraries limit 1",
+        "select id from app.accounts limit 1",
+        "select id from app.capabilities limit 1",
+        "select id from app.request_origins limit 1",
+    ),
+)
+def test_live_worker_role_cannot_read_unrelated_library_or_app_data(
+    live_scan_database, statement
+):
+    import psycopg
+
+    _, _, worker_url = live_scan_database
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.execute(statement).fetchone()
+
+
+@pytest.mark.parametrize(
+    "table",
+    (
+        "library.local_artists",
+        "library.local_albums",
+        "library.local_tracks",
+        "library.local_track_files",
+        "library.local_album_featured_artists",
+    ),
+)
+@pytest.mark.parametrize("privilege", ("SELECT", "INSERT", "UPDATE", "DELETE"))
+def test_live_worker_has_no_direct_inventory_table_privileges(
+    live_scan_database, table, privilege
+):
+    setup_url, _, _ = live_scan_database
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        allowed = connection.execute(
+            "select has_table_privilege('album_haven_worker', %s, %s) as allowed",
+            (table, privilege),
+        ).fetchone()["allowed"]
+
+    assert allowed is False

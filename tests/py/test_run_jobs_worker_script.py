@@ -112,3 +112,15 @@ def test_worker_heartbeat_failure_maps_to_redacted_runtime_exit():
     assert stderr.getvalue() == "Durable jobs worker failed.\n"
     assert "heartbeat" not in stderr.getvalue().casefold()
     assert "secret" not in stderr.getvalue().casefold()
+
+
+def test_worker_bootstrap_registers_the_closed_targeted_reconciliation_handler():
+    import inspect
+
+    source = inspect.getsource(run_jobs_worker._build_worker)
+
+    assert "build_targeted_reconciliation_handler" in source
+    assert "JobKind.TARGETED_RECONCILIATION" in source
+    assert "handlers.register" in source
+    assert "load_claimed_targeted_reconciliation_scope" in source
+    assert "resource_validators" in source

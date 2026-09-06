@@ -505,6 +505,34 @@ def test_server_owned_work_without_inherited_library_scope_fails_before_loading(
     assert repository.loads == []
 
 
+def test_library_watcher_targeted_work_uses_claim_scoped_validator_without_account_snapshot():
+    validator_contexts = []
+
+    def validator(claim, context, now):
+        validator_contexts.append(context)
+        return AuthorizationDecision(True, "server_scope_current")
+
+    service, repository = _service(
+        validators={"targeted_reconciliation": validator}
+    )
+    claim = _claim(
+        kind="targeted_reconciliation",
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        client_surface="library_watcher",
+        max_attempts=3,
+    )
+
+    assert service.authorize(claim, NOW) == AuthorizationDecision(
+        True, "server_scope_current"
+    )
+    assert repository.loads == []
+    assert len(validator_contexts) == 1
+    assert validator_contexts[0].actor is None
+    assert validator_contexts[0].library_current is True
+
+
 def test_bootstrap_owner_keeps_accepted_work_with_current_scope():
     service, repository = _service()
     repository.actor = _actor(capability="library.browse.read", bootstrap=True)

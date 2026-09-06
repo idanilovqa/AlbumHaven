@@ -95,6 +95,35 @@ def invalidate_targeted_library_projections(
     )
 
 
+def sync_durable_inventory_revision(
+    library_state: dict[str, object],
+    config: dict[str, object],
+) -> int:
+    """Observe worker commits and invalidate this web process once per revision."""
+
+    current_revision = max(
+        0, int(library_state.get("inventory_mutation_revision") or 0)
+    )
+    try:
+        adapter = select_scan_cache_adapter(config)
+        load_revision = getattr(adapter, "load_inventory_mutation_revision", None)
+        if not callable(load_revision):
+            return current_revision
+        durable_revision = max(0, int(load_revision() or 0))
+    except Exception:
+        return current_revision
+    if durable_revision <= current_revision:
+        return current_revision
+    invalidate_targeted_library_projections(
+        library_state,
+        config,
+        revision=durable_revision,
+        affected_album_keys=(),
+    )
+    library_state["relation_projection_ready"] = False
+    return durable_revision
+
+
 def _bounded_file_error_history_recorder(
     config: dict[str, object],
     logger: object,

@@ -8,6 +8,7 @@ from datetime import datetime
 from hashlib import sha256
 import json
 from pathlib import Path
+from types import MappingProxyType
 import re
 from typing import Any
 
@@ -34,6 +35,41 @@ class ClaimedFullScanIntent:
     mode: str
     force: bool
     root_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedTargetedReconciliationIntent:
+    intent_id: int
+    library_id: int
+    request: TargetedReconciliationRequest
+    exception_overrides: Mapping[str, str]
+
+    @property
+    def root_id(self) -> str:
+        return self.request.root_id
+
+    @property
+    def paths(self) -> frozenset[Path]:
+        return self.request.paths
+
+    @property
+    def deleted_paths(self) -> frozenset[Path]:
+        return self.request.deleted_paths
+
+    @property
+    def deleted_subtrees(self) -> frozenset[Path]:
+        return self.request.deleted_subtrees
+
+    @property
+    def moves(self) -> tuple[TargetedMove, ...]:
+        return self.request.moves
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedTargetedReconciliationScope:
+    roots: tuple[dict[str, object], ...]
+    root_healthy: bool
+    scope_complete: bool
 
 
 def _connect(database_url: str) -> Any:
@@ -100,6 +136,27 @@ class PostgresScanJobRepository:
         if not self._database_url:
             raise RuntimeError("scan job database URL is required")
         return self._connect_to_database(self._database_url)
+
+    def resolve_local_library_id(self) -> int:
+        """Resolve the one bootstrap-owned local library for watcher work."""
+
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                select library_record.id as library_id
+                  from app.bootstrap_owners as owner_record
+                  join library.libraries as library_record
+                    on library_record.owner_account_id = owner_record.account_id
+                 where owner_record.owner_key = 'local-bootstrap-owner'
+                   and library_record.name = 'Local Library'
+                   and library_record.library_kind = 'local'
+                 order by library_record.id
+                 limit 2
+                """
+            ).fetchall()
+        if len(rows) != 1:
+            raise RuntimeError("local library scope is unavailable")
+        return _positive_id(_row_mapping(rows[0]).get("library_id"), "library_id")
 
     def enqueue_full_scan(
         self,
@@ -364,7 +421,7 @@ class PostgresScanJobRepository:
             row = connection.execute(
                 """
                 select *
-                  from library.load_claimed_targeted_reconciliation_intent(
+                  from library.load_claimed_targeted_reconciliation_intent_v2(
                     %(job_id)s, %(worker_id)s, %(lease_token)s
                   )
                 """,
@@ -372,7 +429,7 @@ class PostgresScanJobRepository:
             ).fetchone()
         payload = _row_mapping(row)
         moves_payload = payload.get("moves") or []
-        return TargetedReconciliationRequest(
+        request = TargetedReconciliationRequest(
             root_id=_bounded_text(payload.get("logical_root_id"), "root_id"),
             paths=frozenset(Path(value) for value in payload.get("active_paths") or ()),
             deleted_paths=frozenset(
@@ -393,6 +450,156 @@ class PostgresScanJobRepository:
                 if isinstance(item, Mapping)
             ),
         )
+        raw_overrides = payload.get("exception_overrides") or {}
+        if not isinstance(raw_overrides, Mapping):
+            raise RuntimeError("claimed targeted exception overrides are invalid")
+        overrides = {
+            _bounded_text(path, "exception override path", maximum=4096): str(
+                value or ""
+            )
+            for path, value in raw_overrides.items()
+        }
+        return ClaimedTargetedReconciliationIntent(
+            intent_id=_positive_id(payload.get("intent_id"), "intent_id"),
+            library_id=_positive_id(payload.get("library_id"), "library_id"),
+            request=request,
+            exception_overrides=MappingProxyType(overrides),
+        )
+
+    def load_claimed_targeted_reconciliation_scope(
+        self,
+        *,
+        intent_id: int,
+        library_id: int,
+        job_id: int,
+        attempt: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+    ) -> ClaimedTargetedReconciliationScope:
+        parameters = {
+            "intent_id": _positive_id(intent_id, "intent_id"),
+            "library_id": _positive_id(library_id, "library_id"),
+            "job_id": _positive_id(job_id, "job_id"),
+            "attempt": _positive_id(attempt, "attempt"),
+            "worker_id": _bounded_text(worker_id, "worker_id"),
+            "lease_token": _bounded_text(lease_token, "lease_token"),
+            "now": now,
+        }
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                select *
+                  from library.load_claimed_targeted_reconciliation_scope(
+                    %(intent_id)s, %(library_id)s, %(job_id)s, %(attempt)s,
+                    %(worker_id)s, %(lease_token)s, %(now)s
+                  )
+                """,
+                parameters,
+            ).fetchall()
+        roots: list[dict[str, object]] = []
+        root_healthy = True
+        scope_complete = True
+        for raw_row in rows:
+            row = _row_mapping(raw_row)
+            roots.append(
+                {
+                    "id": _bounded_text(row.get("logical_root_id"), "root_id"),
+                    "path": Path(_bounded_text(row.get("root_path"), "root_path", maximum=4096)),
+                    "category": _bounded_text(row.get("root_kind"), "root_kind"),
+                    "library_id": _positive_id(row.get("library_id"), "library_id"),
+                    "is_active": row.get("is_active") is True,
+                }
+            )
+            root_healthy = root_healthy and row.get("root_healthy") is True
+            scope_complete = (
+                scope_complete and row.get("scope_complete") is True
+            )
+        return ClaimedTargetedReconciliationScope(
+            tuple(roots), root_healthy, bool(roots) and scope_complete
+        )
+
+    def fence_targeted_reconciliation_publication(
+        self,
+        *,
+        connection: Any,
+        claim: Any,
+        intent_id: int,
+        commit: Callable[[], object],
+        now: datetime,
+    ) -> bool:
+        row = connection.execute(
+            """
+            select library.fence_targeted_reconciliation_publication(
+              %(intent_id)s, %(job_id)s, %(attempt)s,
+              %(worker_id)s, %(lease_token)s, %(now)s
+            ) as publication_won
+            """,
+            {
+                "intent_id": _positive_id(intent_id, "intent_id"),
+                "job_id": _positive_id(claim.job_id, "job_id"),
+                "attempt": _positive_id(claim.attempt, "attempt"),
+                "worker_id": _bounded_text(claim.worker_id, "worker_id"),
+                "lease_token": _bounded_text(claim.lease_token, "lease_token"),
+                "now": now,
+            },
+        ).fetchone()
+        publication_won = _row_mapping(row).get("publication_won") is True
+        if not publication_won:
+            rollback = getattr(connection, "rollback", None)
+            if callable(rollback):
+                rollback()
+            return False
+        commit()
+        return True
+
+    def publish_claimed_targeted_reconciliation(
+        self,
+        *,
+        claim: Any,
+        intent_id: int,
+        inventory: Mapping[str, object],
+        stale_scopes: Iterable[Mapping[str, object]],
+        now: datetime,
+    ) -> dict[str, object]:
+        parameters = {
+            "intent_id": _positive_id(intent_id, "intent_id"),
+            "job_id": _positive_id(claim.job_id, "job_id"),
+            "attempt": _positive_id(claim.attempt, "attempt"),
+            "worker_id": _bounded_text(claim.worker_id, "worker_id"),
+            "lease_token": _bounded_text(claim.lease_token, "lease_token"),
+            "inventory": json.dumps(
+                dict(inventory), ensure_ascii=False, separators=(",", ":")
+            ),
+            "stale_scopes": json.dumps(
+                [dict(scope) for scope in stale_scopes],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "now": now,
+        }
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select *
+                  from library.publish_claimed_targeted_reconciliation(
+                    %(intent_id)s, %(job_id)s, %(attempt)s,
+                    %(worker_id)s, %(lease_token)s,
+                    %(inventory)s::jsonb, %(stale_scopes)s::jsonb, %(now)s
+                  )
+                """,
+                parameters,
+            ).fetchone()
+        payload = _row_mapping(row)
+        return {
+            "publication_won": payload.get("publication_won") is True,
+            "inventory_mutation_revision": int(
+                payload.get("inventory_mutation_revision") or 0
+            ),
+            "affected_album_keys": tuple(
+                str(key) for key in payload.get("affected_album_keys") or ()
+            ),
+        }
 
     @staticmethod
     def _resolve_roots(

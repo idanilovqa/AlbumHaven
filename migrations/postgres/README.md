@@ -136,4 +136,6 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 
 `0065_harden_durable_job_boundaries.sql` closes transition history to legal state-machine edges, narrows worker updates to orchestration columns, and preserves the first accepted running-job cancellation metadata when requests repeat.
 
+`0066_grant_worker_authorization_reads.sql` grants the worker only the non-secret, column-scoped account, ownership, library-membership, capability, and request-origin reads required to revalidate durable-job authority from stable identifiers. It grants no table-wide reads, sequence access, or access to private identity, credential, origin-key, or filesystem fields.
+
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

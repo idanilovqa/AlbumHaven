@@ -36,6 +36,9 @@ DURABLE_JOB_CANCELLATION_MIGRATION = (
 DURABLE_JOB_BOUNDARY_HARDENING_MIGRATION = (
     MIGRATIONS_DIR / "0065_harden_durable_job_boundaries.sql"
 )
+DURABLE_JOB_AUTHORIZATION_READS_MIGRATION = (
+    MIGRATIONS_DIR / "0066_grant_worker_authorization_reads.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -435,7 +438,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-27:] == [
+    assert migration_names[-28:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -463,6 +466,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0063_create_durable_job_foundation.sql",
         "0064_request_durable_job_cancellation.sql",
         "0065_harden_durable_job_boundaries.sql",
+        "0066_grant_worker_authorization_reads.sql",
     ]
 
 
@@ -3235,3 +3239,78 @@ def test_durable_job_boundary_hardening_enforces_transitions_and_worker_columns(
     assert "grant select on table ops.jobs to album_haven_worker" in sql
     assert "cancel_requested_at = coalesce(jobs.cancel_requested_at" in sql
     assert "cancel_requested_by_account_id = coalesce(" in sql
+
+
+def test_worker_authorization_read_migration_file_exists():
+    assert DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.is_file(), (
+        "Task 4 requires additive migration "
+        "0066_grant_worker_authorization_reads.sql"
+    )
+
+
+def test_worker_authorization_reads_are_column_scoped_private_and_upgrade_safe():
+    if not DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.exists():
+        pytest.skip("worker authorization read migration is not present yet")
+    sql = _normalized_sql(
+        DURABLE_JOB_AUTHORIZATION_READS_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "do $$" in sql
+    assert (
+        "if exists (select 1 from pg_roles where rolname = 'album_haven_worker') then"
+        in sql
+    )
+    assert "grant usage on schema app, library to album_haven_worker" in sql
+    expected_grants = {
+        "app.accounts": {"id", "is_active", "disabled_at"},
+        "app.bootstrap_owners": {"account_id", "owner_key"},
+        "library.libraries": {"id", "owner_account_id"},
+        "library.library_memberships": {
+            "library_id",
+            "account_id",
+            "membership_role",
+        },
+        "app.capabilities": {
+            "account_id",
+            "capability_key",
+            "scope_kind",
+            "scope_id",
+            "revoked_at",
+        },
+        "app.request_origins": {
+            "id",
+            "account_id",
+            "client_surface_class",
+            "origin_type",
+        },
+    }
+    for table_name, expected_columns in expected_grants.items():
+        revoke = f"revoke select on table {table_name} from album_haven_worker"
+        assert revoke in sql
+        grant = re.search(
+            rf"grant\s+select\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+            rf"{re.escape(table_name)}\s+to\s+album_haven_worker",
+            sql,
+        )
+        assert grant is not None
+        assert sql.index(revoke) < grant.start()
+        assert {
+            column.strip() for column in grant.group("columns").split(",")
+        } == expected_columns
+        assert not re.search(
+            rf"grant\s+select\s+on\s+table\s+{re.escape(table_name)}\s+"
+            r"to\s+album_haven_worker",
+            sql,
+        )
+
+    for private_column in (
+        "password_hash",
+        "session_token_hash",
+        "token_hash",
+        "origin_key",
+        "root_path",
+        "display_name",
+        "username_display",
+        "name",
+    ):
+        assert not re.search(rf"\b{re.escape(private_column)}\b", sql)

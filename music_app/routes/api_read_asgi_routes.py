@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -35,6 +36,10 @@ from music_app.services.album_ratings_postgres import PostgresAlbumRatingsServic
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.library_watch_health import LibraryWatchHealthService
 from music_app.services.policy_asgi import allowed_actions_for_request
+from music_app.services.private_route_boundary import (
+    _job_status_service,
+    _sanitize_public_worker_health,
+)
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
     default_album_preference_overlay,
@@ -336,7 +341,123 @@ async def status(request: Request) -> JSONResponse:
         payload["watcher_health"] = _project_library_watch_health_for_request(
             request
         )
+    service = _job_status_service(request.app)
+    operator_allowed = allowed_actions_for_request(
+        request,
+        ("ops.jobs.status.read",),
+    ).allows("ops.jobs.status.read")
+    now = datetime.now(timezone.utc)
+    if operator_allowed:
+        operator_status = getattr(service, "operator_status", None)
+        try:
+            result = (
+                await run_in_threadpool(operator_status, now)
+                if callable(operator_status)
+                else None
+            )
+        except Exception:
+            result = None
+        job_status = _sanitize_operator_job_status(result)
+        payload["worker_status"] = job_status["worker_status"]
+        payload["job_status"] = job_status
+    else:
+        public_health = getattr(service, "public_health", None)
+        try:
+            result = (
+                await run_in_threadpool(public_health, now)
+                if callable(public_health)
+                else None
+            )
+        except Exception:
+            result = None
+        worker_health = _sanitize_public_worker_health(result)
+        payload["worker_status"] = worker_health["worker_status"]
     return JSONResponse(payload)
+
+
+def _sanitize_operator_job_status(value: object) -> dict[str, object]:
+    unavailable = _unavailable_operator_job_status()
+    if not isinstance(value, Mapping):
+        return unavailable
+    public_health = _sanitize_public_worker_health(
+        {"status": "ok", "worker_status": value.get("worker_status")}
+    )
+    if public_health["worker_status"] == "worker_unavailable" and value.get(
+        "worker_status"
+    ) != "worker_unavailable":
+        return unavailable
+
+    worker = value.get("worker")
+    if worker is not None:
+        if not isinstance(worker, Mapping):
+            return unavailable
+        instance_id = worker.get("instance_id")
+        lifecycle_state = worker.get("lifecycle_state")
+        heartbeat_age = worker.get("heartbeat_age_seconds")
+        if (
+            not isinstance(instance_id, str)
+            or not instance_id
+            or len(instance_id) > 128
+            or lifecycle_state not in {"starting", "running", "draining", "stopped"}
+            or not _is_bounded_status_integer(heartbeat_age)
+        ):
+            return unavailable
+        worker_projection: dict[str, object] | None = {
+            "instance_id": instance_id,
+            "lifecycle_state": lifecycle_state,
+            "heartbeat_age_seconds": heartbeat_age,
+        }
+    else:
+        worker_projection = None
+    if (
+        worker_projection is None
+        and public_health["worker_status"] in {"worker_ready", "worker_degraded"}
+    ):
+        return unavailable
+
+    jobs = value.get("jobs")
+    if not isinstance(jobs, Mapping):
+        return unavailable
+    job_keys = (
+        "queued_count",
+        "running_count",
+        "retry_count",
+        "failed_count",
+        "ambiguous_count",
+        "oldest_queue_age_seconds",
+        "claim_lag_seconds",
+    )
+    if any(not _is_bounded_status_integer(jobs.get(key)) for key in job_keys):
+        return unavailable
+    return {
+        "worker_status": public_health["worker_status"],
+        "worker": worker_projection,
+        "jobs": {key: jobs[key] for key in job_keys},
+    }
+
+
+def _is_bounded_status_integer(value: object) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value <= 2_147_483_647
+    )
+
+
+def _unavailable_operator_job_status() -> dict[str, object]:
+    return {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
 
 
 def _state_percent(library_state: dict[str, object], *, processed_key: str, total_key: str) -> int:

@@ -241,7 +241,47 @@ def test_health_is_public_and_sanitized():
     status, body = _request(app, "/health")
 
     assert status == 200
-    assert body == b'{"status":"ok"}'
+    assert body == b'{"status":"ok","worker_status":"worker_unavailable"}'
+
+
+def test_health_uses_configured_job_status_service_without_authentication_or_details():
+    class HealthService:
+        def __init__(self):
+            self.calls = []
+
+        def public_health(self, now):
+            self.calls.append(now)
+            return {"status": "ok", "worker_status": "worker_ready"}
+
+    app, resolver = _app(CurrentActor.anonymous())
+    service = HealthService()
+    app.state.job_status_service = service
+
+    status, body = _request(app, "/health")
+
+    assert status == 200
+    assert body == b'{"status":"ok","worker_status":"worker_ready"}'
+    assert len(service.calls) == 1
+    assert service.calls[0].tzinfo is not None
+    assert resolver.calls == []
+
+
+def test_health_keeps_web_readiness_when_job_status_service_fails_and_redacts_error():
+    secret = "postgresql://user:password@private-host/album"
+
+    class FailingHealthService:
+        def public_health(self, _now):
+            raise RuntimeError(secret)
+
+    app, resolver = _app(CurrentActor.anonymous())
+    app.state.job_status_service = FailingHealthService()
+
+    status, body = _request(app, "/health")
+
+    assert status == 200
+    assert body == b'{"status":"ok","worker_status":"worker_unavailable"}'
+    assert secret.encode() not in body
+    assert resolver.calls == []
 
 
 def test_reset_link_query_is_removed_from_downstream_scope_before_dispatch():

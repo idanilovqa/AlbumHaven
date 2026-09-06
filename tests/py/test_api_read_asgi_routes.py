@@ -14,6 +14,8 @@ from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 
+from music_app.services.current_actor import ActorState, CapabilityGrant, CurrentActor
+
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
@@ -59,6 +61,20 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert status == 200
     assert headers["content-type"].startswith("application/json")
     payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
     assert payload["scan_in_progress"] is False
     assert payload["scan_percent"] == 0
     assert payload["scan_mode"] == "idle"
@@ -70,6 +86,215 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     revision_epoch, revision_counter = payload["log_history_revision"].rsplit(":", 1)
     assert revision_epoch
     assert revision_counter == "0"
+
+
+class _ActorResolver:
+    def __init__(self, actor):
+        self.actor = actor
+
+    def resolve(self, _raw_token):
+        return self.actor
+
+
+class _JobStatusService:
+    def __init__(self, *, worker_status="worker_ready", fail=False):
+        self.worker_status = worker_status
+        self.fail = fail
+        self.public_calls = []
+        self.operator_calls = []
+
+    def public_health(self, now):
+        self.public_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {"status": "ok", "worker_status": self.worker_status}
+
+    def operator_status(self, now):
+        self.operator_calls.append(now)
+        if self.fail:
+            raise RuntimeError("postgresql://user:password@private-host/jobs")
+        return {
+            "worker_status": self.worker_status,
+            "worker": {
+                "instance_id": "worker-opaque-a",
+                "lifecycle_state": "running",
+                "heartbeat_age_seconds": 12,
+            },
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+            },
+        }
+
+
+def _status_actor(*, bootstrap=False, include_operator_capability=False):
+    grants = [CapabilityGrant("library.browse.read", "global", None)]
+    if include_operator_capability:
+        grants.append(CapabilityGrant("ops.jobs.status.read", "global", None))
+    return CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="Operator",
+        is_bootstrap_owner=bootstrap,
+        capability_grants=tuple(grants),
+    )
+
+
+def test_asgi_status_gives_ordinary_status_reader_only_coarse_worker_health():
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService(worker_status="worker_degraded")
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor())
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_degraded"
+    assert "job_status" not in payload
+    assert len(service.public_calls) == 1
+    assert service.operator_calls == []
+    private_names = {
+        "instance_id",
+        "heartbeat_age_seconds",
+        "queued_count",
+        "running_count",
+        "retry_count",
+        "failed_count",
+        "ambiguous_count",
+        "oldest_queue_age_seconds",
+        "claim_lag_seconds",
+    }
+    assert private_names.isdisjoint(payload)
+
+
+@pytest.mark.parametrize(
+    "actor",
+    [
+        pytest.param(_status_actor(bootstrap=True), id="bootstrap-owner"),
+        pytest.param(
+            _status_actor(include_operator_capability=True),
+            id="explicit-capability",
+        ),
+    ],
+)
+def test_asgi_status_adds_one_sanitized_nested_projection_for_authorized_operator(actor):
+    asgi_app = _make_asgi_app()
+    service = _JobStatusService()
+    asgi_app.state.current_actor_resolver = _ActorResolver(actor)
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_ready"
+    assert payload["job_status"] == {
+        "worker_status": "worker_ready",
+        "worker": {
+            "instance_id": "worker-opaque-a",
+            "lifecycle_state": "running",
+            "heartbeat_age_seconds": 12,
+        },
+        "jobs": {
+            "queued_count": 3,
+            "running_count": 2,
+            "retry_count": 1,
+            "failed_count": 4,
+            "ambiguous_count": 1,
+            "oldest_queue_age_seconds": 120,
+            "claim_lag_seconds": 45,
+        },
+    }
+    assert service.public_calls == []
+    assert len(service.operator_calls) == 1
+    assert "subject_ref" not in repr(payload["job_status"])
+    assert "parameters" not in repr(payload["job_status"])
+    assert "account_id" not in repr(payload["job_status"])
+    assert "library_id" not in repr(payload["job_status"])
+
+
+@pytest.mark.parametrize("worker_status", ["worker_ready", "worker_degraded"])
+def test_asgi_status_fails_closed_when_operator_worker_details_are_missing(worker_status):
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    service = _JobStatusService(worker_status=worker_status)
+
+    def inconsistent_operator_status(now):
+        service.operator_calls.append(now)
+        return {
+            "worker_status": worker_status,
+            "worker": None,
+            "jobs": {
+                "queued_count": 3,
+                "running_count": 2,
+                "retry_count": 1,
+                "failed_count": 4,
+                "ambiguous_count": 1,
+                "oldest_queue_age_seconds": 120,
+                "claim_lag_seconds": 45,
+            },
+            "diagnostic": secret,
+        }
+
+    service.operator_status = inconsistent_operator_status
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = service
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert len(service.operator_calls) == 1
+    assert secret not in body.decode("utf-8")
+
+
+def test_asgi_status_service_failure_is_sanitized_and_preserves_existing_payload():
+    asgi_app = _make_asgi_app()
+    secret = "postgresql://user:password@private-host/jobs"
+    asgi_app.state.current_actor_resolver = _ActorResolver(_status_actor(bootstrap=True))
+    asgi_app.state.job_status_service = _JobStatusService(fail=True)
+
+    status, _headers, body = _run_asgi_request(asgi_app, "GET", "/status")
+
+    assert status == 200
+    payload = _decode_json(body)
+    assert payload["scan_in_progress"] is False
+    assert payload["worker_status"] == "worker_unavailable"
+    assert payload["job_status"] == {
+        "worker_status": "worker_unavailable",
+        "worker": None,
+        "jobs": {
+            "queued_count": 0,
+            "running_count": 0,
+            "retry_count": 0,
+            "failed_count": 0,
+            "ambiguous_count": 0,
+            "oldest_queue_age_seconds": 0,
+            "claim_lag_seconds": 0,
+        },
+    }
+    assert secret not in body.decode("utf-8")
 
 
 def test_status_payload_counts_matching_active_scan_preview_without_leaking_preview_metadata():
@@ -3701,6 +3926,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
     asgi_app.state.config = asgi_config
     asgi_app.state.library_state = asgi_library_state
     asgi_app.state.logger = asgi_logger
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: []
+    )
 
     detail_calls: list[str] = []
     fallback_calls: list[tuple[str, dict[str, object], dict[str, object], object]] = []
@@ -3821,6 +4049,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
         "context_music_dir": str(asgi_config["MUSIC_DIR"]),
         "state_album_count": 1,
         "logger_name": "problematic-fallback-logger",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {
@@ -3996,6 +4227,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: []
+    )
 
     list_status, _list_headers, list_body = _run_asgi_request(
         asgi_app,
@@ -4045,6 +4279,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {

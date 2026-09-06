@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timezone
 import hashlib
 import hmac
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import QueryParams
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import Response
 from starlette.routing import Match
 
@@ -157,13 +159,33 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/track-preferences"): "library.track_preferences.manage",
 }
 
+_WORKER_STATUSES = frozenset(
+    {"worker_ready", "worker_degraded", "worker_unavailable"}
+)
+_UNAVAILABLE_WORKER_HEALTH = {
+    "status": "ok",
+    "worker_status": "worker_unavailable",
+}
+_MISSING_JOB_STATUS_SERVICE = object()
+
 
 def install_private_route_boundary(app: FastAPI) -> None:
     """Install the public health endpoint and default-private request boundary."""
 
     @app.get("/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        service = _job_status_service(app)
+        public_health = getattr(service, "public_health", None)
+        if not callable(public_health):
+            return dict(_UNAVAILABLE_WORKER_HEALTH)
+        try:
+            result = await run_in_threadpool(
+                public_health,
+                datetime.now(timezone.utc),
+            )
+        except Exception:
+            return dict(_UNAVAILABLE_WORKER_HEALTH)
+        return _sanitize_public_worker_health(result)
 
     @app.middleware("http")
     async def require_private_authentication(request: Request, call_next):
@@ -202,6 +224,41 @@ def install_private_route_boundary(app: FastAPI) -> None:
         if request.method.upper() in _READ_METHODS:
             _refresh_session_csrf_cookie(request, response)
         return response
+
+
+def _job_status_service(app: FastAPI):
+    configured = getattr(
+        app.state,
+        "job_status_service",
+        _MISSING_JOB_STATUS_SERVICE,
+    )
+    if configured is not _MISSING_JOB_STATUS_SERVICE:
+        return configured
+    try:
+        config = getattr(app.state, "config", None)
+        if not isinstance(config, Mapping):
+            return None
+        database_url = str(
+            config.get("ALBUM_HAVEN_APP_DATABASE_URL") or ""
+        ).strip()
+        if not database_url:
+            return None
+        from music_app.services.jobs.status import PostgresJobStatusService
+
+        service = PostgresJobStatusService(database_url=database_url)
+    except Exception:
+        return None
+    app.state.job_status_service = service
+    return service
+
+
+def _sanitize_public_worker_health(value: object) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return dict(_UNAVAILABLE_WORKER_HEALTH)
+    worker_status = value.get("worker_status")
+    if value.get("status") != "ok" or worker_status not in _WORKER_STATUSES:
+        return dict(_UNAVAILABLE_WORKER_HEALTH)
+    return {"status": "ok", "worker_status": worker_status}
 
 
 def _refresh_session_csrf_cookie(request: Request, response: Response) -> None:

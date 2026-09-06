@@ -770,6 +770,41 @@ class PostgresScanJobRepository:
             ),
         }
 
+    def validate_claimed_post_scan_cover_refresh(
+        self,
+        *,
+        library_id: int,
+        inventory_revision: int,
+        job_id: int,
+        attempt: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+    ) -> bool:
+        """Validate one server-owned cover handoff against current inventory."""
+
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                select library.validate_claimed_post_scan_cover_refresh(
+                  %(library_id)s, %(inventory_revision)s, %(job_id)s,
+                  %(attempt)s, %(worker_id)s, %(lease_token)s, %(now)s
+                ) as scope_current
+                """,
+                {
+                    "library_id": _positive_id(library_id, "library_id"),
+                    "inventory_revision": _nonnegative_int(
+                        inventory_revision, "inventory_revision"
+                    ),
+                    "job_id": _positive_id(job_id, "job_id"),
+                    "attempt": _positive_id(attempt, "attempt"),
+                    "worker_id": _bounded_text(worker_id, "worker_id"),
+                    "lease_token": _bounded_text(lease_token, "lease_token"),
+                    "now": now,
+                },
+            ).fetchone()
+        return _row_mapping(row).get("scope_current") is True
+
     def load_authorized_full_scan_status(
         self,
         *,

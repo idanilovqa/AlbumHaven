@@ -195,7 +195,12 @@ class PostgresJobRepository:
         return int(row["job_id"])
 
     def claim(
-        self, *, worker_id: str, now: datetime, lease_seconds: int
+        self,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+        kinds: tuple[str, ...] | None = None,
     ) -> ClaimedJob | None:
         _require_bounded_identifier("worker_id", worker_id)
         _require_aware_datetime("now", now)
@@ -209,11 +214,27 @@ class PostgresJobRepository:
 
         lease_token = secrets.token_urlsafe(32)
         lease_expires_at = now + timedelta(seconds=lease_seconds)
+        if kinds is not None:
+            try:
+                normalized_values = set()
+                for kind in kinds:
+                    policy_for(kind)
+                    normalized_values.add(
+                        str(kind.value if hasattr(kind, "value") else kind)
+                    )
+                normalized_kinds = tuple(sorted(normalized_values))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("claim kinds must be registered job kinds") from exc
+            if not normalized_kinds:
+                return None
+        else:
+            normalized_kinds = None
         statement = """
             with candidate as (
               select id, state as prior_state
                 from ops.jobs as jobs
                where state in ('queued', 'retry_wait')
+                 and (%(kinds)s::varchar[] is null or kind = any(%(kinds)s::varchar[]))
                  and scheduled_at <= %(now)s
                  and cancel_requested_at is null
                  and attempt_count < max_attempts
@@ -272,6 +293,7 @@ class PostgresJobRepository:
                     "lease_token": lease_token,
                     "lease_expires_at": lease_expires_at,
                     "now": now,
+                    "kinds": list(normalized_kinds) if normalized_kinds is not None else None,
                 },
             ).fetchone()
             return None if row is None else self._claimed_job(row)

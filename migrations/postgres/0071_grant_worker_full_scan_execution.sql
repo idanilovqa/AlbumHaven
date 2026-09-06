@@ -740,8 +740,107 @@ begin
   if not found then
     raise exception 'full scan publication fence was lost';
   end if;
+
+  insert into ops.jobs (
+    kind, subject_kind, subject_ref, parameters, account_id, library_id,
+    capability_key, request_origin_id, deployment_mode, client_surface,
+    scope_version, resource_revision, idempotency_key, priority, scheduled_at,
+    max_attempts, recovery_policy
+  ) values (
+    'post_scan_cover_refresh',
+    'inventory_revision',
+    'revision-' || committed_revision::text,
+    jsonb_build_object('inventory_revision', committed_revision),
+    null,
+    claimed_library_id,
+    null,
+    null,
+    claimed_deployment_mode,
+    claimed_client_surface,
+    null,
+    committed_revision,
+    'post-scan-cover-refresh:' || claimed_library_id::text || ':' || committed_revision::text,
+    0,
+    p_now,
+    2,
+    'retry_safe'
+  )
+  on conflict do nothing;
+
+  perform 1
+    from ops.jobs as follow_up
+   where follow_up.kind = 'post_scan_cover_refresh'
+     and follow_up.subject_kind = 'inventory_revision'
+     and follow_up.subject_ref = 'revision-' || committed_revision::text
+     and follow_up.parameters = jsonb_build_object(
+       'inventory_revision', committed_revision
+     )
+     and follow_up.account_id is null
+     and follow_up.library_id = claimed_library_id
+     and follow_up.capability_key is null
+     and follow_up.request_origin_id is null
+     and follow_up.deployment_mode = claimed_deployment_mode
+     and follow_up.client_surface = claimed_client_surface
+     and follow_up.scope_version is null
+     and follow_up.resource_revision = committed_revision
+     and follow_up.idempotency_key =
+       'post-scan-cover-refresh:' || claimed_library_id::text || ':' || committed_revision::text
+     and follow_up.priority = 0
+     and follow_up.max_attempts = 2
+     and follow_up.recovery_policy = 'retry_safe';
+  if not found then
+    raise exception 'post-scan cover follow-up identity conflict';
+  end if;
+
   return query select true, committed_revision;
 end;
+$$;
+
+create or replace function library.validate_claimed_post_scan_cover_refresh(
+  p_library_id bigint,
+  p_inventory_revision bigint,
+  p_job_id bigint,
+  p_attempt integer,
+  p_worker_id varchar,
+  p_lease_token varchar,
+  p_now timestamptz
+)
+returns boolean
+language sql
+security definer
+set search_path = pg_catalog
+as $$
+  select exists (
+    select 1
+      from ops.jobs as job
+      join library.libraries as library_record on library_record.id = job.library_id
+     where job.id = p_job_id
+       and job.kind = 'post_scan_cover_refresh'
+       and job.subject_kind = 'inventory_revision'
+       and job.subject_ref = 'revision-' || p_inventory_revision::text
+       and job.parameters = jsonb_build_object(
+         'inventory_revision', p_inventory_revision
+       )
+       and job.account_id is null
+       and job.capability_key is null
+       and job.request_origin_id is null
+       and job.library_id = p_library_id
+       and job.resource_revision = p_inventory_revision
+       and job.idempotency_key =
+         'post-scan-cover-refresh:' || p_library_id::text || ':' || p_inventory_revision::text
+       and job.max_attempts = 2
+       and job.recovery_policy = 'retry_safe'
+       and job.state = 'running'
+       and job.attempt_count = p_attempt
+       and job.lease_owner = p_worker_id
+       and job.lease_token = p_lease_token
+       and job.lease_expires_at > p_now
+       and job.cancel_requested_at is null
+       and coalesce(
+         nullif(library_record.metadata ->> 'inventory_mutation_revision', '')::bigint,
+         0
+       ) = p_inventory_revision
+  );
 $$;
 
 create or replace function library.load_authorized_full_scan_status(p_library_id bigint)
@@ -851,6 +950,7 @@ revoke all on function library.load_claimed_full_scan_scope(bigint, bigint, bigi
 revoke all on function library.checkpoint_claimed_full_scan(bigint, bigint, integer, varchar, varchar, varchar, bigint, bigint, text, timestamptz) from public;
 revoke all on function library.fence_full_scan_publication(bigint, bigint, integer, varchar, varchar, bigint, timestamptz) from public;
 revoke all on function library.publish_claimed_full_scan(bigint, bigint, integer, varchar, varchar, bigint, jsonb, text[], timestamptz) from public;
+revoke all on function library.validate_claimed_post_scan_cover_refresh(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) from public;
 revoke all on function library.load_authorized_full_scan_status(bigint) from public;
 revoke all on function app.load_claimed_job_authorization_context(bigint, integer, varchar, varchar, timestamptz) from public;
 
@@ -864,6 +964,7 @@ begin
     grant execute on function library.checkpoint_claimed_full_scan(bigint, bigint, integer, varchar, varchar, varchar, bigint, bigint, text, timestamptz) to album_haven_worker;
     revoke execute on function library.fence_full_scan_publication(bigint, bigint, integer, varchar, varchar, bigint, timestamptz) from album_haven_worker;
     grant execute on function library.publish_claimed_full_scan(bigint, bigint, integer, varchar, varchar, bigint, jsonb, text[], timestamptz) to album_haven_worker;
+    grant execute on function library.validate_claimed_post_scan_cover_refresh(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) to album_haven_worker;
     grant execute on function app.load_claimed_job_authorization_context(bigint, integer, varchar, varchar, timestamptz) to album_haven_worker;
   end if;
   if exists (select 1 from pg_roles where rolname = 'album_haven_app') then
@@ -875,6 +976,7 @@ begin
     revoke execute on function library.checkpoint_claimed_full_scan(bigint, bigint, integer, varchar, varchar, varchar, bigint, bigint, text, timestamptz) from album_haven_readonly;
     revoke execute on function library.fence_full_scan_publication(bigint, bigint, integer, varchar, varchar, bigint, timestamptz) from album_haven_readonly;
     revoke execute on function library.publish_claimed_full_scan(bigint, bigint, integer, varchar, varchar, bigint, jsonb, text[], timestamptz) from album_haven_readonly;
+    revoke execute on function library.validate_claimed_post_scan_cover_refresh(bigint, bigint, bigint, integer, varchar, varchar, timestamptz) from album_haven_readonly;
     revoke execute on function library.load_authorized_full_scan_status(bigint) from album_haven_readonly;
     revoke execute on function app.load_claimed_job_authorization_context(bigint, integer, varchar, varchar, timestamptz) from album_haven_readonly;
   end if;

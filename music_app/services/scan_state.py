@@ -167,6 +167,32 @@ def finalize_post_scan_actions(
     start_background_cover_refresh()
 
 
+def run_post_scan_cover_refresh_for_state(
+    *,
+    library_id: int,
+    inventory_revision: int,
+    should_cancel: Callable[[], bool],
+    bridge: Callable[..., object] | None,
+) -> bool | None:
+    """Temporary durable handoff into the existing cover-domain owner.
+
+    The cover-job slice replaces this adapter with its shared claimed bulk-refresh
+    core. Until then, it requires an explicitly supplied existing-domain bridge
+    and never treats an absent or canceled bridge as completed work.
+    """
+
+    if not callable(bridge):
+        return None
+    if should_cancel():
+        return False
+    result = bridge(
+        library_id=library_id,
+        inventory_revision=inventory_revision,
+        should_cancel=should_cancel,
+    )
+    return result is True
+
+
 def project_durable_full_scan_status(
     status: dict[str, object] | None,
 ) -> dict[str, object]:

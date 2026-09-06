@@ -931,3 +931,32 @@ def test_authorized_full_scan_cancellation_fails_closed(evaluation):
 
     assert connection.executed == []
     assert jobs.cancel_calls == []
+
+
+def test_post_scan_cover_scope_validation_uses_only_claim_and_revision_identity():
+    connection = _RecordingConnection([_Result(one={"scope_current": True})])
+    repository, _, _ = _repository(connection)
+
+    current = repository.validate_claimed_post_scan_cover_refresh(
+        library_id=19,
+        inventory_revision=41,
+        job_id=903,
+        attempt=1,
+        worker_id="worker-cover",
+        lease_token="lease-cover",
+        now=NOW,
+    )
+
+    assert current is True
+    [(statement, values)] = connection.executed
+    assert "validate_claimed_post_scan_cover_refresh" in _normalized(statement)
+    assert values == {
+        "library_id": 19,
+        "inventory_revision": 41,
+        "job_id": 903,
+        "attempt": 1,
+        "worker_id": "worker-cover",
+        "lease_token": "lease-cover",
+        "now": NOW,
+    }
+    assert "path" not in repr(values).casefold()

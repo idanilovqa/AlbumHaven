@@ -56,8 +56,11 @@ class Repository:
         if self.reconciliation_failure is not None:
             raise self.reconciliation_failure
 
-    def claim(self, *, worker_id, now, lease_seconds):
-        self.calls.append(("claim", worker_id, now, lease_seconds))
+    def claim(self, *, worker_id, now, lease_seconds, kinds=None):
+        call = ("claim", worker_id, now, lease_seconds)
+        if kinds is not None:
+            call += (kinds,)
+        self.calls.append(call)
         return self.claims.pop(0) if self.claims else None
 
     def heartbeat(self, claimed, *, now, lease_seconds):
@@ -172,6 +175,32 @@ def test_handler_registry_rejects_duplicate_registration():
 def test_handler_registry_rejects_noncallable_handler():
     with pytest.raises(TypeError, match="callable"):
         JobHandlerRegistry().register(JobKind.FULL_SCAN, object())
+
+
+def test_handler_registry_exposes_only_registered_claim_kinds():
+    handlers = JobHandlerRegistry()
+    handlers.register(JobKind.TARGETED_RECONCILIATION, lambda *_: None)
+    handlers.register(JobKind.FULL_SCAN, lambda *_: None)
+
+    assert handlers.registered_kinds == ("full_scan", "targeted_reconciliation")
+
+
+def test_worker_passes_explicit_supported_kinds_to_claim():
+    repository = Repository()
+
+    assert worker(
+        repository,
+        claim_kinds=("full_scan", "targeted_reconciliation"),
+    ).run_once() is False
+    assert repository.calls == [
+        (
+            "claim",
+            "worker-test",
+            NOW,
+            300,
+            ("full_scan", "targeted_reconciliation"),
+        )
+    ]
 
 
 def test_run_once_returns_false_when_queue_is_idle():

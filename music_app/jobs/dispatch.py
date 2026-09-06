@@ -47,6 +47,12 @@ class JobHandlerRegistry:
             raise ValueError("job handler is not registered") from exc
 
     @property
+    def registered_kinds(self) -> tuple[str, ...]:
+        """Return the closed set this worker can safely claim."""
+
+        return tuple(sorted(self._handlers))
+
+    @property
     def fingerprint(self) -> str:
         """Return a deterministic fingerprint of the registered dispatch contract."""
 

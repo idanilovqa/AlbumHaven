@@ -94,6 +94,20 @@ def _scan_repository(database_url: str) -> PostgresScanJobRepository:
     )
 
 
+def _settle_post_scan_cover_follow_ups(setup_url: str, library_id: int) -> None:
+    """Keep module-scoped claim tests independent after inspecting a follow-up."""
+
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update ops.jobs set state = 'succeeded', started_at = now(), "
+            "completed_at = now(), "
+            "outcome_code = 'test_observed', updated_at = now() "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s "
+            "and state = 'queued'",
+            (library_id,),
+        )
+
+
 def _seed_scope(setup_url: str, suffix: str) -> tuple[int, int]:
     with isolatedPostgres._connect(setup_url) as connection:
         account_id = int(
@@ -1346,6 +1360,12 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
         lease_token=claim.lease_token,
         now=datetime.now(timezone.utc),
     )
+    with isolatedPostgres._connect(setup_url) as connection:
+        assert connection.execute(
+            "select count(*) as count from ops.jobs "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s",
+            (library_id,),
+        ).fetchone()["count"] == 0
     result = scans.publish_claimed_full_scan(
         claim=claim,
         intent_id=intent.intent_id,
@@ -1364,6 +1384,30 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
         "publication_won": True,
         "inventory_mutation_revision": intent.inventory_mutation_revision + 1,
     }
+    with isolatedPostgres._connect(setup_url) as connection:
+        follow_ups = connection.execute(
+            "select subject_kind, subject_ref, parameters, account_id, "
+            "capability_key, request_origin_id, resource_revision, "
+            "idempotency_key from ops.jobs "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s",
+            (library_id,),
+        ).fetchall()
+    assert len(follow_ups) == 1
+    assert dict(follow_ups[0]) == {
+        "subject_kind": "inventory_revision",
+        "subject_ref": f"revision-{intent.inventory_mutation_revision + 1}",
+        "parameters": {
+            "inventory_revision": intent.inventory_mutation_revision + 1
+        },
+        "account_id": None,
+        "capability_key": None,
+        "request_origin_id": None,
+        "resource_revision": intent.inventory_mutation_revision + 1,
+        "idempotency_key": (
+            f"post-scan-cover-refresh:{library_id}:"
+            f"{intent.inventory_mutation_revision + 1}"
+        ),
+    }
     with pytest.raises(psycopg.errors.InsufficientPrivilege):
         with isolatedPostgres._connect(worker_url) as connection:
             connection.execute(
@@ -1378,6 +1422,165 @@ def test_live_full_scan_worker_publishes_only_through_claim_scoped_function(
         recovered.committed_inventory_revision
         == result["inventory_mutation_revision"]
     )
+    _settle_post_scan_cover_follow_ups(setup_url, library_id)
+
+
+def test_live_full_scan_publication_rollback_cannot_lose_cover_follow_up(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "full-publication-rollback")
+    arguments = _full_scan_arguments(account_id, library_id, "full-publication-rollback")
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id="full-publication-rollback-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+    inventory = {
+        "artists": [],
+        "albums": [],
+        "featured_artists": [],
+        "tracks": [],
+        "track_files": [],
+    }
+
+    connection = isolatedPostgres._connect(worker_url)
+    try:
+        row = connection.execute(
+            "select * from library.publish_claimed_full_scan("
+            "%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)",
+            (
+                intent.intent_id,
+                claim.job_id,
+                claim.attempt,
+                claim.worker_id,
+                claim.lease_token,
+                intent.inventory_mutation_revision,
+                json.dumps(inventory),
+                list(intent.root_ids),
+                datetime.now(timezone.utc),
+            ),
+        ).fetchone()
+        assert row["publication_won"] is True
+        connection.rollback()
+    finally:
+        connection.close()
+
+    with isolatedPostgres._connect(setup_url) as setup:
+        assert setup.execute(
+            "select committed_inventory_revision from library.full_scan_intents "
+            "where id = %s",
+            (intent.intent_id,),
+        ).fetchone()["committed_inventory_revision"] is None
+        assert setup.execute(
+            "select count(*) as count from ops.jobs "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s",
+            (library_id,),
+        ).fetchone()["count"] == 0
+
+    result = scans.publish_claimed_full_scan(
+        claim=claim,
+        intent_id=intent.intent_id,
+        expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+        inventory=inventory,
+        observed_root_ids=intent.root_ids,
+        now=datetime.now(timezone.utc),
+    )
+    assert result["publication_won"] is True
+    with isolatedPostgres._connect(setup_url) as setup:
+        assert setup.execute(
+            "select count(*) as count from ops.jobs "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s",
+            (library_id,),
+        ).fetchone()["count"] == 1
+    _settle_post_scan_cover_follow_ups(setup_url, library_id)
+
+
+def test_live_full_scan_publication_rolls_back_on_follow_up_identity_collision(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    account_id, library_id = _seed_scope(setup_url, "full-follow-up-collision")
+    arguments = _full_scan_arguments(account_id, library_id, "full-follow-up-collision")
+    arguments["scheduled_at"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+    accepted = _scan_repository(runtime_url).enqueue_full_scan(**arguments)
+    claim = PostgresJobRepository(
+        database_url=worker_url,
+        connect_to_database=isolatedPostgres._connect,
+    ).claim(
+        worker_id="full-follow-up-collision-worker",
+        now=datetime.now(timezone.utc),
+        lease_seconds=300,
+    )
+    assert claim is not None and claim.job_id == accepted.job_id
+    scans = _scan_repository(worker_url)
+    intent = scans.load_claimed_full_scan(
+        job_id=claim.job_id,
+        worker_id=claim.worker_id,
+        lease_token=claim.lease_token,
+    )
+    committed_revision = intent.inventory_mutation_revision + 1
+    with isolatedPostgres._connect(setup_url) as setup:
+        setup.execute(
+            "insert into ops.jobs (kind, subject_kind, subject_ref, parameters, "
+            "library_id, deployment_mode, client_surface, resource_revision, "
+            "idempotency_key, scheduled_at, max_attempts, recovery_policy) "
+            "values ('post_scan_cover_refresh', 'inventory_revision', %s, %s::jsonb, "
+            "%s, 'self_hosted_private_web', 'private_web', %s, %s, now(), 2, "
+            "'retry_safe')",
+            (
+                f"revision-{committed_revision}",
+                json.dumps({"inventory_revision": committed_revision + 99}),
+                library_id,
+                committed_revision + 99,
+                f"post-scan-cover-refresh:{library_id}:{committed_revision}",
+            ),
+        )
+
+    with pytest.raises(Exception, match="follow-up identity conflict"):
+        scans.publish_claimed_full_scan(
+            claim=claim,
+            intent_id=intent.intent_id,
+            expected_inventory_mutation_revision=intent.inventory_mutation_revision,
+            inventory={
+                "artists": [],
+                "albums": [],
+                "featured_artists": [],
+                "tracks": [],
+                "track_files": [],
+            },
+            observed_root_ids=intent.root_ids,
+            now=datetime.now(timezone.utc),
+        )
+
+    with isolatedPostgres._connect(setup_url) as setup:
+        assert setup.execute(
+            "select committed_inventory_revision from library.full_scan_intents "
+            "where id = %s",
+            (intent.intent_id,),
+        ).fetchone()["committed_inventory_revision"] is None
+        assert setup.execute(
+            "select coalesce(nullif(metadata ->> 'inventory_mutation_revision', '')::bigint, 0) "
+            "as revision from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["revision"] == intent.inventory_mutation_revision
+        setup.execute(
+            "delete from ops.jobs where kind = 'post_scan_cover_refresh' "
+            "and library_id = %s",
+            (library_id,),
+        )
 
 
 @pytest.mark.parametrize("revocation", ("cancel", "account", "root"))
@@ -1448,7 +1651,13 @@ def test_live_full_scan_publication_revalidates_claim_authority_and_roots(
             "from library.libraries where id = %s",
             (library_id,),
         ).fetchone()["revision"]
+        follow_up_count = connection.execute(
+            "select count(*) as count from ops.jobs "
+            "where kind = 'post_scan_cover_refresh' and library_id = %s",
+            (library_id,),
+        ).fetchone()["count"]
     assert revision == intent.inventory_mutation_revision
+    assert follow_up_count == 0
 
 
 def test_live_full_scan_publication_waits_for_concurrent_authority_revocation(

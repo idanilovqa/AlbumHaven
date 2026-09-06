@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -304,6 +305,220 @@ def _full_claim() -> ClaimedJob:
         lease_token="lease-full",
         lease_expires_at=NOW + timedelta(minutes=5),
         scheduled_at=NOW,
+    )
+
+
+def _post_scan_cover_claim() -> ClaimedJob:
+    return ClaimedJob(
+        job_id=903,
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-41",
+        parameters={"inventory_revision": 41},
+        account_id=None,
+        library_id=19,
+        capability_key=None,
+        request_origin_id=None,
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        idempotency_key="post-scan-cover-refresh:19:41",
+        attempt=1,
+        max_attempts=2,
+        worker_id="worker-cover",
+        lease_token="lease-cover",
+        lease_expires_at=NOW + timedelta(minutes=5),
+        scheduled_at=NOW,
+        resource_revision=41,
+    )
+
+
+def test_post_scan_cover_validator_requires_current_claimed_inventory_revision():
+    from music_app.jobs.scan_handlers import (
+        build_post_scan_cover_refresh_resource_validator,
+    )
+
+    calls = []
+    repository = SimpleNamespace(
+        validate_claimed_post_scan_cover_refresh=lambda **kwargs: calls.append(kwargs)
+        or True
+    )
+
+    decision = build_post_scan_cover_refresh_resource_validator(
+        scan_repository=repository
+    )(_post_scan_cover_claim(), None, NOW)
+
+    assert decision.allowed is True
+    assert decision.reason_code == "post_scan_cover_scope_current"
+    assert calls == [
+        {
+            "library_id": 19,
+            "inventory_revision": 41,
+            "job_id": 903,
+            "attempt": 1,
+            "worker_id": "worker-cover",
+            "lease_token": "lease-cover",
+            "now": NOW,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"subject_ref": "C:/private/Album"},
+        {"parameters": {"inventory_revision": 40}},
+        {"resource_revision": 40},
+        {"idempotency_key": "post-scan-cover-refresh:19:40"},
+        {"library_id": None},
+    ),
+)
+def test_post_scan_cover_validator_rejects_malformed_or_mismatched_scope(changes):
+    from music_app.jobs.scan_handlers import (
+        build_post_scan_cover_refresh_resource_validator,
+    )
+
+    claim = replace(_post_scan_cover_claim(), **changes)
+    repository = SimpleNamespace(
+        validate_claimed_post_scan_cover_refresh=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("malformed claims must not reach the repository")
+        )
+    )
+
+    decision = build_post_scan_cover_refresh_resource_validator(
+        scan_repository=repository
+    )(claim, None, NOW)
+
+    assert decision.allowed is False
+    assert decision.reason_code == "post_scan_cover_scope_invalid"
+
+
+def test_post_scan_cover_handler_invokes_existing_cover_bridge_once():
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+
+    calls = []
+    context = _FullContext()
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=lambda **kwargs: calls.append(kwargs) or True,
+    )(_post_scan_cover_claim(), context)
+
+    assert outcome == JobTransitionResult(
+        JobState.SUCCEEDED, "post_scan_cover_refresh_completed"
+    )
+    assert len(calls) == 1
+    assert calls[0]["library_id"] == 19
+    assert calls[0]["inventory_revision"] == 41
+    assert callable(calls[0]["should_cancel"])
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    (
+        ("cancel", "post_scan_cover_refresh_canceled"),
+        ("lease", "post_scan_cover_refresh_lease_lost"),
+        ("authority", "post_scan_cover_scope_stale"),
+    ),
+)
+def test_post_scan_cover_handler_fails_closed_before_cover_work(mutation, reason):
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+
+    context = _FullContext()
+    if mutation == "cancel":
+        context.cancel_requested = True
+    elif mutation == "lease":
+        context.lease_active = False
+    else:
+        context.allowed = False
+    calls = []
+
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=lambda **kwargs: calls.append(kwargs) or True,
+    )(_post_scan_cover_claim(), context)
+
+    assert outcome == JobTransitionResult(JobState.CANCELED, reason)
+    assert calls == []
+
+
+def test_post_scan_cover_handler_maps_bridge_failure_without_leaking_details():
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=lambda **_kwargs: (_ for _ in ()).throw(
+            OSError("C:/Users/private/Music/Album/cover.jpg")
+        )
+    )(_post_scan_cover_claim(), _FullContext())
+
+    assert outcome == JobTransitionResult(
+        JobState.FAILED, "post_scan_cover_refresh_failed"
+    )
+
+
+def test_post_scan_cover_handler_revalidates_revision_during_cooperative_work():
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+
+    context = _FullContext()
+
+    def run_cover_refresh(*, should_cancel, **_kwargs):
+        context.allowed = False
+        assert should_cancel() is True
+        return False
+
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=run_cover_refresh,
+    )(_post_scan_cover_claim(), context)
+
+    assert outcome == JobTransitionResult(
+        JobState.CANCELED, "post_scan_cover_scope_stale"
+    )
+
+
+def test_post_scan_cover_handler_models_real_context_authorization_cancellation():
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+    from music_app.jobs.worker import ExecutionContext
+    from music_app.services.jobs.authorization import AuthorizationDecision
+
+    class Authorization:
+        allowed = True
+
+        def authorize(self, _claim, _now):
+            return AuthorizationDecision(self.allowed, "scope_current")
+
+    authorization = Authorization()
+    context = ExecutionContext(
+        _post_scan_cover_claim(),
+        authorization_service=authorization,
+        clock=lambda: NOW,
+    )
+
+    def run_cover_refresh(*, should_cancel, **_kwargs):
+        authorization.allowed = False
+        assert should_cancel() is True
+        assert context.cancel_requested is True
+        return False
+
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=run_cover_refresh,
+    )(_post_scan_cover_claim(), context)
+
+    assert outcome == JobTransitionResult(
+        JobState.CANCELED, "post_scan_cover_scope_stale"
+    )
+
+
+def test_post_scan_cover_handler_preserves_committed_success_after_late_cancel():
+    from music_app.jobs.scan_handlers import build_post_scan_cover_refresh_handler
+
+    context = _FullContext()
+
+    def run_cover_refresh(**_kwargs):
+        context.cancel_requested = True
+        return True
+
+    outcome = build_post_scan_cover_refresh_handler(
+        run_cover_refresh=run_cover_refresh,
+    )(_post_scan_cover_claim(), context)
+
+    assert outcome == JobTransitionResult(
+        JobState.SUCCEEDED, "post_scan_cover_refresh_completed"
     )
 
 

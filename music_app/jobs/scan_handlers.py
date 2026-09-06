@@ -37,6 +37,123 @@ def _full_scan_intent_id(claim: ClaimedJob) -> int | None:
     return intent_id
 
 
+def _post_scan_inventory_revision(claim: ClaimedJob) -> int | None:
+    prefix = "revision-"
+    subject_ref = str(claim.subject_ref or "")
+    if (
+        claim.kind
+        not in {JobKind.POST_SCAN_COVER_REFRESH, "post_scan_cover_refresh"}
+        or claim.subject_kind != "inventory_revision"
+        or not subject_ref.startswith(prefix)
+        or not subject_ref[len(prefix) :].isdigit()
+    ):
+        return None
+    revision = int(subject_ref[len(prefix) :])
+    if (
+        revision < 0
+        or claim.library_id is None
+        or claim.parameters != {"inventory_revision": revision}
+        or claim.resource_revision != revision
+        or claim.idempotency_key
+        != f"post-scan-cover-refresh:{claim.library_id}:{revision}"
+        or claim.max_attempts != 2
+        or claim.account_id is not None
+        or claim.capability_key is not None
+        or claim.request_origin_id is not None
+    ):
+        return None
+    return revision
+
+
+def build_post_scan_cover_refresh_resource_validator(
+    *, scan_repository: Any
+) -> Callable[[ClaimedJob, Any, datetime], AuthorizationDecision]:
+    """Validate a revision-keyed server-owned cover handoff."""
+
+    def validate(
+        claim: ClaimedJob, _authorization_context: Any, now: datetime
+    ) -> AuthorizationDecision:
+        revision = _post_scan_inventory_revision(claim)
+        if revision is None:
+            return AuthorizationDecision(False, "post_scan_cover_scope_invalid")
+        try:
+            current = scan_repository.validate_claimed_post_scan_cover_refresh(
+                library_id=claim.library_id,
+                inventory_revision=revision,
+                job_id=claim.job_id,
+                attempt=claim.attempt,
+                worker_id=claim.worker_id,
+                lease_token=claim.lease_token,
+                now=now,
+            )
+        except Exception:
+            return AuthorizationDecision(False, "post_scan_cover_scope_invalid")
+        if current is not True:
+            return AuthorizationDecision(False, "post_scan_cover_scope_stale")
+        return AuthorizationDecision(True, "post_scan_cover_scope_current")
+
+    return validate
+
+
+def build_post_scan_cover_refresh_handler(
+    *, run_cover_refresh: Callable[..., object]
+) -> Callable[[ClaimedJob, Any], JobTransitionResult]:
+    """Bridge a committed scan revision into the existing cover domain."""
+
+    def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
+        revision = _post_scan_inventory_revision(claim)
+        if revision is None:
+            return JobTransitionResult(
+                JobState.CANCELED, "post_scan_cover_scope_invalid"
+            )
+        authorization_denied = False
+
+        def stop_reason() -> str | None:
+            nonlocal authorization_denied
+            if authorization_denied:
+                return "post_scan_cover_scope_stale"
+            if context.cancel_requested:
+                return "post_scan_cover_refresh_canceled"
+            if not context.lease_active:
+                return "post_scan_cover_refresh_lease_lost"
+            if not context.reauthorize().allowed:
+                authorization_denied = True
+                return "post_scan_cover_scope_stale"
+            return None
+
+        reason = stop_reason()
+        if reason is not None:
+            return JobTransitionResult(JobState.CANCELED, reason)
+
+        def should_cancel() -> bool:
+            return stop_reason() is not None
+
+        try:
+            completed = run_cover_refresh(
+                library_id=claim.library_id,
+                inventory_revision=revision,
+                should_cancel=should_cancel,
+            )
+        except Exception:
+            return JobTransitionResult(
+                JobState.FAILED, "post_scan_cover_refresh_failed"
+            )
+        if completed is not True:
+            reason = stop_reason()
+            if reason is not None:
+                return JobTransitionResult(JobState.CANCELED, reason)
+            return JobTransitionResult(
+                JobState.FAILED, "post_scan_cover_refresh_failed"
+            )
+        # True means the cover-domain publication committed; later cancellation,
+        # lease loss, or revision advance cannot undo that completed side effect.
+        return JobTransitionResult(
+            JobState.SUCCEEDED, "post_scan_cover_refresh_completed"
+        )
+
+    return handle
+
+
 def _current_roots_valid(
     roots: object,
     *,
@@ -402,6 +519,8 @@ def build_targeted_reconciliation_handler(
 __all__ = [
     "build_full_scan_handler",
     "build_full_scan_resource_validator",
+    "build_post_scan_cover_refresh_handler",
+    "build_post_scan_cover_refresh_resource_validator",
     "build_targeted_reconciliation_handler",
     "build_targeted_reconciliation_resource_validator",
 ]

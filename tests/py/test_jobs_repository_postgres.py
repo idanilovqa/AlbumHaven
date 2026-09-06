@@ -11,6 +11,7 @@ from music_app.services.jobs.models import (
     JobCancellationDisposition,
     JobCancellationResult,
     JobHeartbeatResult,
+    JobKind,
     JobStatusSnapshot,
     JobState,
     JobTransitionResult,
@@ -304,6 +305,32 @@ def test_claim_returns_none_when_no_work_is_runnable():
 
     assert repository.claim(worker_id="worker-a", now=NOW, lease_seconds=300) is None
     assert connection.commits == 1
+
+
+def test_claim_filters_to_the_worker_registered_kinds_without_consuming_others():
+    connection = _RecordingConnection([_Result(one=None)])
+    repository, _ = _repository(connection)
+
+    assert repository.claim(
+        worker_id="worker-a",
+        now=NOW,
+        lease_seconds=300,
+        kinds=(JobKind.TARGETED_RECONCILIATION.value, JobKind.FULL_SCAN.value),
+    ) is None
+
+    statement, values = connection.executed[0]
+    assert "kind = any" in _normalized(statement)
+    assert values["kinds"] == ["full_scan", "targeted_reconciliation"]
+
+
+def test_claim_with_no_registered_kinds_does_not_open_a_connection():
+    connection = _RecordingConnection()
+    repository, connector = _repository(connection)
+
+    assert repository.claim(
+        worker_id="worker-a", now=NOW, lease_seconds=300, kinds=()
+    ) is None
+    assert connector.urls == []
 
 
 def test_claim_rejects_invalid_worker_or_lease_before_connecting():

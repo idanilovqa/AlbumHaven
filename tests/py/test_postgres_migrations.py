@@ -3893,3 +3893,20 @@ def test_obsolete_revision_only_full_scan_fence_is_not_granted_to_worker():
     assert f"revoke all on function {signature} from public" in sql
     assert f"revoke execute on function {signature} from album_haven_worker" in sql
     assert f"grant execute on function {signature} to album_haven_worker" not in sql
+
+
+def test_full_scan_publication_atomically_enqueues_revision_keyed_cover_follow_up():
+    sql = _normalized_sql(
+        FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "'post_scan_cover_refresh'" in sql
+    assert "'inventory_revision'" in sql
+    assert "'revision-' || committed_revision::text" in sql
+    assert (
+        "'post-scan-cover-refresh:' || claimed_library_id::text || ':' || "
+        "committed_revision::text"
+    ) in sql
+    assert "resource_revision" in sql
+    assert "on conflict do nothing" in sql
+    assert "post-scan cover follow-up identity conflict" in sql

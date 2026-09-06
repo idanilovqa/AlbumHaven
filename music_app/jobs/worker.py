@@ -261,6 +261,7 @@ class Worker:
         clock: Callable[[], datetime] | None = None,
         wait: Callable[[threading.Event, float], bool] | None = None,
         closeables: tuple[Any, ...] = (),
+        claim_kinds: tuple[str, ...] | None = None,
     ) -> None:
         self._repository = repository
         self._authorization_service = authorization_service
@@ -276,6 +277,7 @@ class Worker:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._wait = wait or (lambda event, seconds: event.wait(seconds))
         self._closeables = closeables
+        self._claim_kinds = claim_kinds
         self._contexts_lock = threading.Lock()
         self._active_contexts: set[ExecutionContext] = set()
         self._owned_threads_lock = threading.Lock()
@@ -299,11 +301,14 @@ class Worker:
             self._closed = True
 
     def run_once(self) -> bool:
-        claimed = self._repository.claim(
-            worker_id=self._worker_id,
-            now=self._clock(),
-            lease_seconds=self._lease_seconds,
-        )
+        claim_arguments = {
+            "worker_id": self._worker_id,
+            "now": self._clock(),
+            "lease_seconds": self._lease_seconds,
+        }
+        if self._claim_kinds is not None:
+            claim_arguments["kinds"] = self._claim_kinds
+        claimed = self._repository.claim(**claim_arguments)
         if claimed is None:
             return False
 

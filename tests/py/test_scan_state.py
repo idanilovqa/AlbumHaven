@@ -2321,3 +2321,33 @@ def test_durable_scan_projection_preserves_legacy_status_fields_without_public_j
     assert "job_id" not in projected
     assert "subject_ref" not in projected
     assert "parameters" not in projected
+
+
+def test_post_scan_cover_bridge_preserves_existing_domain_callback_and_revision():
+    calls = []
+
+    completed = scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: False,
+        bridge=lambda **kwargs: calls.append(kwargs) or True,
+    )
+
+    assert completed is True
+    assert calls[0]["library_id"] == 19
+    assert calls[0]["inventory_revision"] == 41
+
+
+def test_post_scan_cover_bridge_never_completes_absent_or_canceled_work():
+    assert scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: False,
+        bridge=None,
+    ) is None
+    assert scan_state.run_post_scan_cover_refresh_for_state(
+        library_id=19,
+        inventory_revision=41,
+        should_cancel=lambda: True,
+        bridge=lambda **_kwargs: pytest.fail("canceled work must not start"),
+    ) is False

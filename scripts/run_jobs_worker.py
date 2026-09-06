@@ -91,6 +91,8 @@ def _build_worker(config: Any) -> Any:
     from music_app.jobs.scan_handlers import (
         build_full_scan_handler,
         build_full_scan_resource_validator,
+        build_post_scan_cover_refresh_handler,
+        build_post_scan_cover_refresh_resource_validator,
         build_targeted_reconciliation_handler,
         build_targeted_reconciliation_resource_validator,
     )
@@ -112,6 +114,7 @@ def _build_worker(config: Any) -> Any:
     )
     from music_app.services.jobs.models import JobKind
     from music_app.jobs.full_scan_executor import DurableFullScanExecutor
+    from music_app.services.scan_state import run_post_scan_cover_refresh_for_state
 
     pool = create_worker_pool(config)
 
@@ -148,6 +151,9 @@ def _build_worker(config: Any) -> Any:
     full_scan_validator = build_full_scan_resource_validator(
         scan_repository=scan_repository
     )
+    post_scan_cover_validator = build_post_scan_cover_refresh_resource_validator(
+        scan_repository=scan_repository
+    )
     authorization = JobAuthorizationService(
         context_repository=PostgresJobAuthorizationContextRepository(
             database_url=config.database_url,
@@ -156,6 +162,7 @@ def _build_worker(config: Any) -> Any:
         policy_evaluator=PolicyEvaluator(),
         resource_validators={
             JobKind.FULL_SCAN.value: full_scan_validator,
+            JobKind.POST_SCAN_COVER_REFRESH.value: post_scan_cover_validator,
             JobKind.TARGETED_RECONCILIATION.value: targeted_validator,
         },
     )
@@ -181,6 +188,17 @@ def _build_worker(config: Any) -> Any:
             reconciler=reconciler,
         ),
     )
+    post_scan_cover_bridge = scan_config.get("_POST_SCAN_COVER_REFRESH_CALLBACK")
+    if callable(post_scan_cover_bridge):
+        handlers.register(
+            JobKind.POST_SCAN_COVER_REFRESH,
+            build_post_scan_cover_refresh_handler(
+                run_cover_refresh=lambda **kwargs: run_post_scan_cover_refresh_for_state(
+                    **kwargs,
+                    bridge=post_scan_cover_bridge,
+                )
+            ),
+        )
     return Worker(
         repository=repository,
         authorization_service=authorization,
@@ -193,6 +211,7 @@ def _build_worker(config: Any) -> Any:
         concurrency=config.concurrency,
         worker_instances=instances,
         closeables=(pool,),
+        claim_kinds=handlers.registered_kinds,
     )
 
 

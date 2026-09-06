@@ -27,7 +27,7 @@ _MAX_DOMAIN_ATTEMPTS = 5
 @dataclass(frozen=True)
 class AcceptedLastfmRetry:
     pending_scrobble_id: int
-    job_id: int
+    job_id: int | None
     row_revision: int
     accepted_attempt: int
 
@@ -374,6 +374,94 @@ class PostgresLastfmRetryJobRepository:
                 scheduled_at=values["next_attempt_at"],
             )
 
+    def accept_playback_failure(
+        self,
+        *,
+        account_id: int,
+        library_id: int,
+        listen_id: str,
+        entry: Mapping[str, object],
+        retry_count: int,
+        error: str,
+        request_origin_ref: str,
+        deployment_mode: str,
+        client_surface: str,
+        now: datetime,
+        reauthentication_required: bool = False,
+    ) -> AcceptedLastfmRetry:
+        """Atomically bind a known-not-sent playback failure to the active session."""
+
+        account_id = _positive("account_id", account_id)
+        library_id = _positive("library_id", library_id)
+        retry_count = _positive("retry_count", retry_count)
+        if retry_count >= _MAX_DOMAIN_ATTEMPTS:
+            raise ValueError("retry_count must leave a durable retry attempt")
+        listen_id = _bounded("listen_id", listen_id, maximum=512)
+        now = _aware("now", now)
+        values = {
+            "account_id": account_id,
+            "library_id": library_id,
+            "source_family": "runtime_lastfm_sync_state_adapter",
+            "source_key": listen_id,
+            "track_key": _bounded(
+                "track_key",
+                entry.get("track_ref") or entry.get("path") or "opaque-listen",
+                maximum=1024,
+            ),
+            "played_at": now,
+            "attempt_count": retry_count,
+            "accepted_attempt": retry_count + 1,
+            "next_attempt_at": now,
+            "payload": json.dumps(
+                {"source_payload": dict(entry)}, ensure_ascii=False, allow_nan=False
+            ),
+        }
+        with self._connect() as connection:
+            session = _mapping(
+                connection.execute(
+                    """
+                    select id from integration.lastfm_sessions
+                     where account_id = %(account_id)s and is_active
+                     order by id desc limit 1 for share
+                    """,
+                    values,
+                ).fetchone()
+            )
+            if not session:
+                raise ValueError("active Last.fm session is unavailable")
+            active_session_id = _positive("active_session_id", session.get("id"))
+            values["active_session_id"] = active_session_id
+            if reauthentication_required:
+                row = _mapping(
+                    connection.execute(_hold_reauthentication_sql(), values).fetchone()
+                )
+                if not row:
+                    raise ValueError("pending scrobble could not be held")
+                return AcceptedLastfmRetry(
+                    pending_scrobble_id=_positive(
+                        "pending_scrobble_id", row.get("pending_scrobble_id")
+                    ),
+                    job_id=None,
+                    row_revision=_nonnegative(
+                        "row_revision", row.get("row_revision")
+                    ),
+                    accepted_attempt=retry_count,
+                )
+            row = _mapping(connection.execute(_accept_pending_sql(), values).fetchone())
+            if not row:
+                raise ValueError("pending scrobble is terminal, stale, or malformed")
+            return self._compose_job(
+                connection=connection,
+                row=row,
+                account_id=account_id,
+                library_id=library_id,
+                active_session_id=active_session_id,
+                request_origin_ref=request_origin_ref,
+                deployment_mode=deployment_mode,
+                client_surface=client_surface,
+                scheduled_at=now,
+            )
+
     def adopt_due_pending(
         self,
         *,
@@ -397,6 +485,93 @@ class PostgresLastfmRetryJobRepository:
             now=now,
             expected_previous_attempts=None,
         )
+
+    def release_after_reauthentication(
+        self,
+        *,
+        account_id: int,
+        library_id: int,
+        request_origin_ref: str,
+        deployment_mode: str,
+        client_surface: str,
+        now: datetime,
+        limit: int = 100,
+    ) -> tuple[AcceptedLastfmRetry, ...]:
+        """Compose bounded due/held work against the newly active session only."""
+
+        values = {
+            "account_id": _positive("account_id", account_id),
+            "library_id": _positive("library_id", library_id),
+            "now": _aware("now", now),
+            "limit": limit,
+        }
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be between one and 100")
+        released: list[AcceptedLastfmRetry] = []
+        with self._connect() as connection:
+            session = _mapping(
+                connection.execute(
+                    """
+                    select id from integration.lastfm_sessions
+                     where account_id = %(account_id)s and is_active
+                     order by id desc limit 1 for share
+                    """,
+                    values,
+                ).fetchone()
+            )
+            if not session:
+                return ()
+            active_session_id = _positive("active_session_id", session.get("id"))
+            rows = connection.execute(
+                """
+                with candidates as (
+                  select pending.id
+                    from integration.pending_scrobbles as pending
+                   where pending.account_id = %(account_id)s
+                     and pending.library_id = %(library_id)s
+                     and pending.attempt_count < 5
+                     and (
+                       pending.status = 'reauthentication_required' or
+                       (pending.status in ('pending', 'retry_wait')
+                        and pending.current_job_id is null
+                        and pending.next_attempt_at <= %(now)s)
+                     )
+                   order by pending.next_attempt_at nulls first, pending.id
+                   for update skip locked
+                   limit %(limit)s
+                )
+                update integration.pending_scrobbles as pending
+                   set status = 'accepted',
+                       accepted_attempt = pending.attempt_count + 1,
+                       active_session_id = %(active_session_id)s,
+                       current_job_id = null,
+                       next_attempt_at = %(now)s,
+                       row_revision = pending.row_revision + 1,
+                       updated_at = %(now)s
+                  from candidates
+                 where pending.id = candidates.id
+                returning pending.id as pending_scrobble_id,
+                          pending.row_revision,
+                          pending.accepted_attempt,
+                          pending.current_job_id
+                """,
+                {**values, "active_session_id": active_session_id},
+            ).fetchall()
+            for raw_row in rows:
+                released.append(
+                    self._compose_job(
+                        connection=connection,
+                        row=_mapping(raw_row),
+                        account_id=values["account_id"],
+                        library_id=values["library_id"],
+                        active_session_id=active_session_id,
+                        request_origin_ref=request_origin_ref,
+                        deployment_mode=deployment_mode,
+                        client_surface=client_surface,
+                        scheduled_at=values["now"],
+                    )
+                )
+        return tuple(released)
 
     def accept_next_attempt(
         self,
@@ -593,6 +768,46 @@ def _accept_pending_sql() -> str:
           )
         returning id as pending_scrobble_id, row_revision,
                   accepted_attempt, current_job_id
+    """
+
+
+def _hold_reauthentication_sql() -> str:
+    return """
+        insert into integration.pending_scrobbles (
+          account_id, library_id, track_key, played_at, attempt_count,
+          next_attempt_at, status, payload, row_revision, accepted_attempt,
+          active_session_id, last_provider_disposition, repair_reason_code
+        ) values (
+          %(account_id)s, %(library_id)s, %(track_key)s, %(played_at)s,
+          %(attempt_count)s, null, 'reauthentication_required',
+          %(payload)s::jsonb || jsonb_build_object(
+            'source_family', %(source_family)s::text,
+            'source_key', %(source_key)s::text,
+            'account_id', %(account_id)s::text,
+            'library_id', %(library_id)s::text
+          ), 0, null, %(active_session_id)s,
+          'reauthentication_required', 'lastfm_reauthentication_required'
+        )
+        on conflict (
+          account_id, library_id, (payload->>'source_family'),
+          (payload->>'source_key')
+        ) where account_id is not null and library_id is not null
+          and payload ? 'source_family' and payload ? 'source_key'
+        do update set
+          status = 'reauthentication_required',
+          attempt_count = excluded.attempt_count,
+          next_attempt_at = null,
+          current_job_id = null,
+          accepted_attempt = null,
+          active_session_id = excluded.active_session_id,
+          last_provider_disposition = 'reauthentication_required',
+          repair_reason_code = 'lastfm_reauthentication_required',
+          row_revision = integration.pending_scrobbles.row_revision + 1,
+          updated_at = now()
+        where integration.pending_scrobbles.status not in (
+          'completed', 'permanent', 'exhausted', 'canceled', 'ambiguous'
+        )
+        returning id as pending_scrobble_id, row_revision
     """
 
 

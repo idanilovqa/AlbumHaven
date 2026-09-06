@@ -49,6 +49,7 @@ def is_pending_scrobble_entry(item: object) -> bool:
         and bool(item.get("scrobble_eligible"))
         and not bool(item.get("scrobbled"))
         and bool(item.get("scrobble_retryable", True))
+        and not bool(item.get("scrobble_durable_job_owned"))
     )
 
 

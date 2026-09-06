@@ -249,6 +249,15 @@ def create_asgi_app():
         _app.state.cover_job_repository = PostgresCoverJobRepository(
             database_url=targeted_database_url
         )
+        from music_app.services.lastfm_retry_jobs_postgres import (
+            PostgresLastfmRetryJobRepository,
+        )
+
+        _app.state.lastfm_retry_job_repository = (
+            PostgresLastfmRetryJobRepository(database_url=targeted_database_url)
+            if targeted_database_url
+            else None
+        )
         watcher_library_id = (
             scan_jobs.resolve_local_library_id() if targeted_database_url else None
         )

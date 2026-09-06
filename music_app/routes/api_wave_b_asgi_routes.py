@@ -39,7 +39,11 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
-from music_app.services.lastfm_retry import pending_scrobble_count, retry_pending_lastfm_scrobbles
+from music_app.services.lastfm_retry import (
+    pending_scrobble_count,
+    retry_pending_lastfm_scrobbles,  # compatibility seam; no route invokes it
+)
+from music_app.services.policy_asgi import request_origin_ref_for_request
 from music_app.services.lastfm_sync_bridge import (
     build_lastfm_integration_status,
     record_playback_session_complete,
@@ -93,6 +97,26 @@ def _app_logger(request: Request):
 
 def _library_state(request: Request) -> dict[str, object]:
     return request.app.state.library_state
+
+
+def _durable_lastfm_request_context(request: Request):
+    repository = getattr(request.app.state, "lastfm_retry_job_repository", None)
+    evaluation = getattr(request.state, "policy_evaluation", None)
+    audit = getattr(evaluation, "audit", None)
+    actor = getattr(request.state, "current_actor", None)
+    account_id = getattr(audit, "account_id", None)
+    library_id = getattr(audit, "library_id", None) or getattr(
+        actor, "current_library_id", None
+    )
+    if (
+        repository is None
+        or getattr(audit, "action", None)
+        not in {"integration.lastfm.complete", "integration.lastfm.manage"}
+        or not isinstance(account_id, int)
+        or not isinstance(library_id, int)
+    ):
+        return None
+    return repository, audit, account_id, library_id
 
 
 def _first_query_value(request: Request, key: str) -> str | None:
@@ -489,7 +513,23 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
                 pass
         raise
 
-    retry_pending_lastfm_scrobbles(config, reauthenticated=True)
+    durable = _durable_lastfm_request_context(request)
+    if durable is not None:
+        repository, audit, account_id, library_id = durable
+        try:
+            repository.release_after_reauthentication(
+                account_id=account_id,
+                library_id=library_id,
+                request_origin_ref=request_origin_ref_for_request(request),
+                deployment_mode=audit.deployment_mode,
+                client_surface=audit.client_surface_class,
+                now=datetime.now(timezone.utc),
+                limit=100,
+            )
+        except Exception:
+            return _json_response(
+                ({"ok": False, "error": "Last.fm retries could not be queued."}, 503)
+            )
     return JSONResponse({"ok": True, "integration": _enrich_lastfm_status(config, integration)})
 
 
@@ -544,22 +584,44 @@ async def playback_session_complete(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
-    response_payload, status_code = record_playback_session_complete(
-        config,
-        payload,
-        user_timezone=get_lastfm_user_timezone(config),
-        normalize_playback_track_payload=normalize_playback_track_payload,
-        is_meaningful_listen_session=is_meaningful_listen_session,
-        append_listen_history_entry=append_listen_history_entry,
-        update_listen_history_entry=update_listen_history_entry,
-        scrobble_track=scrobble_track,
-        log_lastfm_scrobble_event=lambda action, **kwargs: _log_lastfm_scrobble_event(
+    durable = _durable_lastfm_request_context(request)
+
+    def record_retryable(_config, **values):
+        if durable is None:
+            raise RuntimeError("durable Last.fm retry context is unavailable")
+        repository, audit, account_id, library_id = durable
+        return repository.accept_playback_failure(
+            **values,
+            account_id=account_id,
+            library_id=library_id,
+            request_origin_ref=request_origin_ref_for_request(request),
+            deployment_mode=audit.deployment_mode,
+            client_surface=audit.client_surface_class,
+            now=datetime.now(timezone.utc),
+        )
+
+    try:
+        response_payload, status_code = record_playback_session_complete(
             config,
-            logger,
-            action,
-            **kwargs,
-        ),
-    )
+            payload,
+            user_timezone=get_lastfm_user_timezone(config),
+            normalize_playback_track_payload=normalize_playback_track_payload,
+            is_meaningful_listen_session=is_meaningful_listen_session,
+            append_listen_history_entry=append_listen_history_entry,
+            update_listen_history_entry=update_listen_history_entry,
+            scrobble_track=scrobble_track,
+            log_lastfm_scrobble_event=lambda action, **kwargs: _log_lastfm_scrobble_event(
+                config,
+                logger,
+                action,
+                **kwargs,
+            ),
+            record_retryable_scrobble=record_retryable,
+        )
+    except RuntimeError:
+        return _json_response(
+            ({"ok": False, "error": "Last.fm retry could not be queued."}, 503)
+        )
     return JSONResponse(response_payload, status_code=status_code)
 
 

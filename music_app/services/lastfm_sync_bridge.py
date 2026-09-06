@@ -20,6 +20,7 @@ ListenHistoryAppender = Callable[[ConfigDict, JsonDict], JsonDict]
 ListenHistoryUpdater = Callable[[ConfigDict, str, JsonDict], JsonDict | None]
 LastfmScrobbler = Callable[[ConfigDict, JsonDict], object]
 LastfmScrobbleLogger = Callable[..., None]
+RetryableScrobbleRecorder = Callable[..., object]
 
 _MAX_SCROBBLE_ATTEMPTS = 5
 _BASE_RETRY_DELAY_SECONDS = 60
@@ -57,6 +58,7 @@ def record_playback_session_complete(
     update_listen_history_entry: ListenHistoryUpdater,
     scrobble_track: LastfmScrobbler,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
+    record_retryable_scrobble: RetryableScrobbleRecorder | None = None,
 ) -> tuple[JsonDict, int]:
     entry = build_playback_complete_entry({
         **payload,
@@ -76,6 +78,7 @@ def record_playback_session_complete(
     scrobble_error = ""
     scrobble_retryable = False
     reauthentication_required = False
+    possible_send_ambiguous = False
     submission: object | None = None
 
     if entry["scrobble_eligible"] and not scrobbled:
@@ -84,10 +87,21 @@ def record_playback_session_complete(
             scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
             if not scrobbled:
                 scrobble_error = str(getattr(submission, "message", "") or "Last.fm scrobble was not accepted.")
-                scrobble_retryable = not bool(getattr(submission, "sent", False))
+                scrobble_retryable = (
+                    not bool(getattr(submission, "sent", False))
+                    and str(getattr(submission, "outcome", "") or "")
+                    not in {"not_connected", "invalid_payload"}
+                )
         except LastfmError as exc:
             scrobble_error = str(exc)
-            scrobble_retryable = bool(exc.retryable or exc.reauthentication_required)
+            possible_send_ambiguous = exc.error_kind in {
+                "network_error",
+                "malformed_response",
+            }
+            scrobble_retryable = bool(
+                (exc.retryable or exc.reauthentication_required)
+                and not possible_send_ambiguous
+            )
             reauthentication_required = exc.reauthentication_required
             log_lastfm_scrobble_event(
                 "Last.fm scrobble queued",
@@ -125,6 +139,8 @@ def record_playback_session_complete(
                     "status": (
                         "reauthentication_required"
                         if reauthentication_required
+                        else "ambiguous"
+                        if possible_send_ambiguous
                         else "pending_retry"
                         if scrobble_retryable
                         else "permanent_failure"
@@ -143,13 +159,22 @@ def record_playback_session_complete(
     if entry["scrobble_eligible"] and scrobbled:
         clear_pending_scrobble(config, listen_id=listen_id)
     elif entry["scrobble_eligible"] and scrobble_error and scrobble_retryable:
-        record_pending_scrobble(
-            config,
-            listen_id=listen_id,
-            entry=stored_entry,
-            retry_count=retry_count,
-            error=scrobble_error,
-        )
+        retry_recorder = record_retryable_scrobble or record_pending_scrobble
+        retry_values = {
+            "listen_id": listen_id,
+            "entry": stored_entry,
+            "retry_count": retry_count,
+            "error": scrobble_error,
+        }
+        if reauthentication_required:
+            retry_values["reauthentication_required"] = True
+        durable_retry = retry_recorder(config, **retry_values)
+        if durable_retry is not None:
+            stored_entry = update_listen_history_entry(
+                config,
+                listen_id,
+                {"scrobble_durable_job_owned": True},
+            ) or stored_entry
     elif entry["scrobble_eligible"] and scrobble_error:
         clear_pending_scrobble(config, listen_id=listen_id)
 

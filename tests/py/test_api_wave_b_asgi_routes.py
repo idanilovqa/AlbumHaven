@@ -624,6 +624,7 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
 
     auth_calls: list[dict[str, object]] = []
     retry_calls: list[object] = []
+    release_calls: list[dict[str, object]] = []
     monkeypatch.setattr(asgi_routes, "lastfm_api_enabled", lambda config: True)
     monkeypatch.setattr(
         asgi_routes,
@@ -670,6 +671,15 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state
+    asgi_app.state.lastfm_retry_job_repository = type(
+        "RetryRepository",
+        (),
+        {
+            "release_after_reauthentication": staticmethod(
+                lambda **values: release_calls.append(values) or ()
+            )
+        },
+    )()
 
     status, _headers, body = _run_asgi_request(
         asgi_app,
@@ -690,7 +700,8 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
     assert payload["integration"]["user_timezone"] == "America/Denver"
     assert auth_calls[0]["password"] == "demo-pass"
     assert auth_calls[0]["user_timezone"] == "America/Denver"
-    assert retry_calls == [(app.config, True)]
+    assert retry_calls == []
+    assert release_calls == []
 
 
 def test_asgi_lastfm_settings_records_safe_history_when_provider_rejects_connection(

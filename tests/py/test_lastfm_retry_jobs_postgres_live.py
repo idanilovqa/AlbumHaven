@@ -491,3 +491,156 @@ def test_live_claimed_attempt_state_machine_is_fenced_and_composes_domain_retry(
     if expects_next_job:
         assert int(pending["accepted_attempt"]) == 3
         assert int(pending["current_job_id"]) == result.next_job_id
+
+
+def test_live_playback_failure_composition_converges_duplicate_listen_identity(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    account_id, library_id, session_id, origin_key = _seed_scope(setup_url)
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    now = datetime.now(timezone.utc)
+    values = dict(
+        account_id=account_id,
+        library_id=library_id,
+        listen_id=f"playback-{uuid4().hex}",
+        entry={
+            "artist": "Artist",
+            "title": "Song",
+            "track_ref": "opaque-track",
+            "started_at_unix": 12345,
+        },
+        retry_count=1,
+        error="bounded known no-send failure",
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        now=now,
+    )
+
+    first = repository.accept_playback_failure(**values)
+    duplicate = repository.accept_playback_failure(**values)
+
+    assert duplicate == first
+    with isolatedPostgres._connect(setup_url) as connection:
+        job_count = int(
+            connection.execute(
+                "select count(*) as count from ops.jobs where idempotency_key = %s",
+                (f"lastfm-scrobble:{first.pending_scrobble_id}:attempt:2",),
+            ).fetchone()["count"]
+        )
+        pending = connection.execute(
+            "select active_session_id from integration.pending_scrobbles where id = %s",
+            (first.pending_scrobble_id,),
+        ).fetchone()
+    assert job_count == 1
+    assert int(pending["active_session_id"]) == session_id
+
+
+def test_live_reauthentication_failure_creates_a_hold_without_a_generic_job(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    account_id, library_id, _session_id, origin_key = _seed_scope(setup_url)
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    held = repository.accept_playback_failure(
+        account_id=account_id,
+        library_id=library_id,
+        listen_id=f"held-{uuid4().hex}",
+        entry={"artist": "Artist", "title": "Song", "track_ref": "opaque"},
+        retry_count=1,
+        error="session expired",
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        now=datetime.now(timezone.utc),
+        reauthentication_required=True,
+    )
+
+    assert held.job_id is None
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select status, current_job_id, accepted_attempt "
+            "from integration.pending_scrobbles where id = %s",
+            (held.pending_scrobble_id,),
+        ).fetchone()
+    assert pending["status"] == "reauthentication_required"
+    assert pending["current_job_id"] is None
+    assert pending["accepted_attempt"] is None
+
+
+def test_live_reauthentication_releases_only_scoped_held_rows_to_new_session(
+    live_lastfm_database,
+):
+    setup_url, _runtime_url = live_lastfm_database
+    account_id, library_id, old_session_id, origin_key = _seed_scope(setup_url)
+    repository = PostgresLastfmRetryJobRepository(
+        database_url=setup_url,
+        connect_to_database=isolatedPostgres._connect,
+    )
+    now = datetime.now(timezone.utc)
+    accepted = repository.accept_retryable_pending(
+        account_id=account_id,
+        library_id=library_id,
+        source_family="runtime_lastfm_sync_state_adapter",
+        source_key=f"reauth-{uuid4().hex}",
+        track_key="opaque-track",
+        played_at=now - timedelta(minutes=5),
+        previous_attempts=2,
+        next_attempt_at=now,
+        active_session_id=old_session_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        payload={"source_payload": {"artist": "Artist", "title": "Song"}},
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        connection.execute(
+            "update integration.pending_scrobbles "
+            "set status = 'reauthentication_required', attempt_count = 3 "
+            "where id = %s",
+            (accepted.pending_scrobble_id,),
+        )
+        connection.execute(
+            "update integration.lastfm_sessions set is_active = false where id = %s",
+            (old_session_id,),
+        )
+        new_session_id = int(
+            connection.execute(
+                "insert into integration.lastfm_sessions "
+                "(account_id, provider_username, session_key_encrypted, is_active) "
+                "values (%s, 'new-session', 'new-secret', true) returning id",
+                (account_id,),
+            ).fetchone()["id"]
+        )
+
+    released = repository.release_after_reauthentication(
+        account_id=account_id,
+        library_id=library_id,
+        request_origin_ref=f"browser:{origin_key}",
+        deployment_mode="self_hosted_private_web",
+        client_surface="private_web",
+        now=now + timedelta(seconds=1),
+    )
+
+    assert len(released) == 1
+    with isolatedPostgres._connect(setup_url) as connection:
+        pending = connection.execute(
+            "select active_session_id, accepted_attempt, current_job_id "
+            "from integration.pending_scrobbles where id = %s",
+            (accepted.pending_scrobble_id,),
+        ).fetchone()
+        job = connection.execute(
+            "select parameters from ops.jobs where id = %s",
+            (released[0].job_id,),
+        ).fetchone()
+    assert int(pending["active_session_id"]) == new_session_id
+    assert int(pending["accepted_attempt"]) == 4
+    assert int(pending["current_job_id"]) == released[0].job_id
+    assert job["parameters"] == {"active_session_ref": str(new_session_id)}

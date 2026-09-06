@@ -370,6 +370,12 @@ class Worker:
         execution_failed = False
         try:
             while not stop_event.is_set():
+                self._repository.reconcile_stale_leases(
+                    now=self._clock(),
+                    limit=1000,
+                )
+                if stop_event.is_set():
+                    break
                 batch = self._launch_batch(results)
                 threads.extend(batch)
                 while (

@@ -92,11 +92,11 @@ def _insert_job(
             insert into ops.jobs (
               kind, subject_kind, subject_ref, parameters, deployment_mode,
               client_surface, idempotency_key, priority, max_attempts,
-              recovery_policy, account_id
+              recovery_policy, account_id, scheduled_at
             ) values (
               'auth_password_reset_delivery', 'mail_outbox', %s, '{}'::jsonb,
               'self_hosted_private_web', 'private_web', %s, %s, 1,
-              'ambiguous_on_stale_lease', %s
+              'ambiguous_on_stale_lease', %s, now() - interval '1 second'
             ) returning id
             """,
             (key, f"phase8:{key}", priority, account_id),

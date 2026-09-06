@@ -25,7 +25,7 @@ def test_worker_config_has_approved_safe_defaults():
     ("name", "value"),
     [
         ("ALBUM_HAVEN_WORKER_CONCURRENCY", "0"),
-        ("ALBUM_HAVEN_WORKER_CONCURRENCY", "33"),
+        ("ALBUM_HAVEN_WORKER_CONCURRENCY", "9"),
         ("ALBUM_HAVEN_WORKER_LEASE_SECONDS", "0"),
         ("ALBUM_HAVEN_WORKER_LEASE_SECONDS", "86401"),
         ("ALBUM_HAVEN_WORKER_HEARTBEAT_SECONDS", "0"),
@@ -51,6 +51,17 @@ def test_worker_config_requires_a_dedicated_worker_database_url():
         build_worker_config(
             {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app-role@db/app"}
         )
+
+
+def test_worker_config_accepts_approved_maximum_concurrency():
+    config = build_worker_config(
+        {
+            "ALBUM_HAVEN_WORKER_DATABASE_URL": WORKER_URL,
+            "ALBUM_HAVEN_WORKER_CONCURRENCY": "8",
+        }
+    )
+
+    assert config.concurrency == 8
 
 
 def test_worker_config_requires_heartbeat_no_greater_than_one_third_lease():

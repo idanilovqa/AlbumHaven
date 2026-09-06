@@ -44,11 +44,17 @@ def claim(kind: str = JobKind.FULL_SCAN.value) -> ClaimedJob:
 
 
 class Repository:
-    def __init__(self, claims=(), heartbeats=()):
+    def __init__(self, claims=(), heartbeats=(), reconciliation_failure=None):
         self.claims = list(claims)
         self.heartbeats = list(heartbeats)
+        self.reconciliation_failure = reconciliation_failure
         self.calls = []
         self.finishes = []
+
+    def reconcile_stale_leases(self, *, now, limit):
+        self.calls.append(("reconcile_stale_leases", now, limit))
+        if self.reconciliation_failure is not None:
+            raise self.reconciliation_failure
 
     def claim(self, *, worker_id, now, lease_seconds):
         self.calls.append(("claim", worker_id, now, lease_seconds))
@@ -342,6 +348,89 @@ def test_run_applies_exponential_idle_backoff_capped_by_configuration():
 
     assert waits == [1, 2, 4, 4]
     assert len([call for call in repository.calls if call[0] == "claim"]) == 4
+
+
+def test_run_reconciles_stale_leases_before_each_successive_idle_claim_cycle():
+    repository = Repository()
+    waits = []
+
+    def wait(stop_event, seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            stop_event.set()
+        return stop_event.is_set()
+
+    worker(repository, wait=wait).run(threading.Event())
+
+    assert repository.calls == [
+        ("reconcile_stale_leases", NOW, 1000),
+        ("claim", "worker-test", NOW, 300),
+        ("reconcile_stale_leases", NOW, 1000),
+        ("claim", "worker-test", NOW, 300),
+    ]
+
+
+def test_shutdown_during_blocked_reconciliation_starts_no_claim_or_lingering_thread():
+    reconciliation_started = threading.Event()
+    release_reconciliation = threading.Event()
+
+    class BlockingReconciliationRepository(Repository):
+        def reconcile_stale_leases(self, *, now, limit):
+            super().reconcile_stale_leases(now=now, limit=limit)
+            reconciliation_started.set()
+            assert release_reconciliation.wait(2)
+
+    repository = BlockingReconciliationRepository()
+    stop = threading.Event()
+    errors = []
+
+    def run_worker():
+        try:
+            worker(repository).run(stop)
+        except BaseException as exc:
+            errors.append(exc)
+
+    runner = threading.Thread(target=run_worker, name="test-blocked-reconciliation")
+    runner.start()
+    assert reconciliation_started.wait(2)
+    stop.set()
+    release_reconciliation.set()
+    runner.join(2)
+
+    assert not runner.is_alive()
+    assert errors == []
+    assert [call for call in repository.calls if call[0] == "claim"] == []
+    assert not any(
+        thread.is_alive() and thread.name.startswith("album-haven-job")
+        for thread in threading.enumerate()
+    )
+
+
+def test_reconciliation_failure_stops_before_claim_and_closes_worker_lifecycle():
+    secret = "postgresql://worker:secret@private-host/jobs"
+    repository = Repository(reconciliation_failure=RuntimeError(secret))
+    instances = WorkerInstances()
+    stop = threading.Event()
+    safety_wait_used = []
+
+    def wait(stop_event, _seconds):
+        safety_wait_used.append(True)
+        stop_event.set()
+        return True
+
+    with pytest.raises(
+        RuntimeError, match=r"^durable jobs worker execution failed$"
+    ) as raised:
+        worker(repository, worker_instances=instances, wait=wait).run(stop)
+
+    assert repository.calls == [("reconcile_stale_leases", NOW, 1000)]
+    assert safety_wait_used == []
+    assert stop.is_set()
+    assert [call[0] for call in instances.calls][:2] == ["starting", "running"]
+    assert [call[0] for call in instances.calls][-2:] == ["draining", "stopped"]
+    assert instances.calls[-1][3] == "complete"
+    assert "secret" not in str(raised.value)
+    assert "private-host" not in str(raised.value)
 
 
 def test_run_persists_worker_lifecycle_and_idle_heartbeat():
@@ -864,7 +953,9 @@ def test_blocking_finish_times_out_without_losing_active_context_or_closing():
         thread
         for thread in threading.enumerate()
         if thread.ident not in baseline_thread_ids
-        and thread.name.startswith("album-haven-job")
+        and thread.name.startswith(
+            ("album-haven-job", "album-haven-worker-heartbeat")
+        )
     ]
     for thread in owned:
         thread.join(2)

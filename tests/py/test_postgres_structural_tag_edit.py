@@ -426,7 +426,7 @@ def test_album_edit_restores_display_date_when_watcher_precreates_destination():
     assert "from normalized_existing_destination_album" in normalized_sql
 
 
-def test_postgres_album_split_projects_destination_for_non_album_exception_track(
+def test_postgres_album_rename_keeps_non_album_exception_track_detached(
     monkeypatch,
 ):
     paths, previous, updated = _entries(album="Problematic Files Rename Probe")
@@ -445,14 +445,19 @@ def test_postgres_album_split_projects_destination_for_non_album_exception_track
         changed_field_names={"album"},
     )
 
-    assert result["album_rows_updated"] == 1
+    assert result["album_rows_updated"] == 0
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
     mutation_params = next(
         params
         for sql, params in connection.executed
-        if isinstance(params, dict) and "destination_album_title" in params
+        if isinstance(params, dict) and "input_rows" in params
     )
-    assert mutation_params["destination_album_title"] == "Problematic Files Rename Probe"
-    assert mutation_params["changed_paths"] == [selected_path]
+    assert "destination_album_title" not in mutation_params
+    assert (
+        mutation_params["input_rows"][0]["file_entry"]["album"]
+        == "Problematic Files Rename Probe"
+    )
 
 
 def test_postgres_blank_album_edit_keeps_strongly_inferred_track_attached(monkeypatch):
@@ -1219,7 +1224,10 @@ def test_postgres_targeted_structural_edit_rejects_broader_field_sets(
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
 
-    with pytest.raises(ValueError, match="album-only or year-only"):
+    with pytest.raises(
+        ValueError,
+        match="album-only, year-only, or exception-only",
+    ):
         adapter.persist_structural_tag_edit(
             changed_paths=set(updated),
             previous_file_entries=previous,

@@ -75,6 +75,9 @@ LASTFM_RETRY_JOB_STATE_MIGRATION = (
 LASTFM_RETRY_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0078_grant_worker_lastfm_retry.sql"
 )
+AUTH_MAIL_JOB_STATE_MIGRATION = (
+    MIGRATIONS_DIR / "0079_create_auth_mail_job_state.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -142,6 +145,40 @@ def test_lastfm_retry_worker_migration_exposes_only_claim_fenced_secret_access()
     authorization_return = sql.split("returns table (", 1)[1].split(") language sql", 1)[0]
     assert "integration_session_ref varchar" in authorization_return
     assert "session_key_encrypted" not in authorization_return
+
+
+def test_auth_mail_job_state_adds_stable_checkpointed_outbox_ownership():
+    assert AUTH_MAIL_JOB_STATE_MIGRATION.is_file()
+    sql = _normalized_sql(AUTH_MAIL_JOB_STATE_MIGRATION.read_text(encoding="utf-8"))
+
+    for column in (
+        "row_revision",
+        "accepted_attempt",
+        "current_job_id",
+        "request_origin_id",
+        "actor_account_id",
+        "authorization_mode",
+        "delivery_checkpoint",
+        "provider_disposition",
+        "delivery_reason_code",
+        "updated_at",
+    ):
+        assert f"add column if not exists {column}" in sql
+    assert "mail_outbox_current_job_id_key" in sql
+    assert "mail_outbox_due_welcome_job_idx" in sql
+    assert "mail_outbox_tokenless_accepted_idx" in sql
+    assert "mail_outbox_stale_sending_job_idx" in sql
+    assert "references ops.jobs(id) on delete set null" in sql
+    assert "references app.request_origins(id) on delete set null" in sql
+    assert "accepted_attempt between 1 and 5" in sql
+    assert "accepted_attempt <= least(5, attempt_count + 1)" in sql
+    assert "updated_at >= created_at" in sql
+    assert "octet_length(delivery_reason_code) between 1 and 128" in sql
+    assert "legacy_token_unavailable" in sql
+    assert "delivery_status = 'unknown'" in sql
+    assert "message_category in ('account_invitation', 'password_reset')" in sql
+    assert "reset_token_id is null" in sql
+    assert "invitation_token_id is null" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -541,7 +578,6 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
     assert migration_names[-40:] == [
-        "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
@@ -581,6 +617,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0076_complete_durable_scan_status_projection.sql",
         "0077_create_lastfm_retry_job_state.sql",
         "0078_grant_worker_lastfm_retry.sql",
+        "0079_create_auth_mail_job_state.sql",
     ]
 
 

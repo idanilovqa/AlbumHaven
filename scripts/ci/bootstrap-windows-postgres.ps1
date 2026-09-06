@@ -48,12 +48,13 @@ function Get-Names {
         migrator = "album_haven_migrator_$DatabaseSuffix"
         app = "album_haven_app_$DatabaseSuffix"
         readonly = "album_haven_readonly_$DatabaseSuffix"
+        worker = "album_haven_worker_$DatabaseSuffix"
     }
     if ($database -ceq 'album_haven_core' -or $database -cnotmatch '^album_haven_ci_[a-z0-9]+(?:_[a-z0-9]+)*$') {
         throw 'Generated database name is forbidden.'
     }
     foreach ($role in $roles.Values) {
-        if ($role.Length -gt 63 -or $role -cnotmatch '^album_haven_(?:migrator|app|readonly)_[a-z0-9]+(?:_[a-z0-9]+)*$') {
+        if ($role.Length -gt 63 -or $role -cnotmatch '^album_haven_(?:migrator|app|readonly|worker)_[a-z0-9]+(?:_[a-z0-9]+)*$') {
             throw 'Generated role name is invalid.'
         }
     }
@@ -85,6 +86,7 @@ function Get-Contract {
     $migratorUrl = Get-PasswordlessUrl $names.Roles.migrator $names.Database
     $appUrl = Get-PasswordlessUrl $names.Roles.app $names.Database
     $readonlyUrl = Get-PasswordlessUrl $names.Roles.readonly $names.Database
+    $workerUrl = Get-PasswordlessUrl $names.Roles.worker $names.Database
     return [ordered]@{
         service = [ordered]@{
             name = $ServiceName
@@ -116,11 +118,15 @@ function Get-Contract {
                 allow = @('connect', 'schema-usage', 'select')
                 deny = @('temporary-table', 'insert', 'update', 'delete', 'truncate', 'sequence-usage')
             }
+            worker = [ordered]@{
+                allow = @('connect', 'schema-usage', 'select', 'insert', 'update', 'sequence-usage')
+                deny = @('create-schema', 'temporary-table', 'delete', 'truncate', 'references', 'trigger')
+            }
         }
         teardown = [ordered]@{
             terminateDatabase = $names.Database
             dropDatabase = $names.Database
-            dropRoles = @($names.Roles.app, $names.Roles.readonly, $names.Roles.migrator)
+            dropRoles = @($names.Roles.app, $names.Roles.readonly, $names.Roles.worker, $names.Roles.migrator)
             stateRequired = $true
             rejectUnownedTargets = $true
         }
@@ -136,6 +142,7 @@ function Get-Contract {
             DATABASE_MIGRATOR_URL = $migratorUrl
             DATABASE_APP_URL = $appUrl
             DATABASE_READONLY_URL = $readonlyUrl
+            ALBUM_HAVEN_WORKER_DATABASE_URL = $workerUrl
             ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL = $migratorUrl
             ALBUM_HAVEN_FAKE_E2E_DATABASE_URL = $appUrl
             ALBUM_HAVEN_APP_DATABASE_URL = $appUrl
@@ -224,11 +231,11 @@ function Invoke-Provision([object]$Contract) {
         throw
     }
     [IO.Directory]::CreateDirectory($RunnerTemp) | Out-Null
-    $secrets = [ordered]@{ migrator = New-Secret; app = New-Secret; readonly = New-Secret }
+    $secrets = [ordered]@{ migrator = New-Secret; app = New-Secret; readonly = New-Secret; worker = New-Secret }
     foreach ($secret in $secrets.Values) { Write-Output "::add-mask::$secret" }
 
     $names = Get-Names
-    $collisionSql = "select (select count(*) from pg_roles where rolname in ('$($names.Roles.migrator)','$($names.Roles.app)','$($names.Roles.readonly)')) + (select count(*) from pg_database where datname='$($names.Database)');"
+    $collisionSql = "select (select count(*) from pg_roles where rolname in ('$($names.Roles.migrator)','$($names.Roles.app)','$($names.Roles.readonly)','$($names.Roles.worker)')) + (select count(*) from pg_database where datname='$($names.Database)');"
     $collisionCount = (& $psql -X -w -h $HostName -p $Port -U $AdminRole -d postgres -tAc $collisionSql 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or $collisionCount -cne '0') {
         Restore-AdminAuthentication $previousAdminAuthentication
@@ -246,10 +253,12 @@ begin
   if not exists (select 1 from pg_roles where rolname='album_haven_migrator') then create role album_haven_migrator nologin; end if;
   if not exists (select 1 from pg_roles where rolname='album_haven_app') then create role album_haven_app nologin; end if;
   if not exists (select 1 from pg_roles where rolname='album_haven_readonly') then create role album_haven_readonly nologin; end if;
+  if not exists (select 1 from pg_roles where rolname='album_haven_worker') then create role album_haven_worker nologin; end if;
 end `$bootstrap`$;
 create role $($names.Roles.migrator) login password '$($secrets.migrator)' nosuperuser nocreatedb nocreaterole noreplication nobypassrls in role album_haven_migrator;
 create role $($names.Roles.app) login password '$($secrets.app)' nosuperuser nocreatedb nocreaterole noreplication nobypassrls $appRoleGrantClause;
 create role $($names.Roles.readonly) login password '$($secrets.readonly)' nosuperuser nocreatedb nocreaterole noreplication nobypassrls in role album_haven_readonly;
+create role $($names.Roles.worker) login password '$($secrets.worker)' nosuperuser nocreatedb nocreaterole noreplication nobypassrls in role album_haven_worker;
 commit;
 "@
     $state = [ordered]@{
@@ -265,7 +274,7 @@ commit;
         [IO.File]::WriteAllText($StatePath, ($state | ConvertTo-Json -Depth 8), (New-Object Text.UTF8Encoding($false)))
         Invoke-PsqlText $psql $AdminRole 'postgres' $roleSql
         Invoke-PsqlText $psql $AdminRole 'postgres' "create database $($names.Database) owner $($names.Roles.migrator);"
-        Invoke-PsqlText $psql $AdminRole $names.Database "revoke all on database $($names.Database) from public; grant connect on database $($names.Database) to album_haven_app, album_haven_readonly, $($names.Roles.app); grant temporary on database $($names.Database) to album_haven_app, $($names.Roles.app);"
+        Invoke-PsqlText $psql $AdminRole $names.Database "revoke all on database $($names.Database) from public; grant connect on database $($names.Database) to album_haven_app, album_haven_readonly, album_haven_worker, $($names.Roles.app), $($names.Roles.worker); grant temporary on database $($names.Database) to album_haven_app, $($names.Roles.app);"
     } finally {
         Clear-AdminAuthentication
     }
@@ -273,7 +282,8 @@ commit;
     $pgpassLines = @(
         "$HostName`:$Port`:$($names.Database)`:$($names.Roles.migrator)`:$($secrets.migrator)",
         "$HostName`:$Port`:$($names.Database)`:$($names.Roles.app)`:$($secrets.app)",
-        "$HostName`:$Port`:$($names.Database)`:$($names.Roles.readonly)`:$($secrets.readonly)"
+        "$HostName`:$Port`:$($names.Database)`:$($names.Roles.readonly)`:$($secrets.readonly)",
+        "$HostName`:$Port`:$($names.Database)`:$($names.Roles.worker)`:$($secrets.worker)"
     )
     [IO.File]::WriteAllLines($Contract.pgpass.path, $pgpassLines, (New-Object Text.UTF8Encoding($false)))
     $env:PGPASSFILE = $Contract.pgpass.path
@@ -451,9 +461,38 @@ begin
   end if;
 end $probe$;
 '@
+    $workerProbeSql = @'
+select 1 from ops.jobs limit 1;
+do $probe$
+begin
+  begin
+    delete from ops.jobs;
+    raise exception 'worker unexpectedly deleted ops.jobs';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    truncate table ops.jobs;
+    raise exception 'worker unexpectedly truncated ops.jobs';
+  exception when insufficient_privilege then null;
+  end;
+  if not (
+    has_schema_privilege(current_user,'ops','usage')
+    and has_table_privilege(current_user,'ops.jobs','select,update')
+    and has_table_privilege(current_user,'ops.job_transitions','select,insert')
+    and has_table_privilege(current_user,'ops.worker_instances','select,insert,update')
+    and has_sequence_privilege(current_user,'ops.job_transitions_id_seq','usage')
+    and not has_database_privilege(current_user,current_database(),'temporary')
+    and not has_schema_privilege(current_user,'ops','create')
+    and not has_table_privilege(current_user,'ops.jobs','insert,delete,truncate,references,trigger')
+  ) then
+    raise exception 'worker privilege boundary is incomplete or overbroad';
+  end if;
+end $probe$;
+'@
     Invoke-PsqlText $psql $names.Roles.migrator $names.Database $migratorProbeSql
     Invoke-PsqlText $psql $names.Roles.app $names.Database $appProbeSql
     Invoke-PsqlText $psql $names.Roles.readonly $names.Database $readonlyProbeSql
+    Invoke-PsqlText $psql $names.Roles.worker $names.Database $workerProbeSql
 
     foreach ($entry in $Contract.githubEnvExports.GetEnumerator()) {
         [Environment]::SetEnvironmentVariable($entry.Key, [string]$entry.Value, 'Process')
@@ -484,7 +523,7 @@ function Invoke-Teardown {
         throw 'Bootstrap state contains an unowned teardown target.'
     }
     if ($state.database -ceq 'album_haven_core' -or $state.database -cnotmatch '^album_haven_ci_') { throw 'Forbidden teardown database.' }
-    foreach ($key in @('migrator', 'app', 'readonly')) {
+    foreach ($key in @('migrator', 'app', 'readonly', 'worker')) {
         if ([string]$state.roles.$key -cne [string]$names.Roles[$key]) { throw 'Bootstrap state contains an unowned role.' }
     }
     if (
@@ -498,7 +537,7 @@ function Invoke-Teardown {
     if (-not (Test-Path -LiteralPath $psql -PathType Leaf)) { throw 'PGBIN psql.exe is missing.' }
     $previousAdminAuthentication = Set-AdminAuthentication
     try {
-        Invoke-PsqlText $psql $AdminRole 'postgres' "select pg_terminate_backend(pid) from pg_stat_activity where datname='$($names.Database)' and pid<>pg_backend_pid(); drop database if exists $($names.Database); drop role if exists $($names.Roles.app); drop role if exists $($names.Roles.readonly); drop role if exists $($names.Roles.migrator);"
+        Invoke-PsqlText $psql $AdminRole 'postgres' "select pg_terminate_backend(pid) from pg_stat_activity where datname='$($names.Database)' and pid<>pg_backend_pid(); drop database if exists $($names.Database); drop role if exists $($names.Roles.app); drop role if exists $($names.Roles.readonly); drop role if exists $($names.Roles.worker); drop role if exists $($names.Roles.migrator);"
     } finally {
         Restore-AdminAuthentication $previousAdminAuthentication
     }

@@ -66,6 +66,8 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0059_alert_appearance_family.sql
 0060_player_aware_interaction_outline.sql
 0061_create_missing_album_removal_function.sql
+0062_narrow_readonly_account_privileges.sql
+0063_create_durable_job_foundation.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -125,5 +127,7 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0061_create_missing_album_removal_function.sql` moves confirmed missing-album deletion behind a bounded security-definer function. The application role can execute the function without receiving direct delete privileges on library inventory tables.
 
 `0062_narrow_readonly_account_privileges.sql` removes table-wide readonly access to account identity data and restores only the non-private operational columns needed for approved verification. The sanitized security-audit table remains readable under the deployment's operator-access policy.
+
+`0063_create_durable_job_foundation.sql` adds the private shared job ledger, transition history, and worker heartbeat tables. It closes the initial job-kind and state sets, enforces bounded JSON and coherent lease/terminal state, and adds claim, status, retry, and retention indexes. The application can enqueue and request cancellation, the dedicated worker can claim and transition work, and neither the worker nor readonly role receives deletion access; retention remains migrator-owned.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

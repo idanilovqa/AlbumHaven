@@ -61,6 +61,41 @@ def _dedicated_database_urls_or_skip(monkeypatch: pytest.MonkeyPatch) -> tuple[s
     return setup_url, runtime_url
 
 
+def _durable_job_database_urls_or_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[str, str, str, str]:
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    worker_url = str(
+        os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or ""
+    ).strip()
+    readonly_url = str(os.environ.get("DATABASE_READONLY_URL") or "").strip()
+    if not worker_url or not readonly_url:
+        _skip_or_fail_ci(
+            "Dedicated worker and read-only Postgres URLs are not configured."
+        )
+
+    database_names = {
+        urlparse(value).path.lstrip("/")
+        for value in (setup_url, runtime_url, worker_url, readonly_url)
+    }
+    if len(database_names) != 1:
+        _skip_or_fail_ci("Dedicated Postgres role URLs do not share one database.")
+
+    try:
+        import psycopg
+    except ImportError:
+        _skip_or_fail_ci("psycopg is required for dedicated isolated Postgres tests.")
+        raise AssertionError("unreachable")
+    try:
+        with isolatedPostgres._connect(worker_url) as connection:
+            isolatedPostgres._assert_connected_role(connection, "album_haven_worker")
+        with isolatedPostgres._connect(readonly_url) as connection:
+            isolatedPostgres._assert_connected_role(connection, "album_haven_readonly")
+    except psycopg.OperationalError as exc:
+        _skip_or_fail_ci(f"Dedicated isolated Postgres role is unavailable: {exc}")
+    return setup_url, runtime_url, worker_url, readonly_url
+
+
 def _drop_application_schemas(setup_url: str) -> None:
     with isolatedPostgres._connect(setup_url) as connection:
         isolatedPostgres._assert_connected_role(connection, isolatedPostgres.SETUP_ROLE)
@@ -190,6 +225,178 @@ def _phase6_plan_evidence(plan_document: object) -> dict[str, object]:
         "shared_read_blocks": int(root_plan.get("Shared Read Blocks") or 0),
         "shared_hit_blocks": int(root_plan.get("Shared Hit Blocks") or 0),
     }
+
+
+def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    psycopg = pytest.importorskip("psycopg")
+    migration_sql = (
+        Path(__file__).resolve().parents[2]
+        / "migrations"
+        / "postgres"
+        / "0063_create_durable_job_foundation.sql"
+    ).read_text(encoding="utf-8")
+    cleanup_complete = False
+
+    insert_sql = """
+        insert into ops.jobs (
+          kind, subject_kind, subject_ref, parameters, deployment_mode,
+          client_surface, idempotency_key, max_attempts, recovery_policy
+        ) values (
+          'auth_password_reset_delivery', 'mail_outbox', %s, '{}'::jsonb,
+          'self_hosted_private_web', 'web', %s, 1,
+          'ambiguous_on_stale_lease'
+        )
+        returning id
+    """
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            isolatedPostgres._assert_connected_role(
+                connection, isolatedPostgres.SETUP_ROLE
+            )
+            connection.execute(migration_sql)
+            connection.execute(migration_sql)
+            index_rows = connection.execute(
+                """
+                select indexname, indexdef
+                  from pg_indexes
+                 where schemaname = 'ops'
+                   and indexname in (
+                     'jobs_idempotency_idx',
+                     'jobs_runnable_claim_idx',
+                     'jobs_active_lease_idx',
+                     'jobs_terminal_retention_idx',
+                     'worker_instances_heartbeat_idx',
+                     'worker_instances_retention_idx'
+                   )
+                """
+            ).fetchall()
+        indexes = {str(row["indexname"]): str(row["indexdef"]) for row in index_rows}
+        assert set(indexes) == {
+            "jobs_idempotency_idx",
+            "jobs_runnable_claim_idx",
+            "jobs_active_lease_idx",
+            "jobs_terminal_retention_idx",
+            "worker_instances_heartbeat_idx",
+            "worker_instances_retention_idx",
+        }
+        assert " WHERE " in indexes["worker_instances_heartbeat_idx"]
+        assert " WHERE " in indexes["worker_instances_retention_idx"]
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    insert_sql.replace(
+                        "'auth_password_reset_delivery'", "'album_move'"
+                    ),
+                    ("invalid-kind", "phase8:invalid-kind"),
+                )
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    insert_sql.replace("'{}'::jsonb", "'[]'::jsonb"),
+                    ("invalid-parameters", "phase8:invalid-parameters"),
+                )
+            connection.execute(
+                insert_sql,
+                ("idempotency", "phase8:null-safe-idempotency"),
+            )
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    insert_sql,
+                    ("idempotency", "phase8:null-safe-idempotency"),
+                )
+
+        with isolatedPostgres._connect(app_url) as connection:
+            app_job_id = int(
+                connection.execute(
+                    insert_sql,
+                    ("app-authority", "phase8:app-authority"),
+                ).fetchone()["id"]
+            )
+            connection.execute(
+                """
+                update ops.jobs
+                   set cancel_requested_at = now(),
+                       cancel_reason_code = 'owner_request',
+                       updated_at = now()
+                 where id = %s
+                """,
+                (app_job_id,),
+            )
+
+        with isolatedPostgres._connect(app_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "update ops.jobs set state = 'failed' where id = %s",
+                    (app_job_id,),
+                )
+
+        with isolatedPostgres._connect(worker_url) as connection:
+            claimed = connection.execute(
+                """
+                update ops.jobs
+                   set state = 'running', attempt_count = 1,
+                       lease_owner = 'phase8-live-worker',
+                       lease_token = 'phase8-live-lease',
+                       lease_expires_at = now() + interval '300 seconds',
+                       heartbeat_at = now(), started_at = now(), updated_at = now()
+                 where id = %s and state = 'queued'
+             returning id
+                """,
+                (app_job_id,),
+            ).fetchone()
+            assert int(claimed["id"]) == app_job_id
+            connection.execute(
+                """
+                insert into ops.job_transitions (
+                  job_id, prior_state, next_state, attempt_count, reason_code,
+                  worker_instance_id
+                ) values (%s, 'queued', 'running', 1, 'claimed',
+                          'phase8-live-worker')
+                """,
+                (app_job_id,),
+            )
+            connection.execute(
+                """
+                insert into ops.worker_instances (
+                  instance_id, lifecycle_state, started_at, last_heartbeat_at,
+                  compatible_schema_version, registered_handler_fingerprint
+                ) values (
+                  'phase8-live-worker', 'running', now(), now(), 63,
+                  'phase8-live-handlers'
+                )
+                """
+            )
+
+        with isolatedPostgres._connect(worker_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("delete from ops.jobs where id = %s", (app_job_id,))
+
+        with isolatedPostgres._connect(readonly_url) as connection:
+            connection.autocommit = True
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select id from ops.jobs limit 1")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select nextval('ops.jobs_id_seq')")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("select nextval('ops.job_transitions_id_seq')")
+
+        _drop_application_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_application_schemas(setup_url)
 
 
 def test_phase6_plan_evidence_uses_cumulative_root_buffer_counters_once():

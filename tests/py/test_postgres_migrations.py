@@ -27,6 +27,9 @@ MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION = (
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
+DURABLE_JOBS_MIGRATION = (
+    MIGRATIONS_DIR / "0063_create_durable_job_foundation.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -426,7 +429,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-24:] == [
+    assert migration_names[-25:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -451,6 +454,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0060_player_aware_interaction_outline.sql",
         "0061_create_missing_album_removal_function.sql",
         "0062_narrow_readonly_account_privileges.sql",
+        "0063_create_durable_job_foundation.sql",
     ]
 
 
@@ -2777,3 +2781,333 @@ def test_tag_edit_intents_migration_creates_recoverable_least_privilege_journal(
     assert "grant select on table library.tag_edit_intents to album_haven_readonly" not in sql
     assert "grant delete" not in sql
     assert "grant all" not in sql
+
+
+def test_durable_job_foundation_migration_file_exists():
+    assert DURABLE_JOBS_MIGRATION.is_file(), (
+        "durable job foundation migration SQL is not present yet; "
+        "Task 2 requires 0063_create_durable_job_foundation.sql"
+    )
+
+
+@pytest.fixture
+def durable_jobs_sql() -> str:
+    if not DURABLE_JOBS_MIGRATION.exists():
+        pytest.skip(
+            "durable job foundation migration SQL is not present yet; "
+            "test_durable_job_foundation_migration_file_exists captures the TDD red state"
+        )
+    return DURABLE_JOBS_MIGRATION.read_text(encoding="utf-8")
+
+
+def test_durable_job_migration_creates_private_operational_tables(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"create table if not exists {table_name}" in sql
+    assert "for update skip locked" not in sql
+    assert "album_move" not in sql
+
+
+def test_durable_job_migration_closes_job_kinds_and_states(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    expected_kinds = {
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    }
+    expected_states = {
+        "queued",
+        "running",
+        "retry_wait",
+        "succeeded",
+        "failed",
+        "canceled",
+        "ambiguous",
+    }
+
+    for value in expected_kinds | expected_states:
+        assert f"'{value}'" in sql
+    assert "constraint jobs_kind_check" in sql
+    assert "constraint jobs_state_check" in sql
+    assert "constraint job_transitions_prior_state_check" in sql
+    assert "constraint job_transitions_next_state_check" in sql
+
+
+def test_durable_job_migration_uses_bounded_types_and_named_coherence_constraints(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    workers_sql = _table_sql(sql, "ops.worker_instances")
+
+    assert "id bigint generated always as identity primary key" in jobs_sql
+    assert "created_at timestamptz" in jobs_sql
+    assert "scheduled_at timestamptz" in jobs_sql
+    assert "updated_at timestamptz" in jobs_sql
+    for bounded_column in (
+        "kind varchar(",
+        "state varchar(",
+        "subject_kind varchar(",
+        "subject_ref varchar(",
+        "capability_key varchar(",
+        "idempotency_key varchar(",
+        "lease_owner varchar(",
+        "lease_token varchar(",
+    ):
+        assert bounded_column in jobs_sql
+    assert "parameters jsonb not null" in jobs_sql
+    assert "jsonb_typeof(parameters) = 'object'" in jobs_sql
+    assert "octet_length(parameters::text) <= 4096" in jobs_sql
+    for constraint_name in (
+        "jobs_parameters_shape_check",
+        "jobs_parameters_size_check",
+        "jobs_attempts_check",
+        "jobs_lease_coherence_check",
+        "jobs_terminal_coherence_check",
+    ):
+        assert f"constraint {constraint_name}" in jobs_sql
+
+    assert "id bigint generated always as identity primary key" in transitions_sql
+    assert "reason_code varchar(" in transitions_sql
+    assert "transitioned_at timestamptz" in transitions_sql
+    assert "constraint job_transitions_attempt_check" in transitions_sql
+    assert "instance_id varchar(" in workers_sql
+    assert "started_at timestamptz" in workers_sql
+    assert "last_heartbeat_at timestamptz" in workers_sql
+    assert "constraint worker_instances_lifecycle_state_check" in workers_sql
+
+
+def test_durable_job_migration_enforces_attempt_lease_and_terminal_coherence(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    assert re.search(r"attempt_count\s*>=\s*0", jobs_sql)
+    assert re.search(r"max_attempts\s*>\s*0", jobs_sql)
+    assert re.search(r"attempt_count\s*<=\s*max_attempts", jobs_sql)
+    for lease_column in (
+        "lease_owner",
+        "lease_token",
+        "lease_expires_at",
+        "heartbeat_at",
+    ):
+        assert lease_column in jobs_sql
+    assert "state = 'running'" in jobs_sql
+    assert "completed_at is not null" in jobs_sql
+    for terminal_state in ("succeeded", "failed", "canceled", "ambiguous"):
+        assert f"'{terminal_state}'" in jobs_sql
+
+
+def test_durable_job_migration_declares_indexed_foreign_keys_with_deletion_rules(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+    jobs_sql = _table_sql(sql, "ops.jobs")
+
+    foreign_keys = (
+        ("account_id", "app.accounts"),
+        ("library_id", "library.libraries"),
+        ("request_origin_id", "app.request_origins"),
+    )
+    for column_name, referenced_table in foreign_keys:
+        assert re.search(
+            rf"{column_name}\s+bigint\s+references\s+{re.escape(referenced_table)}\(id\)\s+"
+            rf"on\s+delete\s+(?:restrict|set null)",
+            jobs_sql,
+        )
+        assert _qualified_index_pattern("ops.jobs", (column_name,)).search(
+            durable_jobs_sql
+        )
+    assert "on delete cascade" not in jobs_sql
+
+    transitions_sql = _table_sql(sql, "ops.job_transitions")
+    assert "job_id bigint not null references ops.jobs(id) on delete cascade" in transitions_sql
+    assert _qualified_index_pattern("ops.job_transitions", ("job_id",)).search(
+        durable_jobs_sql
+    )
+
+
+def test_durable_job_migration_uses_null_safe_scoped_idempotency(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    index_match = re.search(
+        r"create unique index if not exists jobs_idempotency_idx\s+on ops\.jobs\s*\((?P<columns>[^;]+)\);",
+        sql,
+    )
+    assert index_match is not None
+    columns = index_match.group("columns")
+    for fragment in (
+        "kind",
+        "coalesce(account_id, 0)",
+        "coalesce(library_id, 0)",
+        "subject_kind",
+        "subject_ref",
+        "idempotency_key",
+    ):
+        assert fragment in columns
+
+
+def test_durable_job_migration_adds_claim_status_retention_and_heartbeat_indexes(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for index_name in (
+        "jobs_runnable_claim_idx",
+        "jobs_active_lease_idx",
+        "jobs_owner_library_status_idx",
+        "jobs_retry_due_idx",
+        "jobs_terminal_retention_idx",
+        "job_transitions_job_id_idx",
+        "worker_instances_heartbeat_idx",
+    ):
+        assert f"create index if not exists {index_name}" in sql
+    assert re.search(
+        r"jobs_runnable_claim_idx.+priority\s+desc.+scheduled_at.+id.+where.+state\s+in\s*\('queued',\s*'retry_wait'\)",
+        sql,
+    )
+    assert re.search(
+        r"jobs_active_lease_idx.+lease_expires_at.+where.+state\s*=\s*'running'",
+        sql,
+    )
+    assert re.search(
+        r"jobs_terminal_retention_idx.+completed_at.+where.+state\s+in\s*\([^)]*'succeeded'[^)]*'failed'[^)]*'canceled'[^)]*\)",
+        sql,
+    )
+
+
+def test_durable_job_migration_applies_least_privilege_grants(durable_jobs_sql):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for table_name in ("ops.jobs", "ops.job_transitions", "ops.worker_instances"):
+        assert f"revoke all on table {table_name} from public" in sql
+        assert f"revoke all on table {table_name} from album_haven_readonly" in sql
+    assert "grant usage on schema ops to album_haven_worker" in sql
+    assert "grant select, update on table ops.jobs to album_haven_worker" in sql
+    assert (
+        "grant select, insert on table ops.job_transitions to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant select, insert, update on table ops.worker_instances to album_haven_worker"
+        in sql
+    )
+    assert (
+        "grant usage, select on sequence ops.job_transitions_id_seq to album_haven_worker"
+        in sql
+    )
+    assert "grant delete on table ops.jobs to album_haven_worker" not in sql
+    assert "grant delete" not in " ".join(
+        fragment
+        for fragment in sql.split(";")
+        if "to album_haven_worker" in fragment
+    )
+    assert "grant all" not in sql
+
+
+def test_durable_job_migration_limits_app_to_enqueue_and_cancel_columns(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert not re.search(
+        r"grant\s+[^;()]*\bupdate\b[^;()]*\bon\s+table\s+ops\.jobs\s+"
+        r"to\s+album_haven_app",
+        sql,
+    )
+    insert_grant = re.search(
+        r"grant\s+insert\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert insert_grant is not None
+    insert_columns = {
+        column.strip() for column in insert_grant.group("columns").split(",")
+    }
+    assert {
+        "kind",
+        "subject_kind",
+        "subject_ref",
+        "parameters",
+        "account_id",
+        "library_id",
+        "capability_key",
+        "request_origin_id",
+        "deployment_mode",
+        "client_surface",
+        "idempotency_key",
+        "priority",
+        "scheduled_at",
+        "max_attempts",
+        "recovery_policy",
+    }.issubset(insert_columns)
+    assert insert_columns.isdisjoint(
+        {
+            "state",
+            "attempt_count",
+            "lease_owner",
+            "lease_token",
+            "lease_expires_at",
+            "heartbeat_at",
+            "completed_at",
+            "outcome_code",
+            "audit_hold",
+            "tombstoned_at",
+        }
+    )
+
+    update_grant = re.search(
+        r"grant\s+update\s*\((?P<columns>[^)]+)\)\s+on\s+table\s+"
+        r"ops\.jobs\s+to\s+album_haven_app",
+        sql,
+    )
+    assert update_grant is not None
+    assert {
+        column.strip() for column in update_grant.group("columns").split(",")
+    } == {
+        "cancel_requested_at",
+        "cancel_requested_by_account_id",
+        "cancel_reason_code",
+        "updated_at",
+    }
+
+
+def test_durable_job_migration_explicitly_revokes_readonly_sequence_access(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    for sequence_name in ("ops.jobs_id_seq", "ops.job_transitions_id_seq"):
+        assert (
+            f"revoke all on sequence {sequence_name} from album_haven_readonly"
+            in sql
+        )
+
+
+def test_durable_job_worker_status_and_retention_indexes_are_partial(
+    durable_jobs_sql,
+):
+    sql = _normalized_sql(durable_jobs_sql)
+
+    assert re.search(
+        r"create index if not exists worker_instances_heartbeat_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state in\s*\('starting',\s*'running',\s*'draining'\)",
+        sql,
+    )
+    assert re.search(
+        r"create index if not exists worker_instances_retention_idx\s+"
+        r"on ops\.worker_instances\s*\(last_heartbeat_at,\s*instance_id\)\s+"
+        r"where lifecycle_state = 'stopped'",
+        sql,
+    )

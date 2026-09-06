@@ -208,8 +208,8 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
 
     asyncio.run(exercise_lifespan())
 
-    assert captured_configs == [app.state.config]
-    python_test_config._assert_safe_runtime_config(captured_configs[0])
+    assert captured_configs == []
+    python_test_config._assert_safe_runtime_config(app.state.config)
 
 
 @pytest.mark.lastfm_loopback_transport(provider_fixture="fixture_owned_lastfm_provider")

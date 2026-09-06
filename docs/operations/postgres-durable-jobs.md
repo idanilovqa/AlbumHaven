@@ -2,7 +2,7 @@
 
 The durable-jobs worker is a separate process from the Album Haven web server. The shared ledger, transition history, and worker heartbeat live in Postgres; the web process must never be treated as the owner of accepted background work.
 
-Full scans, filesystem-watcher targeted reconciliation, candidate cover lookup, bulk cover refresh, post-scan cover refresh, and remote cover save run through this worker. A successful full-scan publication creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision and the shared cover-refresh handler executes it. Last.fm delivery and authentication mail remain on their existing execution paths until their later migration slices are complete.
+Full scans, filesystem-watcher targeted reconciliation, candidate cover lookup, bulk cover refresh, post-scan cover refresh, remote cover save, and Last.fm retry delivery run through this worker. A successful full-scan publication creates one server-owned `post_scan_cover_refresh` job keyed by the committed library inventory revision and the shared cover-refresh handler executes it. Authentication mail remains on its existing execution path until its migration slice is complete.
 
 ## Configuration
 
@@ -138,11 +138,21 @@ Remote saves checkpoint acceptance, download start, exactly owned artifact creat
 
 For a cover backlog, use authorized aggregate status to distinguish queued, running, retry-wait, failed, canceled, and ambiguous work. Confirm the matching handler is registered and the current album/root/inventory authority still exists. Cancellation is cooperative once claimed. During drain, let bounded provider work observe the cancellation/lease predicate and preserve checkpoints; do not terminate unrelated provider, browser, Python, or worker processes.
 
+## Last.fm retry jobs and recovery
+
+Playback performs the first scrobble attempt inline. Only a provider result known not to have sent is accepted for durable retry. The private pending-scrobble row owns the payload, listen identity, active-session reference, attempt count, and provider disposition; the generic job contains only opaque references and bounded orchestration metadata. Each accepted provider attempt has exactly one one-attempt job and a stable idempotency key.
+
+The worker reloads current account, library membership, capability, request origin, and active Last.fm session authority after claim. It can read the session secret only through the lease-fenced claimed-job function and has no direct access to Last.fm tables. Revoked authority, replacement of the bound session, cancellation before send, or lease loss prevents the provider call. A successful reauthentication may release bounded held work onto the new active session; it never silently authorizes an old job against a replacement credential.
+
+Known-not-sent failures schedule at most five domain attempts with exponential delay. Reauthentication-required and permanent rejection are terminal domain outcomes. A timeout, transport loss after dispatch, stale sending lease, or any other possible-send result becomes `ambiguous` and is never replayed automatically. Legacy due rows are adopted in bounded, skip-locked batches; malformed or unprovable legacy state remains held for repair instead of being guessed into execution.
+
+For a Last.fm backlog, use only authorized aggregate job status and bounded reason codes. Confirm that `lastfm_scrobble_retry` is registered, the worker is ready, current membership and capability remain valid, and the account has an active session. Do not expose scrobble payloads, track metadata, usernames, session keys, provider responses, or raw pending rows in logs or tickets. Do not reset an ambiguous row or manufacture another attempt. During drain, already-dispatched provider calls retain their conservative outcome; unclaimed work remains durable for a later worker.
+
 ## Promotion
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0076_complete_durable_scan_status_projection.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0078_grant_worker_lastfm_retry.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
 3. Configure the dedicated worker-role URL, start the worker, and confirm its closed registry and claim filter include the completed scan and cover kinds but exclude every unwired kind.
 4. Deploy the compatible web artifact that enables durable scan and cover producers. Exactly one execution owner may accept each workflow during this cutover.
@@ -182,5 +192,6 @@ The application and worker roles do not receive retention deletion privileges. D
 - Post-scan cover backlog: verify the deployed worker includes the shared bulk-cover handler and that the job's committed inventory revision remains current. Do not edit its revision or create a replacement row manually.
 - Cover lookup or bulk backlog: verify current album/root authority, the actor capability for user-owned work, worker readiness, and provider configuration using secret-safe checks. Preserve provider order and deadlines; do not bypass them with manual ledger changes.
 - Ambiguous remote save: stop automatic intervention, preserve the job and checkpoint evidence, and reconcile whether download, owned-artifact write, selection commit, promotion, rollback, and task publication completed. Remove only an exactly owned artifact after the authorized root containment check succeeds.
+- Last.fm retry backlog: verify the handler registration, active session, account/library authority, and bounded attempt state. Reauthentication-held work is released only by a successful new session; possible-send ambiguity must remain held and must not be replayed.
 - Shutdown timeout: preserve the ledger and lease evidence. Diagnose the exact handler and owned child process; do not kill unrelated processes or force a state transition.
 - Cleanup failure: verify the migrator connection and migration level. The command intentionally suppresses exception details; inspect protected service logs without copying credentials, URLs, paths, tokens, addresses, media, or private fixtures.

@@ -72,6 +72,17 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0065_harden_durable_job_boundaries.sql
 0066_grant_worker_authorization_reads.sql
 0067_add_job_transition_retention_index.sql
+0068_create_scan_job_intents.sql
+0069_grant_worker_targeted_reconciliation.sql
+0070_authorize_full_scan_lifecycle.sql
+0071_grant_worker_full_scan_execution.sql
+0072_create_durable_cover_job_state.sql
+0073_grant_worker_cover_lookup.sql
+0074_grant_worker_cover_refresh.sql
+0075_create_remote_cover_save_checkpoints.sql
+0076_complete_durable_scan_status_projection.sql
+0077_create_lastfm_retry_job_state.sql
+0078_grant_worker_lastfm_retry.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -159,6 +170,10 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0075_create_remote_cover_save_checkpoints.sql` adds atomic remote-selection acceptance and a private, revisioned checkpoint record for download, owned-artifact, selection, promotion, publication, rollback, and ambiguous recovery states. The worker can load private candidate/root/path scope and advance or publish only through an active lease-fenced job.
 
 `0076_complete_durable_scan_status_projection.sql` keeps authenticated scan status authoritative through publication. It projects the committed album count, exposes relation publication as active scan work, and bridges the atomically queued post-scan cover job into cover progress without exposing generic job identities or private paths.
+
+`0077_create_lastfm_retry_job_state.sql` makes each accepted Last.fm provider retry an explicit one-attempt durable job. It adds stable pending-row and active-session identities, bounded attempt and disposition state, idempotent source identity, and a due-retry index while keeping scrobble payloads in the private integration domain.
+
+`0078_grant_worker_lastfm_retry.sql` adds the lease-fenced validation, secret-loading, attempt transition, terminal convergence, and bounded legacy-adoption functions used by the worker. The worker receives execute access only and retains no direct Last.fm table access; possible-send outcomes converge to held ambiguity instead of automatic replay.
 
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 

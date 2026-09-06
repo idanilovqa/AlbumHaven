@@ -377,10 +377,6 @@ def test_live_repository_concurrency_cas_cancellation_and_recovery_contracts():
 
         _drop_schemas(setup_url)
         cleanup_complete = True
-    except Exception as exc:
-        if exc.__class__.__module__.startswith("psycopg"):
-            pytest.fail("Dedicated isolated Postgres operation failed.", pytrace=False)
-        raise
     finally:
         if not cleanup_complete:
             _drop_schemas(setup_url)

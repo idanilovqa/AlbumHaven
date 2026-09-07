@@ -3144,6 +3144,9 @@ test('watchSaveTask owns Problematic Files mutation state until its matching ter
     context.waitForBrowserTimeout = async () => {};
     context.showRepairAlert = () => {};
     context.settleTagEditViewMutation = () => {};
+    context.renderView = () => {
+      listElement.scrollTop = 0;
+    };
 
     await context.watchSaveTask(taskId, {
       originalAlbum: albumsByKey.get(scenario.selectedKey),

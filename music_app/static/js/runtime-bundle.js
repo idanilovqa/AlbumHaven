@@ -15365,9 +15365,6 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'completed') {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
-        if (problematicMutation) {
-          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
-        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -15583,6 +15580,9 @@ async function watchSaveTask(taskId, context = {}) {
         }
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
+        }
+        if (problematicMutation) {
+          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
         }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {

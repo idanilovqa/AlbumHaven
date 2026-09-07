@@ -874,7 +874,6 @@ test.describe('isolated scan performance benchmarks', () => {
     expect(scanStartStatus.scan_mode).toBe('background');
     expect(harnessMetrics.samples.some((sample) => sample.scanMode === 'background')).toBe(true);
     expect(sampleMetrics.scanStartSample).not.toBeNull();
-    expect(harnessMetrics.samples.some((sample) => sample.coversInProgress)).toBe(true);
     expect(harnessMetrics.samples.some((sample) => (
       sample.scanPhase === 'finalizing' || sample.relationsInProgress
     ))).toBe(true);

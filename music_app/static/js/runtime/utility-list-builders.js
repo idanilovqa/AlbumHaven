@@ -2594,18 +2594,18 @@ async function watchSaveTask(taskId, context = {}) {
   settleTagEditViewMutation(tagEditMutationClaim);
 }
 
-function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases) {
+function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases, options = {}) {
   if (typeof cacheHydratedTrackModalAlbum !== 'function') return;
   candidates.filter((candidate) => candidate !== sourceAliasOwner).forEach((candidate) => {
     const candidateRequestKey = String(getAlbumRequestKey(candidate) || '').trim();
-    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate);
+    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate, options);
   });
   if (!sourceAliasOwner) return;
   const sourceRequestKey = String(getAlbumRequestKey(sourceAliasOwner) || '').trim();
   cacheHydratedTrackModalAlbum(
     sourceRequestKey,
     sourceAliasOwner,
-    { aliases: sourceAliases },
+    { ...options, aliases: sourceAliases },
   );
 }
 
@@ -2676,7 +2676,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     const sourceAliasOwner = candidates.find((candidate) => (
       albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
     )) || candidates[0];
-    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases);
+    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases, {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    });
     return;
   }
   const currentAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
@@ -2740,6 +2742,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     candidates,
     sourceAliasOwner === updatedAlbum ? modalAlbum : sourceAliasOwner,
     aliases,
+    {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    },
   );
   if (!currentModalBelongsToMutation) return;
   const releaseSet = getAlbumReleaseSet(modalAlbum);

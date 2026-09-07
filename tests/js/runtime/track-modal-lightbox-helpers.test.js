@@ -171,6 +171,7 @@ function loadHelper(options = {}) {
   };
   const documentListeners = new Map();
   const context = {
+    activeTagEditMutationClaim: options.activeTagEditMutationClaim || null,
     virtualGrid: options.virtualGrid,
     AbortController,
     Promise,
@@ -353,6 +354,9 @@ function loadHelper(options = {}) {
     },
     getAlbumRequestKey(album) {
       return String(album?.request_key || album?.key || '');
+    },
+    tagEditViewMutationStillOwnsResources(claim) {
+      return claim === context.activeTagEditMutationClaim;
     },
     overlayClickStartedOnOverlay() {
       return Boolean(options.overlayClickCloses);
@@ -1606,6 +1610,59 @@ async function run() {
 
     assert.strictEqual(resolvedAlbum, freshHydratedAlbum);
     assert.equal(context.fetchCalls.length, 1);
+  }
+
+  {
+    const albumAlias = 'rarity artist::selected track split fixture';
+    const mutationClaim = { generation: 8, resourceKeys: [`album:${albumAlias}`] };
+    const optimisticSourceAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Selected Track Split Fixture',
+      album_artist: 'Rarity Artist',
+      preview_only: false,
+      tracks: Array.from({ length: 17 }, (_value, index) => ({
+        path: `D:\\Music\\Rarity Artist\\Selected Track Split Fixture\\${index + 2}.mp3`,
+      })),
+    };
+    const staleServerAlbum = {
+      ...optimisticSourceAlbum,
+      tracks: [
+        { path: 'D:\\Music\\Rarity Artist\\Selected Track Split Fixture\\1.mp3' },
+        ...optimisticSourceAlbum.tracks,
+      ],
+    };
+    const { context } = loadHelper({
+      fetchedAlbum: staleServerAlbum,
+      initialAlbums: [optimisticSourceAlbum],
+      inventoryMutationRevision: 7,
+      activeTagEditMutationClaim: mutationClaim,
+    });
+    context.cacheHydratedTrackModalAlbum(albumAlias, optimisticSourceAlbum, {
+      aliases: [albumAlias],
+      tagEditMutationClaim: mutationClaim,
+    });
+
+    context.state.status.inventory_mutation_revision = 8;
+    const pendingResult = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(
+      pendingResult,
+      optimisticSourceAlbum,
+      'an unrelated revision observation must not replace a pending optimistic split with stale server membership',
+    );
+    assert.equal(context.fetchCalls.length, 0);
+
+    context.activeTagEditMutationClaim = null;
+    const settledResult = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(settledResult, staleServerAlbum);
+    assert.equal(
+      context.fetchCalls.length,
+      1,
+      'normal revision invalidation must resume as soon as the optimistic mutation settles',
+    );
   }
 
   {

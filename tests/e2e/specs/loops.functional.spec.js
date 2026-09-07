@@ -214,8 +214,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(collapsed.styles.engaged).toBe('false');
     expect(collapsed.podBounds).toEqual(idle.podBounds);
     expect(collapsed.podBounds.width).toBeLessThan(createHovered.podBounds.width);
-    expect(collapsed.styles.create.color).not.toBe(createHovered.styles.create.color);
-    expect(collapsed.styles.create.textShadow).not.toBe(createHovered.styles.create.textShadow);
+    expect(collapsed.styles.pod.borderColor).not.toBe(createHovered.styles.pod.borderColor);
+    expect(collapsed.styles.pod.boxShadow).not.toBe(createHovered.styles.pod.boxShadow);
     expect(collapsed.mainAreaBounds).toEqual(idle.mainAreaBounds);
     expect(collapsed.waveformBounds).toEqual(idle.waveformBounds);
     await globalPlayerActions.pauseIfPlaying();

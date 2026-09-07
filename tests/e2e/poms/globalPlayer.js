@@ -435,6 +435,8 @@ export class GlobalPlayer extends BasePage {
         if (!(element instanceof HTMLElement)) return null;
         const style = getComputedStyle(element);
         return {
+          borderColor: style.borderColor,
+          boxShadow: style.boxShadow,
           color: style.color,
           cursor: style.cursor,
           display: style.display,

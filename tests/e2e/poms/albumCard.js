@@ -1,9 +1,17 @@
 import { BasePage } from './basePage.js';
 import { SmallAlert } from './components/smallAlert.js';
 
-function exactNormalizedText(value) {
+function normalizedTextPattern(value) {
   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`^\\s*${escaped.replace(/\\s+/g, '\\s+')}\\s*$`, 'u');
+  return escaped.replace(/\\s+/g, '\\s+');
+}
+
+function exactNormalizedText(value) {
+  return new RegExp(`^\\s*${normalizedTextPattern(value)}\\s*$`, 'u');
+}
+
+function normalizeVisibleText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
 export class AlbumCard extends BasePage {
@@ -232,29 +240,68 @@ export class AlbumCard extends BasePage {
 
   async waitForOpenDetailsIdentity(artistName, albumName, year, options = {}) {
     const timeout = options.timeout || 30000;
-    const expectedTitle = [artistName, albumName, year]
-      .map((value) => String(value || '').trim())
-      .filter(Boolean)
-      .join(' - ');
     await this.page.locator(this.trackModalSelector).waitFor({ state: 'visible', timeout });
-    await this.page.locator(this.trackModalTitleSelector).filter({
-      hasText: exactNormalizedText(expectedTitle),
-    }).waitFor({ state: 'visible', timeout });
     await this.page.locator(this.trackModalTrackRowSelector).first().waitFor({
       state: 'visible',
       timeout,
     });
+    await this.waitForOpenDetailsHeaderIdentity(artistName, albumName, year, { timeout });
+  }
+
+  async readOpenDetailsHeaderIdentity() {
+    const header = this.page.locator('#track-modal .album-details-header');
+    const layout = String(await header.getAttribute('data-album-details-layout') || '').trim();
+    const title = normalizeVisibleText(await this.page.locator(this.trackModalTitleSelector).textContent());
+    const subtitle = normalizeVisibleText(await this.page.locator('#track-modal-subtitle').textContent());
+    return { layout, title, subtitle };
+  }
+
+  async waitForOpenDetailsHeaderIdentity(artistName, albumName, year, options = {}) {
+    const timeout = options.timeout || 30000;
+    const artist = normalizeVisibleText(artistName);
+    const album = normalizeVisibleText(albumName);
+    const normalizedYear = normalizeVisibleText(year);
+    const header = this.page.locator('#track-modal .album-details-header');
+    await header.waitFor({ state: 'visible', timeout });
+    const layout = String(await header.getAttribute('data-album-details-layout') || '').trim();
+    const title = layout === 'editorial_canvas'
+      ? album
+      : [artist, album, ...(layout === 'classic_bar' ? [normalizedYear] : [])].join(' • ');
+    await this.page.locator(this.trackModalTitleSelector).filter({
+      hasText: exactNormalizedText(title),
+    }).waitFor({ state: 'visible', timeout });
+    if (layout !== 'classic_bar') {
+      await this.page.locator('#track-modal-subtitle').filter({
+        hasText: new RegExp(
+          layout === 'editorial_canvas'
+            ? `^\\s*${normalizedTextPattern(artist)}\\s*•\\s*${normalizedTextPattern(normalizedYear)}(?:\\s*•|\\s*$)`
+            : `^\\s*${normalizedTextPattern(normalizedYear)}(?:\\s*•|\\s*$)`,
+          'u',
+        ),
+      }).waitFor({ state: 'visible', timeout });
+    }
   }
 
   async isOpenDetailsIdentity(artistName, albumName, year) {
-    const expectedTitle = [artistName, albumName, year]
-      .map((value) => String(value || '').trim())
-      .filter(Boolean)
-      .join(' - ');
     if (!await this.page.locator(this.trackModalSelector).isVisible()) return false;
-    return this.page.locator(this.trackModalTitleSelector).filter({
-      hasText: exactNormalizedText(expectedTitle),
-    }).isVisible();
+    const artist = normalizeVisibleText(artistName);
+    const album = normalizeVisibleText(albumName);
+    const normalizedYear = normalizeVisibleText(year);
+    const { layout, title, subtitle } = await this.readOpenDetailsHeaderIdentity();
+    if (layout === 'classic_bar') {
+      return title === `${artist} • ${album} • ${normalizedYear}`
+        || title === `${artist} - ${album} - ${normalizedYear}`;
+    }
+    if (layout === 'stacked_bar') {
+      return title === `${artist} • ${album}`
+        && (subtitle === normalizedYear || subtitle.startsWith(`${normalizedYear}•`));
+    }
+    if (layout === 'editorial_canvas') {
+      return title === album
+        && (subtitle === `${artist}•${normalizedYear}`
+          || subtitle.startsWith(`${artist}•${normalizedYear}•`));
+    }
+    return false;
   }
 
   detailsButtonByAlbumName(albumName) {

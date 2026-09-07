@@ -19,7 +19,7 @@
   Preserved recreated tracks across a single watcher debounce window and made
   confirmed missing-album removal round-trip slash and percent-bearing keys.
 - Kept the required hosted AI review gate compatible with its pinned action's
-  Chat Completions request contract.
+  Chat Completions request contract and the available per-minute token budget.
 
 ## 0.9.42 - 2026-08-30
 

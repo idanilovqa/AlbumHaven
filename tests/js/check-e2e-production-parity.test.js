@@ -223,7 +223,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
     aiCodeReviewAction,
     /uses: zxcloli666\/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d/,
   );
-  assert.match(aiCodeReviewAction, /OPENAI_API_MODEL: "gpt-4o"/);
+  assert.match(aiCodeReviewAction, /OPENAI_API_MODEL: "gpt-4o-mini"/);
 });
 
 contractTest('hosted review jobs require successful functional and performance E2E guards', () => {

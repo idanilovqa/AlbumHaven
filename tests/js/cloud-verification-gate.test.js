@@ -76,6 +76,7 @@ test('workflow classifies review scope and gates all reviewers behind successful
   assert.match(codex, /HEAD_SHA: \$\{\{ needs\.review_scope\.outputs\.head_sha \}\}/);
   assert.match(third, /needs\.review_scope\.outputs\.mode == 'full'/);
   assert.match(third, /zxcloli666\/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d/);
+  assert.match(third, /OPENAI_API_MODEL: "gpt-4\.1-mini"/);
   assert.match(third, /ENABLE_LINTERS: "false"/);
   assert.doesNotMatch(third, /outputs\.review_status/);
 

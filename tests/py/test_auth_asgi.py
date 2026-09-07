@@ -975,6 +975,36 @@ def test_invitation_completion_accepts_direct_loopback_http_same_origin(auth_asg
     )
 
 
+def test_invitation_completion_accepts_direct_loopback_http_same_origin_referer(auth_asgi):
+    app, _, _ = _app(auth_asgi, origins=("https://music.test",))
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    csrf = issue_invitation_csrf(
+        INVITATION_TRANSACTION, app.state.auth_policy_config
+    )
+
+    status, _, _ = _request(
+        app,
+        "POST",
+        path="/accept-invitation",
+        scheme="http",
+        client="127.0.0.1",
+        host="localhost",
+        headers={
+            "referer": "http://localhost/accept-invitation",
+            "cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}",
+        },
+        form={
+            "new_password": "Phase Seven Recipient Passphrase 2026!",
+            "confirm_password": "Phase Seven Recipient Passphrase 2026!",
+            "csrf_token": csrf,
+        },
+    )
+
+    assert status == 200
+    assert len(lifecycle.completions) == 1
+
+
 def test_login_preserves_only_safe_return_target_on_get_and_failed_retry(auth_asgi):
     app, _, _ = _app(auth_asgi, outcome=LoginOutcome.INVALID)
     status, _, body = _request(

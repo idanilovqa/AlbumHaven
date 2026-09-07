@@ -25,7 +25,7 @@ _SESSION_COOKIE = "__Host-album_haven_session"
 _SESSION_CSRF_COOKIE = "__Host-album_haven_csrf"
 _SESSION_CSRF_HEADER = "x-album-haven-csrf"
 _PRIVATE_ROUTE_ACTIONS = {
-    ("WEBSOCKET", "/playback/pcm"): "library.media.stream",
+    ("WEBSOCKET", "/playback/pcm"): "library.media.read",
     ("POST", "/logout"): "auth.session.logout",
     ("POST", "/admin/accounts"): "accounts.create",
     ("GET", "/admin/members"): "accounts.read",

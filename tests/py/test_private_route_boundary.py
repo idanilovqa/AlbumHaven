@@ -102,7 +102,7 @@ def test_write_inventory_classifies_header_and_route_owned_csrf():
     assert csrf_mode_for_route("POST", "/account/password") == "route_form"
     assert csrf_mode_for_route("GET", "/status") == "none"
     assert csrf_mode_for_route("WEBSOCKET", "/playback/pcm") == "none"
-    assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.stream"
+    assert private_action_for_route("WEBSOCKET", "/playback/pcm") == "library.media.read"
 
 
 class Resolver:

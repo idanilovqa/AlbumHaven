@@ -820,7 +820,7 @@ async def playback_pcm_socket(websocket: WebSocket) -> None:
         await websocket.close(code=CLOSE_FORBIDDEN_ORIGIN)
         return
     try:
-        await require_action("library.media.stream")(websocket)
+        await require_action("library.media.read")(websocket)
     except HTTPException as exc:
         await websocket.close(
             code=(

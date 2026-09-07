@@ -184,6 +184,54 @@ def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("capability_keys", "accepted"),
+    [
+        (("library.media.read",), True),
+        ((), False),
+    ],
+    ids=["admin-assigned-playback-grant", "missing-playback-grant"],
+)
+def test_pcm_socket_uses_managed_account_playback_permission(
+    playback_app,
+    capability_keys,
+    accepted,
+):
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    assert "library.media.read" in MANAGED_CAPABILITY_KEYS
+
+    class ManagedAccountResolver:
+        def resolve(self, _token):
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=tuple(
+                    CapabilityGrant(key, "library", 23) for key in capability_keys
+                ),
+            )
+
+    playback_app.state.current_actor_resolver = ManagedAccountResolver()
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is accepted
+            if not accepted:
+                assert socket.close_code == 4403
+
+    asyncio.run(scenario())
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,

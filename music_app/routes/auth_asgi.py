@@ -1054,23 +1054,34 @@ def _same_origin(request: Request, config: Mapping[str, object]) -> bool:
     if origin is not None:
         if origin in origins:
             return True
-        peer = _ip_address(request.client.host if request.client else None)
-        return bool(
-            request.url.scheme == "http"
-            and peer is not None
-            and peer.is_loopback
-            and not _peer_is_trusted_proxy(peer, config)
-            and _host_is_loopback(request.url.hostname)
-            and origin == f"http://{request.url.netloc}"
-        )
+        return _direct_loopback_same_origin(request, config, origin)
     referer = request.headers.get("referer")
     if not referer:
         return False
     try:
         parsed = urlsplit(referer)
-        return f"{parsed.scheme}://{parsed.netloc}" in origins
+        referer_origin = f"{parsed.scheme}://{parsed.netloc}"
+        return referer_origin in origins or _direct_loopback_same_origin(
+            request, config, referer_origin
+        )
     except Exception:
         return False
+
+
+def _direct_loopback_same_origin(
+    request: Request,
+    config: Mapping[str, object],
+    candidate_origin: str,
+) -> bool:
+    peer = _ip_address(request.client.host if request.client else None)
+    return bool(
+        request.url.scheme == "http"
+        and peer is not None
+        and peer.is_loopback
+        and not _peer_is_trusted_proxy(peer, config)
+        and _host_is_loopback(request.url.hostname)
+        and candidate_origin == f"http://{request.url.netloc}"
+    )
 
 
 def _request_source(request: Request, config: Mapping[str, object]) -> tuple[str, str]:

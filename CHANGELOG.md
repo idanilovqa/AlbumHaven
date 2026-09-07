@@ -14,7 +14,8 @@
   component, functional, authentication, and performance release gates.
 - Applied configured password limits consistently, bounded appearance JSON
   mutations, persisted missed watcher-write health, and made stale bearer-mail
-  claims terminal rather than retrying an uncertain delivery.
+  claims terminal rather than retrying an uncertain delivery. Preserved
+  Problematic Files selection and scroll after terminal mutation rendering.
 
 ## 0.9.42 - 2026-08-30
 

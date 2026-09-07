@@ -1045,6 +1045,7 @@ class ProductionStatusFileSampler:
         self._thread.start()
 
     def _run(self) -> None:
+        consecutive_transient_errors = 0
         try:
             with self.samples_path.open("a", encoding="utf-8", buffering=1) as stream:
                 while not self._stop.is_set():
@@ -1056,18 +1057,21 @@ class ProductionStatusFileSampler:
                             "processed": payload.get("scan_processed"),
                             "total": payload.get("scan_total"),
                         }
+                        consecutive_transient_errors = 0
                         stream.write(json.dumps({
                             "recordedAtEpochMs": int(time.time() * 1000),
                             "status": payload,
                         }, separators=(",", ":")) + "\n")
                     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
                         if self._observed_response:
-                            checkpoint = self._last_checkpoint or {}
-                            raise RuntimeError(
-                                f"Production status request failed ({type(exc).__name__}); "
-                                f"last_phase={checkpoint.get('phase')}; "
-                                f"last_processed={checkpoint.get('processed')}/{checkpoint.get('total')}"
-                            ) from exc
+                            consecutive_transient_errors += 1
+                            if consecutive_transient_errors >= 3:
+                                checkpoint = self._last_checkpoint or {}
+                                raise RuntimeError(
+                                    f"Production status request failed ({type(exc).__name__}); "
+                                    f"last_phase={checkpoint.get('phase')}; "
+                                    f"last_processed={checkpoint.get('processed')}/{checkpoint.get('total')}"
+                                ) from exc
                     self._stop.wait(self.interval_seconds)
         except Exception as exc:
             self.error = exc

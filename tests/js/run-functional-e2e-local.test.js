@@ -16,6 +16,7 @@ const windowsPowerShell = path.join(
   'v1.0',
   'powershell.exe',
 );
+const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 'pwsh';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -25,7 +26,7 @@ test('local functional runner lists every approved shard and exact case without 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const contract = readJson(shardContractPath);
   const result = spawnSync(
-    windowsPowerShell,
+    powerShellExecutable,
     ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', runnerPath, '-List'],
     { cwd: repoRoot, encoding: 'utf8', windowsHide: true },
   );
@@ -46,7 +47,7 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const source = fs.readFileSync(runnerPath, 'utf8');
 
-  assert.match(source, /fixtures-v1\.0\.19/);
+  assert.match(source, /fixtures-v1\.0\.21/);
   assert.match(source, /functional-core/);
   assert.match(source, /manifest\.json/);
   assert.match(source, /Import-Module\s+Microsoft\.PowerShell\.Utility/);
@@ -101,6 +102,6 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.match(guide, /npm run test:e2e:functional:local -- -All/);
   assert.match(guide, /localhost/);
   assert.match(guide, /PGPASSFILE/);
-  assert.match(guide, /fixtures-v1\.0\.19/);
+  assert.match(guide, /fixtures-v1\.0\.20/);
   assert.match(guide, /Do not[^.]*run-playwright\.cjs/is);
 });

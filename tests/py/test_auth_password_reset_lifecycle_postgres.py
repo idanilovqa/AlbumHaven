@@ -109,10 +109,11 @@ def _config():
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app",
         "argon2": {"memory_cost": 65536, "time_cost": 3, "parallelism": 1, "salt_len": 16, "hash_len": 32},
         "argon2_policy_version": 4,
+        "password": {"min_codepoints": 13, "max_codepoints": 77, "max_utf8_bytes": 99},
     }
 
 
-def _service(connection, audit):
+def _service(connection, audit, *, password_hasher=None):
     from music_app.services.auth_password_reset_lifecycle_postgres import (
         PostgresPasswordResetLifecycleService,
     )
@@ -124,7 +125,8 @@ def _service(connection, audit):
         token_issuer=lambda: IssuedOpaqueToken(
             LIFECYCLE_RAW, hashlib.sha256(LIFECYCLE_RAW.encode("ascii")).digest()
         ),
-        password_hasher=lambda *_args, **_kwargs: PasswordCredential("$argon2id$replacement", 4),
+        password_hasher=password_hasher
+        or (lambda *_args, **_kwargs: PasswordCredential("$argon2id$replacement", 4)),
         breached_checker=lambda _password: False,
         audit_repository=audit,
     )
@@ -178,6 +180,28 @@ def test_completion_replaces_credential_increments_version_and_revokes_all_state
     assert any("update app.account_sessions" in sql and "password_reset" in sql for sql in statements)
     assert any("update app.password_reset_transactions" in sql and "consumed_at" in sql for sql in statements)
     assert audit.calls[-1]["reason"].value == "reset_completed"
+
+
+def test_reset_completion_hashes_with_the_configured_password_policy():
+    connection = Connection()
+    observed = []
+
+    def password_hasher(*_args, **kwargs):
+        observed.append(kwargs)
+        return PasswordCredential("$argon2id$replacement", 4)
+
+    result = _service(
+        connection,
+        Audit(),
+        password_hasher=password_hasher,
+    ).complete_reset(
+        LIFECYCLE_RAW,
+        new_password="a sufficiently private replacement",
+        request_ref="complete-policy",
+    )
+
+    assert result.value == "success"
+    assert observed[0]["password_policy"] == _config()["password"]
 
 
 def test_invalid_or_replayed_lifecycle_state_is_one_safe_result():

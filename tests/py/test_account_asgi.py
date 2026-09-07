@@ -44,7 +44,7 @@ class Service:
         return True
 
 
-def _app(*, is_bootstrap_owner=False):
+def _app(*, is_bootstrap_owner=False, password_min=8):
     from music_app.routes.account_asgi import router
 
     app = FastAPI()
@@ -53,6 +53,7 @@ def _app(*, is_bootstrap_owner=False):
     app.state.auth_policy_config = {
         "hmac": {"secret": "s" * 48, "key_version": 1},
         "trusted_origins": ["https://music.test"],
+        "password": {"min_codepoints": password_min, "max_codepoints": 256, "max_utf8_bytes": 1024},
     }
 
     @app.middleware("http")
@@ -144,6 +145,21 @@ def test_account_page_renders_approved_security_profile_without_cacheable_secret
     assert "Sign Out" in body
     assert session not in body
     assert body.count('minlength="8"') == 2
+
+
+def test_account_password_form_minimum_length_comes_from_password_policy():
+    app, _service = _app(password_min=13)
+
+    status, _headers, body = _request(
+        app,
+        "GET",
+        "/account",
+        session=_session(),
+    )
+
+    assert status == 200
+    assert body.count('minlength="13"') == 2
+    assert 'minlength="8"' not in body
 
 
 def test_my_account_navigation_keeps_personal_password_and_connected_devices():

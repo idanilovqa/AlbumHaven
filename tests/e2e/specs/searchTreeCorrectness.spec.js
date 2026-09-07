@@ -290,7 +290,10 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
     await galleryActions.prepareMountedGalleryContinuityCheckpoint({
       minimumDecodedCovers: 1,
     });
-    const transition = await searchToolbarActions.clearSearchAndObserveStableGallery();
+    const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
+      expectedViewDataRequestCount: 1,
+      minimumViewDataRequestCount: 0,
+    });
     expect(transition).toEqual(expect.objectContaining({
       cardContentChanged: false,
       cardNodesChanged: false,
@@ -310,8 +313,16 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
       galleryScrollChanged: false,
       loaderActivated: false,
       spinnerActivated: false,
-      viewDataRequests: [],
+      viewDataRequests: expect.any(Array),
     }));
+    expect(transition.viewDataRequests.length).toBeLessThanOrEqual(1);
+    if (transition.viewDataRequests.length === 1) {
+      const canonicalRequestUrl = new URL(transition.viewDataRequests[0]);
+      expect(canonicalRequestUrl.pathname).toBe('/view-data');
+      expect(canonicalRequestUrl.searchParams.has('q')).toBe(false);
+      expect(canonicalRequestUrl.searchParams.get('artist')).toBe(FAMILY_ARTIST);
+      expect(canonicalRequestUrl.searchParams.get('omit_sidebar')).toBe('1');
+    }
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootArtistNames);
     await navigationPanelActions.waitForSidebarSelection(FAMILY_ARTIST);
@@ -379,6 +390,8 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
     expect(mountedAlbumNames.length).toBeGreaterThan(0);
     const transition = await searchToolbarActions.clearSearchAndObserveStableGallery({
       submitWithEnter: true,
+      expectedViewDataRequestCount: 1,
+      minimumViewDataRequestCount: 0,
     });
     expect(transition).toEqual(expect.objectContaining({
       galleryContentChanged: false,
@@ -396,8 +409,16 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
       familyViewDataRequests: [],
       loaderActivated: false,
       spinnerActivated: false,
-      viewDataRequests: [],
+      viewDataRequests: expect.any(Array),
     }));
+    expect(transition.viewDataRequests.length).toBeLessThanOrEqual(1);
+    if (transition.viewDataRequests.length === 1) {
+      const canonicalRequestUrl = new URL(transition.viewDataRequests[0]);
+      expect(canonicalRequestUrl.pathname).toBe('/view-data');
+      expect(canonicalRequestUrl.searchParams.has('q')).toBe(false);
+      expect(canonicalRequestUrl.searchParams.get('artist')).toBe(ONE_FAMILY_QUERY);
+      expect(canonicalRequestUrl.searchParams.get('omit_sidebar')).toBe('1');
+    }
     await navigationPanelActions.waitForAllArtistsVisibility(true);
     await navigationPanelActions.waitForSidebarArtistNames(rootSnapshot.names);
     await navigationPanelActions.waitForSidebarSelection(ONE_FAMILY_QUERY);
@@ -1020,10 +1041,10 @@ test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the sear
   });
 
   await stepLogger.step('Keep the popover aligned, unclipped, and visually stable', async () => {
-    const { input, popover } = await searchToolbarActions.readRecentSearchGeometry();
-    expect(Math.abs(popover.x - input.x)).toBeLessThanOrEqual(1);
-    expect(popover.width).toBe(input.width);
-    expect(popover.y).toBeGreaterThanOrEqual(input.y + input.height);
+    const { control, popover } = await searchToolbarActions.readRecentSearchGeometry();
+    expect(Math.abs(popover.x - control.x)).toBeLessThanOrEqual(1);
+    expect(popover.width).toBe(control.width);
+    expect(popover.y).toBeGreaterThanOrEqual(control.y + control.height);
     expect(popover.x + popover.width).toBeLessThanOrEqual(1440);
     expect(popover.y + popover.height).toBeLessThanOrEqual(900);
   });

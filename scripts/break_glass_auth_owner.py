@@ -97,6 +97,7 @@ def main(
             breached_checker=breached_checker,
             argon2=config["argon2"],
             policy_version=int(config["argon2_policy_version"]),
+            password_policy=config["password"],
         )
     except Exception:
         print("Break-glass password was not accepted.", file=error_stream)

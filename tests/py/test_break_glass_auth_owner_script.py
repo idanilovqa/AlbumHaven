@@ -64,6 +64,7 @@ def _dependencies(*, passwords=(PASSWORD, PASSWORD)):
             "hash_len": 32,
         },
         "argon2_policy_version": 7,
+        "password": {"min_codepoints": 13, "max_codepoints": 77, "max_utf8_bytes": 99},
         "ALBUM_HAVEN_APP_DATABASE_URL": environment["ALBUM_HAVEN_APP_DATABASE_URL"],
     }
 
@@ -117,6 +118,7 @@ def _dependencies(*, passwords=(PASSWORD, PASSWORD)):
         stdout=output,
         stderr=errors,
         environment=environment,
+        config=config,
         config_builder=config_builder,
         getpass_fn=getpass_fn,
         breached_checker=breached_checker,
@@ -156,6 +158,21 @@ def test_break_glass_reads_twice_and_hashes_before_database(break_glass_script):
     ]
     assert len(dependencies.prompts) == 2
     assert all(stream is dependencies.stderr for _, stream in dependencies.prompts)
+
+
+def test_break_glass_hashes_with_the_configured_password_policy(break_glass_script):
+    dependencies = _dependencies()
+    observed = []
+    original_hasher = dependencies.password_hasher
+
+    def password_hasher(raw, **kwargs):
+        observed.append(kwargs)
+        return original_hasher(raw, **kwargs)
+
+    dependencies.password_hasher = password_hasher
+
+    assert _main(break_glass_script, dependencies) == 0
+    assert observed[0]["password_policy"] == dependencies.config["password"]
 
 
 def test_break_glass_rejects_all_argv_before_config_or_password_access(

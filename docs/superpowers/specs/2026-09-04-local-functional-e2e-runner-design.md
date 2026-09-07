@@ -31,7 +31,7 @@ Playwright output, blob reports, database identity, PostgreSQL roles, and the
 ports selected for the run.
 
 The source fixture defaults to the locally installed
-`../album-haven-test-data/dist` release and must report `fixtures-v1.0.19` in
+`../album-haven-test-data/dist` release and must report `fixtures-v1.0.20` in
 `manifest.json`. The runner may accept an explicit fixture-distribution path for
 diagnostics, but it must apply the same manifest and profile validation. It
 copies the `functional-core` profile into invocation-owned immutable and

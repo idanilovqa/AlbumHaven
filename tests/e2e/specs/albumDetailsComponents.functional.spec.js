@@ -31,7 +31,7 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
 
-  for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) {
+  for (const layout of ['stacked_bar', 'editorial_canvas', 'classic_bar']) {
     await stepLogger.step(`Save and inspect the ${layout} Album Details layout`, async () => {
       await openAppearanceAlbumPage({
         settingsModalAppBarActions,

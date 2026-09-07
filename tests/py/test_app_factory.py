@@ -38,7 +38,15 @@ class _FatalFlaskContextAccess:
 
 @pytest.fixture(autouse=True)
 def _stub_relation_projection_startup(monkeypatch):
-    from music_app.services import state
+    from music_app.services import (
+        exception_overrides,
+        library_roots,
+        scan_cache_persistence,
+        state,
+    )
+
+    class _TargetedRepositoryStub:
+        backend = "postgres"
 
     def ensure_ready(runtime):
         runtime.library_state["relation_projection_ready"] = True
@@ -46,6 +54,26 @@ def _stub_relation_projection_startup(monkeypatch):
         return {"ready": True, "relation_views": runtime.library_state.get("relation_views", {})}
 
     monkeypatch.setattr(state, "ensure_runtime_relation_projection_ready", ensure_ready)
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "select_scan_cache_adapter",
+        lambda _config: _TargetedRepositoryStub(),
+    )
+    monkeypatch.setattr(
+        library_roots,
+        "get_library_roots",
+        lambda config: [{
+            "id": "app-factory-root",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+            "category": "main_library",
+        }],
+    )
+    monkeypatch.setattr(
+        exception_overrides,
+        "load_exception_overrides",
+        lambda _config: {},
+    )
 
 
 @pytest.fixture

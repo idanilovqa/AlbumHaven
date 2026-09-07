@@ -249,7 +249,12 @@ function validateProblematicSummaryPayload(payload) {
     const stateValue = String(item.state || '').trim();
     const rootKey = String(item.root_key || '').trim();
     if (
-      !['overflow', 'root_unavailable'].includes(stateValue)
+      ![
+        'overflow',
+        'reconciliation_failed',
+        'root_unavailable',
+        'stable_write_unavailable',
+      ].includes(stateValue)
       || !/^root_[a-f0-9]{16}$/.test(rootKey)
     ) {
       throw new Error('Problematic Files operational item is invalid.');
@@ -1722,7 +1727,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
     if (!bucket.album_rating) bucket.album_rating = parseOptionalInteger(track?.album_rating) || 0;
   });
 
-  return Array.from(grouped.values())
+  const groupedAlbums = Array.from(grouped.values());
+  const groupedAlbumBaseKeyCounts = groupedAlbums.reduce((counts, groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    counts.set(baseKey, Number(counts.get(baseKey) || 0) + 1);
+    return counts;
+  }, new Map());
+  groupedAlbums.forEach((groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    const year = parseOptionalInteger(groupedAlbum?.year);
+    if (year != null && Number(groupedAlbumBaseKeyCounts.get(baseKey) || 0) > 1) {
+      groupedAlbum.key = `${baseKey}::year::${year}`;
+    }
+  });
+
+  return groupedAlbums
     .map((bucket) => {
       const tracks = bucket.tracks.slice().sort((left, right) => {
         const discCompare = Number(left?.disc_number ?? 999) - Number(right?.disc_number ?? 999);
@@ -1731,8 +1754,41 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         if (trackCompare) return trackCompare;
         return String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
       });
+      const distinctTrackArtists = new Map();
+      tracks.forEach((track) => {
+        const artist = String(track?.artist || '').trim();
+        const key = artist.toLocaleLowerCase();
+        if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
+      });
+      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const promotesSoleCompilationArtist = (
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        && distinctTrackArtists.size === 1
+      );
+      const promotedAlbumArtist = promotesSoleCompilationArtist
+        ? Array.from(distinctTrackArtists.values())[0]
+        : '';
+      const promotedAlbumArtistKey = promotedAlbumArtist.toLocaleLowerCase();
+      const trackRows = Array.isArray(bucket.track_rows)
+        ? bucket.track_rows.map((row) => {
+          if (!promotedAlbumArtist) return row;
+          const secondaryCredits = String(row?.secondary_artist || '')
+            .split(/\s+\/\s+/)
+            .map((credit) => credit.trim())
+            .filter((credit) => credit && credit.toLocaleLowerCase() !== promotedAlbumArtistKey);
+          return {
+            ...row,
+            secondary_artist: secondaryCredits.join(' / ') || null,
+          };
+        })
+        : null;
       return {
         ...bucket,
+        ...(promotedAlbumArtist ? {
+          album_artist: promotedAlbumArtist,
+          key: [promotedAlbumArtistKey, ...String(bucket.key || '').split('::').slice(1)].join('::'),
+        } : {}),
+        ...(trackRows ? { track_rows: trackRows } : {}),
         preview_only: false,
         track_count_preview: tracks.length,
         track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),

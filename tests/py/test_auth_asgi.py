@@ -169,7 +169,7 @@ class FakeInvitationLifecycle:
         return self.outcome
 
 
-def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.test",), proxies=()):
+def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.test",), proxies=(), password_min=8):
     app = FastAPI()
     preauth = FakePreAuth()
     login = FakeLogin(outcome)
@@ -182,6 +182,7 @@ def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.tes
         "trusted_proxies": proxies,
         "hmac": {"secret": "0123456789abcdef0123456789abcdef", "key_version": 7},
         "cookie": {"name": SESSION_COOKIE, "secure": True, "http_only": True, "same_site": "Lax", "path": "/", "domain": None},
+        "password": {"min_codepoints": password_min, "max_codepoints": 256, "max_utf8_bytes": 1024},
     }
     app.include_router(auth_asgi.router)
     return app, preauth, login
@@ -458,6 +459,23 @@ def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
     assert rendered.count('minlength="8"') == 2
 
 
+def test_reset_form_minimum_length_comes_from_password_policy(auth_asgi):
+    app, _, _ = _app(auth_asgi, password_min=13)
+    app.state.password_reset_lifecycle_service = FakeResetLifecycle()
+
+    status, _headers, body = _request(
+        app,
+        "GET",
+        path="/reset-password",
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
+    )
+
+    rendered = body.decode()
+    assert status == 200
+    assert rendered.count('minlength="13"') == 2
+    assert 'minlength="8"' not in rendered
+
+
 def test_reset_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeResetLifecycle()
@@ -579,6 +597,28 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
     assert lifecycle.exchanges[0][0] == raw_invite
 
 
+def test_invitation_link_rejects_non_loopback_plaintext_before_token_exchange(
+    auth_asgi,
+):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query="purpose=account-invitation&token=" + INVITATION_RAW,
+        scheme="http",
+        client="192.0.2.44",
+    )
+
+    assert status == 400
+    assert body == b"Invitation link is invalid or expired."
+    assert lifecycle.exchanges == []
+    assert _set_cookies(headers) == []
+
+
 @pytest.mark.parametrize(
     "query",
     (
@@ -697,6 +737,23 @@ def test_clean_invitation_page_uses_transaction_bound_csrf_and_same_origin_refer
     assert dict(headers)["referrer-policy"] == "same-origin"
     assert '<meta name="referrer" content="same-origin">' in rendered
     assert rendered.count('minlength="8"') == 2
+
+
+def test_invitation_form_minimum_length_comes_from_password_policy(auth_asgi):
+    app, _, _ = _app(auth_asgi, password_min=13)
+    app.state.invitation_lifecycle_service = FakeInvitationLifecycle()
+
+    status, _headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+
+    rendered = body.decode()
+    assert status == 200
+    assert rendered.count('minlength="13"') == 2
+    assert 'minlength="8"' not in rendered
 
 
 def test_invitation_completion_requires_origin_csrf_and_matching_passwords_then_clears_state(auth_asgi):

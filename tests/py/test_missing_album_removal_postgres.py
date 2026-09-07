@@ -221,7 +221,7 @@ def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, t
     app = create_test_asgi_app(tmp_path, monkeypatch)
     app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = DATABASE_URL
 
-    assert "/api/library/albums/{album_key}/confirm-removal" in collect_route_paths(app)
+    assert "/api/library/albums/{album_key:path}/confirm-removal" in collect_route_paths(app)
     status, _headers, body = run_asgi_request(
         app,
         "POST",
@@ -235,6 +235,53 @@ def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, t
         "library_revision": 22,
     }
     assert calls == [ALBUM_KEY]
+
+
+@pytest.mark.parametrize(
+    ("request_album_key", "expected_album_key"),
+    (
+        ("artist/album", "artist/album"),
+        ("artist%2Falbum", "artist%2Falbum"),
+    ),
+)
+def test_confirm_removal_route_preserves_decoded_slashes_and_literal_percent_sequences(
+    monkeypatch,
+    tmp_path,
+    request_album_key,
+    expected_album_key,
+):
+    from music_app.routes import api_wave_a_asgi_routes
+
+    calls: list[str] = []
+
+    class Service:
+        def __init__(self, _config):
+            pass
+
+        def confirm_removal(self, album_key):
+            calls.append(album_key)
+            return {"removed_album_key": album_key, "library_revision": 22}
+
+    monkeypatch.setattr(
+        api_wave_a_asgi_routes,
+        "PostgresMissingAlbumRemovalService",
+        Service,
+    )
+    app = create_test_asgi_app(tmp_path, monkeypatch)
+
+    status, _headers, body = run_asgi_request(
+        app,
+        "POST",
+        f"/api/library/albums/{request_album_key}/confirm-removal",
+    )
+
+    assert status == 200
+    assert decode_json(body) == {
+        "ok": True,
+        "removed_album_key": expected_album_key,
+        "library_revision": 22,
+    }
+    assert calls == [expected_album_key]
 
 
 def test_confirm_removal_route_maps_reappeared_album_to_409(monkeypatch, tmp_path):
@@ -309,7 +356,7 @@ def test_confirm_removal_route_rejects_blank_album_key(monkeypatch, tmp_path):
     status, _headers, body = run_asgi_request(
         app,
         "POST",
-        "/api/library/albums/%20/confirm-removal",
+        "/api/library/albums/ /confirm-removal",
     )
 
     assert status == 400
@@ -367,7 +414,7 @@ def test_inventory_manage_capability_is_selectable_but_not_a_listener_default():
     assert "library.inventory.manage" not in _LISTENER_DEFAULTS
     assert private_action_for_route(
         "POST",
-        "/api/library/albums/{album_key}/confirm-removal",
+        "/api/library/albums/{album_key:path}/confirm-removal",
     ) == "library.inventory.manage"
 
 

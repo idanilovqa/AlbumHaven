@@ -137,6 +137,110 @@ def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
     }
 
 
+def test_targeted_reconciler_holds_track_reservations_while_reading_and_persisting(
+    tmp_path,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    requested = album / "01.flac"
+    sibling = album / "02.flac"
+    album.mkdir(parents=True)
+    requested.write_bytes(b"one")
+    sibling.write_bytes(b"two")
+    events: list[str] = []
+    acquired_keys: list[set[str]] = []
+
+    class Lease:
+        def release(self) -> None:
+            events.append("released")
+
+    class Repository(RecordingRepository):
+        def persist_targeted_inventory_mutation(self, **kwargs):
+            assert events == ["acquired", "read", "read"]
+            events.append("persisted")
+            return super().persist_targeted_inventory_mutation(**kwargs)
+
+    def acquire(keys: set[str]) -> Lease:
+        acquired_keys.append(keys)
+        events.append("acquired")
+        return Lease()
+
+    repository = Repository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=lambda path: (
+            events.append("read")
+            or {
+                "path": str(path),
+                "album": "Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": path.stem,
+                "mtime": 1.0,
+                "size": path.stat().st_size,
+            }
+        ),
+        reservation_acquirer=acquire,
+    )
+
+    reconciler.reconcile(_request(paths=(requested,)))
+
+    assert events == ["acquired", "read", "read", "persisted", "released"]
+    expected_suffixes = {
+        str(requested.resolve(strict=False)).casefold(),
+        str(sibling.resolve(strict=False)).casefold(),
+    }
+    assert {
+        key.removeprefix("path:").casefold()
+        for key in acquired_keys[0]
+    } == expected_suffixes
+
+
+def test_targeted_reconciler_loads_current_exception_overrides_for_each_mutation(
+    tmp_path,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    track = root / "Artist" / "Album" / "01.flac"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"media")
+    repository = RecordingRepository()
+    current_overrides = {str(track): "Non-album rarity"}
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=lambda path: {
+            "path": str(path),
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": path.stem,
+            "mtime": 1.0,
+            "size": path.stat().st_size,
+        },
+        exception_overrides_provider=lambda: dict(current_overrides),
+    )
+
+    reconciler.reconcile(_request(paths=(track,)))
+    current_overrides[str(track)] = ""
+    reconciler.reconcile(_request(paths=(track,)))
+
+    first_entry = repository.calls[0]["active_file_entries"][str(track)]
+    second_entry = repository.calls[1]["active_file_entries"][str(track)]
+    assert first_entry["exception_type"] == "Non-album rarity"
+    assert second_entry["exception_type"] is None
+
+
 def test_targeted_reconciler_keeps_move_endpoints_in_one_repository_mutation(tmp_path):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,

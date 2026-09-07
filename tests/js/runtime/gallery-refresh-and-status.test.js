@@ -50,6 +50,12 @@ function createContext() {
   let transitionImage = null;
   const artistGroups = {
     innerHTML: '<section class="artist-section"></section>',
+    querySelector(selector) {
+      return selector === '.artist-section, .album-card'
+        && this.innerHTML.includes('artist-section')
+        ? { className: 'artist-section' }
+        : null;
+    },
     querySelectorAll(selector) {
       return selector === 'img' && transitionImage ? [transitionImage] : [];
     },
@@ -1420,6 +1426,51 @@ test('fetchAndRender applies equivalent committed-search state without rebuildin
   assert.equal(calls.animationFrames.length, 1);
   calls.animationFrames[0]();
   assert.equal(calls.renderSidebar, 1);
+});
+
+test('fetchAndRender remounts equivalent canonical search state when the optimistic gallery has no attached content', async () => {
+  const {
+    context,
+    runtimeRenderView,
+    calls,
+    pendingRequests,
+  } = createContext();
+  const retainedGroups = [{
+    artist: 'Cosmic Cathedral',
+    albums: [{ key: 'cosmic-cathedral::deep-water', name: 'Deep Water' }],
+  }];
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  };
+  context.document.getElementById('artist-groups').innerHTML = '';
+  context.renderView = runtimeRenderView;
+
+  const requestPromise = context.fetchAndRender(
+    '/view-data?surface=albums&q=Neal%20Morse&artist=Cosmic%20Cathedral',
+    false,
+    { preserveScroll: true, skipPendingViewTransition: true },
+  );
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  });
+  await requestPromise;
+
+  assert.equal(
+    calls.renderArtistGroups,
+    1,
+    'Equivalent data must still render when the optimistic virtual gallery never attached.',
+  );
 });
 
 test('q-empty retained-artist reconciliation preserves mounted nodes only for equivalent canonical groups', async () => {
@@ -3172,6 +3223,53 @@ test('pollStatus refreshes the loaded gallery when targeted inventory revision a
     'inventory refresh invalidates before dispatch and again after applying the canonical payload',
   );
   assert.deepEqual(calls.showToast, []);
+});
+
+test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.hasPendingTagEditViewMutations = () => true;
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'optimistic-merge' }] }],
+  };
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+
+  const statusPromise = context.pollStatus();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  const requestCountBeforeSettlement = pendingRequests.length;
+  if (pendingRequests[1]) {
+    pendingRequests[1].resolveWith({
+      artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'stale-canonical' }] }],
+      album_count: 1,
+    });
+  }
+  await statusPromise;
+  await flushMicrotasks();
+  assert.equal(
+    requestCountBeforeSettlement,
+    1,
+    'the inventory revision must not start a stale gallery request during the edit',
+  );
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(context.state.view.artist_groups[0].albums[0].key, 'optimistic-merge');
 });
 
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {

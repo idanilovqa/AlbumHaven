@@ -604,9 +604,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.19 `
+            -Release fixtures-v1.0.21 `
             -Profile functional-core `
-            -ManifestSha256 cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51
+            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
 
       - name: Prepare writable functional fixture
         run: |
@@ -833,9 +833,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.19 `
+            -Release fixtures-v1.0.21 `
             -Profile ${{ matrix.fixtureDownloadProfile }} `
-            -ManifestSha256 cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51
+            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -1425,6 +1425,7 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_MODEL: "gpt-4o-mini"
           ENABLE_LINTERS: "false"
 
   cloud_verification_gate:

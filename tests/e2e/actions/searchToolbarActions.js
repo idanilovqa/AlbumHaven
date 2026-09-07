@@ -220,45 +220,55 @@ export class SearchToolbarActions {
   }
 
   async dismissRecentSearchesWithFocusLoss() {
-    await this.searchToolbar.applyButton.focus();
+    await this.searchToolbar.input.press('Tab');
+    await expect(this.searchToolbar.applyButton).toBeFocused();
+    await this.searchToolbar.applyButton.press('Tab');
     await expect(this.searchToolbar.input).not.toBeFocused();
+    await expect(this.searchToolbar.applyButton).not.toBeFocused();
     await this.expectRecentSearchesDismissed();
   }
 
   async dismissRecentSearchesWithOutsideClick() {
-    await this.searchToolbar.mainContent.click({ position: { x: 4, y: 4 } });
+    const viewport = this.searchToolbar.page.viewportSize();
+    if (!viewport) {
+      throw new Error('Recent-search outside dismissal requires a fixed viewport.');
+    }
+    await this.searchToolbar.page.mouse.click(
+      Math.max(1, viewport.width - 32),
+      Math.max(1, viewport.height - 32),
+    );
     await this.expectRecentSearchesDismissed();
   }
 
   async readRecentSearchGeometry() {
     await expect(this.searchToolbar.input).toBeVisible();
     await expect(this.searchToolbar.recentSearchPopover).toBeVisible();
-    const [input, popover] = await Promise.all([
-      this.searchToolbar.input.boundingBox(),
+    const [control, popover] = await Promise.all([
+      this.searchToolbar.control.boundingBox(),
       this.searchToolbar.recentSearchPopover.boundingBox(),
     ]);
-    if (!input || !popover) {
-      throw new Error('Recent-search geometry requires visible input and popover bounds.');
+    if (!control || !popover) {
+      throw new Error('Recent-search geometry requires visible control and popover bounds.');
     }
-    return { input, popover };
+    return { control, popover };
   }
 
   async expectRecentSearchControlScreenshot(name, options = {}) {
-    const { input, popover } = await this.readRecentSearchGeometry();
+    const { control, popover } = await this.readRecentSearchGeometry();
     const viewport = this.searchToolbar.page.viewportSize();
     if (!viewport) {
       throw new Error('Recent-search screenshot requires a fixed viewport.');
     }
     const margin = Number(options.margin ?? 4);
-    const left = Math.max(0, Math.floor(Math.min(input.x, popover.x) - margin));
-    const top = Math.max(0, Math.floor(Math.min(input.y, popover.y) - margin));
+    const left = Math.max(0, Math.floor(Math.min(control.x, popover.x) - margin));
+    const top = Math.max(0, Math.floor(Math.min(control.y, popover.y) - margin));
     const right = Math.min(
       viewport.width,
-      Math.ceil(Math.max(input.x + input.width, popover.x + popover.width) + margin),
+      Math.ceil(Math.max(control.x + control.width, popover.x + popover.width) + margin),
     );
     const bottom = Math.min(
       viewport.height,
-      Math.ceil(Math.max(input.y + input.height, popover.y + popover.height) + margin),
+      Math.ceil(Math.max(control.y + control.height, popover.y + popover.height) + margin),
     );
     await expect(this.searchToolbar.page).toHaveScreenshot(name, {
       animations: 'disabled',

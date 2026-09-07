@@ -100,10 +100,11 @@ def _config():
         "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app",
         "argon2": {"memory_cost": 65536, "time_cost": 3, "parallelism": 1, "salt_len": 16, "hash_len": 32},
         "argon2_policy_version": 4,
+        "password": {"min_codepoints": 13, "max_codepoints": 77, "max_utf8_bytes": 99},
     }
 
 
-def _service(connection, audit, *, current_valid=True):
+def _service(connection, audit, *, current_valid=True, password_hasher=None):
     from music_app.services.auth_profile_password_postgres import (
         PostgresProfilePasswordService,
     )
@@ -113,7 +114,8 @@ def _service(connection, audit, *, current_valid=True):
         connect=lambda _url: connection,
         clock=lambda: NOW,
         verifier=lambda *_args, **_kwargs: PasswordVerification(current_valid, False),
-        password_hasher=lambda *_args, **_kwargs: PasswordCredential("$argon2id$new", 4),
+        password_hasher=password_hasher
+        or (lambda *_args, **_kwargs: PasswordCredential("$argon2id$new", 4)),
         breached_checker=lambda _password: False,
         audit_repository=audit,
     )
@@ -141,6 +143,30 @@ def test_password_change_verifies_current_then_atomically_replaces_and_revokes_o
     assert audit.calls[-1]["reason"].value == "password_changed"
     assert "$argon2id$new" in repr(connection.operations)
     assert "new sufficiently private password" not in repr(connection.operations)
+
+
+def test_profile_change_hashes_with_the_configured_password_policy():
+    connection = Connection()
+    observed = []
+
+    def password_hasher(*_args, **kwargs):
+        observed.append(kwargs)
+        return PasswordCredential("$argon2id$new", 4)
+
+    result = _service(
+        connection,
+        Audit(),
+        password_hasher=password_hasher,
+    ).change_password(
+        account_id=41,
+        current_session_id=11,
+        current_password="current private password",
+        new_password="new sufficiently private password",
+        request_ref="profile-policy",
+    )
+
+    assert result.value == "success"
+    assert observed[0]["password_policy"] == _config()["password"]
 
 
 def test_profile_view_exposes_only_display_identity_suggestion_and_active_sessions():

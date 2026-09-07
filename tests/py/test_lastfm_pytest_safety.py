@@ -187,7 +187,17 @@ def test_dotenv_loading_cannot_rehydrate_owner_lastfm_or_database_values(tmp_pat
 
 def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch):
     from music_app import create_asgi_app
-    from music_app.services import lastfm_retry, runtime_shutdown, state
+    from music_app.services import (
+        exception_overrides,
+        lastfm_retry,
+        library_roots,
+        runtime_shutdown,
+        scan_cache_persistence,
+        state,
+    )
+
+    class TargetedRepositoryStub:
+        backend = "postgres"
 
     captured_configs = []
     monkeypatch.setattr(state, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
@@ -200,6 +210,22 @@ def test_app_lifespan_receives_only_safe_lastfm_and_database_config(monkeypatch)
     monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda runtime: captured_configs.append(runtime.config))
     monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
     monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: None)
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "select_scan_cache_adapter",
+        lambda _config: TargetedRepositoryStub(),
+    )
+    monkeypatch.setattr(
+        library_roots,
+        "get_library_roots",
+        lambda config: [{
+            "id": "lastfm-safety-root",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+            "category": "main_library",
+        }],
+    )
+    monkeypatch.setattr(exception_overrides, "load_exception_overrides", lambda _config: {})
     app = create_asgi_app()
 
     async def exercise_lifespan() -> None:

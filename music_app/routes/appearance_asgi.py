@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.auth_asgi import _policy_config
+from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.appearance_preferences_postgres import (
     AppearanceRevisionConflict,
     PostgresAppearancePreferencesRepository,
@@ -71,14 +72,22 @@ async def get_appearance(request: Request) -> JSONResponse:
 @router.put("/account/appearance")
 async def put_appearance(request: Request) -> JSONResponse:
     try:
-        payload = await request.json()
-        expected_revision = payload.pop("expected_revision", None) if isinstance(payload, dict) else None
+        payload = await read_bounded_json_object(request)
+        if payload is None:
+            raise ValueError("Invalid JSON object.")
+        expected_revision = payload.pop("expected_revision", None)
         colors = normalize_appearance_preferences(payload)
         aggregate = "interaction_overrides" in colors
         if aggregate and (type(expected_revision) is not int or expected_revision < 0):
             raise ValueError("Invalid expected revision.")
         if not aggregate and expected_revision is not None:
             raise ValueError("Unexpected revision.")
+    except JSONBodyTooLarge:
+        return JSONResponse(
+            {"error": "appearance_payload_too_large"},
+            status_code=413,
+            headers=_NO_STORE,
+        )
     except (ValueError, UnicodeDecodeError):
         return JSONResponse({"error": "invalid_appearance"}, status_code=400, headers=_NO_STORE)
     try:

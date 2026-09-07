@@ -40,6 +40,18 @@ const utilityRendererPath = path.join(
   'utility-renderers-and-actions.js',
 );
 const utilityRendererSource = fs.readFileSync(utilityRendererPath, 'utf8');
+const utilityLoaderPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'utility-loaders-and-cover-lookup.js',
+);
+const utilityLoaderSource = fs.readFileSync(utilityLoaderPath, 'utf8');
 const playbackControlClusterPath = path.join(
   __dirname,
   '..',
@@ -2336,6 +2348,65 @@ test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist sourc
   }
 });
 
+test('applyUpdatedAlbumsToCurrentView retains compact destination membership during a structural merge', () => {
+  const context = loadHelpers();
+  const movedTracks = Array.from({ length: 3 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`,
+    title: `Moved Track ${index + 1}`,
+  }));
+  const destinationPaths = Array.from({ length: 16 }, (_value, index) => (
+    `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`
+  ));
+  const compactDestination = {
+    key: 'ddt::studio-records',
+    album_ref: 'ddt::studio-records',
+    name: 'Studio Records',
+    album_artist: 'DDT',
+    preview_only: true,
+    track_count_preview: 13,
+    track_paths: destinationPaths,
+    tracks: [],
+  };
+  const temporarySource = {
+    key: 'ddt::temporary-split',
+    album_ref: 'ddt::temporary-split',
+    name: 'Temporary Split',
+    album_artist: 'DDT',
+    preview_only: false,
+    track_count_preview: 3,
+    track_paths: movedTracks.map((track) => track.path),
+    tracks: movedTracks,
+  };
+  const optimisticDestination = {
+    ...compactDestination,
+    preview_only: false,
+    track_count_preview: 3,
+    track_paths: movedTracks.map((track) => track.path),
+    tracks: movedTracks,
+  };
+  context.state.view.selected_artist = 'DDT';
+  context.state.view.related_artists = [];
+  context.state.view.primary_artist_groups = [{
+    artist: 'DDT',
+    albums: [compactDestination, temporarySource],
+  }];
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = context.state.view.primary_artist_groups;
+  context.getAlbumRequestKey = (album) => String(album?.album_ref || album?.key || '');
+  context.getAlbumIdentity = (album) => String(album?.key || '');
+
+  context.applyUpdatedAlbumsToCurrentView(
+    [optimisticDestination],
+    { originalAlbum: temporarySource, skipRender: true },
+  );
+
+  const albums = context.lastMergedPayload.artist_groups[0].albums;
+  const destination = albums.find((album) => album.name === 'Studio Records');
+  assert.equal(albums.some((album) => album.name === temporarySource.name), false);
+  assert.equal(destination.track_count_preview, 16);
+  assert.deepEqual(new Set(destination.track_paths), new Set(destinationPaths));
+});
+
 test('updateOpenTrackModalAfterTagEdit keeps source aliases on the remaining album when source is first', () => {
   const context = loadHelpers();
   const movedTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Source\\01 Move.mp3';
@@ -3290,6 +3361,9 @@ test('watchSaveTask owns Problematic Files mutation state until its matching ter
     context.waitForBrowserTimeout = async () => {};
     context.showRepairAlert = () => {};
     context.settleTagEditViewMutation = () => {};
+    context.renderView = () => {
+      listElement.scrollTop = 0;
+    };
 
     await context.watchSaveTask(taskId, {
       originalAlbum: albumsByKey.get(scenario.selectedKey),
@@ -3441,6 +3515,49 @@ test('final-row mutation retains enough list geometry to restore scrollTop 659 a
   assert.equal(listElement.scrollTop, 659, 'temporary retained geometry must allow exact scroll restoration');
   assert.equal(retainedNodes.length, 1, 'retained geometry must be scrollable content, not container min-height');
   assert.equal(context.state.utility.selectedProblematicKey, survivingAlbum.key);
+});
+
+test('Problematic Files mutation restores sidebar scroll after deferred browser anchoring', async () => {
+  const context = loadHelpers();
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  const removedAlbum = {
+    key: 'album-removed',
+    name: 'Album Removed',
+    tracks: [{ path: 'C:/Music/Removed/01 Track.flac' }],
+  };
+  const survivingAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+    tracks: [{ path: 'C:/Music/Previous/01 Track.flac' }],
+  };
+  const listElement = {
+    clientHeight: 200,
+    scrollHeight: 2000,
+    scrollTop: 1266,
+  };
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [survivingAlbum, removedAlbum],
+    selectedProblematicKey: removedAlbum.key,
+  };
+  context.getUtilityModalElements = () => ({ list: listElement });
+  context.renderUtilityModalContent = () => {};
+
+  context.claimProblematicSaveTaskMutation('remove-after-anchor', removedAlbum);
+  context.state.utility.problematicFiles = [survivingAlbum];
+  await context.settleProblematicSaveTaskMutation('remove-after-anchor', { reconcileSelection: true });
+  assert.equal(listElement.scrollTop, 1266, 'the synchronous restore should preserve the owned position');
+
+  listElement.scrollTop = 0;
+  assert.equal(scheduledFrames.length, 1, 'the restore must survive browser scroll anchoring on the next frame');
+  scheduledFrames.shift()();
+  assert.equal(listElement.scrollTop, 1266);
 });
 
 test('watchSaveTask reloads Problematic Files after an in-flight stale load settles', async () => {
@@ -4546,6 +4663,72 @@ test('watchSaveTask ignores an older stale save-task completion after a newer ed
   );
 });
 
+test('a pending second move supersedes the first move before either save task completes', () => {
+  const context = loadHelpers();
+  const firstTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\01 First.flac',
+    title: 'First',
+  };
+  const secondTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\02 Second.flac',
+    title: 'Second',
+  };
+  const remainingTrack = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\03 Remaining.flac',
+    title: 'Remaining',
+  };
+  const source = {
+    key: 'ordering-source',
+    name: 'Source',
+    album_artist: 'Ordering Artist',
+    tracks: [firstTrack, secondTrack, remainingTrack],
+  };
+  const sourceAfterFirstMove = {
+    ...source,
+    tracks: [secondTrack, remainingTrack],
+  };
+
+  const firstClaim = context.claimTagEditViewMutation(
+    source,
+    [firstTrack.path],
+    { [firstTrack.path]: { album: 'Destination' } },
+  );
+  const secondClaim = context.claimTagEditViewMutation(
+    sourceAfterFirstMove,
+    [secondTrack.path],
+    { [secondTrack.path]: { album: 'Destination' } },
+  );
+
+  assert.equal(context.tagEditViewMutationStillOwnsResources(firstClaim), false);
+  assert.equal(context.tagEditViewMutationStillOwnsResources(secondClaim), true);
+});
+
+test('tag-edit mutation claims report pending ownership until they settle', () => {
+  const context = loadHelpers();
+  const track = {
+    path: 'D:\\Synthetic Music\\Ordering Artist\\Source\\01 First.flac',
+    title: 'First',
+  };
+  const source = {
+    key: 'ordering-source',
+    name: 'Source',
+    album_artist: 'Ordering Artist',
+    tracks: [track],
+  };
+
+  assert.equal(context.hasPendingTagEditViewMutations(), false);
+  const claim = context.claimTagEditViewMutation(
+    source,
+    [track.path],
+    { [track.path]: { album: 'Destination' } },
+  );
+  assert.equal(context.hasPendingTagEditViewMutations(), true);
+
+  context.settleTagEditViewMutation(claim);
+
+  assert.equal(context.hasPendingTagEditViewMutations(), false);
+});
+
 test('watchSaveTask prevents a delayed canonical terminal payload from overwriting a newer overlapping edit', async () => {
   const context = loadHelpers();
   const movedTrack = {
@@ -4667,6 +4850,7 @@ test('watchSaveTask prevents a delayed canonical terminal payload from overwriti
     [movedTrack.path],
     newerTagEdits,
   );
+  context.state.ui.viewStateRevision = 62;
   const newerGroups = [{
     artist: 'Ordering Artist',
     albums: [newerSource, newerDestination],
@@ -6203,6 +6387,64 @@ test('watcher health keeps the operational message but omits the action for a re
 
   assert.match(html, /Some library changes may have been missed\./);
   assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321/);
+});
+
+test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  const result = context.validateProblematicSummaryPayload({
+    ok: true,
+    items: [],
+    operational_items: [{
+      state: 'reconciliation_failed',
+      root_key: 'root_1234567890abcdef',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.operationalItems)),
+    [{
+      state: 'reconciliation_failed',
+      root_key: 'root_1234567890abcdef',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  );
+});
+
+test('Problematic Files accepts a path-free stable-write warning', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  const result = context.validateProblematicSummaryPayload({
+    ok: true,
+    items: [],
+    operational_items: [{
+      state: 'stable_write_unavailable',
+      root_key: 'root_fedcba0987654321',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.operationalItems)),
+    [{
+      state: 'stable_write_unavailable',
+      root_key: 'root_fedcba0987654321',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  );
 });
 
 test('Problematic Files keeps watcher health mounted when there are zero problematic albums', () => {

@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Use Windows-native PowerShell plus npm aliases.
-- Use `fixtures-v1.0.19` and the `functional-core` profile.
+- Use `fixtures-v1.0.20` and the `functional-core` profile.
 - Use `localhost` for local PostgreSQL authentication.
 - Preserve an explicit `PGPASSFILE`; otherwise use `postgresql\pgpass.conf` beneath the current user's standard application-data directory when present.
 - Run all shards sequentially and never start more than one Playwright process.
@@ -50,7 +50,7 @@ test('local functional runner lists approved shards without provisioning', () =>
 });
 
 test('local functional runner owns setup, delegation, and teardown', () => {
-  assert.match(source, /fixtures-v1\.0\.19/);
+  assert.match(source, /fixtures-v1\.0\.20/);
   assert.match(source, /functional-core/);
   assert.match(source, /-HostName\s+localhost/);
   assert.match(source, /validate-functional-shards\.cjs/);

@@ -17,6 +17,11 @@ ARGON2_FLOOR = {
     "hash_len": 32,
 }
 CURRENT_POLICY_VERSION = 3
+CUSTOM_PASSWORD_POLICY = {
+    "min_codepoints": 12,
+    "max_codepoints": 16,
+    "max_utf8_bytes": 20,
+}
 
 
 def test_password_policy_contract_is_present():
@@ -124,6 +129,45 @@ def test_validation_accepts_eight_codepoints(passwords):
     candidate = "u7!Qz2#v"
 
     assert _validate(passwords, candidate) == candidate
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "x" * 11,
+        "x" * 17,
+        ("\U0001f642" * 4) + ("x" * 8),
+    ],
+    ids=("below-min-codepoints", "above-max-codepoints", "above-max-utf8-bytes"),
+)
+def test_validation_enforces_each_configured_password_bound(passwords, candidate):
+    with pytest.raises(passwords.PasswordPolicyError):
+        _validate(passwords, candidate, password_policy=CUSTOM_PASSWORD_POLICY)
+
+
+def test_credential_created_at_configured_bounds_is_accepted_by_login_verification(
+    passwords,
+):
+    candidate = "Q7!" + ("\U0001f642" * 2) + "abc1234"
+
+    credential = _hash(
+        passwords,
+        candidate,
+        password_policy=CUSTOM_PASSWORD_POLICY,
+    )
+    verification = passwords.verify_password(
+        candidate,
+        credential.encoded_hash,
+        stored_policy_version=credential.policy_version,
+        argon2=ARGON2_FLOOR,
+        current_policy_version=CURRENT_POLICY_VERSION,
+        password_policy=CUSTOM_PASSWORD_POLICY,
+    )
+
+    assert verification == passwords.PasswordVerification(
+        valid=True,
+        needs_rehash=False,
+    )
 
 
 @pytest.mark.parametrize(

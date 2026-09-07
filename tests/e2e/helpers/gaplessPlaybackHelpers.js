@@ -599,9 +599,9 @@ export function assertPersistentWaveformCacheContract(expect, {
   expect(requests[0].cachedOnly).toBe(true);
   expect(requests[0].response?.status).toBe(200);
   expect(response.response.status).toBe(200);
-  expect(response.response.payload?.sampleCount).toBe(280);
-  expect(response.response.payload?.left).toHaveLength(280);
-  expect(response.response.payload?.right).toHaveLength(280);
+  expect(response.response.payload?.sampleCount).toBe(720);
+  expect(response.response.payload?.left).toHaveLength(720);
+  expect(response.response.payload?.right).toHaveLength(720);
   expect(rendered.leftPeaks).toEqual(response.response.payload.left);
   expect(rendered.rightPeaks).toEqual(response.response.payload.right);
   expect(rendered.renderedAtEpochMs).toBeGreaterThanOrEqual(

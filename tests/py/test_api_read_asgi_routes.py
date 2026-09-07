@@ -4010,7 +4010,7 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
     asgi_app.state.library_state = asgi_library_state
     asgi_app.state.logger = asgi_logger
     asgi_app.state.library_watch_health_service = SimpleNamespace(
-        load_problems=lambda: []
+        load_problems=lambda: [],
     )
 
     detail_calls: list[str] = []
@@ -4311,7 +4311,7 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
     asgi_app.state.library_watch_health_service = SimpleNamespace(
-        load_problems=lambda: []
+        load_problems=lambda: [],
     )
 
     list_status, _list_headers, list_body = _run_asgi_request(

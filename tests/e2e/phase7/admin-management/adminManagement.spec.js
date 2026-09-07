@@ -226,8 +226,8 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   await expect(members.ownerFullAccess).toBeVisible();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeDisabled();
-  await expect(members.capabilitySwitches).toHaveCount(12);
-  for (let index = 0; index < 12; index += 1) {
+  await expect(members.capabilitySwitches).toHaveCount(13);
+  for (let index = 0; index < 13; index += 1) {
     await expect(members.capabilitySwitches.nth(index)).toBeChecked();
     await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
   }
@@ -276,7 +276,7 @@ test('FTC-PERMISSIONS-009 denies limited administration and preserves owner-only
   await expect(members.ownerRoleOption).toHaveCount(0);
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeEnabled();
-  await expect(members.capabilitySwitches).toHaveCount(12);
+  await expect(members.capabilitySwitches).toHaveCount(13);
   await expect(members.checkedCapabilitySwitches).toHaveCount(LISTENER_CAPABILITIES.length);
   for (const label of LISTENER_CAPABILITIES) {
     await expect(members.capabilitySwitch(label)).toBeChecked();
@@ -315,8 +315,8 @@ test('Owner save preserves inherited capabilities and membership', async ({ page
   await expect(members.ownerFullAccess).toBeVisible();
   await expect(members.libraryAccess).toBeChecked();
   await expect(members.libraryAccess).toBeDisabled();
-  await expect(members.capabilitySwitches).toHaveCount(12);
-  for (let index = 0; index < 12; index += 1) {
+  await expect(members.capabilitySwitches).toHaveCount(13);
+  for (let index = 0; index < 13; index += 1) {
     await expect(members.capabilitySwitches.nth(index)).toBeChecked();
     await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
   }

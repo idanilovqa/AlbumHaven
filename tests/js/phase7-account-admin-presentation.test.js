@@ -17,19 +17,19 @@ const adminNavigation = readProjectFile('music_app', 'templates', 'partials', 'a
 test('Account and Admin navigation keep Users discoverable and omit redundant links', () => {
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
   assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
-  assert.match(adminNavigation, /<button class="settings-nav-item" type="submit">.*Sign Out<\/button>/);
-  assert.match(adminNavigation, /href="\/admin\/members"[^\n]*aria-current="page"[^\n]*Users/);
+  assert.match(adminNavigation, /navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)/);
+  assert.match(adminNavigation, /navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
   assert.doesNotMatch(adminNavigation, /settings-back|Back to library/);
 });
 
 test('Admin navigation offers My account instead of unavailable placeholders', () => {
-  assert.match(adminNavigation, /href="\/account"[^\n]*My account<\/a>/);
+  assert.match(adminNavigation, /navigation_tree_item\('My account', '\/account', 'account'/);
   assert.doesNotMatch(adminNavigation, /is-future|aria-disabled|Email delivery|Security|Audit log/);
 });
 
 test('Account navigation identifies the current user settings as My account', () => {
   assert.match(accountTemplate, /set settings_section = 'account'/);
-  assert.match(adminNavigation, /settings_section == 'account'[^\n]*aria-current="page"[^\n]*My account/);
+  assert.match(adminNavigation, /navigation_tree_item\('My account', '\/account', 'account', settings_section == 'account'/);
 });
 
 test('Account navigation omits the unavailable Profile placeholder', () => {

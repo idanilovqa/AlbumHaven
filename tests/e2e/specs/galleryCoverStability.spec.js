@@ -176,7 +176,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   await stepLogger.step('Open its normal album modal and verify the decoded non-placeholder cover', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ARTIST} - ${ALBUM}`);
+    expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
     expect(summary.title).toContain(YEAR);
     expect(summary.coverLoaded).toBe(true);
     expect(summary.coverPlaceholderVisible).toBe(false);
@@ -253,7 +253,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ARTIST} - ${ALBUM}`);
+    expect(summary.title).toContain(`${ARTIST} • ${ALBUM}`);
     const modalCover = await trackModalActions.waitForDetailedCoverImageCheckpoint();
     expectedCoverPath = new URL(modalCover.productionSrc, page.url()).searchParams.get('path') || '';
     expect(expectedCoverPath).not.toEqual('');
@@ -295,7 +295,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
   await stepLogger.step('Keep full-gallery navigation when the album is opened through the ordinary gallery', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
     const galleryModal = await trackModalActions.waitForLoadedSummary();
-    expect(galleryModal.title).toContain(`${ARTIST} - ${ALBUM}`);
+    expect(galleryModal.title).toContain(`${ARTIST} • ${ALBUM}`);
     await trackModalActions.openCoverLightbox();
     await trackModalActions.expectCoverLightboxNavigationAvailable();
     await trackModalActions.closeCoverLightbox();
@@ -305,7 +305,7 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
   await stepLogger.step('Open the player album and show only its cover in the full-art view', async () => {
     await globalPlayerActions.openCurrentAlbumFromCover();
     const reopened = await trackModalActions.waitForLoadedSummary();
-    expect(reopened.title).toContain(`${ARTIST} - ${ALBUM}`);
+    expect(reopened.title).toContain(`${ARTIST} • ${ALBUM}`);
     expect(reopened.title).toContain(YEAR);
     await trackModalActions.openCoverLightbox();
     const fullscreenCover = await readDecodedImageCheckpoint(trackModalActions.trackModal.lightboxImage);

@@ -47,34 +47,36 @@ async function mounted(method, initial = preference(), saveResponse) {
   assert.equal(await instance.load(), true);
   instance[method](host);
   assert.match(host.innerHTML, /class="appearance-background-editor /);
-  return { instance, root, host, editor: host.querySelector('.appearance-background-editor') };
+  const editor = host.querySelector('.appearance-background-editor');
+  const previewSelector = method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]';
+  return { instance, root, host, preview: editor.querySelector(previewSelector) };
 }
 
-function assertEditorTheme(editor, draft) {
+function assertPreviewTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);
-  assert.equal(editor.styles.get('--appearance-main-surface'), effective.main, 'Editor main must follow its draft');
-  assert.equal(editor.styles.get('--appearance-panel-background'), effective.panel, 'Editor panels must follow its draft');
+  assert.equal(preview.styles.get('--appearance-main-surface'), effective.main, 'Preview main must follow its draft');
+  assert.equal(preview.styles.get('--appearance-panel-background'), effective.panel, 'Preview panels must follow its draft');
   for (const [token, color] of Object.entries(effective.tokens)) {
-    assert.equal(editor.styles.get('--appearance-' + token), color, `Editor ${token} must use the draft palette`);
+    assert.equal(preview.styles.get('--appearance-' + token), color, `Preview ${token} must use the draft palette`);
   }
-  assert.equal(editor.getAttribute('data-appearance-mode'), effective.mode);
-  assert.equal(editor.getAttribute('data-appearance-palette'), draft.palette_id);
+  assert.equal(preview.getAttribute('data-appearance-mode'), effective.mode);
+  assert.equal(preview.getAttribute('data-appearance-palette'), draft.palette_id);
 }
 
 for (const method of ['mount', 'mountSeekbar']) {
   const name = method === 'mount' ? 'Backgrounds' : 'Seekbar';
 
   test(`${name} editor follows black and light draft palettes and panel companions`, async () => {
-    const { instance, root, editor } = await mounted(method);
+    const { instance, root, preview } = await mounted(method);
     const savedRoot = [...root.styles];
-    assertEditorTheme(editor, preference());
+    assertPreviewTheme(preview, preference());
     for (const palette_id of ['black', 'paper']) {
       instance.controller.setPalette(palette_id);
       for (const panel_index of [0, 1, 2]) {
         instance.controller.setPanelIndex(panel_index);
         const draft = preference({ palette_id, panel_index });
-        assertEditorTheme(editor, draft);
-        assert.ok(api.contrastRatio(editor.styles.get('--appearance-ink'), editor.styles.get('--appearance-main-surface')) >= 4.5);
+        assertPreviewTheme(preview, draft);
+        assert.ok(api.contrastRatio(preview.styles.get('--appearance-ink'), preview.styles.get('--appearance-main-surface')) >= 4.5);
         assert.deepEqual([...root.styles], savedRoot, 'Draft editor theme must not recolor the saved app');
         assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
       }
@@ -83,13 +85,13 @@ for (const method of ['mount', 'mountSeekbar']) {
 
   test(`${name} Cancel restores saved editor colors and mode without changing the app`, async () => {
     const saved = preference({ palette_id: 'black', panel_index: 2 });
-    const { instance, root, editor } = await mounted(method, saved);
+    const { instance, root, preview } = await mounted(method, saved);
     const savedRoot = [...root.styles];
     instance.controller.setPalette('paper');
-    assert.equal(editor.getAttribute('data-appearance-mode'), 'light');
+    assert.equal(preview.getAttribute('data-appearance-mode'), 'light');
     instance.controller.cancel();
-    assertEditorTheme(editor, saved);
-    assert.equal(editor.getAttribute('data-appearance-mode'), 'dark');
+    assertPreviewTheme(preview, saved);
+    assert.equal(preview.getAttribute('data-appearance-mode'), 'dark');
     assert.deepEqual([...root.styles], savedRoot);
   });
 
@@ -97,20 +99,20 @@ for (const method of ['mount', 'mountSeekbar']) {
     let finishSave;
     const pending = new Promise(resolve => { finishSave = resolve; });
     const saved = preference({ palette_id: 'paper', panel_index: 1 });
-    const { instance, root, editor } = await mounted(method, saved, () => pending);
+    const { instance, root, preview } = await mounted(method, saved, () => pending);
     const savedRoot = [...root.styles];
     instance.controller.reset();
-    assertEditorTheme(editor, preference({ palette_id: null }));
+    assertPreviewTheme(preview, preference({ palette_id: null }));
     assert.deepEqual([...root.styles], savedRoot, 'Default draft must override inherited saved light tokens locally');
     instance.controller.setPalette('black');
     instance.controller.setPanelIndex(2);
     const draft = preference({ palette_id: 'black', panel_index: 2 });
     const saving = instance.controller.save();
-    assertEditorTheme(editor, draft);
+    assertPreviewTheme(preview, draft);
     assert.deepEqual([...root.styles], savedRoot, 'Pending Save cannot apply draft tokens to the app');
     finishSave(draft);
     assert.equal(await saving, true);
-    assertEditorTheme(editor, draft);
+    assertPreviewTheme(preview, draft);
     assert.equal(root.styles.get('--appearance-main-surface'), api.resolveAppearance(draft).main);
     assert.equal(root.styles.get('--appearance-panel-background'), api.resolveAppearance(draft).panel);
     assert.equal(root.getAttribute('data-appearance-palette'), 'black');

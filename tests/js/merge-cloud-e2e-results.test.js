@@ -48,7 +48,7 @@ function fingerprint(overrides = {}) {
   return {
     runnerImage: 'windows-2025',
     chromeVersion: '151.0.7922.138',
-    fixtureRelease: 'fixtures-v1.0.19',
+    fixtureRelease: 'fixtures-v1.0.21',
     fixtureSchemaVersion: 1,
     postgresMajor: 17,
     measurementContract: 'performance-v1',
@@ -163,8 +163,8 @@ function sampleInput() {
       actionsUrl: `https://github.com/idanilovqa/AlbumHaven/actions/runs/${RUN_ID}`,
     },
     fixture: {
-      release: 'fixtures-v1.0.19',
-      manifestSha256: 'cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51',
+      release: 'fixtures-v1.0.21',
+      manifestSha256: '094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f',
       schemaVersion: 1,
     },
     resultArtifacts: [

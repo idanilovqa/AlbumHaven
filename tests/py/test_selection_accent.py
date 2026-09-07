@@ -215,6 +215,21 @@ def test_endpoint_rejects_target_account_field_and_reports_save_failure():
     assert "no-store" in headers["cache-control"]
 
 
+def test_endpoint_rejects_oversized_json_without_a_declared_content_length():
+    store = MemoryStore()
+
+    status, headers, body = request(
+        app_for(store),
+        "PUT",
+        {"enabled": True, "color": "#34ca78", "padding": "x" * 16_384},
+    )
+
+    assert status == 413
+    assert body == {"detail": "Selection accent payload is too large."}
+    assert "no-store" in headers["cache-control"]
+    assert store.calls == []
+
+
 
 def test_server_navigation_item_escapes_content_and_preserves_artist_selection_and_zero_count():
     from music_app.services.navigation_tree import render_navigation_tree_item

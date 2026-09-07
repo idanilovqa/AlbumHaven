@@ -1755,6 +1755,37 @@ async function run() {
     assert.equal(resolvedCompactAlbum?.track_count_preview, 1);
   }
 
+  {
+    const staleRenderedAlbum = {
+      key: 'rarity artist::sparse year edit fixture',
+      name: 'Sparse Year Edit Fixture',
+      album_artist: 'Rarity Artist',
+      year: '2004',
+      edition: '',
+      preview_only: true,
+      track_count_preview: 17,
+    };
+    const durableIndexedAlbum = {
+      ...staleRenderedAlbum,
+      key: 'rarity artist::sparse year edit fixture::year::2004',
+    };
+    const { context } = loadHelper({ initialAlbums: [durableIndexedAlbum] });
+    context.state.modalReleases = [];
+    const staleButton = new context.HTMLElement('stale-year-card');
+    staleButton.setAttribute('data-album-key', staleRenderedAlbum.key);
+    staleButton.setAttribute(
+      'data-album-version-key',
+      context.getTrackModalAlbumVersionKey(staleRenderedAlbum),
+    );
+    staleButton.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+    assert.strictEqual(
+      context.resolveTrackModalActionAlbum(staleButton),
+      durableIndexedAlbum,
+      'a rendered card must rebind to its durable year key after watcher reconciliation',
+    );
+  }
+
   test('openTrackModalForButton must not bypass the current-album identity resolver', () => {
     const originalTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Original\\01 Stay.mp3';
     const movedTrackPath = 'D:\\Synthetic Music\\Rarity Artist\\Destination\\02 Move.mp3';

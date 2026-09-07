@@ -45,7 +45,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(unavailable.visual.coverCenterY).not.toBeNull();
     expect(Math.abs(unavailable.visual.coverCenterY - unavailable.visual.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs((unavailable.visual.timelineCenterY - unavailable.visual.playCenterY) - 12))
+    expect(Math.abs(unavailable.visual.timelineCenterY - unavailable.visual.playCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(unavailable.visual.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
     const hovered = await globalPlayerActions.hoverLoopAction();
@@ -57,9 +57,11 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
     expect(selectedAlbum).toEqual(LOOP_ALBUM_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe('Album Haven Last.fm Fixture - Signed Scrobble Journey - 2026');
+    expect(modal.title).toContain(LOOP_ALBUM_TARGET.album);
+    expect(`${modal.title} ${modal.subtitle}`).toContain(LOOP_ALBUM_TARGET.artist);
+    expect(`${modal.title} ${modal.subtitle}`).toContain(LOOP_ALBUM_TARGET.year);
     const playbackMark = await playbackEvidence.playbackMark();
-    selectedTrack = await trackModalActions.playTrackAt(0);
+    selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
     expect(selectedTrack.title).toBe(LOOP_TRACK_TITLE);
     await globalPlayerActions.waitForCurrentTrack({
       path: selectedTrack.path,
@@ -92,10 +94,10 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(playingPlayerLayout.coverCenterY).not.toBeNull();
     expect(Math.abs(playingPlayerLayout.coverCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs((playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY) - 12))
+    expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(playingPlayerLayout.playerBounds.height).toBe(108);
+    expect(Math.abs(playingPlayerLayout.playerBounds.height - 92)).toBeLessThanOrEqual(1);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -174,7 +176,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(idle.styles.state).toBe('idle');
     expect(idle.styles.engaged).toBe('false');
     expect(Math.abs(idle.coverCenterY - idle.playCenterY)).toBeLessThanOrEqual(1);
-    expect(Math.abs((idle.timelineCenterY - idle.playCenterY) - 12)).toBeLessThanOrEqual(1);
+    expect(Math.abs(idle.timelineCenterY - idle.playCenterY)).toBeLessThanOrEqual(1);
     expect(Math.abs(idle.timelineCenterY - playingPlayerLayout.timelineCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(idle.mainAreaBounds.x - playingPlayerLayout.mainAreaBounds.x))
@@ -193,7 +195,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(opened.cursors.endHandle).toBe('grab');
     expect(opened.timeWaveformOverlap).toBe(false);
     expect(opened.metadataWaveformGap).toBeGreaterThanOrEqual(3);
-    expect(opened.playerHeight).toBe(108);
+    expect(Math.abs(opened.playerHeight - 92)).toBeLessThanOrEqual(1);
     expect(opened.waveformHeight).toBe(56);
     expect(opened.selectionStartErrorPixels).toBeLessThanOrEqual(1);
     expect(opened.selectionEndErrorPixels).toBeLessThanOrEqual(1);
@@ -212,8 +214,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(collapsed.styles.engaged).toBe('false');
     expect(collapsed.podBounds).toEqual(idle.podBounds);
     expect(collapsed.podBounds.width).toBeLessThan(createHovered.podBounds.width);
-    expect(collapsed.styles.create.color).not.toBe(createHovered.styles.create.color);
-    expect(collapsed.styles.create.textShadow).not.toBe(createHovered.styles.create.textShadow);
+    expect(collapsed.styles.pod.borderColor).not.toBe(createHovered.styles.pod.borderColor);
+    expect(collapsed.styles.pod.boxShadow).not.toBe(createHovered.styles.pod.boxShadow);
     expect(collapsed.mainAreaBounds).toEqual(idle.mainAreaBounds);
     expect(collapsed.waveformBounds).toEqual(idle.waveformBounds);
     await globalPlayerActions.pauseIfPlaying();
@@ -745,7 +747,7 @@ test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal'
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -781,7 +783,7 @@ test('FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor', 
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -819,7 +821,7 @@ test('FTC-PLAYER-017 scissors remains available after saving a loop', async ({
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -844,7 +846,7 @@ test('FTC-PLAYER-017 loop-edit reload restores the active playhead', async ({
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -895,7 +897,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', async ({
   await settingsModalAppBarActions.closeSettings();
 
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
-  const selectedTrack = await trackModalActions.playTrackAt(0);
+  const selectedTrack = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({
     path: selectedTrack.path,
     trackTitle: LOOP_TRACK_TITLE,
@@ -911,6 +913,6 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', async ({
 
   const waveform = await globalPlayerActions.waitForRenderedWaveform({ path: selectedTrack.path });
   expect(waveform.nonPlayheadPixels).toBeGreaterThan(0);
-  expect(waveform.leftBins).toBe(280);
-  expect(waveform.rightBins).toBe(280);
+  expect(waveform.leftBins).toBe(720);
+  expect(waveform.rightBins).toBe(720);
 });

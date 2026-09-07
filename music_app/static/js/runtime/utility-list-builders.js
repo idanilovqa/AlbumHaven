@@ -1064,6 +1064,12 @@ function tagEditViewMutationStillOwnsResources(claim) {
   );
 }
 
+function hasPendingTagEditViewMutations() {
+  return Array.from(tagEditViewMutationResourceClaims.values()).some(
+    (claims) => claims.some((generation) => !settledTagEditViewMutations.has(generation)),
+  );
+}
+
 function pruneSettledTagEditViewMutationClaims() {
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     while (claims.length > 1 && settledTagEditViewMutations.has(claims[0])) {
@@ -1275,6 +1281,12 @@ function coalesceUniqueVisibleLogicalAlbumCandidates(
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareTrackPath(logicalMatch, getAlbumTrackPaths(candidate))) {
+      if (
+        originalAlbum
+        && !albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+      ) {
+        return mergeVisibleAlbumWithOptimisticCandidate(logicalMatch, candidate);
+      }
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareRuntimeIdentityAlias(logicalMatch, candidate)) {
@@ -2103,7 +2115,13 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('wheel', releaseRetainedGeometry, { passive: true });
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
-    list.scrollTop = priorScrollTop;
+    const restoreOwnedScroll = () => {
+      list.scrollTop = priorScrollTop;
+    };
+    restoreOwnedScroll();
+    if (typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+    }
   }
   return true;
 }
@@ -2183,9 +2201,7 @@ async function watchSaveTask(taskId, context = {}) {
   const canReconcileOriginView = () => (
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
-  const supersededMutationStillAtOrigin = () => (
-    originStillOwnsView() && !mutationStillOwnsOriginResources()
-  );
+  const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
   const absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
@@ -2264,9 +2280,6 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'completed') {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
-        if (problematicMutation) {
-          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
-        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -2343,7 +2356,7 @@ async function watchSaveTask(taskId, context = {}) {
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
-            && !supersededMutationStillAtOrigin()
+            && !mutationWasSuperseded()
           ) {
             try {
               const canonicalRefreshAttempts = structuralPartialMembershipRequiresCanonicalRefresh
@@ -2368,7 +2381,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ),
                     restartIfSameUrl: true,
                     shouldApplyResponse: (payload) => (
-                      !supersededMutationStillAtOrigin()
+                      !mutationWasSuperseded()
                       && (
                         !structuralPartialMembershipRequiresCanonicalRefresh
                         || canonicalViewPayloadCoversExpectedTagEdit(
@@ -2380,7 +2393,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ),
                   },
                 );
-                if (viewRefreshed || supersededMutationStillAtOrigin()) break;
+                if (viewRefreshed || mutationWasSuperseded()) break;
                 if (refreshAttempt + 1 < canonicalRefreshAttempts) {
                   await waitForBrowserTimeout(250);
                 }
@@ -2509,6 +2522,9 @@ async function watchSaveTask(taskId, context = {}) {
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
         }
+        if (problematicMutation) {
+          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
+        }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
@@ -2518,7 +2534,7 @@ async function watchSaveTask(taskId, context = {}) {
       }
       if (data.status === 'failed') {
         let viewRefreshed = false;
-        if (!supersededMutationStillAtOrigin()) {
+        if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
               buildApiUrl(state.view),

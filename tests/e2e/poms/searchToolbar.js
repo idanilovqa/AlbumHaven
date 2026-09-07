@@ -40,6 +40,7 @@ export class SearchToolbar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.form = page.locator(this.formSelector);
+    this.control = this.form.locator('.search-field-control');
     this.input = page.locator(this.inputSelector);
     this.applyButton = page.locator(this.applyButtonSelector);
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });
@@ -559,6 +560,9 @@ export class SearchToolbar extends BasePage {
     const expectedViewDataRequestCount = Number(
       options.expectedViewDataRequestCount || 0,
     );
+    const minimumViewDataRequestCount = Number(
+      options.minimumViewDataRequestCount ?? expectedViewDataRequestCount,
+    );
     const deadline = Date.now() + timeout;
     let lastObservedState = null;
     while (Date.now() <= deadline) {
@@ -631,7 +635,9 @@ export class SearchToolbar extends BasePage {
       );
       const transitionStayedLocal = (
         finalTransitionObservation.viewDataRequests.length
-          === expectedViewDataRequestCount
+          >= minimumViewDataRequestCount
+        && finalTransitionObservation.viewDataRequests.length
+          <= expectedViewDataRequestCount
         && finalTransitionObservation.activeViewDataRequestCount === 0
         && !finalTransitionObservation.galleryReplaced
         && !finalTransitionObservation.cardNodesChanged

@@ -556,10 +556,29 @@ function getTrackModalButtonAlbumVersionKey(button) {
     || '';
 }
 
+function parseTrackModalButtonAlbumFallback(button) {
+  if (!(button instanceof HTMLElement)) return null;
+  try {
+    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
+    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function findIndexedTrackModalLogicalRelease(album) {
+  if (!album || !(state?.gallery?.albumIndex instanceof Map)) return null;
+  const matches = Array.from(new Set(state.gallery.albumIndex.values())).filter(
+    (candidate) => trackModalAlbumsShareLogicalRelease(candidate, album),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function resolveTrackModalActionAlbum(button) {
   const albumKey = String(getTrackModalButtonAlbumKey(button) || '').trim();
   const albumVersionKey = String(getTrackModalButtonAlbumVersionKey(button) || '').trim();
   const currentAlbum = getCurrentTrackModalAlbum();
+  const fallbackAlbum = parseTrackModalButtonAlbumFallback(button);
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
     if (currentAlbum && !albumRequiresHydration(currentAlbum) && currentAlbumVersionKey === albumVersionKey) {
@@ -586,13 +605,7 @@ function resolveTrackModalActionAlbum(button) {
     }
   }
   if (currentAlbum) return currentAlbum;
-  if (!(button instanceof HTMLElement)) return null;
-  try {
-    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
-    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
-  } catch (_error) {
-    return null;
-  }
+  return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {

@@ -1343,6 +1343,39 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && state.view.related_filter_artists.length)
     && sameArtistSet(currentSelectedArtistGroupNames, expectedFamilyArtistNames)
   );
+  const searchContext = state.view?.search_context;
+  const artistNameMatchArtists = Array.isArray(searchContext?.artist_name_match_artists)
+    ? searchContext.artist_name_match_artists
+    : null;
+  const classifiedSearchMatchArtists = [
+    ...(Array.isArray(searchContext?.direct_match_artists)
+      ? searchContext.direct_match_artists
+      : []),
+    ...(Array.isArray(searchContext?.related_match_artists)
+      ? searchContext.related_match_artists
+      : []),
+  ];
+  const hasClassifiedSearchMatchArtists = (
+    Array.isArray(searchContext?.direct_match_artists)
+    && Array.isArray(searchContext?.related_match_artists)
+  );
+  const matchesSearchArtist = (candidate) => (
+    String(candidate || '').trim() === normalizedArtist
+  );
+  const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
+  const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
+  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
+  const matchedSelectedArtistGroup = matchedSelectedArtistGroupIndex >= 0
+    ? currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]
+    : null;
+  const normalizedQuery = query.toLocaleLowerCase();
+  const hasVisibleAlbumTitleMatch = Boolean(
+    normalizedQuery
+    && (Array.isArray(matchedSelectedArtistGroup?.albums)
+      ? matchedSelectedArtistGroup.albums
+      : []
+    ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -1351,16 +1384,18 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         || currentRelatedArtists.length
       )
       && (
-        !Array.isArray(state.view?.search_context?.artist_name_match_artists)
-        || state.view.search_context.artist_name_match_artists.some(
-          (artistNameMatch) => String(artistNameMatch || '').trim() === normalizedArtist,
+        artistNameMatchArtists === null
+        || isArtistNameMatch
+        || (
+          hasClassifiedSearchMatchArtists
+          && !isClassifiedSearchMatch
+          && !hasVisibleAlbumTitleMatch
         )
       )
     )
     : hasAuthoritativeMountedFamilyContext;
-  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
   if (matchedSelectedArtistGroupIndex >= 0) {
-    const matchedSelectedArtistGroup = deepCloneJson(currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]);
+    const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const familyGroups = currentSelectedArtistGroups
       .filter((_, index) => index !== matchedSelectedArtistGroupIndex)
       .map((group) => deepCloneJson(group));
@@ -1373,7 +1408,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       relatedArtists.push(groupArtist);
     });
     return {
-      primaryGroups: [matchedSelectedArtistGroup],
+      primaryGroups: [optimisticMatchedSelectedArtistGroup],
       familyGroups,
       relatedArtists,
       skipFetch: canReuseCurrentSelectedArtistFamilyContext,
@@ -1449,7 +1484,9 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const query = String(state.view?.query || '').trim();
+  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
+    && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
     ? getReusableSelectedArtistBrowseView(nextView)
     : null;
@@ -1474,7 +1511,6 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     }
     return true;
   }
-  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   if (!optimisticGroups) return false;
   if (!query && !optimisticGroups.skipFetch) return false;
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
@@ -1518,6 +1554,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     omitSidebar: true,
   }), false, {
     preserveScroll: true,
+    restartIfSameUrl: true,
     skipPendingViewTransition: true,
   });
   return true;

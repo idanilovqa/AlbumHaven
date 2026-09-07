@@ -435,6 +435,8 @@ export class GlobalPlayer extends BasePage {
         if (!(element instanceof HTMLElement)) return null;
         const style = getComputedStyle(element);
         return {
+          borderColor: style.borderColor,
+          boxShadow: style.boxShadow,
           color: style.color,
           cursor: style.cursor,
           display: style.display,
@@ -473,6 +475,14 @@ export class GlobalPlayer extends BasePage {
       mainLeftGapFromPlay: mainAreaBounds.x - (playBounds.x + playBounds.width),
       styles,
     };
+  }
+
+  async readThemedPlayerInkColor() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the production player theme boundary
+    return this.player.evaluate((player) => ({
+      active: document.documentElement.hasAttribute('data-appearance-player'),
+      color: getComputedStyle(player).color,
+    }));
   }
 
   async readMainLoopVisualSnapshot() {

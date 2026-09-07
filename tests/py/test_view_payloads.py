@@ -5097,6 +5097,7 @@ def test_build_view_payload_caches_search_buckets_between_same_query_requests(ap
         "selected_artist": "Neal Morse",
         "selected_artist_source": "auto_top_match",
         "direct_match_artists": ["Neal Morse"],
+        "artist_name_match_artists": ["Neal Morse"],
         "related_match_artists": [],
     }
     assert second_payload["search_context"] == first_payload["search_context"]

@@ -1436,6 +1436,178 @@ def test_live_vacated_structural_album_sweep_retires_exact_zero_track_siblings(
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+@pytest.mark.parametrize(
+    ("checkpoint", "expected_disposition"),
+    (
+        ("accepted", "preserved_cover_checkpoint"),
+        ("publication_completed", "retired"),
+        ("rolled_back", "retired"),
+        ("ambiguous", "retired"),
+    ),
+)
+def test_live_vacated_structural_album_retirement_blocks_only_active_cover_save(
+    monkeypatch,
+    checkpoint,
+    expected_disposition,
+):
+    setup_url, runtime_url, _worker_url, _readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            scope = connection.execute(
+                """
+                select owner.account_id, library_record.id as library_id
+                from app.bootstrap_owners as owner
+                join library.libraries as library_record
+                  on library_record.owner_account_id = owner.account_id
+                where owner.owner_key = 'local-bootstrap-owner'
+                  and library_record.library_kind = 'local'
+                limit 1
+                """
+            ).fetchone()
+            library_id = int(scope["library_id"])
+            root_id = int(connection.execute(
+                """
+                insert into library.library_roots (
+                  library_id, root_path, root_kind, is_active, metadata
+                ) values (%s, %s, 'main', true, '{}'::jsonb)
+                returning id
+                """,
+                (library_id, f"C:/private/retirement-{checkpoint}"),
+            ).fetchone()["id"])
+            artist_id = int(connection.execute(
+                """
+                insert into library.local_artists (library_id, artist_key, name)
+                values (%s, %s, 'Retirement Artist')
+                returning id
+                """,
+                (library_id, f"retirement-artist-{checkpoint}"),
+            ).fetchone()["id"])
+            destination_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
+                returning id
+                """,
+                (library_id, artist_id, f"retirement-destination-{checkpoint}"),
+            ).fetchone()["id"])
+            source_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, %s, 'Retirement Album', 1999, '{}')
+                returning id
+                """,
+                (library_id, artist_id, f"retirement-source-{checkpoint}"),
+            ).fetchone()["id"])
+            job_id = int(connection.execute(
+                """
+                insert into ops.jobs (
+                  kind, subject_kind, subject_ref, parameters, library_id,
+                  deployment_mode, client_surface, idempotency_key,
+                  max_attempts, recovery_policy
+                ) values (
+                  'cover_remote_save', 'cover_lookup_task', %s, '{}'::jsonb, %s,
+                  'self_hosted_private_web', 'private_web', %s,
+                  1, 'ambiguous_on_stale_lease'
+                ) returning id
+                """,
+                (
+                    f"retirement-task-{checkpoint}",
+                    library_id,
+                    f"retirement-cover-save-{checkpoint}",
+                ),
+            ).fetchone()["id"])
+            task_id = int(connection.execute(
+                """
+                insert into ops.cover_lookup_tasks (
+                  library_id, task_key, status, local_album_id,
+                  library_root_id, job_id
+                ) values (%s, %s, 'completed', %s, %s, %s)
+                returning id
+                """,
+                (
+                    library_id,
+                    f"retirement-task-{checkpoint}",
+                    source_id,
+                    root_id,
+                    job_id,
+                ),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into ops.cover_remote_save_checkpoints (
+                  task_id, job_id, library_id, local_album_id, library_root_id,
+                  candidate_generation, candidate_id, checkpoint,
+                  resource_revision, completed_at
+                ) values (
+                  %s, %s, %s, %s, %s,
+                  '00000000-0000-0000-0000-000000000082'::uuid,
+                  %s, %s, 0,
+                  case when %s in (
+                    'publication_completed', 'rolled_back', 'ambiguous'
+                  ) then now() else null end
+                )
+                """,
+                (
+                    task_id,
+                    job_id,
+                    library_id,
+                    source_id,
+                    root_id,
+                    f"retirement-candidate-{checkpoint}",
+                    checkpoint,
+                    checkpoint,
+                ),
+            )
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            disposition = str(connection.execute(
+                """
+                select library.retire_vacated_structural_album(
+                  %s, %s, %s, %s, %s
+                ) as disposition
+                """,
+                (
+                    library_id,
+                    source_id,
+                    destination_id,
+                    f"retirement-source-{checkpoint}",
+                    f"retirement-destination-{checkpoint}",
+                ),
+            ).fetchone()["disposition"])
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            source_exists = bool(connection.execute(
+                "select exists(select 1 from library.local_albums where id = %s) as present",
+                (source_id,),
+            ).fetchone()["present"])
+            checkpoint_album_id = int(connection.execute(
+                "select local_album_id from ops.cover_remote_save_checkpoints where job_id = %s",
+                (job_id,),
+            ).fetchone()["local_album_id"])
+
+        assert disposition == expected_disposition
+        if checkpoint == "accepted":
+            assert source_exists is True
+            assert checkpoint_album_id == source_id
+        else:
+            assert source_exists is False
+            assert checkpoint_album_id == destination_id
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_waveform_peak_cache_roundtrip_invalidation_upsert_grants_and_cascade(
     monkeypatch,
     tmp_path,
@@ -1887,12 +2059,14 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
             },
             "structural-root-identity",
             1.0,
+            observed_library_root_ids={"structural-root"},
         )
         adapter.save_snapshot(
             Path("unused-structural-rename.json"),
             previous,
             "structural-root-identity",
             1.1,
+            observed_library_root_ids={"structural-root"},
         )
         with isolatedPostgres._connect(setup_url) as connection:
             connection.execute(
@@ -3308,6 +3482,11 @@ def test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_
             )
             assert split_result["track_rows_updated"] == 1
             assert split_result["track_file_rows_updated"] == 1
+            watcher_result = adapter.persist_targeted_inventory_mutation(
+                root_id="mixed-year-restore-root",
+                active_file_entries=current_entries,
+            )
+            assert watcher_result["inventory_mutation_revision"] >= 1
 
         with isolatedPostgres._connect(setup_url) as connection:
             split_rows = connection.execute(
@@ -5192,6 +5371,7 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             first_snapshot,
             "scan-membership-root-identity",
             1.0,
+            observed_library_root_ids={"scan-membership-root"},
         )
 
         with isolatedPostgres._connect(setup_url) as connection:
@@ -5258,6 +5438,7 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             second_snapshot,
             "scan-membership-root-identity",
             2.0,
+            observed_library_root_ids={"scan-membership-root"},
         )
 
         with isolatedPostgres._connect(setup_url) as connection:
@@ -5274,6 +5455,13 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
                 join library.local_artists
                   on library.local_artists.id = library.local_album_featured_artists.artist_id
                 order by album_title, artist_name, featured_kind
+                """
+            ).fetchall()
+            file_states = connection.execute(
+                """
+                select private_path, scan_cache_stale
+                from library.local_track_files
+                order by private_path
                 """
             ).fetchall()
             from music_app.services.relation_projection_postgres import (
@@ -5304,6 +5492,11 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             )
             for row in memberships
         }
+        file_state_by_path = {
+            str(row["private_path"]): bool(row["scan_cache_stale"])
+            for row in file_states
+        }
+        assert file_state_by_path[str(removed_path)] is True, file_state_by_path
         assert (
             "Retained Album",
             "Curated Guest",
@@ -5333,7 +5526,15 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
         browse_artists = {row["artist"] for row in browse_payload["artists_sidebar"]}
         assert "New Guest" in browse_artists
         assert "Old Guest" not in browse_artists
-        assert "Archived Owner" not in browse_artists
+        assert "Archived Owner" in browse_artists
+        archived_album = next(
+            album
+            for group in browse_payload["artist_groups"]
+            if group["artist"] == "Archived Owner"
+            for album in group["albums"]
+            if album["name"] == "Removed Album"
+        )
+        assert archived_album["inventory_status"] == "missing"
         assert "Curated Guest" in browse_artists
 
         relation_views = build_relation_views_from_postgres_rows(config, relation_rows)

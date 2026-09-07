@@ -71,6 +71,10 @@ class PostgresInvitationLifecycleService:
         if not isinstance(argon2, Mapping):
             raise ValueError("Account invitation configuration is invalid.")
         self._argon2 = dict(argon2)
+        password_policy = payload.get("password")
+        self._password_policy = (
+            dict(password_policy) if isinstance(password_policy, Mapping) else {}
+        )
         self._policy_version = _positive_integer(
             payload.get("argon2_policy_version"), "Argon2 policy version"
         )
@@ -240,6 +244,7 @@ class PostgresInvitationLifecycleService:
                 breached_checker=self._breached_checker,
                 argon2=self._argon2,
                 policy_version=self._policy_version,
+                password_policy=self._password_policy,
             )
             if not isinstance(credential, PasswordCredential):
                 raise RuntimeError

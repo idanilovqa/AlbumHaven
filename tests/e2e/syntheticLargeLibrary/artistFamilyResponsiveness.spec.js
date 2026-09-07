@@ -388,7 +388,11 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
             [EXPECTED_FAMILY.resonance, EXPECTED_FAMILY.cosmic],
             { timeout: 60000 },
           );
-          await galleryActions.waitForAlbumVisible('Deep Water', { timeout: 60000 });
+          await galleryActions.scrollToAlbumUnderHeading(
+            EXPECTED_FAMILY.cosmic,
+            'Deep Water',
+            { timeout: 60000 },
+          );
         },
       )
     ));
@@ -477,7 +481,15 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
           await artistFamilyActions.waitForViewReady(EXPECTED_FAMILY.cosmic, { timeout: 120000 });
           await artistFamilyActions.waitForVisible({ timeout: 60000 });
           await artistFamilyActions.waitForPrimaryChipActive(EXPECTED_FAMILY.cosmic);
-          await galleryActions.waitForAlbumVisible('Deep Water', { timeout: 60000 });
+          await galleryActions.waitForArtistHeadings(
+            [EXPECTED_FAMILY.cosmic],
+            { timeout: 60000 },
+          );
+          await galleryActions.scrollToAlbumUnderHeading(
+            EXPECTED_FAMILY.cosmic,
+            'Deep Water',
+            { timeout: 60000 },
+          );
         },
       )
     ));
@@ -495,7 +507,11 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
         async () => {
           await galleryActions.waitForOnlyArtistHeadings([EXPECTED_FAMILY.cosmic], { timeout: 60000 });
           await galleryActions.waitForAlbumCountByHeading(EXPECTED_FAMILY.cosmic, 1, { timeout: 60000 });
-          await galleryActions.waitForAlbumVisible('Deep Water', { timeout: 60000 });
+          await galleryActions.scrollToAlbumUnderHeading(
+            EXPECTED_FAMILY.cosmic,
+            'Deep Water',
+            { timeout: 60000 },
+          );
         },
       )
     ));

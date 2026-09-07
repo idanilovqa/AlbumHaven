@@ -11,7 +11,7 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   `postgresql-x64-18` service is available.
 - Python resolves from `PLAYWRIGHT_PYTHON` or `PATH` and has the application test
   dependencies installed.
-- The expanded `fixtures-v1.0.19` distribution is available at
+- The expanded `fixtures-v1.0.20` distribution is available at
   `..\album-haven-test-data\dist`. Its `profiles\functional-core` directory must
   contain `database`, `media`, and `loopback`.
 - PostgreSQL passwordless automation is configured in `PGPASSFILE`. When that

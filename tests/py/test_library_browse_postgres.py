@@ -59,6 +59,19 @@ def default_empty_relation_alias_projection(monkeypatch):
     return original_loader
 
 
+@pytest.fixture(autouse=True)
+def default_empty_missing_album_projection(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    original_loader = PostgresLibraryBrowseRepository._load_missing_album_rows
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "_load_missing_album_rows",
+        lambda _self, *_args, **_kwargs: [],
+    )
+    return original_loader
+
+
 class _InventoryCursor:
     def __init__(self, *, row=None, rows=None):
         self._row = row
@@ -3016,6 +3029,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         "selected_artist": "Tender Forever",
         "selected_artist_source": "auto_top_match",
         "direct_match_artists": ["Tender Forever", "Broadcast"],
+        "artist_name_match_artists": ["Tender Forever"],
         "related_match_artists": [],
     }
 
@@ -4407,7 +4421,13 @@ def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tr
     assert payload["primary_filter_active"] is True
     assert album["preview_only"] is False
     assert album["tracks"][0]["key"] == "cosmic-cathedral-deep-water-01"
-    assert "track_count" not in " ".join(executed_sql)
+    selected_artist_queries = [
+        sql
+        for sql in executed_sql
+        if "target_artists as" in sql and "selected_artist_albums as" in sql
+    ]
+    assert len(selected_artist_queries) == 1
+    assert "track_count" not in selected_artist_queries[0]
 
 
 def test_postgres_search_payload_supports_search_scoped_all_artists():

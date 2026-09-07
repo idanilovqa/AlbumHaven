@@ -328,6 +328,7 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
   const claimCalls = [];
   const settledClaims = [];
   const watchedTasks = [];
+  let localViewMutationClaims = 0;
   const tagEditorOverlay = { hidden: true };
   const closedOverlay = { hidden: true };
   const context = loadHelper([album], {
@@ -383,6 +384,9 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
     },
     updateOpenTrackModalAfterTagEdit() {},
     renderView() {},
+    claimLocalViewStateNavigation() {
+      localViewMutationClaims += 1;
+    },
     watchSaveTask(taskId, options) {
       watchedTasks.push({ taskId, options });
     },
@@ -425,6 +429,11 @@ test('opening a tag editor immediately supersedes an older album mutation claim 
 
   await context.confirmManualTagEdit();
 
+  assert.equal(
+    localViewMutationClaims,
+    1,
+    'confirmation must preempt an older canonical view response before publishing its optimistic edit',
+  );
   assert.equal(watchedTasks.length, 1);
   const confirmedClaim = watchedTasks[0].options.tagEditMutationClaim;
   assert.ok(

@@ -136,7 +136,7 @@ Clients do not receive raw file paths.
 ## Removal Transaction
 
 The server exposes
-`POST /api/library/albums/{album_key}/confirm-removal`. The route requires
+`POST /api/library/albums/{album_key:path}/confirm-removal`. The route requires
 `library.inventory.manage`, current-library scope, authentication, same-origin
 validation, and session CSRF protection.
 

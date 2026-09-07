@@ -22,6 +22,7 @@ function loadRuntime(initial, seekbarMode) {
   const styles = new Map(), attributes = new Map();
   const root = {
     dataset: {},
+    classList: { toggle() {} },
     style: {
       setProperty: (name, value) => styles.set(name, value),
       removeProperty: (name) => styles.delete(name),

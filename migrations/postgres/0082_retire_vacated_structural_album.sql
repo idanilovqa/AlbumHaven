@@ -63,6 +63,7 @@ begin
     select 1 from ops.cover_remote_save_checkpoints
     where ops.cover_remote_save_checkpoints.library_id = p_library_id
       and ops.cover_remote_save_checkpoints.local_album_id = p_source_album_id
+      and ops.cover_remote_save_checkpoints.checkpoint not in ('publication_completed', 'rolled_back', 'ambiguous')
   ) then
     return 'preserved_cover_checkpoint';
   end if;
@@ -163,6 +164,12 @@ begin
   set local_album_id = p_destination_album_id,
       album_key = p_destination_album_key
   where library_id = p_library_id and local_album_id = p_source_album_id;
+
+  update ops.cover_remote_save_checkpoints
+  set local_album_id = p_destination_album_id
+  where library_id = p_library_id
+    and local_album_id = p_source_album_id
+    and ops.cover_remote_save_checkpoints.checkpoint in ('publication_completed', 'rolled_back', 'ambiguous');
 
   delete from library.local_album_cover_candidate_snapshots
   where album_id = p_source_album_id

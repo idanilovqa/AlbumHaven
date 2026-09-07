@@ -529,6 +529,38 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   assert.equal(interactions[2].selector, '#scan-indicator');
 });
 
+test('incremental scan completion waits for the browser post-scan view refresh', async () => {
+  const actionSource = read('tests/e2e/actions/appBarActions.js');
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/appBarActions.js')).href;
+  const { AppBarActions } = await import(moduleUrl);
+  const interactions = [];
+  const actions = new AppBarActions({});
+  actions.triggerIncrementalScanAndWaitForBusy = async () => {
+    interactions.push('scan-busy');
+  };
+  actions.waitForIncrementalScanComplete = async (options) => {
+    interactions.push(['backend-idle', options]);
+  };
+  actions.waitForIncrementalScanUiSettled = async (options) => {
+    interactions.push(['browser-view-settled', options]);
+  };
+
+  await actions.triggerIncrementalScanAndWait({ timeout: 54321 });
+
+  assert.deepEqual(interactions, [
+    'scan-busy',
+    ['backend-idle', { timeout: 54321 }],
+    ['browser-view-settled', { timeout: 54321 }],
+  ]);
+  const settlementMethod = actionSource.slice(
+    actionSource.indexOf('async waitForIncrementalScanUiSettled'),
+    actionSource.indexOf('async triggerIncrementalScanAndWaitForBusy'),
+  );
+  assert.match(settlementMethod, /activeViewRequestUrl/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefresh/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefreshRetryScheduled/);
+});
+
 test('functional browser requests explicitly carry secure loopback session cookies', async () => {
   const moduleUrl = pathToFileURL(
     path.join(repoRoot, 'tests/e2e/helpers/authenticatedPageRequest.js'),
@@ -803,7 +835,7 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
 
   assert.match(galleryActions, /selectAlbumDetailsByIdentity\(expected/);
   assert.match(galleryActions, /albumCard\.clickDetailsByIdentity\(artist, album, year\)/);
-  assert.match(albumCard, /cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)/);
+  assert.match(albumCard, /const card = this\.cardByIdentity\(artistName, albumName, year\);/);
   assert.doesNotMatch(coverLookup, /clickFirstAlbumDetails\(/);
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
   assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
@@ -2628,8 +2660,13 @@ test('album-details selection supports production prewarming without a click-tim
   assert.match(method, /Album details identity mismatch/u);
   assert.match(
     albumCard,
-    /waitForOpenDetailsIdentity[\s\S]*exactNormalizedText\(expectedTitle\)[\s\S]*trackModalTrackRowSelector/u,
+    /waitForOpenDetailsIdentity[\s\S]*trackModalTrackRowSelector[\s\S]*waitForOpenDetailsHeaderIdentity/u,
     'The fallback must prove the exact clicked modal identity is fully loaded.',
+  );
+  assert.match(
+    albumCard,
+    /waitForOpenDetailsHeaderIdentity[\s\S]*exactNormalizedText\(title\)/u,
+    'The layout-aware header fallback must prove the exact clicked album title.',
   );
 });
 
@@ -3972,6 +4009,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href;
   const { GalleryActions } = await import(moduleUrl);
   const selected = [];
+  const scrolled = [];
   const actions = new GalleryActions({
     albumCard: {
       async clickDetailsByIdentity(artist, album, year) {
@@ -3979,7 +4017,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
       },
     },
   });
-  actions.scrollToAlbumUnderHeading = async () => {};
+  actions.scrollToAlbumUnderHeading = async (...args) => scrolled.push(args);
 
   const identity = await actions.selectAlbumDetailsByIdentity({
     artist: 'Mastodon',
@@ -3988,6 +4026,11 @@ test('exact album selection delegates one retrying Playwright click to the ident
   });
 
   assert.deepEqual(selected, [['Mastodon', 'Crack The Skye', '2009']]);
+  assert.deepEqual(scrolled, [[
+    'Mastodon',
+    'Crack The Skye',
+    { year: '2009' },
+  ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',
     album: 'Crack The Skye',
@@ -3997,7 +4040,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const albumCard = read('tests/e2e/poms/albumCard.js');
   assert.match(
     albumCard,
-    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
+    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year\);[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
   );
 });
 
@@ -4314,7 +4357,7 @@ test('track modal cover readiness rejects loading placeholders and requires a fi
   assert.match(trackModal, /naturalWidth\s*>\s*0/);
   assert.match(trackModal, /getBoundingClientRect\(\)\.width\s*>\s*0/);
   assert.match(trackModal, /albumCoverImage\.evaluateAll/);
-  assert.match(trackModal, /String\(coverPlaceholder\.textContent\s*\|\|\s*''\)\.trim\(\)\s*===\s*'No cover art'/);
+  assert.match(trackModal, /coverPlaceholder\.getAttribute\('data-album-artbox-state'\)\s*===\s*'empty'/);
   assert.doesNotMatch(trackModal, /return coverLoaded \|\| coverPlaceholderVisible/);
 });
 
@@ -5071,7 +5114,10 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   }
 
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
-  assert.match(spec, /opened\.playerHeight\)\.toBe\(108\)/);
+  assert.match(
+    spec,
+    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
+  );
   assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
   assert.match(spec, /opened\.metadataWaveformGap\)\.toBeGreaterThanOrEqual\(3\)/);
@@ -5082,12 +5128,12 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder keeps controls centered while the taller waveform sits lower',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
+    'the no-track placeholder keeps its cover, controls, and timeline centered',
   );
   assert.match(
     spec,
-    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY\) - 12[\s\S]*toBeLessThanOrEqual\(1\)/,
+    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,
@@ -5175,5 +5221,10 @@ test('compact-player Appearance helper enters the owning Player and Seekbar page
     helper,
     /compactPlayerStyle\.buttons\.count\(\)\s*===\s*0[^]*await this\.openSection\('seekbar'\)/,
     'the shared compact-player control is owned by Player & Seekbar, not the Main elements landing page',
+  );
+  assert.match(
+    helper,
+    /documentRoot[^]*data-compact-player-style[^]*if \(alreadySaved\)/,
+    'an already-saved compact-player style must remain an idempotent action',
   );
 });

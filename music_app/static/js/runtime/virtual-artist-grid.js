@@ -1460,6 +1460,26 @@ class VirtualArtistGrid {
     });
   }
 
+  hasMatchingMountedAlbumCardIdentity(existingRoot, nextRoot) {
+    if (
+      !existingRoot
+      || !nextRoot
+      || typeof existingRoot.querySelectorAll !== 'function'
+      || typeof nextRoot.querySelectorAll !== 'function'
+    ) {
+      return false;
+    }
+    const existingIdentities = new Set(
+      Array.from(existingRoot.querySelectorAll('.album-card[data-gallery-card-key]'))
+        .map((card) => String(card?.getAttribute?.('data-gallery-card-key') || '').trim())
+        .filter(Boolean),
+    );
+    return Array.from(nextRoot.querySelectorAll('.album-card[data-gallery-card-key]'))
+      .some((card) => existingIdentities.has(
+        String(card?.getAttribute?.('data-gallery-card-key') || '').trim(),
+      ));
+  }
+
   renderedSectionNodesMatch(existingNode, nextNode) {
     if (!existingNode || !nextNode) return false;
     if (typeof existingNode.isEqualNode === 'function') {
@@ -1540,6 +1560,16 @@ class VirtualArtistGrid {
         existing
         && !usedExistingChildren.has(existing)
         && this.renderedSectionNodesMatch(existing, nextNode)
+      ) {
+        usedExistingChildren.add(existing);
+        nextChildren.push(existing);
+        return;
+      }
+      if (
+        existing
+        && !usedExistingChildren.has(existing)
+        && this.hasMatchingMountedAlbumCardIdentity(existing, nextNode)
+        && this.updateRenderedSectionNode(existing, nextNode, record)
       ) {
         usedExistingChildren.add(existing);
         nextChildren.push(existing);

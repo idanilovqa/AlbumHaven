@@ -25,6 +25,10 @@ _HEALTH_EVENT_KINDS = {
     LibraryEventKind.OVERFLOW,
     LibraryEventKind.ROOT_UNAVAILABLE,
 }
+_HEALTH_PROBLEM_STATES = {
+    "reconciliation_failed",
+    "stable_write_unavailable",
+}
 
 _BOOTSTRAP_LIBRARY_SQL = """
 with bootstrap_library as (
@@ -179,7 +183,7 @@ class PostgresLibraryWatchHealthStore:
         *,
         detected_before: str,
     ) -> int:
-        normalized = tuple(
+        normalized = list(
             dict.fromkeys(
                 root_id
                 for value in root_ids
@@ -227,12 +231,26 @@ class LibraryWatchHealthService:
     def record_event(self, event: LibraryEvent) -> bool:
         if event.kind not in _HEALTH_EVENT_KINDS:
             return False
-        root_id = str(event.root_id or "").strip()
+        return self._record(event.root_id, event.kind.value)
+
+    def record_problem(self, problem: object) -> bool:
+        """Persist a coordinator failure that means watcher events may be missing."""
+
+        state = str(getattr(problem, "code", "") or "").strip()
+        if state not in _HEALTH_PROBLEM_STATES:
+            return False
+        return self._record(
+            getattr(problem, "root_id", None),
+            state,
+        )
+
+    def _record(self, raw_root_id: object, state: str) -> bool:
+        root_id = str(raw_root_id or "").strip()
         if not root_id:
             return False
         problem = LibraryWatchHealthProblem(
             root_id=root_id,
-            state=event.kind.value,
+            state=state,
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
         )
         with self._lock:

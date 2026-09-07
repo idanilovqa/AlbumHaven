@@ -9369,10 +9369,29 @@ function getTrackModalButtonAlbumVersionKey(button) {
     || '';
 }
 
+function parseTrackModalButtonAlbumFallback(button) {
+  if (!(button instanceof HTMLElement)) return null;
+  try {
+    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
+    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function findIndexedTrackModalLogicalRelease(album) {
+  if (!album || !(state?.gallery?.albumIndex instanceof Map)) return null;
+  const matches = Array.from(new Set(state.gallery.albumIndex.values())).filter(
+    (candidate) => trackModalAlbumsShareLogicalRelease(candidate, album),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function resolveTrackModalActionAlbum(button) {
   const albumKey = String(getTrackModalButtonAlbumKey(button) || '').trim();
   const albumVersionKey = String(getTrackModalButtonAlbumVersionKey(button) || '').trim();
   const currentAlbum = getCurrentTrackModalAlbum();
+  const fallbackAlbum = parseTrackModalButtonAlbumFallback(button);
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
     if (currentAlbum && !albumRequiresHydration(currentAlbum) && currentAlbumVersionKey === albumVersionKey) {
@@ -9399,13 +9418,7 @@ function resolveTrackModalActionAlbum(button) {
     }
   }
   if (currentAlbum) return currentAlbum;
-  if (!(button instanceof HTMLElement)) return null;
-  try {
-    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
-    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
-  } catch (_error) {
-    return null;
-  }
+  return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {
@@ -11287,7 +11300,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     attempt <= BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT;
     attempt += 1
   ) {
-    if (state.busy || hasPendingSidebarNavigation()) return false;
+    const tagEditOwnsGalleryResources = Boolean(
+      typeof hasPendingTagEditViewMutations === 'function'
+      && hasPendingTagEditViewMutations()
+    );
+    if (state.busy || hasPendingSidebarNavigation() || tagEditOwnsGalleryResources) {
+      return false;
+    }
     const originatingRevision = readViewStateRevision();
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
       preserveGalleryOptionsMenu: true,
@@ -11765,8 +11784,13 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('render_started', requestOptions);
     attachModalEvents();
     state.ui.activeViewPayloadReady = true;
+    const mountedGalleryContainer = document.getElementById('artist-groups');
+    const hasMountedGalleryContent = Boolean(
+      mountedGalleryContainer?.querySelector('.artist-section, .album-card'),
+    );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
         state.view?.artist_groups,
@@ -14195,6 +14219,12 @@ function tagEditViewMutationStillOwnsResources(claim) {
   );
 }
 
+function hasPendingTagEditViewMutations() {
+  return Array.from(tagEditViewMutationResourceClaims.values()).some(
+    (claims) => claims.some((generation) => !settledTagEditViewMutations.has(generation)),
+  );
+}
+
 function pruneSettledTagEditViewMutationClaims() {
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     while (claims.length > 1 && settledTagEditViewMutations.has(claims[0])) {
@@ -14406,6 +14436,12 @@ function coalesceUniqueVisibleLogicalAlbumCandidates(
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareTrackPath(logicalMatch, getAlbumTrackPaths(candidate))) {
+      if (
+        originalAlbum
+        && !albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+      ) {
+        return mergeVisibleAlbumWithOptimisticCandidate(logicalMatch, candidate);
+      }
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareRuntimeIdentityAlias(logicalMatch, candidate)) {
@@ -15234,7 +15270,13 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('wheel', releaseRetainedGeometry, { passive: true });
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
-    list.scrollTop = priorScrollTop;
+    const restoreOwnedScroll = () => {
+      list.scrollTop = priorScrollTop;
+    };
+    restoreOwnedScroll();
+    if (typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+    }
   }
   return true;
 }
@@ -15314,9 +15356,7 @@ async function watchSaveTask(taskId, context = {}) {
   const canReconcileOriginView = () => (
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
-  const supersededMutationStillAtOrigin = () => (
-    originStillOwnsView() && !mutationStillOwnsOriginResources()
-  );
+  const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
   const absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
@@ -15395,9 +15435,6 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'completed') {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
-        if (problematicMutation) {
-          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
-        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -15474,7 +15511,7 @@ async function watchSaveTask(taskId, context = {}) {
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
-            && !supersededMutationStillAtOrigin()
+            && !mutationWasSuperseded()
           ) {
             try {
               const canonicalRefreshAttempts = structuralPartialMembershipRequiresCanonicalRefresh
@@ -15499,7 +15536,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ),
                     restartIfSameUrl: true,
                     shouldApplyResponse: (payload) => (
-                      !supersededMutationStillAtOrigin()
+                      !mutationWasSuperseded()
                       && (
                         !structuralPartialMembershipRequiresCanonicalRefresh
                         || canonicalViewPayloadCoversExpectedTagEdit(
@@ -15511,7 +15548,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ),
                   },
                 );
-                if (viewRefreshed || supersededMutationStillAtOrigin()) break;
+                if (viewRefreshed || mutationWasSuperseded()) break;
                 if (refreshAttempt + 1 < canonicalRefreshAttempts) {
                   await waitForBrowserTimeout(250);
                 }
@@ -15640,6 +15677,9 @@ async function watchSaveTask(taskId, context = {}) {
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
         }
+        if (problematicMutation) {
+          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
+        }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
@@ -15649,7 +15689,7 @@ async function watchSaveTask(taskId, context = {}) {
       }
       if (data.status === 'failed') {
         let viewRefreshed = false;
-        if (!supersededMutationStillAtOrigin()) {
+        if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
               buildApiUrl(state.view),
@@ -17604,30 +17644,61 @@ function mountAlertsAppearanceEditor(detail) {
   initializeRepairSelections(selectedAlbum);
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
   if (state.utility.focusedTrackPath) {
-    const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
-    activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
-    if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
-      const listRect = els.list.getBoundingClientRect();
-      const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
-      if (activeAlbumRect.bottom > listRect.bottom) {
-        els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
-      } else if (activeAlbumRect.top < listRect.top) {
-        els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+    const focusedTrackPath = String(state.utility.focusedTrackPath);
+    const scrollFocusedRowsIntoView = () => {
+      let albumGeometryReady = false;
+      const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
+      activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
+      if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
+        const listRect = els.list.getBoundingClientRect();
+        const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
+        albumGeometryReady = listRect.bottom > listRect.top
+          && activeAlbumRect.bottom > activeAlbumRect.top;
+        if (activeAlbumRect.bottom > listRect.bottom) {
+          els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
+        } else if (activeAlbumRect.top < listRect.top) {
+          els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+        }
       }
-    }
-    const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(state.utility.focusedTrackPath)}"]`;
-    const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
-    const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
-    if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
-      const detailRect = els.detail.getBoundingClientRect();
-      const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
-      if (focusedTrackRect.bottom > detailRect.bottom) {
-        els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
-      } else if (focusedTrackRect.top < detailRect.top) {
-        els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+      const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(focusedTrackPath)}"]`;
+      const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
+      const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
+      let trackGeometryReady = false;
+      if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
+        const detailRect = els.detail.getBoundingClientRect();
+        const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
+        trackGeometryReady = detailRect.bottom > detailRect.top
+          && focusedTrackRect.bottom > focusedTrackRect.top;
+        if (focusedTrackRect.bottom > detailRect.bottom) {
+          els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
+        } else if (focusedTrackRect.top < detailRect.top) {
+          els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+        }
       }
+      return {
+        focusedTrackRendered: Boolean(focusedTrackRow),
+        layoutReady: albumGeometryReady && trackGeometryReady,
+      };
+    };
+    const initialFocusedNavigation = scrollFocusedRowsIntoView();
+    const finishFocusedNavigation = (remainingAttempts) => {
+      if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
+      const result = scrollFocusedRowsIntoView();
+      if (result.layoutReady) {
+        state.utility.focusedTrackPath = '';
+      } else if (
+        result.focusedTrackRendered
+        && remainingAttempts > 1
+        && typeof scheduleBrowserAnimationFrame === 'function'
+      ) {
+        scheduleBrowserAnimationFrame(() => finishFocusedNavigation(remainingAttempts - 1));
+      }
+    };
+    if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
+    } else if (initialFocusedNavigation.layoutReady) {
+      state.utility.focusedTrackPath = '';
     }
-    if (focusedTrackRow) state.utility.focusedTrackPath = '';
   }
 }
 
@@ -19151,7 +19222,12 @@ function validateProblematicSummaryPayload(payload) {
     const stateValue = String(item.state || '').trim();
     const rootKey = String(item.root_key || '').trim();
     if (
-      !['overflow', 'root_unavailable'].includes(stateValue)
+      ![
+        'overflow',
+        'reconciliation_failed',
+        'root_unavailable',
+        'stable_write_unavailable',
+      ].includes(stateValue)
       || !/^root_[a-f0-9]{16}$/.test(rootKey)
     ) {
       throw new Error('Problematic Files operational item is invalid.');
@@ -20624,7 +20700,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
     if (!bucket.album_rating) bucket.album_rating = parseOptionalInteger(track?.album_rating) || 0;
   });
 
-  return Array.from(grouped.values())
+  const groupedAlbums = Array.from(grouped.values());
+  const groupedAlbumBaseKeyCounts = groupedAlbums.reduce((counts, groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    counts.set(baseKey, Number(counts.get(baseKey) || 0) + 1);
+    return counts;
+  }, new Map());
+  groupedAlbums.forEach((groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    const year = parseOptionalInteger(groupedAlbum?.year);
+    if (year != null && Number(groupedAlbumBaseKeyCounts.get(baseKey) || 0) > 1) {
+      groupedAlbum.key = `${baseKey}::year::${year}`;
+    }
+  });
+
+  return groupedAlbums
     .map((bucket) => {
       const tracks = bucket.tracks.slice().sort((left, right) => {
         const discCompare = Number(left?.disc_number ?? 999) - Number(right?.disc_number ?? 999);
@@ -20633,8 +20727,41 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         if (trackCompare) return trackCompare;
         return String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
       });
+      const distinctTrackArtists = new Map();
+      tracks.forEach((track) => {
+        const artist = String(track?.artist || '').trim();
+        const key = artist.toLocaleLowerCase();
+        if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
+      });
+      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const promotesSoleCompilationArtist = (
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        && distinctTrackArtists.size === 1
+      );
+      const promotedAlbumArtist = promotesSoleCompilationArtist
+        ? Array.from(distinctTrackArtists.values())[0]
+        : '';
+      const promotedAlbumArtistKey = promotedAlbumArtist.toLocaleLowerCase();
+      const trackRows = Array.isArray(bucket.track_rows)
+        ? bucket.track_rows.map((row) => {
+          if (!promotedAlbumArtist) return row;
+          const secondaryCredits = String(row?.secondary_artist || '')
+            .split(/\s+\/\s+/)
+            .map((credit) => credit.trim())
+            .filter((credit) => credit && credit.toLocaleLowerCase() !== promotedAlbumArtistKey);
+          return {
+            ...row,
+            secondary_artist: secondaryCredits.join(' / ') || null,
+          };
+        })
+        : null;
       return {
         ...bucket,
+        ...(promotedAlbumArtist ? {
+          album_artist: promotedAlbumArtist,
+          key: [promotedAlbumArtistKey, ...String(bucket.key || '').split('::').slice(1)].join('::'),
+        } : {}),
+        ...(trackRows ? { track_rows: trackRows } : {}),
         preview_only: false,
         track_count_preview: tracks.length,
         track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),
@@ -28916,6 +29043,26 @@ class VirtualArtistGrid {
     });
   }
 
+  hasMatchingMountedAlbumCardIdentity(existingRoot, nextRoot) {
+    if (
+      !existingRoot
+      || !nextRoot
+      || typeof existingRoot.querySelectorAll !== 'function'
+      || typeof nextRoot.querySelectorAll !== 'function'
+    ) {
+      return false;
+    }
+    const existingIdentities = new Set(
+      Array.from(existingRoot.querySelectorAll('.album-card[data-gallery-card-key]'))
+        .map((card) => String(card?.getAttribute?.('data-gallery-card-key') || '').trim())
+        .filter(Boolean),
+    );
+    return Array.from(nextRoot.querySelectorAll('.album-card[data-gallery-card-key]'))
+      .some((card) => existingIdentities.has(
+        String(card?.getAttribute?.('data-gallery-card-key') || '').trim(),
+      ));
+  }
+
   renderedSectionNodesMatch(existingNode, nextNode) {
     if (!existingNode || !nextNode) return false;
     if (typeof existingNode.isEqualNode === 'function') {
@@ -28996,6 +29143,16 @@ class VirtualArtistGrid {
         existing
         && !usedExistingChildren.has(existing)
         && this.renderedSectionNodesMatch(existing, nextNode)
+      ) {
+        usedExistingChildren.add(existing);
+        nextChildren.push(existing);
+        return;
+      }
+      if (
+        existing
+        && !usedExistingChildren.has(existing)
+        && this.hasMatchingMountedAlbumCardIdentity(existing, nextNode)
+        && this.updateRenderedSectionNode(existing, nextNode, record)
       ) {
         usedExistingChildren.add(existing);
         nextChildren.push(existing);
@@ -33272,6 +33429,39 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && state.view.related_filter_artists.length)
     && sameArtistSet(currentSelectedArtistGroupNames, expectedFamilyArtistNames)
   );
+  const searchContext = state.view?.search_context;
+  const artistNameMatchArtists = Array.isArray(searchContext?.artist_name_match_artists)
+    ? searchContext.artist_name_match_artists
+    : null;
+  const classifiedSearchMatchArtists = [
+    ...(Array.isArray(searchContext?.direct_match_artists)
+      ? searchContext.direct_match_artists
+      : []),
+    ...(Array.isArray(searchContext?.related_match_artists)
+      ? searchContext.related_match_artists
+      : []),
+  ];
+  const hasClassifiedSearchMatchArtists = (
+    Array.isArray(searchContext?.direct_match_artists)
+    && Array.isArray(searchContext?.related_match_artists)
+  );
+  const matchesSearchArtist = (candidate) => (
+    String(candidate || '').trim() === normalizedArtist
+  );
+  const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
+  const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
+  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
+  const matchedSelectedArtistGroup = matchedSelectedArtistGroupIndex >= 0
+    ? currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]
+    : null;
+  const normalizedQuery = query.toLocaleLowerCase();
+  const hasVisibleAlbumTitleMatch = Boolean(
+    normalizedQuery
+    && (Array.isArray(matchedSelectedArtistGroup?.albums)
+      ? matchedSelectedArtistGroup.albums
+      : []
+    ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -33280,16 +33470,18 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
         || currentRelatedArtists.length
       )
       && (
-        !Array.isArray(state.view?.search_context?.artist_name_match_artists)
-        || state.view.search_context.artist_name_match_artists.some(
-          (artistNameMatch) => String(artistNameMatch || '').trim() === normalizedArtist,
+        artistNameMatchArtists === null
+        || isArtistNameMatch
+        || (
+          hasClassifiedSearchMatchArtists
+          && !isClassifiedSearchMatch
+          && !hasVisibleAlbumTitleMatch
         )
       )
     )
     : hasAuthoritativeMountedFamilyContext;
-  const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
   if (matchedSelectedArtistGroupIndex >= 0) {
-    const matchedSelectedArtistGroup = deepCloneJson(currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]);
+    const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const familyGroups = currentSelectedArtistGroups
       .filter((_, index) => index !== matchedSelectedArtistGroupIndex)
       .map((group) => deepCloneJson(group));
@@ -33302,7 +33494,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       relatedArtists.push(groupArtist);
     });
     return {
-      primaryGroups: [matchedSelectedArtistGroup],
+      primaryGroups: [optimisticMatchedSelectedArtistGroup],
       familyGroups,
       relatedArtists,
       skipFetch: canReuseCurrentSelectedArtistFamilyContext,
@@ -33378,7 +33570,9 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
 
 function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const query = String(state.view?.query || '').trim();
+  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
+    && (!optimisticGroups || optimisticGroups.skipFetch)
     && typeof getReusableSelectedArtistBrowseView === 'function'
     ? getReusableSelectedArtistBrowseView(nextView)
     : null;
@@ -33403,7 +33597,6 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     }
     return true;
   }
-  const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   if (!optimisticGroups) return false;
   if (!query && !optimisticGroups.skipFetch) return false;
   state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
@@ -33447,6 +33640,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     omitSidebar: true,
   }), false, {
     preserveScroll: true,
+    restartIfSameUrl: true,
     skipPendingViewTransition: true,
   });
   return true;

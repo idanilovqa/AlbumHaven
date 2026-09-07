@@ -860,7 +860,9 @@ def refresh_library_for_state(
         if expected_cover_mutation_revision is not None:
             options["expected_cover_mutation_revision"] = expected_cover_mutation_revision
         if expected_inventory_mutation_revision is not None:
-            options["expected_inventory_mutation_revision"] = expected_inventory_mutation_revision
+            options["expected_inventory_mutation_revision"] = (
+                expected_inventory_mutation_revision
+            )
         if before_commit is not None:
             options["before_commit"] = before_commit
         if publication_state is not None:

@@ -11,5 +11,5 @@ media from reports and attachments.
 
 ## Supported version
 
-Security fixes target the current release, `0.9.41`, until a newer release
+Security fixes target the current release, `0.9.43`, until a newer release
 supersedes it.

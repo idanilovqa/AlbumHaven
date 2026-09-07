@@ -151,6 +151,7 @@ class PostgresLoginAuthService:
         )
         password_policy = payload.get("password")
         password_config = password_policy if isinstance(password_policy, Mapping) else {}
+        self._password_policy = dict(password_config)
         self._password_max_codepoints = _positive_integer(
             password_config.get("max_codepoints", 256), "password maximum"
         )
@@ -281,6 +282,7 @@ class PostgresLoginAuthService:
                         stored_policy_version=stored_policy,
                         argon2=self._argon2,
                         current_policy_version=self._argon2_policy_version,
+                        password_policy=self._password_policy,
                     )
                     if (
                         isinstance(candidate_result, PasswordVerification)

@@ -73,7 +73,7 @@
 3. Add capability-catalog tests proving `library.inventory.manage` is selectable for administrators and not included in listener defaults.
 4. Run `pytest -q tests/py/test_missing_album_removal_postgres.py tests/py/test_policy_asgi.py tests/py/test_missing_album_asgi.py` and confirm RED.
 5. Implement a repository method that locks the target album and its file inventory, verifies no active row exists, deletes stale file inventory and now-unreferenced local tracks, then deletes the album in one transaction. Let existing foreign keys detach retained listening history.
-6. Add `POST /api/library/albums/{album_key}/confirm-removal`, protect it with `library.inventory.manage`, translate the reappeared case to `409`, and return the new library revision plus removed key.
+6. Add `POST /api/library/albums/{album_key:path}/confirm-removal`, protect it with `library.inventory.manage`, translate the reappeared case to `409`, and return the new library revision plus removed key.
 7. Invalidate browse, relation, Problematic Files, utility-rule, and album-detail projections only after commit.
 8. Rerun the focused pytest command and require green.
 

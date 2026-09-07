@@ -107,6 +107,10 @@ class PostgresProfilePasswordService:
         if not isinstance(argon2, Mapping):
             raise ValueError("Profile password configuration is invalid.")
         self._argon2 = dict(argon2)
+        password_policy = payload.get("password")
+        self._password_policy = (
+            dict(password_policy) if isinstance(password_policy, Mapping) else {}
+        )
         self._policy_version = _positive_integer(
             payload.get("argon2_policy_version"), "Argon2 policy version"
         )
@@ -213,6 +217,7 @@ class PostgresProfilePasswordService:
             stored_policy_version=snapshot.hash_policy_version,
             argon2=self._argon2,
             current_policy_version=self._policy_version,
+            password_policy=self._password_policy,
         )
         if not isinstance(verification, PasswordVerification) or not verification.valid:
             with self._operation() as connection:
@@ -232,6 +237,7 @@ class PostgresProfilePasswordService:
             breached_checker=self._breached_checker,
             argon2=self._argon2,
             policy_version=self._policy_version,
+            password_policy=self._password_policy,
         )
         if not isinstance(credential, PasswordCredential):
             raise RuntimeError("Profile password hashing failed.")

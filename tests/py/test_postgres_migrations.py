@@ -293,6 +293,24 @@ def test_vacated_structural_album_retirement_is_narrow_and_dependency_complete()
     assert "delete from library.local_albums" in sql
 
 
+def test_vacated_structural_album_retirement_blocks_only_active_cover_save_checkpoints():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    terminal_checkpoints = "('publication_completed', 'rolled_back', 'ambiguous')"
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint not in "
+        f"{terminal_checkpoints}"
+    ) in sql
+    assert "update ops.cover_remote_save_checkpoints" in sql
+    assert "set local_album_id = p_destination_album_id" in sql
+    assert (
+        "ops.cover_remote_save_checkpoints.checkpoint in "
+        f"{terminal_checkpoints}"
+    ) in sql
+
+
 def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_marker_safe():
     sql = _normalized_sql(
         VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")

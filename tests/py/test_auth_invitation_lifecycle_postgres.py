@@ -156,6 +156,7 @@ def _config():
             "hash_len": 32,
         },
         "argon2_policy_version": 4,
+        "password": {"min_codepoints": 13, "max_codepoints": 77, "max_utf8_bytes": 99},
     }
 
 
@@ -269,10 +270,10 @@ def test_transaction_validation_is_purpose_bound_and_requires_pending_account():
 def test_completion_inserts_first_recipient_credential_and_consumes_exact_state():
     connection = Connection()
     audit = Audit()
-    hasher_depth = []
+    hasher_calls = []
 
-    def password_hasher(*_args, **_kwargs):
-        hasher_depth.append(connection.transaction_depth)
+    def password_hasher(*_args, **kwargs):
+        hasher_calls.append((connection.transaction_depth, kwargs))
         return PasswordCredential("$argon2id$invited", 4)
 
     result = _service(
@@ -284,7 +285,8 @@ def test_completion_inserts_first_recipient_credential_and_consumes_exact_state(
     )
 
     assert result is InvitationCompletionOutcome.SUCCESS
-    assert hasher_depth == [0]
+    assert [depth for depth, _kwargs in hasher_calls] == [0]
+    assert hasher_calls[0][1]["password_policy"] == _config()["password"]
     statements = _statements(connection)
     credential_insert = next(
         sql for sql in statements if "insert into app.account_credentials" in sql

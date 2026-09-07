@@ -71,6 +71,13 @@ class PasswordResetClaim:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class AmbiguousPasswordResetClaim:
+    """A stale reset send whose provider acceptance cannot be determined safely."""
+
+    outbox_id: int
+
+
 @dataclass(frozen=True, repr=False, slots=True)
 class InvitationClaim:
     outbox_id: int
@@ -91,6 +98,13 @@ class InvitationClaim:
             f"attempt_count={self.attempt_count!r}, "
             f"claimed_at={self.claimed_at!r})"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguousInvitationClaim:
+    """A stale invitation send whose acceptance cannot be determined safely."""
+
+    outbox_id: int
 
 
 class PostgresWelcomeOutboxService:
@@ -263,7 +277,9 @@ class PostgresPasswordResetOutboxService:
         self._connect = connect or _connect
         self._now = now or (lambda: datetime.now(timezone.utc))
 
-    def claim_password_reset(self, delivery: object) -> PasswordResetClaim | None:
+    def claim_password_reset(
+        self, delivery: object
+    ) -> PasswordResetClaim | AmbiguousPasswordResetClaim | None:
         outbox_id = _positive_integer(getattr(delivery, "outbox_id", None), "outbox id")
         account_id = _positive_integer(getattr(delivery, "account_id", None), "account id")
         recipient = _required_text(getattr(delivery, "recipient", None), "recipient")
@@ -274,6 +290,40 @@ class PostgresPasswordResetOutboxService:
         now = _aware_utc(self._now())
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
+                stale_rows = connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'unknown', next_attempt_at = null
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.account_id = %s
+                      and app.mail_outbox.message_category = 'password_reset'
+                      and app.mail_outbox.delivery_status = %s
+                      and app.mail_outbox.claimed_at is not null
+                      and app.mail_outbox.claimed_at <= %s
+                      and exists (
+                        select 1
+                        from app.password_reset_tokens reset_token
+                        join app.accounts account
+                          on account.id = app.mail_outbox.account_id
+                        where reset_token.id = app.mail_outbox.reset_token_id
+                          and reset_token.token_hash = %s
+                          and account.contact_email = %s
+                      )
+                    returning id
+                    """,
+                    (
+                        outbox_id,
+                        account_id,
+                        "sending",
+                        now - _CLAIM_LEASE,
+                        digest,
+                        recipient,
+                    ),
+                ).fetchall()
+                if len(stale_rows) > 1:
+                    raise RuntimeError("Password reset stale-claim context is invalid.")
+                if stale_rows:
+                    return AmbiguousPasswordResetClaim(outbox_id=outbox_id)
                 rows = connection.execute(
                     """
                     select outbox.id, outbox.account_id,
@@ -389,13 +439,17 @@ class PostgresInvitationOutboxService:
 
     def claim_invitation(
         self, delivery: InvitationDelivery
-    ) -> InvitationClaim | None:
+    ) -> InvitationClaim | AmbiguousInvitationClaim | None:
         if not isinstance(delivery, InvitationDelivery):
             raise ValueError("Invitation delivery is invalid.")
         outbox_id = _positive_integer(delivery.outbox_id, "outbox id")
         invitation_token_id = _positive_integer(
             delivery.invitation_token_id, "invitation token id"
         )
+        account_id = _positive_integer(delivery.account_id, "account id")
+        recipient = _required_text(delivery.recipient, "recipient")
+        username = _required_text(delivery.username, "username")
+        expires_at = _aware_utc(delivery.expires_at)
         try:
             token_hash = hash_opaque_token(delivery.raw_token)
         except (TypeError, ValueError):
@@ -403,6 +457,49 @@ class PostgresInvitationOutboxService:
         now = _aware_utc(self._now())
         with self._connect(self._database_url) as connection:
             with _transaction(connection):
+                stale_rows = connection.execute(
+                    """
+                    update app.mail_outbox
+                    set delivery_status = 'unknown', next_attempt_at = null
+                    where app.mail_outbox.id = %s
+                      and app.mail_outbox.account_id = %s
+                      and app.mail_outbox.invitation_token_id = %s
+                      and app.mail_outbox.message_category = %s
+                      and app.mail_outbox.delivery_status = %s
+                      and app.mail_outbox.claimed_at is not null
+                      and app.mail_outbox.claimed_at <= %s
+                      and exists (
+                        select 1
+                        from app.account_invitation_tokens invitation
+                        join app.accounts account
+                          on account.id = invitation.account_id
+                        where invitation.id = app.mail_outbox.invitation_token_id
+                          and invitation.token_hash = %s
+                          and invitation.account_id = %s
+                          and invitation.expires_at = %s
+                          and account.username_display = %s
+                          and account.contact_email = %s
+                      )
+                    returning id
+                    """,
+                    (
+                        outbox_id,
+                        account_id,
+                        invitation_token_id,
+                        INVITATION_MESSAGE_CATEGORY,
+                        "sending",
+                        now - _CLAIM_LEASE,
+                        token_hash,
+                        account_id,
+                        expires_at,
+                        username,
+                        recipient,
+                    ),
+                ).fetchall()
+                if len(stale_rows) > 1:
+                    raise RuntimeError("Invitation stale-claim context is invalid.")
+                if stale_rows:
+                    return AmbiguousInvitationClaim(outbox_id=outbox_id)
                 candidates = connection.execute(
                     """
                     select outbox.id as outbox_id,
@@ -719,6 +816,8 @@ async def deliver_password_reset(
             {_DATABASE_URL_KEY: str(database_url or "").strip()}
         )
     claim = repository.claim_password_reset(delivery)
+    if isinstance(claim, AmbiguousPasswordResetClaim):
+        return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     try:
@@ -748,6 +847,8 @@ async def deliver_invitation(
     """Attempt one committed invitation without persisting its bearer token."""
 
     claim = repository.claim_invitation(delivery)
+    if isinstance(claim, AmbiguousInvitationClaim):
+        return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     try:

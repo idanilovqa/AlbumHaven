@@ -82,6 +82,27 @@ def _aggregate_row(**overrides):
     return row
 
 
+def _metrics_row(**overrides):
+    row = {
+        "claim_latency_seconds": 2.5,
+        "run_duration_seconds": 8.25,
+        "retry_delay_seconds": 60.0,
+        "lease_recovery_count": 3,
+        "backlog_by_kind": {
+            "full_scan": 2,
+            "auth_password_reset_delivery": 1,
+        },
+        "completion_by_state": {
+            "succeeded": 9,
+            "failed": 2,
+            "canceled": 1,
+            "ambiguous": 1,
+        },
+    }
+    row.update(overrides)
+    return row
+
+
 def _normalized(statement):
     return " ".join(statement.casefold().split())
 
@@ -156,7 +177,9 @@ def test_status_methods_require_timezone_aware_now_before_connecting(invalid_now
 
 
 def test_operator_status_uses_only_worker_and_aggregate_job_queries():
-    service, connector, connection = _service(_worker_row(), _aggregate_row())
+    service, connector, connection = _service(
+        _worker_row(), _aggregate_row(), _metrics_row()
+    )
 
     assert service.operator_status(NOW) == {
         "worker_status": "worker_ready",
@@ -174,11 +197,27 @@ def test_operator_status_uses_only_worker_and_aggregate_job_queries():
             "oldest_queue_age_seconds": 120,
             "claim_lag_seconds": 45,
         },
+        "metrics": {
+            "claim_latency_seconds": 2.5,
+            "run_duration_seconds": 8.25,
+            "retry_delay_seconds": 60.0,
+            "lease_recovery_count": 3,
+            "backlog_by_kind": {
+                "auth_password_reset_delivery": 1,
+                "full_scan": 2,
+            },
+            "completion_by_state": {
+                "ambiguous": 1,
+                "canceled": 1,
+                "failed": 2,
+                "succeeded": 9,
+            },
+        },
     }
 
     assert connector.urls == [DATABASE_URL]
     assert connection.entries == connection.exits == 1
-    assert len(connection.executed) == 2
+    assert len(connection.executed) == 3
     combined_sql = " ".join(_normalized(statement) for statement, _params in connection.executed)
     assert "ops.worker_instances" in combined_sql
     assert "ops.jobs" in combined_sql
@@ -208,6 +247,14 @@ def test_operator_status_clamps_ages_and_counts_to_bounded_nonnegative_integers(
             oldest_queued_at=NOW + timedelta(minutes=2),
             oldest_claimed_at=NOW + timedelta(minutes=2),
         ),
+        _metrics_row(
+            claim_latency_seconds=-2.0,
+            run_duration_seconds=10**30,
+            retry_delay_seconds=None,
+            lease_recovery_count=10**30,
+            backlog_by_kind={"full_scan": -1},
+            completion_by_state={"succeeded": 10**30},
+        ),
     )
 
     payload = service.operator_status(NOW)
@@ -225,6 +272,31 @@ def test_operator_status_clamps_ages_and_counts_to_bounded_nonnegative_integers(
         value = payload["jobs"][field]
         assert type(value) is int
         assert 0 <= value <= 2_147_483_647
+    assert payload["metrics"] == {
+        "claim_latency_seconds": 0.0,
+        "run_duration_seconds": 2_147_483_647.0,
+        "retry_delay_seconds": 0.0,
+        "lease_recovery_count": 2_147_483_647,
+        "backlog_by_kind": {"full_scan": 0},
+        "completion_by_state": {"succeeded": 2_147_483_647},
+    }
+
+
+def test_operator_metrics_reject_private_or_unbounded_labels_fail_closed():
+    service, _connector, _connection = _service(
+        _worker_row(),
+        _aggregate_row(),
+        _metrics_row(backlog_by_kind={"person@example.test": 1}),
+    )
+
+    assert service.operator_status(NOW)["metrics"] == {
+        "claim_latency_seconds": 0.0,
+        "run_duration_seconds": 0.0,
+        "retry_delay_seconds": 0.0,
+        "lease_recovery_count": 0,
+        "backlog_by_kind": {},
+        "completion_by_state": {},
+    }
 
 
 class _FailingConnector:
@@ -257,6 +329,14 @@ def test_database_failure_returns_exact_sanitized_public_and_operator_projection
             "ambiguous_count": 0,
             "oldest_queue_age_seconds": 0,
             "claim_lag_seconds": 0,
+        },
+        "metrics": {
+            "claim_latency_seconds": 0.0,
+            "run_duration_seconds": 0.0,
+            "retry_delay_seconds": 0.0,
+            "lease_recovery_count": 0,
+            "backlog_by_kind": {},
+            "completion_by_state": {},
         },
     }
     assert secret not in repr(public)

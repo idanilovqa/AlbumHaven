@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
+
+from .models import JobKind
 
 
 _MAX_STATUS_COUNT = 2_147_483_647
@@ -36,6 +39,50 @@ _JOB_AGGREGATE_QUERY = """
            ) as oldest_claimed_at
       from ops.jobs
 """
+
+_JOB_METRICS_QUERY = """
+    with backlog as (
+      select kind, count(*)::bigint as count
+        from ops.jobs
+       where state in ('queued', 'running', 'retry_wait')
+       group by kind
+    ), completion as (
+      select state, count(*)::bigint as count
+        from ops.jobs
+       where state in ('succeeded', 'failed', 'canceled', 'ambiguous')
+       group by state
+    )
+    select coalesce(
+             (select jsonb_object_agg(kind, count) from backlog), '{}'::jsonb
+           ) as backlog_by_kind,
+           coalesce(
+             (select jsonb_object_agg(state, count) from completion), '{}'::jsonb
+           ) as completion_by_state,
+           coalesce(avg(extract(epoch from (started_at - created_at))) filter (
+             where started_at is not null
+           ), 0) as claim_latency_seconds,
+           coalesce(avg(extract(epoch from (completed_at - started_at))) filter (
+             where completed_at is not null and started_at is not null
+           ), 0) as run_duration_seconds,
+           coalesce((
+             select avg(extract(epoch from (transition.next_due_at - transition.transitioned_at)))
+               from ops.job_transitions as transition
+              where transition.retry_decision = 'scheduled'
+                and transition.next_due_at is not null
+           ), 0) as retry_delay_seconds,
+           coalesce((
+             select count(*)::bigint
+               from ops.job_transitions as transition
+              where transition.reason_code in (
+                'stale_lease_retry', 'stale_lease_canceled',
+                'stale_lease_ambiguous'
+              )
+           ), 0) as lease_recovery_count
+      from ops.jobs
+"""
+
+_JOB_KIND_LABELS = frozenset(item.value for item in JobKind)
+_COMPLETION_LABELS = frozenset({"succeeded", "failed", "canceled", "ambiguous"})
 
 
 def _default_connect(database_url: str) -> Any:
@@ -74,6 +121,29 @@ def _bounded_count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("status count must be an integer")
     return min(_MAX_STATUS_COUNT, max(0, value))
+
+
+def _bounded_seconds(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("metric duration must be numeric")
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("metric duration must be numeric") from exc
+    if not math.isfinite(number):
+        raise ValueError("metric duration must be finite")
+    return min(float(_MAX_STATUS_COUNT), max(0.0, number))
+
+
+def _bounded_label_counts(value: Any, allowed: frozenset[str]) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise ValueError("metric labels must be a mapping")
+    result: dict[str, int] = {}
+    for label in sorted(value):
+        if not isinstance(label, str) or label not in allowed:
+            raise ValueError("metric label is invalid")
+        result[label] = _bounded_count(value[label])
+    return result
 
 
 def _worker_projection(
@@ -128,11 +198,23 @@ def _empty_jobs() -> dict[str, int]:
     }
 
 
+def _empty_metrics() -> dict[str, Any]:
+    return {
+        "claim_latency_seconds": 0.0,
+        "run_duration_seconds": 0.0,
+        "retry_delay_seconds": 0.0,
+        "lease_recovery_count": 0,
+        "backlog_by_kind": {},
+        "completion_by_state": {},
+    }
+
+
 def _operator_unavailable() -> dict[str, Any]:
     return {
         "worker_status": "worker_unavailable",
         "worker": None,
         "jobs": _empty_jobs(),
+        "metrics": _empty_metrics(),
     }
 
 
@@ -171,10 +253,13 @@ class PostgresJobStatusService:
             with self._connect() as connection:
                 worker_row = connection.execute(_WORKER_QUERY).fetchone()
                 aggregate_row = connection.execute(_JOB_AGGREGATE_QUERY).fetchone()
+                metrics_row = connection.execute(_JOB_METRICS_QUERY).fetchone()
             if worker_row is not None and not isinstance(worker_row, Mapping):
                 raise ValueError("worker status row is invalid")
             if not isinstance(aggregate_row, Mapping):
                 raise ValueError("job status aggregate row is invalid")
+            if not isinstance(metrics_row, Mapping):
+                raise ValueError("job metrics aggregate row is invalid")
 
             worker_status, worker = _worker_projection(worker_row, now)
             jobs = {
@@ -192,10 +277,31 @@ class PostgresJobStatusService:
                     now, aggregate_row.get("oldest_claimed_at")
                 ),
             }
+            metrics = {
+                "claim_latency_seconds": _bounded_seconds(
+                    metrics_row.get("claim_latency_seconds")
+                ),
+                "run_duration_seconds": _bounded_seconds(
+                    metrics_row.get("run_duration_seconds")
+                ),
+                "retry_delay_seconds": _bounded_seconds(
+                    metrics_row.get("retry_delay_seconds")
+                ),
+                "lease_recovery_count": _bounded_count(
+                    metrics_row.get("lease_recovery_count")
+                ),
+                "backlog_by_kind": _bounded_label_counts(
+                    metrics_row.get("backlog_by_kind"), _JOB_KIND_LABELS
+                ),
+                "completion_by_state": _bounded_label_counts(
+                    metrics_row.get("completion_by_state"), _COMPLETION_LABELS
+                ),
+            }
             return {
                 "worker_status": worker_status,
                 "worker": worker,
                 "jobs": jobs,
+                "metrics": metrics,
             }
         except Exception:
             return _operator_unavailable()

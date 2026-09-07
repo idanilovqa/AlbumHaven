@@ -116,7 +116,7 @@ Public `GET /health` keeps web readiness independent from worker availability:
 
 `worker_ready` means the newest active heartbeat is at most 90 seconds old. `worker_degraded` means it is 91 through 300 seconds old or the worker is draining. `worker_unavailable` means there is no active heartbeat, the heartbeat is older than 300 seconds, or the status query failed. Worker failure does not change the web `status` value from `ok`.
 
-Authenticated `/status` callers receive only the same coarse `worker_status` unless the server-side policy grants global `ops.jobs.status.read` (the Phase 8 bootstrap owner receives it). Authorized output contains only an opaque worker identity, lifecycle state, heartbeat age, bounded state counts, oldest queue age, and claim lag. It never contains job parameters, account or library identifiers, subject references, request origins, paths, tokens, addresses, or credentials.
+Authenticated `/status` callers receive only the same coarse `worker_status` unless the server-side policy grants global `ops.jobs.status.read` (the Phase 8 bootstrap owner receives it). Authorized output contains only an opaque worker identity, lifecycle state, heartbeat age, bounded state counts, oldest queue age, claim lag, aggregate claim/run/retry timing, lease-recovery count, terminal completion class, and backlog by closed job kind. Metric labels are limited to registered job kinds and terminal states. It never contains job parameters, account or library identifiers, subject references, request origins, paths, tokens, addresses, or credentials.
 
 ## Scan jobs and recovery
 

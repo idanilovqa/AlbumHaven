@@ -168,6 +168,24 @@ export class AppBarActions {
     return lastStatus;
   }
 
+  async waitForIncrementalScanUiSettled(options = {}) {
+    await this.appBar.waitForPageCondition((scanIndicatorSelector) => {
+      const indicator = document.querySelector(scanIndicatorSelector);
+      if (!(indicator instanceof HTMLElement) || indicator.classList.contains('is-busy')) {
+        return false;
+      }
+      if (typeof state === 'undefined') return false;
+      const ui = state.ui || {};
+      return !state.busy
+        && !String(ui.activeViewRequestUrl || '').trim()
+        && !ui.pendingScanCompletionViewRefresh
+        && !ui.pendingScanCompletionViewRefreshRetryScheduled
+        && !Number(ui.pendingScanCompletionViewRefreshEligibleRequestId || 0);
+    }, {
+      timeout: options.timeout || 120000,
+    }, this.appBar.scanIndicatorSelector);
+  }
+
   async triggerIncrementalScanAndWaitForBusy() {
     const refreshResponsePromise = this.appBar.page.waitForResponse((response) => {
       if (response.request().method() !== 'POST') return false;
@@ -186,6 +204,7 @@ export class AppBarActions {
   async triggerIncrementalScanAndWait(options = {}) {
     await this.triggerIncrementalScanAndWaitForBusy();
     await this.waitForIncrementalScanComplete(options);
+    await this.waitForIncrementalScanUiSettled(options);
   }
 
   async waitForScanAndCoverRefreshIdle(options = {}) {

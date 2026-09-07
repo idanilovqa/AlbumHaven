@@ -513,6 +513,38 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   assert.equal(interactions[2].selector, '#scan-indicator');
 });
 
+test('incremental scan completion waits for the browser post-scan view refresh', async () => {
+  const actionSource = read('tests/e2e/actions/appBarActions.js');
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/appBarActions.js')).href;
+  const { AppBarActions } = await import(moduleUrl);
+  const interactions = [];
+  const actions = new AppBarActions({});
+  actions.triggerIncrementalScanAndWaitForBusy = async () => {
+    interactions.push('scan-busy');
+  };
+  actions.waitForIncrementalScanComplete = async (options) => {
+    interactions.push(['backend-idle', options]);
+  };
+  actions.waitForIncrementalScanUiSettled = async (options) => {
+    interactions.push(['browser-view-settled', options]);
+  };
+
+  await actions.triggerIncrementalScanAndWait({ timeout: 54321 });
+
+  assert.deepEqual(interactions, [
+    'scan-busy',
+    ['backend-idle', { timeout: 54321 }],
+    ['browser-view-settled', { timeout: 54321 }],
+  ]);
+  const settlementMethod = actionSource.slice(
+    actionSource.indexOf('async waitForIncrementalScanUiSettled'),
+    actionSource.indexOf('async triggerIncrementalScanAndWaitForBusy'),
+  );
+  assert.match(settlementMethod, /activeViewRequestUrl/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefresh/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefreshRetryScheduled/);
+});
+
 test('functional browser requests explicitly carry secure loopback session cookies', async () => {
   const moduleUrl = pathToFileURL(
     path.join(repoRoot, 'tests/e2e/helpers/authenticatedPageRequest.js'),

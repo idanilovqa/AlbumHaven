@@ -2612,8 +2612,13 @@ test('album-details selection supports production prewarming without a click-tim
   assert.match(method, /Album details identity mismatch/u);
   assert.match(
     albumCard,
-    /waitForOpenDetailsIdentity[\s\S]*exactNormalizedText\(expectedTitle\)[\s\S]*trackModalTrackRowSelector/u,
+    /waitForOpenDetailsIdentity[\s\S]*trackModalTrackRowSelector[\s\S]*waitForOpenDetailsHeaderIdentity/u,
     'The fallback must prove the exact clicked modal identity is fully loaded.',
+  );
+  assert.match(
+    albumCard,
+    /waitForOpenDetailsHeaderIdentity[\s\S]*exactNormalizedText\(title\)/u,
+    'The layout-aware header fallback must prove the exact clicked album title.',
   );
 });
 

@@ -207,6 +207,7 @@ def _config():
         "hmac": {"secret": "0123456789abcdef0123456789abcdef", "key_version": 3},
         "argon2": {"memory_cost": 65_536, "time_cost": 3, "parallelism": 1, "salt_len": 16, "hash_len": 32},
         "argon2_policy_version": 3,
+        "password": {"min_codepoints": 13, "max_codepoints": 77, "max_utf8_bytes": 99},
         "verification_semaphore": 2,
         "throttles": {
             "login_account": {"limit": 5, "window_seconds": 900},
@@ -318,6 +319,15 @@ def test_success_returns_only_safe_account_identity_and_verifies_once(login):
         if "from app.account_credentials" in sql and "for update" in sql
     ]
     assert len(identity_locks) == len(credential_locks) == 1
+
+
+def test_login_verifies_credentials_with_the_configured_password_policy(login):
+    service, observed = _service(login, RecordingConnection())
+
+    result = _authenticate(service)
+
+    assert result.outcome is login.LoginOutcome.SUCCESS
+    assert observed[0][2]["password_policy"] == _config()["password"]
 
 
 def test_invitation_created_credential_logs_in_as_recipient_set(login):

@@ -137,7 +137,11 @@ def project_library_watch_health(
             detected_at = str(
                 getattr(problem, "detected_at", "") or ""
             ).strip()
-        if not root_id or state not in {"overflow", "root_unavailable"}:
+        if not root_id or state not in {
+            "overflow",
+            "root_unavailable",
+            "stable_write_unavailable",
+        }:
             continue
         item: dict[str, object] = {
             "state": state,

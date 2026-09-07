@@ -227,12 +227,25 @@ class LibraryWatchHealthService:
     def record_event(self, event: LibraryEvent) -> bool:
         if event.kind not in _HEALTH_EVENT_KINDS:
             return False
-        root_id = str(event.root_id or "").strip()
+        return self._record(event.root_id, event.kind.value)
+
+    def record_problem(self, problem: object) -> bool:
+        """Persist a coordinator failure that means watcher events may be missing."""
+
+        if str(getattr(problem, "code", "") or "").strip() != "stable_write_unavailable":
+            return False
+        return self._record(
+            getattr(problem, "root_id", None),
+            "stable_write_unavailable",
+        )
+
+    def _record(self, raw_root_id: object, state: str) -> bool:
+        root_id = str(raw_root_id or "").strip()
         if not root_id:
             return False
         problem = LibraryWatchHealthProblem(
             root_id=root_id,
-            state=event.kind.value,
+            state=state,
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
         )
         with self._lock:

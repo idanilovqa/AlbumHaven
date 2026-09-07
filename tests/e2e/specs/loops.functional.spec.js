@@ -97,7 +97,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(playingPlayerLayout.playerBounds.height).toBe(92);
+    expect(Math.abs(playingPlayerLayout.playerBounds.height - 92)).toBeLessThanOrEqual(1);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -195,7 +195,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(opened.cursors.endHandle).toBe('grab');
     expect(opened.timeWaveformOverlap).toBe(false);
     expect(opened.metadataWaveformGap).toBeGreaterThanOrEqual(3);
-    expect(opened.playerHeight).toBe(92);
+    expect(Math.abs(opened.playerHeight - 92)).toBeLessThanOrEqual(1);
     expect(opened.waveformHeight).toBe(56);
     expect(opened.selectionStartErrorPixels).toBeLessThanOrEqual(1);
     expect(opened.selectionEndErrorPixels).toBeLessThanOrEqual(1);

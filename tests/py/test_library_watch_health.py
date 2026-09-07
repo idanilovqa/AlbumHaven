@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 from pathlib import Path
@@ -195,6 +196,234 @@ def test_successful_manual_full_scan_clears_only_observed_recovered_roots():
         if "watch_health_clear" in sql
     )
     assert clear_params["root_ids"] == ["main-root"]
+
+
+def test_exhausted_stable_write_persists_warning_and_blocks_destructive_work_until_full_scan(
+    tmp_path,
+):
+    from music_app.services.allowed_actions import AllowedActions
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+    from music_app.services.view_payloads import project_library_watch_health
+
+    module = _health_module()
+    connection = _HealthConnection()
+    service = module.LibraryWatchHealthService(
+        module.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _database_url: connection,
+        )
+    )
+    coordinator = LibraryEventCoordinator(
+        emit_request=lambda _request: None,
+        emit_problem=service.record_problem,
+        stat_path=lambda _path: (_ for _ in ()).throw(PermissionError("busy")),
+        wait=lambda _seconds: None,
+        max_stable_attempts=2,
+    )
+
+    coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.CREATED,
+            "main-root",
+            tmp_path / "Artist" / "Album" / "01.flac",
+        )
+    )
+    coordinator.flush()
+
+    [problem] = service.load_problems()
+    assert problem.root_id == "main-root"
+    assert problem.state == "stable_write_unavailable"
+    projected = project_library_watch_health(
+        [problem],
+        AllowedActions(("library.refresh",)),
+    )
+    assert projected["state"] == "warning"
+    assert projected["problems"][0]["message"] == (
+        "Some library changes may have been missed."
+    )
+    assert projected["problems"][0]["allowed_actions"] == {
+        "library.refresh": True
+    }
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+
+    assert service.clear_after_scan(
+        scan_mode="background",
+        observed_root_ids={"main-root"},
+    ) == 0
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+
+    assert service.clear_after_scan(
+        scan_mode="manual_full_rescan",
+        observed_root_ids={"main-root"},
+    ) == 1
+    assert service.load_problems() == []
+    assert service.root_allows_destructive_reconciliation("main-root") is True
+
+
+def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch):
+    from music_app import create_asgi_app
+    from music_app.services import (
+        lastfm_retry,
+        exception_overrides,
+        library_event_coordinator,
+        library_reconciliation,
+        library_roots,
+        library_watch_health,
+        runtime_shutdown,
+        scan_cache_persistence,
+        state,
+        targeted_library_reconciliation,
+    )
+
+    callbacks = {}
+    recorded = []
+    reconciled = []
+
+    class HealthService:
+        def __init__(self, _store):
+            self._unhealthy_roots = set()
+
+        def record_problem(self, problem):
+            recorded.append(problem)
+            self._unhealthy_roots.add(problem.root_id)
+            return True
+
+        def root_allows_destructive_reconciliation(self, root_id):
+            return root_id not in self._unhealthy_roots
+
+    class CompletedFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self):
+            return self._result
+
+        def add_done_callback(self, callback):
+            callback(self)
+
+    class InlineExecutor:
+        def submit(self, function, *args):
+            return CompletedFuture(function(*args))
+
+        def shutdown(self, **_kwargs):
+            return None
+
+    class CapturingCoordinator:
+        def __init__(self, **kwargs):
+            callbacks.update(kwargs)
+
+        def accept(self, _event):
+            return True
+
+        def stop(self):
+            return True
+
+    class WatchService:
+        def __init__(self, _source, _emit_event):
+            pass
+
+        def start(self):
+            return True
+
+        def stop(self):
+            return True
+
+        def replace_roots(self, _roots):
+            return None
+
+    class TargetedReconciler:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def reconcile(self, request, *, root_healthy):
+            reconciled.append((request.root_id, root_healthy))
+            return root_healthy
+
+        def replace_roots(self, _roots):
+            return None
+
+    class ScanCacheRepository:
+        backend = "postgres"
+
+    monkeypatch.setattr(
+        library_watch_health,
+        "LibraryWatchHealthService",
+        HealthService,
+    )
+    monkeypatch.setattr(
+        library_event_coordinator,
+        "LibraryEventCoordinator",
+        CapturingCoordinator,
+    )
+    monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchService)
+    monkeypatch.setattr(
+        library_reconciliation,
+        "WatchdogLibraryEventSource",
+        lambda _roots: object(),
+    )
+    monkeypatch.setattr(
+        targeted_library_reconciliation,
+        "TargetedLibraryReconciler",
+        TargetedReconciler,
+    )
+    monkeypatch.setattr(
+        library_roots,
+        "get_library_roots",
+        lambda _config: ({"id": "main-root", "path": "C:/Music"},),
+    )
+    monkeypatch.setattr(
+        scan_cache_persistence,
+        "select_scan_cache_adapter",
+        lambda _config: ScanCacheRepository(),
+    )
+    monkeypatch.setattr(
+        exception_overrides,
+        "load_exception_overrides",
+        lambda _config: {},
+    )
+    monkeypatch.setattr(
+        state,
+        "hydrate_runtime_library_state_on_startup",
+        lambda _runtime: True,
+    )
+    monkeypatch.setattr(
+        state,
+        "ensure_runtime_relation_projection_ready",
+        lambda _runtime: None,
+    )
+    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(
+        runtime_shutdown,
+        "request_runtime_shutdown",
+        lambda _runtime: True,
+    )
+    monkeypatch.setattr(
+        runtime_shutdown,
+        "create_daemon_executor",
+        lambda **_kwargs: InlineExecutor(),
+    )
+
+    app = create_asgi_app()
+    problem = library_event_coordinator.CoordinatorProblem(
+        "stable_write_unavailable",
+        "main-root",
+    )
+
+    async def exercise_problem_callback():
+        async with app.router.lifespan_context(app):
+            callbacks["emit_problem"](problem)
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="main-root"
+                )
+            )
+
+    asyncio.run(exercise_problem_callback())
+
+    assert recorded == [problem]
+    assert reconciled == [("main-root", False)]
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():

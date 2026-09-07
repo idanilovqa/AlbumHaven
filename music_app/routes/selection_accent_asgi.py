@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.policy_asgi import require_action
 from music_app.services.private_route_boundary import _valid_session_csrf
 from music_app.services.selection_accent import (
@@ -63,7 +64,12 @@ async def put_selection_accent(request: Request) -> JSONResponse:
     if not _valid_session_csrf(request):
         return _response({"detail": "CSRF validation failed."}, 403)
     try:
-        payload = normalize_selection_accent(await request.json())
+        raw_payload = await read_bounded_json_object(request)
+        if raw_payload is None:
+            raise ValueError("Invalid JSON object.")
+        payload = normalize_selection_accent(raw_payload)
+    except JSONBodyTooLarge:
+        return _response({"detail": "Selection accent payload is too large."}, 413)
     except (TypeError, ValueError):
         return _response({"detail": "Selection accent requires a boolean and six-digit hex color."}, 400)
     try:

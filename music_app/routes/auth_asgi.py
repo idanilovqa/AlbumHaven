@@ -126,6 +126,7 @@ def _render_reset(
     password_invalid: bool = False,
 ) -> Response:
     templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    password_minlength, password_maxlength = _password_form_constraints(request)
     response = templates.TemplateResponse(
         request,
         "password-reset.html",
@@ -134,6 +135,8 @@ def _render_reset(
             "csrf_token": csrf_token,
             "completed": completed,
             "password_invalid": password_invalid,
+            "password_minlength": password_minlength,
+            "password_maxlength": password_maxlength,
         },
     )
     response.headers["Referrer-Policy"] = "same-origin"
@@ -150,6 +153,7 @@ def _render_invitation(
     status_code: int = 200,
 ) -> Response:
     templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    password_minlength, password_maxlength = _password_form_constraints(request)
     response = templates.TemplateResponse(
         request,
         "account-invitation.html",
@@ -159,6 +163,8 @@ def _render_invitation(
             "csrf_token": csrf_token,
             "completed": completed,
             "password_invalid": password_invalid,
+            "password_minlength": password_minlength,
+            "password_maxlength": password_maxlength,
         },
         status_code=status_code,
     )
@@ -199,6 +205,20 @@ def _policy_config(request: Request) -> Mapping[str, object]:
         ).strip()
         request.app.state.auth_policy_config = payload
         return payload
+
+
+def _password_form_constraints(request: Request) -> tuple[int, int]:
+    config = _policy_config(request)
+    raw_policy = config.get("password")
+    policy = raw_policy if isinstance(raw_policy, Mapping) else {}
+    try:
+        minimum = int(policy.get("min_codepoints", 8))
+        maximum = int(policy.get("max_codepoints", 256))
+    except (TypeError, ValueError):
+        return 8, 256
+    if minimum < 1 or maximum < minimum:
+        return 8, 256
+    return minimum, maximum
 
 
 def _services(request: Request):

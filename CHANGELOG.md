@@ -12,6 +12,9 @@
   and transactional missing-album removal backed by Postgres.
 - Bounded HTTPS shutdown behavior and expanded the JavaScript, Python,
   component, functional, authentication, and performance release gates.
+- Applied configured password limits consistently, bounded appearance JSON
+  mutations, persisted missed watcher-write health, and made stale bearer-mail
+  claims terminal rather than retrying an uncertain delivery.
 
 ## 0.9.42 - 2026-08-30
 

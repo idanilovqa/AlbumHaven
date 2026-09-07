@@ -287,12 +287,18 @@ def create_asgi_app():
                     "Unable to persist library watcher health event."
                 )
 
+        def persist_library_watch_problem(problem) -> None:
+            try:
+                runtime.library_watch_health_service.record_problem(problem)
+            except Exception:
+                runtime.logger.exception(
+                    "Unable to persist library watcher health problem."
+                )
+
         runtime.library_event_coordinator = LibraryEventCoordinator(
             emit_request=submit_targeted_reconciliation,
             emit_health_event=persist_library_watch_health,
-            emit_problem=lambda problem: runtime.library_state.setdefault(
-                "pending_library_watch_problems", []
-            ).append(problem),
+            emit_problem=persist_library_watch_problem,
             auto_schedule=True,
         )
         runtime.library_watch_service = LibraryWatchService(

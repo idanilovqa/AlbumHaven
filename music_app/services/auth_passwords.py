@@ -84,13 +84,15 @@ def validate_password(
     username: str,
     email: str,
     breached_checker: Callable[[str], bool],
+    password_policy: Mapping[str, int] | None = None,
 ) -> str:
     """Validate and return the NFC password without trimming or case changes."""
 
     normalized = unicodedata.normalize("NFC", raw)
-    if not _MIN_CODEPOINTS <= len(normalized) <= _MAX_CODEPOINTS:
+    minimum, maximum, maximum_bytes = _password_bounds(password_policy)
+    if not minimum <= len(normalized) <= maximum:
         raise PasswordPolicyError("Password length is outside the allowed range")
-    if len(normalized.encode("utf-8")) > _MAX_UTF8_BYTES:
+    if len(normalized.encode("utf-8")) > maximum_bytes:
         raise PasswordPolicyError("Password length is outside the allowed range")
 
     folded = normalized.casefold()
@@ -135,6 +137,7 @@ def hash_password(
     breached_checker: Callable[[str], bool],
     argon2: Mapping[str, int],
     policy_version: int,
+    password_policy: Mapping[str, int] | None = None,
 ) -> PasswordCredential:
     """Validate a password and hash its normalized value with Argon2id."""
 
@@ -143,6 +146,7 @@ def hash_password(
         username=username,
         email=email,
         breached_checker=breached_checker,
+        password_policy=password_policy,
     )
     return PasswordCredential(
         encoded_hash=_hasher(argon2).hash(normalized),
@@ -197,6 +201,7 @@ def verify_password(
     stored_policy_version: int,
     argon2: Mapping[str, int],
     current_policy_version: int,
+    password_policy: Mapping[str, int] | None = None,
 ) -> PasswordVerification:
     """Verify a candidate and report whether a valid credential needs upgrade."""
 
@@ -204,6 +209,9 @@ def verify_password(
         return PasswordVerification(valid=False, needs_rehash=False)
 
     normalized = unicodedata.normalize("NFC", raw)
+    _, maximum, maximum_bytes = _password_bounds(password_policy)
+    if len(normalized) > maximum or len(normalized.encode("utf-8")) > maximum_bytes:
+        return PasswordVerification(valid=False, needs_rehash=False)
     hasher = _hasher(argon2)
     try:
         valid = hasher.verify(encoded_hash, normalized)
@@ -219,3 +227,18 @@ def verify_password(
             stored_policy_version < current_policy_version or not meets_floor
         ),
     )
+
+
+def _password_bounds(
+    password_policy: Mapping[str, int] | None,
+) -> tuple[int, int, int]:
+    policy = password_policy if isinstance(password_policy, Mapping) else {}
+    try:
+        minimum = int(policy.get("min_codepoints", _MIN_CODEPOINTS))
+        maximum = int(policy.get("max_codepoints", _MAX_CODEPOINTS))
+        maximum_bytes = int(policy.get("max_utf8_bytes", _MAX_UTF8_BYTES))
+    except (TypeError, ValueError):
+        raise PasswordPolicyError("Password policy is invalid") from None
+    if minimum < 1 or maximum < minimum or maximum_bytes < minimum:
+        raise PasswordPolicyError("Password policy is invalid")
+    return minimum, maximum, maximum_bytes

@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.routes.auth_asgi import (
     _form_payload,
+    _password_form_constraints,
     _policy_config,
     _same_origin,
 )
@@ -82,6 +83,7 @@ async def _page(
     except Exception:
         return HTMLResponse("Account settings are temporarily unavailable.", status_code=503)
     templates = getattr(request.app.state, "templates", _FALLBACK_TEMPLATES)
+    password_minlength, password_maxlength = _password_form_constraints(request)
     response = templates.TemplateResponse(
         request,
         "account.html",
@@ -93,6 +95,8 @@ async def _page(
             "account_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
             "changed": request.query_params.get("changed") == "1",
             "error": error,
+            "password_minlength": password_minlength,
+            "password_maxlength": password_maxlength,
         },
         status_code=status_code,
     )

@@ -189,6 +189,32 @@ def test_invalid_or_overposting_save_is_rejected_before_either_color_changes(pay
     assert repository.rows == {41: CUSTOM}
 
 
+def test_save_rejects_an_oversized_declared_json_body_before_parsing_or_storage():
+    app, repository, _resolver = _app()
+    token = issue_session_csrf(SESSION, app.state.auth_policy_config)
+    oversized = {"padding": "x" * 16_384}
+
+    status, headers, body = run_asgi_request(
+        app,
+        "PUT",
+        "/account/appearance",
+        headers={
+            "cookie": (
+                f"__Host-album_haven_session={SESSION}; "
+                f"__Host-album_haven_csrf={token}"
+            ),
+            "origin": "http://testserver",
+            "x-album-haven-csrf": token,
+        },
+        json_body=oversized,
+    )
+
+    assert status == 413
+    assert decode_json(body) == {"error": "appearance_payload_too_large"}
+    assert "no-store" in headers["cache-control"]
+    assert repository.writes == []
+
+
 @pytest.mark.parametrize("actor", [CurrentActor.anonymous(), _actor(state=ActorState.INACTIVE)])
 @pytest.mark.parametrize("method", ["GET", "PUT"])
 def test_unauthenticated_or_inactive_user_cannot_read_or_write_preferences(actor, method):

@@ -468,6 +468,61 @@ def test_password_reset_repository_claim_requires_matching_active_digest_and_is_
     assert not any(value is not None for value in update_params[1:2])
 
 
+def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox):
+    from music_app.services.auth_password_reset_request_postgres import (
+        PasswordResetDelivery,
+    )
+
+    raw_token = "A" * 43
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    connection = Connection(stale_rows=({"id": 81},))
+
+    outcome = _reset_service(outbox, connection).claim_password_reset(delivery)
+
+    assert type(outcome).__name__ == "AmbiguousPasswordResetClaim"
+    assert getattr(outcome, "outbox_id", None) == 81
+    stale_sql, stale_params = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if "set delivery_status = 'unknown'" in sql
+    )
+    assert "message_category = 'password_reset'" in stale_sql
+    assert "delivery_status = %s" in stale_sql
+    assert "sending" in stale_params
+    assert "claimed_at <=" in stale_sql
+    assert "next_attempt_at = null" in stale_sql
+    assert 81 in stale_params
+    assert raw_token not in repr(connection.operations)
+    assert raw_token not in repr(outcome)
+
+
+def test_password_reset_delivery_does_not_retry_reconciled_sending_claim(outbox):
+    from music_app.services.auth_password_reset_request_postgres import (
+        PasswordResetDelivery,
+    )
+
+    raw_token = "A" * 43
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", raw_token)
+    connection = Connection(stale_rows=({"id": 81},))
+
+    result = asyncio.run(
+        outbox.deliver_password_reset(
+            delivery,
+            config={"public_base_url": "https://music.example.test"},
+            repository=_reset_service(outbox, connection),
+            composer=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("an ambiguous reset send must not be composed again")
+            ),
+            sender=lambda _message, *, config: (_ for _ in ()).throw(
+                AssertionError("an ambiguous reset send must not be retried")
+            ),
+        )
+    )
+
+    assert result == outbox.DeliveryResult(False, "unknown")
+    assert raw_token not in repr(connection.operations)
+
+
 def test_invitation_delivery_claims_matching_active_token_and_finalizes_once(outbox):
     events = []
     delivery = _invitation_delivery()
@@ -562,6 +617,54 @@ def test_invitation_repository_claim_requires_matching_pending_token_and_account
         "delivery_status = 'sending'" in sql
         for sql, _ in connection.operations
     )
+
+
+def test_invitation_claim_reconciles_expired_sending_lease_as_unknown(outbox):
+    raw_token = "A" * 43
+    delivery = _invitation_delivery(raw_token=raw_token)
+    connection = Connection(stale_rows=({"id": 71},))
+
+    outcome = _invitation_service(outbox, connection).claim_invitation(delivery)
+
+    assert type(outcome).__name__ == "AmbiguousInvitationClaim"
+    assert getattr(outcome, "outbox_id", None) == 71
+    stale_sql, stale_params = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if "set delivery_status = 'unknown'" in sql
+    )
+    assert "message_category = %s" in stale_sql
+    assert INVITATION_MESSAGE_CATEGORY in stale_params
+    assert "delivery_status = %s" in stale_sql
+    assert "sending" in stale_params
+    assert "claimed_at <=" in stale_sql
+    assert "next_attempt_at = null" in stale_sql
+    assert 71 in stale_params
+    assert raw_token not in repr(connection.operations)
+    assert raw_token not in repr(outcome)
+
+
+def test_invitation_delivery_does_not_retry_reconciled_sending_claim(outbox):
+    raw_token = "A" * 43
+    delivery = _invitation_delivery(raw_token=raw_token)
+    connection = Connection(stale_rows=({"id": 71},))
+
+    result = asyncio.run(
+        outbox.deliver_invitation(
+            delivery,
+            config={"public_base_url": "https://music.example.test"},
+            repository=_invitation_service(outbox, connection),
+            composer=lambda **_kwargs: (_ for _ in ()).throw(
+                AssertionError("an ambiguous invitation send must not be composed again")
+            ),
+            sender=lambda _message, *, config: (_ for _ in ()).throw(
+                AssertionError("an ambiguous invitation send must not be retried")
+            ),
+        )
+    )
+
+    assert result == outbox.DeliveryResult(False, "unknown")
+    assert raw_token not in repr(connection.operations)
 
 
 def test_invitation_claim_locks_account_then_invitation_then_outbox_before_single_update(

@@ -783,6 +783,37 @@ test('a near-end seek waits for its promised queued successor instead of stoppin
   assert.equal(fixture.events('ended').length, 0);
 });
 
+test('an expected empty successor releases terminal playback after its EOS arrives', () => {
+  const fixture = createProcessor();
+  enqueue(fixture, {
+    streamId: 63,
+    role: 'current',
+    sequence: 0,
+    left: sequence(1, 64),
+  });
+  markEos(fixture, { streamId: 63, role: 'current', emittedFrames: 64 });
+  fixture.send({
+    type: 'expect-continuity',
+    generation: fixture.generation,
+    active: true,
+  });
+  play(fixture);
+
+  renderQuantum(fixture);
+  assert.equal(fixture.events('ended').length, 0);
+
+  markEos(fixture, {
+    streamId: 64,
+    role: 'continuity',
+    emittedFrames: 0,
+    authoritativeTotalFrames: 0,
+  });
+  renderQuantum(fixture);
+
+  assert.equal(fixture.events('ended').length, 1);
+  assert.equal(fixture.processor.playing, false);
+});
+
 test('continues the promoted stream with its next sequence under the current role', () => {
   const fixture = createProcessor();
   const outgoing = sequence(1, 64);

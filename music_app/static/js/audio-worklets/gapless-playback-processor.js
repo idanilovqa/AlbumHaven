@@ -710,7 +710,7 @@
             continue;
           }
           if (this.current.eos) {
-            if (this.expectContinuity) {
+            if (this.expectContinuity && !this.continuity.eos) {
               outputFrame = left.length;
               break;
             }

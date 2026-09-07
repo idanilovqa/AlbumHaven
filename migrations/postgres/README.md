@@ -83,6 +83,10 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0076_complete_durable_scan_status_projection.sql
 0077_create_lastfm_retry_job_state.sql
 0078_grant_worker_lastfm_retry.sql
+0079_create_auth_mail_job_state.sql
+0080_grant_worker_auth_mail.sql
+0081_validate_durable_worker_startup.sql
+0082_retire_vacated_structural_album.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -178,6 +182,10 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0079_create_auth_mail_job_state.sql` extends the existing mail outbox with stable actor, origin, accepted-attempt, checkpoint, revision, provider-disposition, and current-job fences. It classifies legacy token-bearing invitation and reset work as non-replayable, preserves completed evidence, and supports atomic tokenless intent plus generic-job composition without copying recipients, tokens, links, messages, or SMTP settings into the generic ledger.
 
 `0080_grant_worker_auth_mail.sql` adds category-specific claimed authorization, minimum delivery-context loading, hash-only token issuance, send checkpoints, terminal convergence, welcome retry scheduling, and bounded legacy-welcome adoption. The dedicated worker receives execute access only to lease-fenced functions and no broad reads of accounts, credentials, tokens, mail outbox, throttles, audit records, or settings; uncertain invitation and reset delivery remains ambiguous and is never replayed automatically.
+
+`0081_validate_durable_worker_startup.sql` adds the closed startup contract used before a worker advertises readiness. It requires the exact registered handler set, every handler-owned function and execute grant, generic-ledger table and update-column grants, and transition-sequence usage. It returns only a boolean and exposes no schema, role, path, credential, or job detail.
+
+`0082_retire_vacated_structural_album.sql` adds narrow application and worker boundaries for retiring zero-track album rows after structural and durable targeted reconciliation. It validates and locks same-library identities, preserves real track tombstones and cover-save checkpoint references, moves durable key/ID dependents with conflict-safe semantics, and sweeps only exact artist/title/year/edition siblings. The family-wide `separate_releases` marker does not protect an otherwise empty duplicate row; track ownership and active cover checkpoints remain row-specific guards. The targeted worker entry point additionally requires the current job attempt, lease, intent, and committed publication before using server-recorded affected album keys. Roles receive only function execution rather than destructive table privileges.
 
 Durable-jobs launch, health, shutdown, promotion, rollback, retention, and troubleshooting guidance is maintained in [`docs/operations/postgres-durable-jobs.md`](../../docs/operations/postgres-durable-jobs.md).
 

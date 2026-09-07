@@ -157,6 +157,30 @@ class PostgresWorkerInstanceRepository:
         with self._connect_to_database(self._database_url) as connection:
             connection.execute(statement, parameters)
 
+    def validate_startup(self, *, registered_kinds: tuple[str, ...]) -> None:
+        """Fail closed before readiness when schema, grants, or handlers differ."""
+
+        if not self._database_url:
+            raise RuntimeError("durable worker startup preflight failed")
+        try:
+            with self._connect_to_database(self._database_url) as connection:
+                row = connection.execute(
+                    "select ops.validate_durable_worker_startup("
+                    "%(registered_kinds)s::text[]) as startup_valid",
+                    {"registered_kinds": list(registered_kinds)},
+                ).fetchone()
+            valid = (
+                row.get("startup_valid")
+                if hasattr(row, "get")
+                else row[0]
+                if row is not None
+                else False
+            )
+        except Exception:
+            raise RuntimeError("durable worker startup preflight failed") from None
+        if valid is not True:
+            raise RuntimeError("durable worker startup preflight failed")
+
     def record_starting(
         self,
         *,
@@ -413,6 +437,27 @@ class Worker:
         execution_failed = False
         try:
             while not stop_event.is_set():
+                completed = [thread for thread in threads if not thread.is_alive()]
+                if completed:
+                    batch_failed, did_work = self._harvest(completed, results)
+                    for thread in completed:
+                        threads.remove(thread)
+                    if batch_failed:
+                        execution_failed = True
+                        stop_event.set()
+                        break
+                    if did_work:
+                        idle_backoff = self._poll_seconds
+                    else:
+                        delay = self._poll_seconds if threads else idle_backoff
+                        self._wait(stop_event, delay)
+                        if not threads:
+                            idle_backoff = min(
+                                idle_backoff * 2,
+                                self._max_idle_backoff_seconds,
+                            )
+                        if stop_event.is_set():
+                            break
                 self._repository.reconcile_stale_leases(
                     now=self._clock(),
                     limit=1000,
@@ -437,32 +482,18 @@ class Worker:
                             )
                 if stop_event.is_set():
                     break
-                batch = self._launch_batch(results)
-                threads.extend(batch)
+                available_slots = self._concurrency - len(threads)
+                if available_slots > 0:
+                    threads.extend(
+                        self._launch_batch(results, count=available_slots)
+                    )
                 while (
                     not stop_event.is_set()
-                    and any(thread.is_alive() for thread in batch)
+                    and threads
+                    and all(thread.is_alive() for thread in threads)
                 ):
-                    for thread in batch:
+                    for thread in tuple(threads):
                         thread.join(0.01)
-                if stop_event.is_set():
-                    break
-                for thread in batch:
-                    thread.join()
-                batch_failed, did_work = self._harvest(batch, results)
-                for thread in batch:
-                    threads.remove(thread)
-                if batch_failed:
-                    execution_failed = True
-                    stop_event.set()
-                    break
-                if did_work:
-                    idle_backoff = self._poll_seconds
-                else:
-                    self._wait(stop_event, idle_backoff)
-                    idle_backoff = min(
-                        idle_backoff * 2, self._max_idle_backoff_seconds
-                    )
         except BaseException:
             execution_failed = True
             stop_event.set()
@@ -489,10 +520,13 @@ class Worker:
             raise RuntimeError("durable jobs worker execution failed") from None
 
     def _launch_batch(
-        self, results: dict[threading.Thread, dict[str, bool]]
+        self,
+        results: dict[threading.Thread, dict[str, bool]],
+        *,
+        count: int | None = None,
     ) -> list[threading.Thread]:
         batch = []
-        for _ in range(self._concurrency):
+        for _ in range(self._concurrency if count is None else max(0, count)):
             result = {"failed": False, "did_work": False}
             thread = threading.Thread(
                 target=self._run_once_captured,
@@ -576,6 +610,9 @@ class Worker:
     def _record_startup(self) -> None:
         if self._worker_instances is None:
             return
+        self._worker_instances.validate_startup(
+            registered_kinds=self._handlers.registered_kinds
+        )
         now = self._clock()
         self._worker_instances.record_starting(
             worker_id=self._worker_id,

@@ -81,6 +81,12 @@ AUTH_MAIL_JOB_STATE_MIGRATION = (
 AUTH_MAIL_WORKER_MIGRATION = (
     MIGRATIONS_DIR / "0080_grant_worker_auth_mail.sql"
 )
+DURABLE_WORKER_PREFLIGHT_MIGRATION = (
+    MIGRATIONS_DIR / "0081_validate_durable_worker_startup.sql"
+)
+VACATED_STRUCTURAL_ALBUM_MIGRATION = (
+    MIGRATIONS_DIR / "0082_retire_vacated_structural_album.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 
 
@@ -220,6 +226,112 @@ def test_auth_mail_worker_migration_exposes_only_claim_fenced_delivery_access():
     assert "grant execute on function ops.reconcile_auth_mail_jobs" in sql
     assert "for update of outbox skip locked" in sql
     assert "generic_terminal_converged" in sql
+
+
+def test_durable_worker_preflight_checks_schema_handlers_and_worker_grants():
+    sql = _normalized_sql(
+        DURABLE_WORKER_PREFLIGHT_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function ops.validate_durable_worker_startup(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    for kind in (
+        "full_scan",
+        "targeted_reconciliation",
+        "post_scan_cover_refresh",
+        "cover_lookup",
+        "cover_bulk_refresh",
+        "cover_remote_save",
+        "lastfm_scrobble_retry",
+        "auth_welcome_delivery",
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+    ):
+        assert f"'{kind}'" in sql
+    assert "to_regprocedure(required.signature) is null" in sql
+    assert "ops.schema_migrations" not in sql
+    assert "has_function_privilege(session_user, required.signature, 'execute')" in sql
+    assert "has_table_privilege(session_user, 'ops.jobs', 'select')" in sql
+    assert "has_sequence_privilege(" in sql
+    assert "'ops.job_transitions_id_seq', 'usage'" in sql
+    assert "'state', 'scheduled_at', 'attempt_count', 'lease_owner', 'lease_token'" in sql
+    assert "has_column_privilege(" in sql
+    assert (
+        "library.retire_claimed_targeted_reconciliation_vacated_albums"
+        "(bigint,bigint,integer,character varying,character varying,"
+        "timestamp with time zone)"
+    ) in sql
+    assert "grant execute on function ops.validate_durable_worker_startup(text[])" in sql
+    assert "owner to album_haven_migrator" not in sql
+
+
+def test_vacated_structural_album_retirement_is_narrow_and_dependency_complete():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album(" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "grant execute on function library.retire_vacated_structural_album(" in sql
+    assert "to album_haven_app" in sql
+    assert "grant delete on" not in sql
+    assert "preserved_track_tombstone" in sql
+    assert "preserved_cover_checkpoint" in sql
+    for durable_relation in (
+        "app.album_ratings",
+        "library.local_album_featured_artists",
+        "library.local_mbid_assertions",
+        "library.ignored_versions",
+        "library.manual_versions",
+        "ops.cover_remote_save_checkpoints",
+        "ops.cover_lookup_tasks",
+        "library.local_album_cover_candidate_snapshots",
+    ):
+        assert durable_relation in sql
+    assert "delete from library.local_albums" in sql
+
+
+def test_vacated_structural_album_sibling_sweep_is_exact_bounded_and_family_marker_safe():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_vacated_structural_album_siblings(" in sql
+    assert "grant execute on function library.retire_vacated_structural_album_siblings(" in sql
+    assert "to album_haven_app" in sql
+    assert "pg_advisory_xact_lock" in sql
+    assert "candidate_album.artist_id = destination.artist_id" in sql
+    assert "destination.artist_id is null" in sql
+    assert "nullif(btrim(destination.title), '') is null" in sql
+    assert "lower(btrim(candidate_album.title)) = lower(btrim(destination.title))" in sql
+    assert "candidate_album.release_year is not distinct from destination.release_year" in sql
+    assert "candidate_album.metadata ->> 'edition'" in sql
+    assert "not exists ( select 1 from library.local_tracks" in sql
+    assert "from library.separate_releases" not in sql
+    assert "order by candidate_album.id" in sql
+    assert "for update of candidate_album" in sql
+    assert "library.retire_vacated_structural_album(" in sql
+
+
+def test_targeted_reconciliation_album_retirement_is_claim_and_lease_scoped():
+    sql = _normalized_sql(
+        VACATED_STRUCTURAL_ALBUM_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "job.kind = 'targeted_reconciliation'" in sql
+    assert "job.state = 'running'" in sql
+    assert "job.attempt_count = p_attempt" in sql
+    assert "job.lease_owner = p_worker_id" in sql
+    assert "job.lease_token = p_lease_token" in sql
+    assert "job.lease_expires_at > p_now" in sql
+    assert "intent.publication_attempt = p_attempt" in sql
+    assert "intent.committed_inventory_revision is not null" in sql
+    assert "library.retire_vacated_structural_album_siblings(" in sql
+    assert "grant execute on function library.retire_claimed_targeted_reconciliation_vacated_albums(" in sql
+    assert "to album_haven_worker" in sql
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
     MIGRATIONS_DIR / "0003_add_local_mbid_projection_provenance.sql"
@@ -618,7 +730,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-40:] == [
+    assert migration_names[-42:] == [
         "0041_create_local_album_cover_candidate_snapshots.sql",
         "0042_track_distinct_cover_improvement_alerts.sql",
         "0043_create_local_track_waveform_peaks.sql",
@@ -659,6 +771,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0078_grant_worker_lastfm_retry.sql",
         "0079_create_auth_mail_job_state.sql",
         "0080_grant_worker_auth_mail.sql",
+        "0081_validate_durable_worker_startup.sql",
+        "0082_retire_vacated_structural_album.sql",
     ]
 
 

@@ -135,11 +135,30 @@ def _bounded_file_error_history_recorder(
 ) -> Callable[..., None]:
     counters = counter_state if counter_state is not None else {}
     counter_key = f"{summary_id_prefix}:{scan_generation}"
+    durable_reason_codes = {
+        "Library cover file inspection failed": "cover_file_inspection_failed",
+        "Library cover image decode failed": "cover_image_decode_failed",
+        "Library metadata read failed": "metadata_read_failed",
+        "Library directory read failed": "directory_read_failed",
+        "Library directory entry inspection failed": "directory_entry_inspection_failed",
+        "Library candidate file stat failed": "candidate_file_stat_failed",
+    }
 
     def record_file_error(action: str, **fields: object) -> None:
         recorded_file_errors = int(counters.get(counter_key) or 0) + 1
         counters[counter_key] = recorded_file_errors
         if recorded_file_errors <= _SCAN_FILE_ERROR_HISTORY_LIMIT:
+            if config.get("DURABLE_WORKER_SAFE_LOGGING") is True:
+                log_app_event(
+                    config,
+                    logger,
+                    "Durable library file error",
+                    level="error",
+                    history=True,
+                    scan_generation=scan_generation,
+                    reason_code=durable_reason_codes.get(action, "scan_file_error"),
+                )
+                return
             log_app_event(
                 config,
                 logger,

@@ -66,6 +66,18 @@ _DELETE_TOMBSTONES = """
          and job.state in ('succeeded', 'failed', 'canceled')
          and job.audit_hold = false
          and job.tombstoned_at is not null
+         and not exists (
+           select 1 from library.full_scan_intents
+            where library.full_scan_intents.job_id = job.id
+         )
+         and not exists (
+           select 1 from library.targeted_reconciliation_intents
+            where library.targeted_reconciliation_intents.job_id = job.id
+         )
+         and not exists (
+           select 1 from ops.cover_remote_save_checkpoints
+            where ops.cover_remote_save_checkpoints.job_id = job.id
+         )
        order by job.tombstoned_at, job.id
        for update of job skip locked
        limit %s

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -288,6 +289,86 @@ def test_post_scan_cover_refresh_uses_shared_claimed_core_and_publishes_progress
     assert repository.selections[0]["job_id"] == claim.job_id
     assert repository.selections[0]["task_id"] == scope.task_id
     assert repository.finished[0]["next_status"] == "completed"
+
+
+def test_post_scan_cover_refresh_real_runtime_finishes_no_jobs_once(tmp_path, monkeypatch):
+    from music_app.jobs.cover_handlers import build_cover_refresh_handler
+    from music_app.services import state as state_service
+    from music_app.services.cover_refresh_runtime import run_claimed_cover_refresh
+
+    claim = _claim(
+        job_id=88,
+        kind="post_scan_cover_refresh",
+        subject_kind="inventory_revision",
+        subject_ref="revision-12",
+        parameters={"inventory_revision": 12},
+        account_id=None,
+        capability_key=None,
+        request_origin_id=None,
+        idempotency_key="post-scan-cover-refresh:9:12",
+    )
+    scope = SimpleNamespace(
+        task_id=51,
+        task_key="post-scan-12",
+        row_revision=1,
+        file_cache={},
+        progress_total=0,
+        mode="post_scan",
+        force_search=False,
+    )
+
+    class Repository:
+        def __init__(self):
+            self.finished = []
+            self.checkpoints = []
+
+        def begin_claimed_cover_refresh(self, **_kwargs):
+            return scope
+
+        def cover_refresh_cancel_requested(self, **_kwargs):
+            return False
+
+        def checkpoint_claimed_cover_refresh(self, **kwargs):
+            self.checkpoints.append(kwargs)
+            return kwargs["expected_row_revision"] + 1
+
+        def finish_claimed_cover_refresh(self, **kwargs):
+            self.finished.append(kwargs)
+            return True
+
+    logged = []
+    monkeypatch.setattr(
+        state_service,
+        "select_background_cover_refresh_jobs",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        state_service,
+        "log_cover_refresh_completion",
+        lambda **kwargs: logged.append(kwargs),
+    )
+    repository = Repository()
+    outcome = build_cover_refresh_handler(
+        cover_repository=repository,
+        config={
+            "COVER_CACHE_PATH": str(tmp_path / "covers.json"),
+            "IMAGE_EXTENSIONS": {".jpg"},
+            "MUSICBRAINZ_USER_AGENT": "album-haven-tests",
+            "BULK_COVER_NEGATIVE_CACHE_TTL_SECONDS": 60,
+            "BULK_COVER_JOB_WORKERS": 1,
+        },
+        logger=logging.getLogger("test.cover.post_scan"),
+        run_refresh=run_claimed_cover_refresh,
+        clock=lambda: NOW,
+    )(claim, _Context())
+
+    assert outcome.next_state == JobState.SUCCEEDED
+    assert outcome.reason_code == "cover_refresh_completed"
+    assert len(logged) == 1
+    assert repository.checkpoints
+    assert len(repository.finished) == 1
+    assert repository.finished[0]["next_status"] == "completed"
+    assert repository.finished[0]["processed_count"] == 0
 
 
 def test_shared_cover_refresh_core_cancels_when_projection_fence_is_lost():

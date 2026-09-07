@@ -4,10 +4,24 @@ import re
 import pytest
 
 from music_app.services.jobs.retention_postgres import PostgresJobRetentionService
+from music_app.services.jobs.retention_postgres import _DELETE_TOMBSTONES
 
 
 NOW = datetime(2026, 9, 5, 18, 30, tzinfo=timezone.utc)
 DATABASE_URL = "postgresql://jobs-retention@localhost/album_haven"
+
+
+def test_tombstone_candidates_skip_restrictive_domain_evidence_before_limit():
+    normalized = " ".join(_DELETE_TOMBSTONES.lower().split())
+
+    for relation in (
+        "library.full_scan_intents",
+        "library.targeted_reconciliation_intents",
+        "ops.cover_remote_save_checkpoints",
+    ):
+        assert f"not exists ( select 1 from {relation}" in normalized
+    assert normalized.index("not exists") < normalized.index("order by")
+    assert normalized.index("order by") < normalized.index("limit %s")
 
 
 class Result:

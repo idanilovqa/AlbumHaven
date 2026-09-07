@@ -96,6 +96,10 @@ def _build_worker(
 ) -> Any:
     """Wire the durable worker with its closed handler set."""
 
+    from music_app.jobs.safe_logging import install_durable_worker_logging_boundary
+
+    install_durable_worker_logging_boundary()
+
     from config import Config, build_mail_config as build_runtime_mail_config
     from music_app.jobs.dispatch import JobHandlerRegistry
     from music_app.jobs.cover_handlers import (

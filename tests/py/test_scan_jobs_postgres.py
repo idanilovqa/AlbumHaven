@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -155,6 +156,47 @@ def _targeted_request():
             ),
         ),
     )
+
+
+def test_targeted_publication_converges_vacated_albums_under_the_same_lease():
+    connection = _RecordingConnection(
+        results=(
+            _Result(one={
+                "publication_won": True,
+                "inventory_mutation_revision": 17,
+                "affected_album_keys": ["artist::album"],
+            }),
+            _Result(one={"retired_count": 2}),
+        )
+    )
+    repository, _, _ = _repository(connection)
+    claim = SimpleNamespace(
+        job_id=91,
+        attempt=2,
+        worker_id="worker-a",
+        lease_token="lease-a",
+    )
+
+    result = repository.publish_claimed_targeted_reconciliation(
+        claim=claim,
+        intent_id=41,
+        inventory={"artists": [], "albums": [], "featured_artists": [], "tracks": [], "track_files": []},
+        stale_scopes=[],
+        now=NOW,
+    )
+
+    assert result["publication_won"] is True
+    assert len(connection.executed) == 2
+    converge_sql, converge_params = connection.executed[1]
+    assert "retire_claimed_targeted_reconciliation_vacated_albums" in converge_sql
+    assert converge_params == {
+        "intent_id": 41,
+        "job_id": 91,
+        "attempt": 2,
+        "worker_id": "worker-a",
+        "lease_token": "lease-a",
+        "now": NOW,
+    }
 
 
 def _policy_evaluation(

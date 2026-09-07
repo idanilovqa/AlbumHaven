@@ -502,7 +502,7 @@ def refresh_cover_artwork_request(
     log_cover_refresh_completion: CoverRefreshLogger,
     bulk_negative_cache_ttl_seconds: float,
     job_workers: int,
-) -> None:
+) -> dict[str, object]:
     context = build_cover_refresh_context(get_state=get_state, config=config)
     jobs = select_background_cover_refresh_jobs(
         file_cache=context.file_cache,
@@ -518,7 +518,7 @@ def refresh_cover_artwork_request(
         logger=logger,
         scan_generation=context.scan_generation,
     )
-    execute_cover_refresh_request(
+    return execute_cover_refresh_request(
         context=context,
         cache_lock=cache_lock,
         jobs=jobs,

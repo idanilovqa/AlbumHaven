@@ -1154,6 +1154,83 @@ def test_structural_album_edit_scopes_selection_and_completeness_to_active_track
         "library.local_track_files.metadata #>> '{scan_cache,stale}'"
     ) >= 2
     assert sql.count("::boolean, false ) is false") >= 2
+    assert "ops.cover_remote_save_checkpoints" not in sql
+
+
+def test_vacated_structural_album_retirement_uses_narrow_database_boundary():
+    from music_app.services import scan_cache_persistence
+
+    class RetirementConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "retire_vacated_structural_album" in sql:
+                return FakeCursor([{"disposition": "retired"}])
+            return cursor
+
+    connection = RetirementConnection()
+
+    disposition = scan_cache_persistence._retire_vacated_structural_album(
+        connection,
+        source_album_id=41,
+        destination_album_id=73,
+        library_id=5,
+        source_album_key="artist::source",
+        destination_album_key="artist::destination",
+    )
+
+    assert disposition == "retired"
+    assert len(connection.executed) == 1
+    sql, params = connection.executed[0]
+    assert "library.retire_vacated_structural_album" in sql
+    assert params == {
+        "source_album_id": 41,
+        "destination_album_id": 73,
+        "library_id": 5,
+        "source_album_key": "artist::source",
+        "destination_album_key": "artist::destination",
+    }
+
+
+def test_vacated_structural_album_sibling_retirement_uses_bounded_database_boundary():
+    from music_app.services import scan_cache_persistence
+
+    class SiblingRetirementConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "retire_vacated_structural_album_siblings" in sql:
+                return FakeCursor([{"retired_count": 2}])
+            return cursor
+
+    connection = SiblingRetirementConnection()
+
+    retired_count = scan_cache_persistence._retire_vacated_structural_album_siblings(
+        connection,
+        destination_album_id=73,
+        library_id=5,
+    )
+
+    assert retired_count == 2
+    assert len(connection.executed) == 1
+    sql, params = connection.executed[0]
+    assert "library.retire_vacated_structural_album_siblings" in sql
+    assert params == {"destination_album_id": 73, "library_id": 5}
+
+
+def test_structural_edit_sweeps_vacated_siblings_after_semantic_reconciliation():
+    import inspect
+
+    from music_app.services import scan_cache_persistence
+
+    source = inspect.getsource(
+        scan_cache_persistence.PostgresScanCacheAdapter.persist_structural_tag_edit
+    )
+
+    reconcile_at = source.index("_execute_semantic_local_album_reconciliation")
+    sweep_at = source.index("_retire_vacated_structural_album_siblings")
+    assert reconcile_at < sweep_at
+    assert "retirement_disposition = _retire_vacated_structural_album" in source
+    assert "retirement_disposition == \"preserved_track_tombstone\"" in source
+    assert source.count("_retire_vacated_structural_album(") == 2
 
 
 def test_scan_publication_relies_on_row_local_identity_constraint_without_full_library_reconciliation():

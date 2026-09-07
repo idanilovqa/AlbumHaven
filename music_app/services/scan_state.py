@@ -28,6 +28,37 @@ def _scan_cache_adapter(config: dict[str, object]):
     return select_scan_cache_adapter(config)
 
 
+def _log_scan_history_failure(
+    config: dict[str, object],
+    logger: object,
+    *,
+    legacy_action: str,
+    reason_code: str,
+    scan_generation: int,
+    **legacy_fields: object,
+) -> None:
+    if config.get("DURABLE_WORKER_SAFE_LOGGING") is True:
+        log_app_event(
+            config,
+            logger,
+            "Durable library scan failed",
+            level="error",
+            history=True,
+            reason_code=reason_code,
+            scan_generation=scan_generation,
+        )
+        return
+    log_app_event(
+        config,
+        logger,
+        legacy_action,
+        level="error",
+        history=True,
+        scan_generation=scan_generation,
+        **legacy_fields,
+    )
+
+
 _ACTIVE_SCAN_PREVIEW_KEY = "active_scan_preview_state"
 _SCAN_PREVIEW_BROWSE_FIELDS = (
     "file_cache",
@@ -387,12 +418,11 @@ def refresh_library_state(
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
                 library_state["last_error"] = disk_error
-        log_app_event(
+        _log_scan_history_failure(
             cfg,
             logger,
-            "Library scan cache load failed",
-            level="error",
-            history=True,
+            legacy_action="Library scan cache load failed",
+            reason_code="scan_cache_load_failed",
             error=disk_error,
             scan_generation=scan_generation,
         )
@@ -583,12 +613,11 @@ def refresh_library_state(
     except Exception as exc:
         with cache_lock:
             if int(library_state.get("scan_generation") or 0) == scan_generation:
-                log_app_event(
+                _log_scan_history_failure(
                     cfg,
                     logger,
-                    "Library indexing failed",
-                    level="error",
-                    history=True,
+                    legacy_action="Library indexing failed",
+                    reason_code="indexing_failed",
                     id=f"library-status-error:{scan_generation}",
                     error=str(exc),
                     scan_generation=scan_generation,

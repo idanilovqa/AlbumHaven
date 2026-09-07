@@ -1201,7 +1201,24 @@ class PostgresScanJobRepository:
                 """,
                 parameters,
             ).fetchone()
-        payload = _row_mapping(row)
+            payload = _row_mapping(row)
+            if payload.get("publication_won") is True:
+                connection.execute(
+                    """
+                    select library.retire_claimed_targeted_reconciliation_vacated_albums(
+                      %(intent_id)s, %(job_id)s, %(attempt)s,
+                      %(worker_id)s, %(lease_token)s, %(now)s
+                    ) as retired_count
+                    """,
+                    {
+                        "intent_id": parameters["intent_id"],
+                        "job_id": parameters["job_id"],
+                        "attempt": parameters["attempt"],
+                        "worker_id": parameters["worker_id"],
+                        "lease_token": parameters["lease_token"],
+                        "now": parameters["now"],
+                    },
+                ).fetchone()
         return {
             "publication_won": payload.get("publication_won") is True,
             "inventory_mutation_revision": int(

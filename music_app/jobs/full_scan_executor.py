@@ -12,16 +12,19 @@ from typing import Any
 
 from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
 from music_app.services import state as state_service
+from music_app.jobs.safe_logging import DurablePipelineLogger
 
 
 class DurableFullScanExecutor:
     """Run the established scanner with durable progress and publication fences."""
 
     def __init__(self, *, config: dict[str, object], scan_repository: Any) -> None:
-        self._config = dict(config)
+        self._config = {**dict(config), "DURABLE_WORKER_SAFE_LOGGING": True}
         self._scan_repository = scan_repository
         self._local = threading.local()
-        self._logger = logging.getLogger("music_app.jobs.full_scan")
+        self._logger = DurablePipelineLogger(
+            logging.getLogger("music_app.jobs.full_scan"), domain="scan"
+        )
 
     def bind_claim(self, claim: Any) -> None:
         self._local.claim = claim

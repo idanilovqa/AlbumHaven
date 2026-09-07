@@ -227,6 +227,61 @@ def _phase6_plan_evidence(plan_document: object) -> dict[str, object]:
     }
 
 
+def test_live_durable_worker_startup_preflight_accepts_worker_and_rejects_missing_grants(
+    monkeypatch,
+):
+    setup_url, app_url, worker_url, readonly_url = _durable_job_database_urls_or_skip(
+        monkeypatch
+    )
+    registered_kinds = [
+        "auth_invitation_delivery",
+        "auth_password_reset_delivery",
+        "auth_welcome_delivery",
+        "cover_bulk_refresh",
+        "cover_lookup",
+        "cover_remote_save",
+        "full_scan",
+        "lastfm_scrobble_retry",
+        "post_scan_cover_refresh",
+        "targeted_reconciliation",
+    ]
+    cleanup_complete = False
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, app_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "grant execute on function "
+                "ops.validate_durable_worker_startup(text[]) "
+                "to album_haven_readonly"
+            )
+        with isolatedPostgres._connect(worker_url) as connection:
+            worker_result = connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                (registered_kinds,),
+            ).fetchone()
+        with isolatedPostgres._connect(readonly_url) as connection:
+            denied_result = connection.execute(
+                "select ops.validate_durable_worker_startup(%s::text[]) as valid",
+                (registered_kinds,),
+            ).fetchone()
+
+        assert worker_result["valid"] is True
+        assert denied_result["valid"] is False
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                "revoke execute on function "
+                "ops.validate_durable_worker_startup(text[]) "
+                "from album_haven_readonly"
+            )
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_durable_job_migration_is_idempotent_and_roles_are_narrow(
     monkeypatch,
 ):
@@ -1263,6 +1318,124 @@ def test_live_cover_upgrade_compare_and_swap_rejects_stale_automatic_state(
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_vacated_structural_album_sweep_retires_exact_zero_track_siblings(
+    monkeypatch,
+):
+    import psycopg
+
+    setup_url, runtime_url, _worker_url, readonly_url = (
+        _durable_job_database_urls_or_skip(monkeypatch)
+    )
+    cleanup_complete = False
+
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            library_id = int(connection.execute(
+                """
+                select library.libraries.id
+                from app.bootstrap_owners
+                join library.libraries
+                  on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+                where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+                  and library.libraries.library_kind = 'local'
+                limit 1
+                """
+            ).fetchone()["id"])
+            artist_id = int(connection.execute(
+                """
+                insert into library.local_artists (library_id, artist_key, name)
+                values (%s, 'sweep-artist', 'Sweep Artist')
+                returning id
+                """,
+                (library_id,),
+            ).fetchone()["id"])
+            destination_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'sweep-destination', 'Exact Album', 1988, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.separate_releases (library_id, release_key)
+                values (%s, 'sweep artist::exact album')
+                """,
+                (library_id,),
+            )
+            source_ids = [
+                int(connection.execute(
+                    """
+                    insert into library.local_albums (
+                      library_id, artist_id, album_key, title, release_year, metadata
+                    ) values (%s, %s, %s, 'Exact Album', 1988, '{}')
+                    returning id
+                    """,
+                    (library_id, artist_id, source_key),
+                ).fetchone()["id"])
+                for source_key in ("sweep-source-one", "sweep-source-two")
+            ]
+            protected_source_id = int(connection.execute(
+                """
+                insert into library.local_albums (
+                  library_id, artist_id, album_key, title, release_year, metadata
+                ) values (%s, %s, 'sweep-protected', 'Exact Album', 1988, '{}')
+                returning id
+                """,
+                (library_id, artist_id),
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into library.local_tracks (
+                  library_id, album_id, artist_id, track_key, title
+                ) values
+                  (%s, %s, %s, 'sweep-track', 'Sweep Track'),
+                  (%s, %s, %s, 'sweep-protected-track', 'Protected Track')
+                """,
+                (
+                    library_id, destination_id, artist_id,
+                    library_id, protected_source_id, artist_id,
+                ),
+            )
+
+        with isolatedPostgres._connect(readonly_url) as connection:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "select library.retire_vacated_structural_album_siblings(%s, %s)",
+                    (library_id, destination_id),
+                ).fetchone()
+
+        with isolatedPostgres._connect(runtime_url) as connection:
+            retired_count = int(connection.execute(
+                "select library.retire_vacated_structural_album_siblings(%s, %s) "
+                "as retired_count",
+                (library_id, destination_id),
+            ).fetchone()["retired_count"])
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            remaining_ids = {
+                int(row["id"])
+                for row in connection.execute(
+                    "select id from library.local_albums where library_id = %s",
+                    (library_id,),
+                ).fetchall()
+            }
+        assert retired_count == 2
+        assert destination_id in remaining_ids
+        assert protected_source_id in remaining_ids
+        assert remaining_ids.isdisjoint(source_ids)
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_waveform_peak_cache_roundtrip_invalidation_upsert_grants_and_cascade(
     monkeypatch,
     tmp_path,
@@ -1733,9 +1906,14 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 """
                 update library.local_track_files
                    set metadata = jsonb_set(
-                     metadata,
-                     '{scan_cache,file_entry}',
-                     %(file_entry)s::jsonb,
+                     jsonb_set(
+                       metadata,
+                       '{scan_cache,file_entry}',
+                       %(file_entry)s::jsonb,
+                       true
+                     ),
+                     '{scan_cache,stale}',
+                     'true'::jsonb,
                      true
                    )
                  where private_path = %(private_path)s
@@ -1773,6 +1951,24 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 where title = 'Old Album'
                 """
             ).fetchone()
+            source_file_counts = connection.execute(
+                """
+                select
+                  count(*) as total_count,
+                  count(*) filter (
+                    where coalesce(
+                      (library.local_track_files.metadata
+                        #>> '{scan_cache,stale}')::boolean,
+                      false
+                    ) is false
+                  ) as active_count
+                from library.local_track_files
+                join library.local_tracks
+                  on library.local_tracks.id = library.local_track_files.track_id
+                where library.local_tracks.album_id = %(album_id)s
+                """,
+                {"album_id": old_album["id"]},
+            ).fetchone()
             connection.execute(
                 """
                 insert into app.album_ratings (
@@ -1793,6 +1989,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 },
             )
         before_by_path = {str(row["private_path"]): dict(row) for row in before_rows}
+        assert int(source_file_counts["active_count"]) == 2, source_file_counts
         prepared_inventory_revision = adapter.load_inventory_mutation_revision()
         updated = {
             path: {**entry, "album": "New Album"}
@@ -1809,6 +2006,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
 
         assert result["track_rows_updated"] == 2
         assert result["track_file_rows_updated"] == 2
+        assert result["destination_album_id"] == old_album["id"], result
         assert result["inventory_mutation_revision"] == prepared_inventory_revision + 1
         with isolatedPostgres._connect(setup_url) as connection:
             after_rows = connection.execute(
@@ -1926,12 +2124,25 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 where library.local_albums.title = 'Existing Album'
                 """
             ).fetchone()["track_count"]
+            merged_rating = connection.execute(
+                """
+                select rating
+                from app.album_ratings
+                where library_id = %(library_id)s
+                  and album_key = %(album_key)s
+                """,
+                {
+                    "library_id": old_album["library_id"],
+                    "album_key": existing_destination_before["album_key"],
+                },
+            ).fetchone()
         assert int(after_merge["new_album_count"]) == 1
         assert int(after_merge["existing_album_count"]) == 1
         assert int(after_merge["old_album_count"]) == 0
         assert after_merge["existing_album_id"] == existing_destination_before["id"]
         assert after_merge["existing_cover_path"] == existing_destination_before["cover_path"]
         assert int(merged_track_count) == 3
+        assert int(merged_rating["rating"]) == 9
 
         current_cover_revision = adapter.load_cover_mutation_revision()
         with pytest.raises(ScanCachePublicationSuperseded, match="Inventory changed"):

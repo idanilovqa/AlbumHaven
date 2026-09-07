@@ -11,6 +11,7 @@ from music_app.services.cover_provider_deadline import (
 )
 from music_app.services.jobs.authorization import AuthorizationDecision
 from music_app.services.jobs.models import ClaimedJob, JobKind, JobState, JobTransitionResult
+from music_app.jobs.safe_logging import DurablePipelineLogger
 
 
 def _candidate_lookup_task_id(claim: ClaimedJob) -> int | None:
@@ -83,6 +84,7 @@ def build_cover_lookup_handler(
     """Execute one accepted lookup with durable cancellation and publication fences."""
 
     now = clock or (lambda: datetime.now(timezone.utc))
+    durable_logger = DurablePipelineLogger(logger, domain="cover")
 
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
         if _candidate_lookup_task_id(claim) is None:
@@ -168,7 +170,7 @@ def build_cover_lookup_handler(
             run_lookup(
                 task_id=str(scope.task_key),
                 config=config,
-                logger=logger,
+                logger=durable_logger,
                 user_agent=str(config.get("MUSICBRAINZ_USER_AGENT") or ""),
                 album=dict(scope.album),
                 track_paths=set(scope.track_paths),
@@ -256,6 +258,7 @@ def build_cover_refresh_handler(
     """Run user and post-scan bulk refreshes through one durable core."""
 
     now = clock or (lambda: datetime.now(timezone.utc))
+    durable_logger = DurablePipelineLogger(logger, domain="cover")
 
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
         if not _cover_refresh_claim_valid(claim):
@@ -345,7 +348,7 @@ def build_cover_refresh_handler(
             result = run_refresh(
                 scope=scope,
                 config=execution_config,
-                logger=logger,
+                logger=durable_logger,
                 should_cancel=should_cancel,
                 progress=progress,
             )
@@ -446,6 +449,7 @@ def build_cover_remote_save_handler(
     """Execute one remote selection through private recovery checkpoints."""
 
     now = clock or (lambda: datetime.now(timezone.utc))
+    durable_logger = DurablePipelineLogger(logger, domain="cover")
 
     def handle(claim: ClaimedJob, context: Any) -> JobTransitionResult:
         if not _cover_remote_save_claim_valid(claim):
@@ -544,7 +548,7 @@ def build_cover_remote_save_handler(
             result = run_save(
                 scope=scope,
                 config=dict(config),
-                logger=logger,
+                logger=durable_logger,
                 should_cancel=should_cancel,
                 checkpoint=checkpoint,
                 persist_selection=persist_selection,

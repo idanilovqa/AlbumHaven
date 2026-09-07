@@ -200,8 +200,14 @@ class Authorization:
 
 
 class WorkerInstances:
-    def __init__(self):
+    def __init__(self, *, startup_valid=True):
         self.calls = []
+        self.startup_valid = startup_valid
+
+    def validate_startup(self, *, registered_kinds):
+        self.calls.append(("preflight", registered_kinds))
+        if not self.startup_valid:
+            raise RuntimeError("durable worker startup preflight failed")
 
     def record_starting(
         self, *, worker_id, now, compatible_schema_version, handler_fingerprint
@@ -230,10 +236,11 @@ class WorkerInstances:
 
 
 class Connection:
-    def __init__(self):
+    def __init__(self, *, startup_valid=True):
         self.entered = False
         self.exited = False
         self.executions = []
+        self.startup_valid = startup_valid
 
     def __enter__(self):
         self.entered = True
@@ -245,6 +252,10 @@ class Connection:
     def execute(self, statement, parameters):
         assert self.entered and not self.exited
         self.executions.append((statement, parameters))
+        return self
+
+    def fetchone(self):
+        return {"startup_valid": self.startup_valid}
 
 
 def registry(handler=lambda claimed, context: JobTransitionResult(JobState.SUCCEEDED, "completed")):
@@ -569,7 +580,11 @@ def test_reconciliation_failure_stops_before_claim_and_closes_worker_lifecycle()
     assert repository.calls == [("reconcile_stale_leases", NOW, 1000)]
     assert safety_wait_used == []
     assert stop.is_set()
-    assert [call[0] for call in instances.calls][:2] == ["starting", "running"]
+    assert [call[0] for call in instances.calls][:3] == [
+        "preflight",
+        "starting",
+        "running",
+    ]
     assert [call[0] for call in instances.calls][-2:] == ["draining", "stopped"]
     assert instances.calls[-1][3] == "complete"
     assert "secret" not in str(raised.value)
@@ -587,14 +602,26 @@ def test_run_persists_worker_lifecycle_and_idle_heartbeat():
     worker(repository, wait=wait, worker_instances=instances).run(threading.Event())
 
     names = [call[0] for call in instances.calls]
-    assert names[0:2] == ["starting", "running"]
+    assert names[0:3] == ["preflight", "starting", "running"]
     assert "heartbeat" in names
     assert names[-2:] == ["draining", "stopped"]
-    assert instances.calls[0][3] == 1
-    assert instances.calls[0][4] == registry().fingerprint
+    assert instances.calls[0][1] == ("full_scan",)
+    assert instances.calls[1][3] == 1
+    assert instances.calls[1][4] == registry().fingerprint
     assert instances.calls[-2][3] == NOW + timedelta(seconds=30)
     assert instances.calls[-2][4] == "draining"
     assert instances.calls[-1][3] == "complete"
+
+
+def test_startup_preflight_failure_never_records_worker_ready():
+    instances = WorkerInstances(startup_valid=False)
+    stop = threading.Event()
+    stop.set()
+
+    with pytest.raises(RuntimeError, match="startup preflight failed"):
+        worker(Repository(), worker_instances=instances).run(stop)
+
+    assert instances.calls == [("preflight", ("full_scan",))]
 
 
 def test_postgres_worker_instance_repository_writes_coherent_short_lifecycle_updates():
@@ -674,6 +701,35 @@ def test_postgres_worker_instance_repository_writes_coherent_short_lifecycle_upd
     assert "private@" not in evidence
 
 
+def test_postgres_worker_startup_preflight_checks_closed_handler_contract():
+    connection = Connection()
+    instances = PostgresWorkerInstanceRepository(
+        database_url="postgresql://worker-role:private@db.example/album_haven",
+        connect_to_database=lambda _url: connection,
+    )
+
+    instances.validate_startup(
+        registered_kinds=("auth_welcome_delivery", "full_scan")
+    )
+
+    [(statement, parameters)] = connection.executions
+    assert "ops.validate_durable_worker_startup" in statement
+    assert parameters == {
+        "registered_kinds": ["auth_welcome_delivery", "full_scan"]
+    }
+
+
+def test_postgres_worker_startup_preflight_rejects_partial_schema_or_missing_grant():
+    connection = Connection(startup_valid=False)
+    instances = PostgresWorkerInstanceRepository(
+        database_url="postgresql://worker-role:private@db.example/album_haven",
+        connect_to_database=lambda _url: connection,
+    )
+
+    with pytest.raises(RuntimeError, match=r"^durable worker startup preflight failed$"):
+        instances.validate_startup(registered_kinds=("full_scan",))
+
+
 def test_concurrency_is_bounded_and_shutdown_drains_every_active_handler():
     claims = [claim(), claim(), claim()]
     claims[1] = ClaimedJob(**{**claims[1].__dict__, "job_id": 42})
@@ -715,6 +771,66 @@ def test_concurrency_is_bounded_and_shutdown_drains_every_active_handler():
     assert not runner.is_alive()
     assert maximum_active == 2
     assert len([call for call in repository.calls if call[0] == "claim"]) == 2
+    assert len(repository.finishes) == 2
+
+
+def test_free_worker_slot_claims_new_job_before_long_handler_finishes():
+    class DynamicRepository(Repository):
+        def __init__(self):
+            super().__init__([claim()])
+            self._claims_lock = threading.Lock()
+            self.idle_claimed = threading.Event()
+
+        def claim(self, *, worker_id, now, lease_seconds):
+            with self._claims_lock:
+                self.calls.append(("claim", worker_id, now, lease_seconds))
+                if self.claims:
+                    return self.claims.pop(0)
+                self.idle_claimed.set()
+                return None
+
+        def enqueue(self, claimed):
+            with self._claims_lock:
+                self.claims.append(claimed)
+
+    repository = DynamicRepository()
+    blocker_entered = threading.Event()
+    release_blocker = threading.Event()
+    short_started = threading.Event()
+    stop = threading.Event()
+
+    def handler(claimed, _context):
+        if claimed.job_id == 41:
+            blocker_entered.set()
+            assert release_blocker.wait(3)
+        else:
+            short_started.set()
+            stop.set()
+        return JobTransitionResult(JobState.SUCCEEDED, "completed")
+
+    runtime = worker(
+        repository,
+        handlers=registry(handler),
+        concurrency=2,
+        wait=lambda event, _seconds: event.wait(0.01),
+    )
+    runner = threading.Thread(target=runtime.run, args=(stop,))
+    runner.start()
+    observed_before_release = False
+    try:
+        assert blocker_entered.wait(2)
+        assert repository.idle_claimed.wait(2)
+        second = claim()
+        second = ClaimedJob(**{**second.__dict__, "job_id": 42})
+        repository.enqueue(second)
+        observed_before_release = short_started.wait(1)
+    finally:
+        release_blocker.set()
+        stop.set()
+        runner.join(3)
+
+    assert observed_before_release is True
+    assert not runner.is_alive()
     assert len(repository.finishes) == 2
 
 

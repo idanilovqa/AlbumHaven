@@ -1005,6 +1005,12 @@ class PostgresScanCacheAdapter:
                 result.get("inventory_mutation_revision") or 0
             )
             destination_album_id = int(result.get("destination_album_id") or 0)
+            source_album_id = int(result.get("source_album_id") or 0)
+            source_library_id = int(result.get("source_library_id") or 0)
+            source_album_key = str(result.get("source_album_key") or "").strip()
+            destination_album_key = str(
+                result.get("destination_album_key") or destination_album_key
+            ).strip()
             persisted_separate_release_key = str(
                 result.get("separate_release_key") or ""
             ).strip()
@@ -1034,9 +1040,33 @@ class PostgresScanCacheAdapter:
                 raise RuntimeError(
                     "Targeted structural tag persistence did not update the complete album inventory."
                 )
+            retirement_disposition = ""
+            if source_album_id and source_album_id != destination_album_id:
+                retirement_disposition = _retire_vacated_structural_album(
+                    connection,
+                    source_album_id=source_album_id,
+                    destination_album_id=destination_album_id,
+                    library_id=source_library_id,
+                    source_album_key=source_album_key,
+                    destination_album_key=destination_album_key,
+                )
             _execute_semantic_local_album_reconciliation(
                 connection,
                 target_album_ids=(destination_album_id,),
+            )
+            if retirement_disposition == "preserved_track_tombstone":
+                _retire_vacated_structural_album(
+                    connection,
+                    source_album_id=source_album_id,
+                    destination_album_id=destination_album_id,
+                    library_id=source_library_id,
+                    source_album_key=source_album_key,
+                    destination_album_key=destination_album_key,
+                )
+            _retire_vacated_structural_album_siblings(
+                connection,
+                destination_album_id=destination_album_id,
+                library_id=source_library_id,
             )
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
@@ -3213,6 +3243,99 @@ def _execute_semantic_local_album_reconciliation(
             connection.execute(statement)
 
 
+def _retire_vacated_structural_album(
+    connection: Any,
+    *,
+    source_album_id: int,
+    destination_album_id: int,
+    library_id: int,
+    source_album_key: str,
+    destination_album_key: str,
+) -> str:
+    """Move remaining durable references, then remove a fully vacated album."""
+
+    if (
+        source_album_id < 1
+        or destination_album_id < 1
+        or library_id < 1
+        or source_album_id == destination_album_id
+        or not source_album_key
+        or not destination_album_key
+    ):
+        raise RuntimeError("Vacated structural album retirement received invalid identity data.")
+    parameters = {
+        "source_album_id": source_album_id,
+        "destination_album_id": destination_album_id,
+        "library_id": library_id,
+        "source_album_key": source_album_key,
+        "destination_album_key": destination_album_key,
+    }
+    row = _row_mapping(
+        _first_row(
+            connection.execute(
+                """
+                select library.retire_vacated_structural_album(
+                  %(library_id)s,
+                  %(source_album_id)s,
+                  %(destination_album_id)s,
+                  %(source_album_key)s,
+                  %(destination_album_key)s
+                ) as disposition
+                """,
+                parameters,
+            )
+        )
+    )
+    disposition = str(row.get("disposition") or "").strip()
+    if disposition not in {
+        "retired",
+        "preserved_track_tombstone",
+        "preserved_cover_checkpoint",
+    }:
+        raise RuntimeError("Vacated structural album retirement did not converge.")
+    return disposition
+
+
+def _retire_vacated_structural_album_siblings(
+    connection: Any,
+    *,
+    destination_album_id: int,
+    library_id: int,
+) -> int:
+    """Retire exact-identity zero-track siblings left by structural reconciliation."""
+
+    if destination_album_id < 1 or library_id < 1:
+        raise RuntimeError(
+            "Vacated structural album sibling retirement received invalid identity data."
+        )
+    row = _row_mapping(
+        _first_row(
+            connection.execute(
+                """
+                select library.retire_vacated_structural_album_siblings(
+                  %(library_id)s,
+                  %(destination_album_id)s
+                ) as retired_count
+                """,
+                {
+                    "destination_album_id": destination_album_id,
+                    "library_id": library_id,
+                },
+            )
+        )
+    )
+    retired_count = row.get("retired_count")
+    if (
+        isinstance(retired_count, bool)
+        or not isinstance(retired_count, int)
+        or retired_count < 0
+    ):
+        raise RuntimeError(
+            "Vacated structural album sibling retirement did not converge."
+        )
+    return retired_count
+
+
 def _persist_blank_album_tag_edit_sql() -> str:
     return """
         with bootstrap_context as (
@@ -4068,7 +4191,12 @@ def _persist_structural_album_tag_edit_sql(
         ),
         updated_album_mbid_assertions as (
           update library.local_mbid_assertions
-          set album_id = destination_album.id
+          set album_id = destination_album.id,
+              target_key = case
+                when library.local_mbid_assertions.target_kind = 'album'
+                then destination_album.album_key
+                else library.local_mbid_assertions.target_key
+              end
           from validated_source_album
           cross join destination_album
           where library.local_mbid_assertions.album_id = validated_source_album.id
@@ -4200,6 +4328,10 @@ def _persist_structural_album_tag_edit_sql(
           0 as destination_conflict_count,
           (select count(*) from destination_album) as destination_album_count,
           (select id from destination_album) as destination_album_id,
+          (select id from validated_source_album) as source_album_id,
+          (select library_id from validated_source_album) as source_library_id,
+          (select album_key from validated_source_album) as source_album_key,
+          (select album_key from destination_album) as destination_album_key,
           (select count(*) from destination_album) as album_rows_updated,
           (select count(*) from updated_tracks) as track_rows_updated,
           (select count(*) from updated_track_files) as track_file_rows_updated,

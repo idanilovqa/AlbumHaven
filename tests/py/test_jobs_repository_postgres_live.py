@@ -17,6 +17,7 @@ from music_app.services.jobs.models import (
     JobTransitionResult,
 )
 from music_app.services.jobs.repository_postgres import PostgresJobRepository
+from music_app.services.jobs.retention_postgres import PostgresJobRetentionService
 from tests.e2e.support import isolatedPostgres
 
 
@@ -103,6 +104,115 @@ def _insert_job(
             (key, f"phase8:{key}", priority, account_id),
         ).fetchone()
     return int(row["id"])
+
+
+def test_live_retention_deletes_unreferenced_tombstone_and_preserves_domain_evidence():
+    setup_url, runtime_url, _worker_url = _database_urls_or_skip()
+    cleanup_complete = False
+    try:
+        _drop_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                """
+                insert into app.request_origins (
+                  account_id, client_surface_class, origin_type, origin_key
+                )
+                select account_id, 'private_web', 'origin',
+                       'phase8-retention-live'
+                from app.bootstrap_owners
+                where owner_key = 'local-bootstrap-owner'
+                """
+            )
+            context = connection.execute(
+                """
+                select owner_record.account_id, library_record.id as library_id,
+                       origin.id as origin_id
+                from app.bootstrap_owners as owner_record
+                join library.libraries as library_record
+                  on library_record.owner_account_id = owner_record.account_id
+                join app.request_origins as origin
+                  on origin.account_id = owner_record.account_id
+                where owner_record.owner_key = 'local-bootstrap-owner'
+                order by origin.id
+                limit 1
+                """
+            ).fetchone()
+            job_ids = []
+            for suffix in ("referenced", "unreferenced"):
+                job_ids.append(int(connection.execute(
+                    """
+                    insert into ops.jobs (
+                      kind, state, subject_kind, subject_ref, parameters,
+                      account_id, library_id, capability_key, request_origin_id,
+                      deployment_mode, client_surface, idempotency_key,
+                      attempt_count, max_attempts, recovery_policy,
+                      started_at, completed_at, outcome_code, tombstoned_at,
+                      scheduled_at, created_at, updated_at
+                    ) values (
+                      'full_scan', 'succeeded', 'full_scan_intent', %s, '{}',
+                      %s, %s, 'library.refresh', %s,
+                      'self_hosted_private_web', 'private_web', %s,
+                      1, 2, 'retry_safe',
+                      '2024-01-01T00:00:00Z', '2024-01-01T00:01:00Z',
+                      'completed', '2024-01-02T00:00:00Z',
+                      '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z',
+                      '2024-01-02T00:00:00Z'
+                    ) returning id
+                    """,
+                    (
+                        f"retention-{suffix}",
+                        context["account_id"],
+                        context["library_id"],
+                        context["origin_id"],
+                        f"retention-live:{suffix}",
+                    ),
+                ).fetchone()["id"]))
+            connection.execute(
+                """
+                insert into library.full_scan_intents (
+                  library_id, initiating_account_id, capability_key,
+                  request_origin_id, deployment_mode, client_surface,
+                  mode, force, state, job_id, accepted_at, completed_at
+                ) values (
+                  %s, %s, 'library.refresh', %s,
+                  'self_hosted_private_web', 'private_web',
+                  'normal', false, 'succeeded', %s,
+                  '2024-01-01T00:00:00Z', '2024-01-01T00:01:00Z'
+                )
+                """,
+                (
+                    context["library_id"],
+                    context["account_id"],
+                    context["origin_id"],
+                    job_ids[0],
+                ),
+            )
+
+        result = PostgresJobRetentionService(
+            database_url=setup_url,
+            connect_to_database=isolatedPostgres._connect,
+        ).cleanup(
+            batch_size=10,
+            now=datetime(2026, 9, 7, tzinfo=timezone.utc),
+        )
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            remaining = {
+                int(row["id"])
+                for row in connection.execute(
+                    "select id from ops.jobs where id = any(%s)",
+                    (job_ids,),
+                ).fetchall()
+            }
+        assert result["tombstones"] == 1
+        assert remaining == {job_ids[0]}
+
+        _drop_schemas(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            _drop_schemas(setup_url)
 
 
 def test_live_repository_concurrency_cas_cancellation_and_recovery_contracts():

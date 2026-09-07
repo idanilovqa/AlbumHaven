@@ -124,6 +124,8 @@ Authenticated `/status` callers receive only the same coarse `worker_status` unl
 
 Only registered job kinds are claimable by a worker process. Full-scan and targeted-reconciliation handlers reload current roots and authorization scope after claiming, checkpoint progress with the active lease, and fence authoritative inventory publication with the same job ID, attempt, worker ID, lease token, and unexpired lease. A removed root, unhealthy watcher scope, revoked account or capability, cancellation request, or lost lease therefore prevents stale publication. Metadata reads remain bounded inside one claimed full-scan job rather than consuming additional durable worker slots.
 
+After a targeted reconciliation wins authoritative publication, the same transaction performs lease-fenced album-identity convergence over only the intent's server-recorded affected album keys. It retires exact artist/title/year/edition siblings only when they have no tracks and no active cover-save checkpoint, moving supported durable references before deletion. A family-wide `separate_releases` marker distinguishes the release family but does not make an empty duplicate row authoritative. Do not delete or merge album rows manually to repair a targeted-reconciliation result.
+
 Expired retry-safe scan leases are reconciled before new claims. Recovery repeats only work that did not commit its authoritative publication. A committed full scan and its revision-keyed cover follow-up are one transaction, so recovery can produce neither committed inventory without its follow-up nor duplicate follow-ups for the same library revision. Do not repair scan jobs by editing the ledger or private intent tables.
 
 For a growing scan backlog, inspect only the authorized aggregate status. Confirm that the worker is ready, the relevant kind is registered, leases are advancing, and the current library/root authority is valid. A growing `post_scan_cover_refresh` backlog is not expected after migrations through `0076` and the matching worker artifact are active. Never copy subject references, generic parameters, scan-domain records, filesystem paths, or SQL parameter values into logs or tickets.
@@ -164,9 +166,9 @@ For an authentication-mail backlog, inspect only authorized aggregate status and
 
 Use this additive order:
 
-1. Back up Postgres and apply migrations through `0080_grant_worker_auth_mail.sql` with the migrator role.
+1. Back up Postgres and apply migrations through `0082_retire_vacated_structural_album.sql` with the migrator role.
 2. Deploy the new worker artifact while the existing web artifact still owns its pre-cutover execution path.
-3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm its closed registry and claim filter include every completed scan, cover, Last.fm, and authentication-mail kind.
+3. Configure the dedicated worker-role URL and mail settings, start the worker, and confirm the closed startup preflight accepts its exact handler registry, schema, function grants, table columns, and transition-sequence access before readiness. Confirm its claim filter includes every completed scan, cover, Last.fm, and authentication-mail kind.
 4. Verify the worker fingerprint and role checks before deploying the compatible web artifact that enables durable producers. Drain any old request-owned mail tasks first. Exactly one execution owner may accept each workflow during cutover.
 5. Verify `/health`, the authorized `/status` projection, unchanged scan and cover contracts, unchanged Last.fm summaries, unchanged administrator mail responses, the padded public forgot-password response, and synchronous invitation-link copying.
 6. Keep prior web artifacts out of service after mail producers are cut over; they must not reclaim job-owned outboxes.
@@ -190,7 +192,7 @@ $env:ALBUM_HAVEN_MIGRATOR_DATABASE_URL = '<migrator-role Postgres URL>'
 python scripts/cleanup_jobs.py --batch-size 1000
 ```
 
-Each invocation processes at most the requested `1..10000` rows in each category. It removes eligible transition detail and compacts non-held succeeded, failed, or canceled jobs after 90 days; deletes those idempotency tombstones after 365 days; and removes stopped, unleased worker records after seven days. It never automatically removes queued, running, retry-wait, ambiguous, audit-held, or active-lease work. The command prints only category counts.
+Each invocation processes at most the requested `1..10000` rows in each category. It removes eligible transition detail and compacts non-held succeeded, failed, or canceled jobs after 90 days; deletes unreferenced idempotency tombstones after 365 days; and removes stopped, unleased worker records after seven days. Tombstones still referenced by full-scan intents, targeted-reconciliation intents, or remote-cover-save checkpoints remain as domain evidence. Cleanup never automatically removes queued, running, retry-wait, ambiguous, audit-held, or active-lease work. The command prints only category counts.
 
 Generic mail-job cleanup follows those same 90-day transition/job and 365-day idempotency-tombstone windows. This command does not delete `app.mail_outbox`, authentication tokens, or security-audit evidence. Preserve every outbox and token record needed to explain an ambiguous delivery and retain security-audit evidence for its independently defined window. Any future domain-record deletion requires a separate bounded migrator-owned procedure and tests proving it cannot cascade into active or ambiguous evidence.
 

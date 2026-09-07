@@ -172,18 +172,13 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
       artist: ARTIST,
       year: YEAR,
     });
-    const activeIdentityIndexes = postgresIdentity.track_counts
-      .map((trackCount, index) => ({ index, trackCount }))
-      .filter(({ trackCount }) => trackCount > 0)
-      .map(({ index }) => index);
     expect(
-      activeIdentityIndexes,
-      `Expected one active persisted album identity, received ${JSON.stringify(postgresIdentity)}`,
+      postgresIdentity.album_ids,
+      `Expected one persisted album identity, received ${JSON.stringify(postgresIdentity)}`,
     ).toHaveLength(1);
-    const activeIdentityIndex = activeIdentityIndexes[0];
-    expect(postgresIdentity.album_ids[activeIdentityIndex]).toEqual(expect.any(Number));
-    expect(postgresIdentity.album_keys[activeIdentityIndex]).toEqual(expect.any(String));
-    expect(postgresIdentity.track_counts[activeIdentityIndex]).toBe(TRACKS.length);
+    expect(postgresIdentity.album_ids[0]).toEqual(expect.any(Number));
+    expect(postgresIdentity.album_keys).toHaveLength(1);
+    expect(postgresIdentity.track_counts).toEqual([TRACKS.length]);
   });
 
   await stepLogger.step('Show one 16-track release without a redundant Original tab', async () => {

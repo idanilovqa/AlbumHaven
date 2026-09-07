@@ -878,6 +878,10 @@ as $$
    limit 1;
 $$;
 
+drop function if exists app.load_claimed_job_authorization_context(
+  bigint, integer, varchar, varchar, timestamptz
+);
+
 create or replace function app.load_claimed_job_authorization_context(
   p_job_id bigint,
   p_attempt integer,

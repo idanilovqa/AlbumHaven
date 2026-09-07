@@ -761,6 +761,20 @@ def test_full_scan_publication_uses_the_authorized_root_path_style():
     ) in sql
 
 
+def test_full_scan_worker_migration_can_reapply_after_authorization_shape_expands():
+    sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
+    signature = (
+        "app.load_claimed_job_authorization_context( bigint, integer, varchar, "
+        "varchar, timestamptz )"
+    )
+
+    drop_position = sql.index(f"drop function if exists {signature}")
+    create_position = sql.index(
+        "create or replace function app.load_claimed_job_authorization_context("
+    )
+    assert drop_position < create_position
+
+
 def test_full_scan_publication_uses_shared_account_lifecycle_lock():
     sql = _normalized_sql(FULL_SCAN_WORKER_MIGRATION.read_text(encoding="utf-8"))
     function_sql = sql.split(

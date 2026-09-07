@@ -950,16 +950,10 @@ class PostgresScanCacheAdapter:
                     else ""
                 )
             )
-            destination_separate_release_key = (
-                album_separate_release_key(
-                    str(
-                        getattr(destination_album, "album_artist", "") or ""
-                    ),
-                    str(getattr(destination_album, "name", "") or ""),
-                    getattr(destination_album, "edition", None),
-                )
-                if updates_release_year
-                else ""
+            destination_separate_release_key = album_separate_release_key(
+                str(getattr(destination_album, "album_artist", "") or ""),
+                str(getattr(destination_album, "name", "") or ""),
+                getattr(destination_album, "edition", None),
             )
             destination_is_explicit_separate = (
                 destination_separate_release_key
@@ -4139,6 +4133,16 @@ def _persist_structural_album_tag_edit_sql(
             and (select count(*) from updated_track_files) =
                 (select input_path_count from selection_scope)
         ),
+        deleted_destination_separate_release as (
+          delete from library.separate_releases
+          using bootstrap_context, vacated_source_album
+          where library.separate_releases.library_id =
+                bootstrap_context.library_id
+            and library.separate_releases.release_key =
+                %(destination_separate_release_key)s
+            and not %(updates_release_year)s::boolean
+          returning library.separate_releases.release_key
+        ),
         updated_library as (
           update library.libraries
           set metadata = jsonb_set(
@@ -4175,6 +4179,7 @@ def _persist_structural_album_tag_edit_sql(
             and (select count(*) from updated_tracks) =
                 (select input_path_count from selection_scope)
             and (select count(*) from destination_album) = 1
+            and (select count(*) from deleted_destination_separate_release) >= 0
             and (
                   not exists (select 1 from existing_destination_album)
                   or (select input_path_count from selection_scope) < (

@@ -787,6 +787,63 @@ function finalizedAlbumsCoverExpectedTrackPaths(originalAlbum, optimisticAlbums,
   return Array.from(expectedPaths).every((path) => finalizedPaths.has(path));
 }
 
+function albumDeclaredMembershipCount(album) {
+  const explicitMembershipCount = getAlbumTrackPaths(album).size;
+  const declaredCounts = [album?.track_count_preview, album?.track_count]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  return Math.max(explicitMembershipCount, ...declaredCounts, 0);
+}
+
+function collectAlbumsFromViewPayload(payload) {
+  return ['primary_artist_groups', 'family_artist_groups', 'artist_groups']
+    .flatMap((field) => (Array.isArray(payload?.[field]) ? payload[field] : []))
+    .flatMap((group) => (Array.isArray(group?.albums) ? group.albums : []));
+}
+
+function canonicalViewPayloadCoversExpectedTagEdit(payload, originalAlbum, optimisticAlbums) {
+  const expectedAlbums = Array.isArray(optimisticAlbums) && optimisticAlbums.length
+    ? optimisticAlbums
+    : [originalAlbum].filter(Boolean);
+  const canonicalAlbums = collectAlbumsFromViewPayload(payload);
+  if (!expectedAlbums.length || !canonicalAlbums.length) return false;
+  const expectedReleaseGroups = [];
+  expectedAlbums.forEach((expectedAlbum) => {
+    const matchingGroup = expectedReleaseGroups.find((group) => (
+      albumsShareLogicalReleaseIdentity(group[0], expectedAlbum)
+      || albumsShareRuntimeIdentityAlias(group[0], expectedAlbum)
+    ));
+    if (matchingGroup) matchingGroup.push(expectedAlbum);
+    else expectedReleaseGroups.push([expectedAlbum]);
+  });
+  return expectedReleaseGroups.every((expectedReleaseGroup) => {
+    const expectedAlbum = expectedReleaseGroup[0];
+    const expectedAliases = new Set();
+    const expectedPaths = new Set();
+    let opaqueMembershipCount = 0;
+    expectedReleaseGroup.forEach((album) => {
+      getAlbumRuntimeIdentityAliases(album).forEach((alias) => expectedAliases.add(alias));
+      const albumPaths = getAlbumTrackPaths(album);
+      albumPaths.forEach((path) => expectedPaths.add(path));
+      opaqueMembershipCount += Math.max(
+        0,
+        albumDeclaredMembershipCount(album) - albumPaths.size,
+      );
+    });
+    const expectedCount = expectedPaths.size + opaqueMembershipCount;
+    if (!expectedCount) return false;
+    return canonicalAlbums.some((canonicalAlbum) => {
+      const canonicalAliases = getAlbumRuntimeIdentityAliases(canonicalAlbum);
+      const aliasesMatch = Array.from(expectedAliases)
+        .some((alias) => canonicalAliases.has(alias));
+      return (
+        (aliasesMatch || albumsShareLogicalReleaseIdentity(expectedAlbum, canonicalAlbum))
+        && albumDeclaredMembershipCount(canonicalAlbum) >= expectedCount
+      );
+    });
+  });
+}
+
 function albumsShareTrackPath(left, rightPaths) {
   if (!rightPaths?.size) return false;
   return Array.from(getAlbumTrackPaths(left))
@@ -935,6 +992,10 @@ function getAlbumRuntimeIdentityAliases(album) {
 let tagEditViewMutationGeneration = 0;
 const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
+
+function hasActiveTagEditViewMutation() {
+  return tagEditViewMutationResourceClaims.size > 0;
+}
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
   tagEditViewMutationGeneration += 1;
@@ -2285,19 +2346,45 @@ async function watchSaveTask(taskId, context = {}) {
             && !supersededMutationStillAtOrigin()
           ) {
             try {
-              viewRefreshed = await fetchAndRender(
-                buildApiUrl(state.view),
-                false,
-                {
-                  ...currentViewRenderOptions(),
-                  preserveMountedGalleryChildren: true,
-                  ...(!structuralTagEditRequiresCanonicalView
-                    ? { retainMountedGalleryIfEquivalent: true }
-                    : {}),
-                  restartIfSameUrl: true,
-                  shouldApplyResponse: () => !supersededMutationStillAtOrigin(),
-                },
-              );
+              const canonicalRefreshAttempts = structuralPartialMembershipRequiresCanonicalRefresh
+                ? 80
+                : 1;
+              for (
+                let refreshAttempt = 0;
+                refreshAttempt < canonicalRefreshAttempts;
+                refreshAttempt += 1
+              ) {
+                viewRefreshed = await fetchAndRender(
+                  buildApiUrl(state.view),
+                  false,
+                  {
+                    ...currentViewRenderOptions(),
+                    preserveMountedGalleryChildren: !structuralPartialMembershipRequiresCanonicalRefresh,
+                    ...(
+                      !structuralTagEditRequiresCanonicalView
+                      && !structuralPartialMembershipRequiresCanonicalRefresh
+                      ? { retainMountedGalleryIfEquivalent: true }
+                      : {}
+                    ),
+                    restartIfSameUrl: true,
+                    shouldApplyResponse: (payload) => (
+                      !supersededMutationStillAtOrigin()
+                      && (
+                        !structuralPartialMembershipRequiresCanonicalRefresh
+                        || canonicalViewPayloadCoversExpectedTagEdit(
+                          payload,
+                          originalAlbum,
+                          context.optimisticAlbums,
+                        )
+                      )
+                    ),
+                  },
+                );
+                if (viewRefreshed || supersededMutationStillAtOrigin()) break;
+                if (refreshAttempt + 1 < canonicalRefreshAttempts) {
+                  await waitForBrowserTimeout(250);
+                }
+              }
               if (viewRefreshed && finalizedAlbums.length) {
                 modalUpdatedAlbums = enrichFinalizedAlbumsWithCanonicalVisibleProjections(
                   finalizedAlbums,

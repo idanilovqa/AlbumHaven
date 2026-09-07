@@ -708,6 +708,14 @@ async function fetchAndRender(url, push = true, options = {}) {
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
       return false;
     }
+    if (
+      !push
+      && typeof requestOptions.shouldApplyResponse !== 'function'
+      && typeof hasActiveTagEditViewMutation === 'function'
+      && hasActiveTagEditViewMutation()
+    ) {
+      return false;
+    }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
       let shouldApplyResponse = false;
       try {

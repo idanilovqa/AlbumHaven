@@ -129,3 +129,12 @@ def test_bootstrap_executes_worker_denied_delete_probe_with_worker_login():
         "invoke-psqltext $psql $names.roles.worker $names.database $workerprobesql"
         in source
     )
+
+
+def test_direct_app_login_copies_inherited_column_privileges():
+    source = BOOTSTRAP_PATH.read_text(encoding="utf-8").casefold()
+
+    assert "pg_attribute" in source
+    assert "has_column_privilege(" in source
+    assert "'album_haven_app', relation.oid, attribute.attnum" in source
+    assert "grant %s (%i) on table %s to %i" in source

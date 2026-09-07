@@ -18,7 +18,7 @@ import time
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -4941,6 +4941,93 @@ def install_shutdown_handlers() -> None:
             signal.signal(signal_value, handle_shutdown)
 
 
+class ManagedDurableJobsWorker:
+    def __init__(
+        self,
+        worker: Any,
+        *,
+        ready_probe: Callable[[], bool],
+        startup_timeout_seconds: float = 15,
+        shutdown_timeout_seconds: float = 35,
+    ) -> None:
+        self._worker = worker
+        self._ready_probe = ready_probe
+        self._startup_timeout_seconds = startup_timeout_seconds
+        self._shutdown_timeout_seconds = shutdown_timeout_seconds
+        self._stop_event = threading.Event()
+        self._failure: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="album-haven-e2e-durable-jobs-worker",
+        )
+
+    def _run(self) -> None:
+        try:
+            self._worker.run(self._stop_event)
+        except BaseException as exc:
+            self._failure = exc
+        finally:
+            close = getattr(self._worker, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except BaseException as exc:
+                    if self._failure is None:
+                        self._failure = exc
+
+    def start(self) -> None:
+        self._thread.start()
+        deadline = time.monotonic() + self._startup_timeout_seconds
+        while time.monotonic() < deadline:
+            if self._failure is not None:
+                raise RuntimeError("Isolated durable jobs worker failed during startup") from self._failure
+            if not self._thread.is_alive():
+                raise RuntimeError("Isolated durable jobs worker exited during startup")
+            if self._ready_probe():
+                return
+            time.sleep(0.05)
+        raise RuntimeError("Isolated durable jobs worker did not become ready")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread.ident is not None:
+            self._thread.join(self._shutdown_timeout_seconds)
+        if self._thread.is_alive():
+            raise RuntimeError("Isolated durable jobs worker did not stop cleanly")
+        if self._failure is not None:
+            raise RuntimeError("Isolated durable jobs worker failed") from self._failure
+
+
+def build_isolated_jobs_worker(runtime_database_url: str) -> ManagedDurableJobsWorker | None:
+    worker_database_url = str(
+        os.environ.get("ALBUM_HAVEN_WORKER_DATABASE_URL") or ""
+    ).strip()
+    if not worker_database_url:
+        return None
+
+    import psycopg
+    from config import build_mail_config, build_worker_config
+    from scripts.run_jobs_worker import _build_worker
+
+    worker_environment = dict(os.environ)
+    worker_environment["ALBUM_HAVEN_WORKER_POLL_SECONDS"] = "1"
+    worker_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] = "1"
+    worker = _build_worker(
+        build_worker_config(worker_environment),
+        mail_config=build_mail_config(worker_environment),
+    )
+
+    def ready_probe() -> bool:
+        with psycopg.connect(runtime_database_url) as connection:
+            row = connection.execute(
+                "select 1 from ops.worker_instances "
+                "where lifecycle_state = 'running' limit 1"
+            ).fetchone()
+        return row is not None
+
+    return ManagedDurableJobsWorker(worker, ready_probe=ready_probe)
+
+
 def resolve_provider_port(cli_port: int | None, environment: dict[str, str] | None = None) -> int:
     if cli_port is not None:
         return int(cli_port)
@@ -5001,6 +5088,7 @@ def main() -> None:
     )
     temp_root.mkdir(parents=True, exist_ok=True)
     provider_service: ProviderFixtureService | None = None
+    jobs_worker: ManagedDurableJobsWorker | None = None
     original_failure: BaseException | None = None
     cleanup_failure: Exception | None = None
     database_preparation_started = False
@@ -5103,6 +5191,9 @@ def main() -> None:
         assert_production_runtime_configuration(
             app.state.config, temp_root, fixture_media_root=fixture_media_root
         )
+        jobs_worker = build_isolated_jobs_worker(runtime_database_url)
+        if jobs_worker is not None:
+            jobs_worker.start()
         print(
             f"Album Haven production E2E app listening on http://127.0.0.1:{args.port} "
             f"with {artist_count} artists, {album_count} albums, {track_count} tracks, "
@@ -5116,11 +5207,19 @@ def main() -> None:
         original_failure = exc
         raise
     finally:
+        if jobs_worker is not None:
+            try:
+                jobs_worker.stop()
+            except Exception as cleanup_exc:
+                cleanup_failure = cleanup_exc
+                if original_failure is not None:
+                    print(f"Durable jobs worker cleanup failed: {cleanup_exc}", file=sys.stderr)
         if provider_service is not None:
             try:
                 provider_service.stop()
             except Exception as cleanup_exc:
-                cleanup_failure = cleanup_exc
+                if cleanup_failure is None:
+                    cleanup_failure = cleanup_exc
                 if original_failure is not None:
                     print(f"Provider fixture cleanup failed: {cleanup_exc}", file=sys.stderr)
         if database_preparation_started and not preserve_on_shutdown:

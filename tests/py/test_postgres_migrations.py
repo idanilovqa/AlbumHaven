@@ -4136,6 +4136,22 @@ def test_targeted_publication_fence_checks_exact_live_claim_in_mutation_transact
     assert "return" in function_sql
 
 
+def test_targeted_publication_reuses_one_unseparated_semantic_album_identity():
+    sql = _normalized_sql(targeted_reconciliation_worker_sql())
+    function_sql = sql.split(
+        "create or replace function library.publish_claimed_targeted_reconciliation",
+        1,
+    )[1].split("revoke all on function", 1)[0]
+
+    assert "create temporary table targeted_album_key_map" in function_sql
+    assert "input_album_key text primary key" in function_sql
+    assert "target_album_key text not null" in function_sql
+    assert "existing.album_key = input.album_key" in function_sql
+    assert "not exists ( select 1 from library.separate_releases" in function_sql
+    assert "join pg_temp.targeted_album_key_map as album_map" in function_sql
+    assert "album.album_key = album_map.target_album_key" in function_sql
+
+
 def test_claimed_targeted_scope_revalidates_library_roots_and_watcher_health():
     sql = _normalized_sql(targeted_reconciliation_worker_sql())
     function_sql = sql.split(

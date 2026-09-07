@@ -1271,6 +1271,105 @@ def test_live_claimed_publication_commits_inventory_revision_exactly_once(
         ).fetchone()["count"] == 1
 
 
+def test_live_targeted_publication_reuses_unseparated_semantic_album_identity(
+    live_scan_database,
+):
+    setup_url, runtime_url, worker_url = live_scan_database
+    suffix = "semantic-album-identity"
+    library_id, accepted, claimed = _enqueue_and_claim_targeted(
+        setup_url=setup_url,
+        runtime_url=runtime_url,
+        worker_url=worker_url,
+        suffix=suffix,
+    )
+    with isolatedPostgres._connect(setup_url) as connection:
+        owner_account_id = connection.execute(
+            "select owner_account_id from library.libraries where id = %s",
+            (library_id,),
+        ).fetchone()["owner_account_id"]
+        connection.execute(
+            "update app.bootstrap_owners set account_id = %s "
+            "where owner_key = 'local-bootstrap-owner'",
+            (owner_account_id,),
+        )
+        connection.execute(
+            "update library.libraries set name = 'Local Library' where id = %s",
+            (library_id,),
+        )
+        artist_id = connection.execute(
+            "insert into library.local_artists "
+            "(library_id, artist_key, name, sort_name, metadata) "
+            "values (%s, 'artist', 'Artist', 'Artist', '{}'::jsonb) returning id",
+            (library_id,),
+        ).fetchone()["id"]
+        existing_album_id = connection.execute(
+            "insert into library.local_albums "
+            "(library_id, artist_id, album_key, title, release_year, metadata) "
+            "values (%s, %s, 'artist::album', 'Album', 2026, "
+            "jsonb_build_object('album_artist', 'Artist')) returning id",
+            (library_id, artist_id),
+        ).fetchone()["id"]
+
+    private_path = (
+        rf"C:\private\scan-jobs-{suffix}\a\Artist\Album\01.flac"
+    )
+    result = _scan_repository(worker_url).publish_claimed_targeted_reconciliation(
+        claim=claimed,
+        intent_id=accepted.intent_id,
+        inventory={
+            "artists": [{
+                "artist_key": "artist",
+                "name": "Artist",
+                "sort_name": "Artist",
+                "metadata": {},
+            }],
+            "albums": [{
+                "artist_key": "artist",
+                "album_key": "artist::album::year::2026",
+                "title": "Album",
+                "release_year": 2026,
+                "cover_path": None,
+                "metadata": {"album_artist": "Artist"},
+            }],
+            "featured_artists": [],
+            "tracks": [{
+                "album_key": "artist::album::year::2026",
+                "artist_key": "artist",
+                "track_key": "artist::album::01",
+                "title": "Track",
+                "disc_number": 1,
+                "track_number": 1,
+                "duration_seconds": 180,
+                "metadata": {},
+            }],
+            "track_files": [{
+                "track_key": "artist::album::01",
+                "private_path": private_path,
+                "relative_path": r"Artist\Album\01.flac",
+                "file_size_bytes": 1024,
+                "modified_at_epoch": 1_788_710_400.0,
+                "metadata": {},
+            }],
+        },
+        stale_scopes=(),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert result["publication_won"] is True
+    with isolatedPostgres._connect(setup_url) as connection:
+        albums = connection.execute(
+            "select id, album_key from library.local_albums where library_id = %s",
+            (library_id,),
+        ).fetchall()
+        track = connection.execute(
+            "select album_id from library.local_tracks "
+            "where library_id = %s and track_key = 'artist::album::01'",
+            (library_id,),
+        ).fetchone()
+    assert albums == [{"id": existing_album_id, "album_key": "artist::album"}]
+    assert track["album_id"] == existing_album_id
+
+
 def test_live_lost_lease_rolls_back_pending_publication_transaction(
     live_scan_database,
 ):

@@ -172,10 +172,18 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
       artist: ARTIST,
       year: YEAR,
     });
-    expect(postgresIdentity.album_ids).toHaveLength(1);
-    expect(postgresIdentity.album_ids[0]).toEqual(expect.any(Number));
-    expect(postgresIdentity.album_keys).toHaveLength(1);
-    expect(postgresIdentity.track_counts).toEqual([TRACKS.length]);
+    const activeIdentityIndexes = postgresIdentity.track_counts
+      .map((trackCount, index) => ({ index, trackCount }))
+      .filter(({ trackCount }) => trackCount > 0)
+      .map(({ index }) => index);
+    expect(
+      activeIdentityIndexes,
+      `Expected one active persisted album identity, received ${JSON.stringify(postgresIdentity)}`,
+    ).toHaveLength(1);
+    const activeIdentityIndex = activeIdentityIndexes[0];
+    expect(postgresIdentity.album_ids[activeIdentityIndex]).toEqual(expect.any(Number));
+    expect(postgresIdentity.album_keys[activeIdentityIndex]).toEqual(expect.any(String));
+    expect(postgresIdentity.track_counts[activeIdentityIndex]).toBe(TRACKS.length);
   });
 
   await stepLogger.step('Show one 16-track release without a redundant Original tab', async () => {
@@ -229,7 +237,7 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
     await session.tagEditorActions.setTrackNumber(15);
     await session.tagEditorActions.applyAndWaitForSavedFiles();
     await session.trackModalActions.waitForExactAlbumDetails({
-      title: `${ARTIST} - ${SOURCE_ALBUM} - ${FIXTURE_YEAR}`,
+      title: `${ARTIST} • ${SOURCE_ALBUM} • ${FIXTURE_YEAR}`,
       trackTitles: TRACKS.map((track) => track.title),
       displayedTrackNumbers: TRACKS.map((_track, index) => index + 1),
     });

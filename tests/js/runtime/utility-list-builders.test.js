@@ -1208,6 +1208,76 @@ test('applyUpdatedAlbumsToCurrentView merges a second moved track into the stabl
   });
 });
 
+test('applyUpdatedAlbumsToCurrentView immediately merges a renamed selected-artist release into its destination', () => {
+  const context = loadHelpers();
+  const destinationTracks = Array.from({ length: 13 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 1).padStart(2, '0')}.mp3`,
+    title: `Studio Track ${index + 1}`,
+  }));
+  const movedTracks = Array.from({ length: 3 }, (_value, index) => ({
+    path: `D:\\Synthetic Music\\DDT\\Studio Records\\${String(index + 14).padStart(2, '0')}.mp3`,
+    title: `Studio Track ${index + 14}`,
+  }));
+  const visibleDestination = {
+    key: 'ddt::studio records',
+    album_ref: 'ddt::studio records',
+    name: 'Studio Records',
+    album_artist: 'DDT',
+    year: 1988,
+    track_count_preview: destinationTracks.length,
+    tracks: destinationTracks,
+  };
+  const visibleSource = {
+    key: 'ddt::studio records merge candidate',
+    album_ref: 'ddt::studio records merge candidate',
+    name: 'Studio Records merge candidate',
+    album_artist: 'DDT',
+    year: 1988,
+    track_count_preview: movedTracks.length,
+    tracks: movedTracks,
+  };
+  const optimisticDestination = {
+    ...visibleSource,
+    key: visibleDestination.key,
+    album_ref: undefined,
+    name: visibleDestination.name,
+  };
+  const selectedArtistGroups = [{
+    artist: 'DDT',
+    albums: [visibleDestination, visibleSource],
+  }];
+  context.state.view.selected_artist = 'DDT';
+  context.state.view.primary_artist_groups = selectedArtistGroups;
+  context.state.view.family_artist_groups = [];
+  context.state.view.artist_groups = selectedArtistGroups;
+  context.getAlbumRequestKey = (album) => String(album?.key || album?.album_ref || '');
+  context.getAlbumIdentity = (album) => context.getAlbumPathSignature(album)
+    || context.getAlbumRequestKey(album);
+
+  context.applyUpdatedAlbumsToCurrentView(
+    [optimisticDestination],
+    {
+      originalAlbum: visibleSource,
+      skipRender: true,
+      tagEdits: Object.fromEntries(movedTracks.map((track) => [
+        track.path,
+        { album: visibleDestination.name },
+      ])),
+    },
+  );
+
+  const publishedAlbums = JSON.parse(JSON.stringify(
+    context.state.view.artist_groups[0].albums,
+  ));
+  assert.equal(publishedAlbums.length, 1);
+  assert.equal(publishedAlbums[0].name, visibleDestination.name);
+  assert.equal(publishedAlbums[0].track_count_preview, 16);
+  assert.deepEqual(
+    publishedAlbums[0].tracks.map((track) => track.path),
+    [...destinationTracks, ...movedTracks].map((track) => track.path),
+  );
+});
+
 test('applyUpdatedAlbumsToCurrentView merges disjoint tracks for the same visible runtime album identity', () => {
   const context = loadHelpers();
   const firstTrack = {
@@ -2712,6 +2782,141 @@ test('watchSaveTask refreshes a partial year split so the untouched source relea
   assert.deepEqual(
     Array.from(context.state.view.artist_groups[0].albums, (album) => album.year),
     [2004, 2014],
+  );
+});
+
+test('watchSaveTask waits for a canonical structural projection before replacing optimistic membership', async () => {
+  const context = loadHelpers();
+  const existingPaths = Array.from({ length: 13 }, (_value, index) => (
+    `D:\\Synthetic Music\\Merge Artist\\Target Album\\${String(index + 1).padStart(2, '0')} Existing.flac`
+  ));
+  const movedPaths = Array.from({ length: 3 }, (_value, index) => (
+    `D:\\Synthetic Music\\Merge Artist\\Source Album\\${String(index + 1).padStart(2, '0')} Moved.flac`
+  ));
+  const originalAlbum = {
+    key: 'merge-artist::source-album::2020',
+    name: 'Source Album',
+    album_artist: 'Merge Artist',
+    year: 2020,
+    tracks: movedPaths.map((path) => ({ path })),
+  };
+  const optimisticTarget = {
+    key: 'merge-artist::target-album::2020',
+    request_key: 'merge-artist::target-album::2020',
+    identity_key: 'merge-artist::target-album::2020',
+    name: 'Target Album',
+    album_artist: 'Merge Artist',
+    year: 2020,
+    tracks: [...existingPaths, ...movedPaths].map((path) => ({ path })),
+  };
+  const stalePayload = {
+    artist_groups: [{
+      artist: 'Merge Artist',
+      albums: [{ ...optimisticTarget, tracks: [], track_paths: [], track_count_preview: 13 }],
+    }],
+  };
+  const readyPayload = {
+    artist_groups: [{
+      artist: 'Merge Artist',
+      albums: [{ ...optimisticTarget, tracks: [], track_paths: [], track_count_preview: 16 }],
+    }],
+  };
+  const evaluatedPayloads = [];
+  const refreshOptions = [];
+  context.state.view.artist_groups = [{ artist: 'Merge Artist', albums: [optimisticTarget] }];
+  context.state.view.primary_artist_groups = [];
+  context.state.view.family_artist_groups = [];
+  context.buildApiUrl = () => '/view-data?surface=albums&artist=Merge%20Artist';
+  context.waitForBrowserTimeout = async () => {};
+  context.fetchAndRender = async (_url, _push, options) => {
+    refreshOptions.push(options);
+    const payload = evaluatedPayloads.length ? readyPayload : stalePayload;
+    evaluatedPayloads.push(payload);
+    if (!options.shouldApplyResponse(payload)) return false;
+    context.state.view.artist_groups = payload.artist_groups;
+    return true;
+  };
+  context.document.getElementById = () => null;
+  context.renderView = () => {};
+  context.showRepairAlert = () => {};
+
+  await context.watchSaveTask('completed-structural-merge', {
+    originalAlbum,
+    optimisticAlbums: [optimisticTarget],
+    tagEdits: Object.fromEntries(movedPaths.map((path) => [path, { album: 'Target Album' }])),
+    terminalPayload: {
+      ok: true,
+      task_id: 'completed-structural-merge',
+      status: 'completed',
+      requires_view_refresh: true,
+      updated_albums: [],
+    },
+  });
+
+  assert.equal(evaluatedPayloads.length, 2);
+  assert.equal(context.state.view.artist_groups[0].albums[0].track_count_preview, 16);
+  assert.equal(refreshOptions[1].preserveMountedGalleryChildren, false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(refreshOptions[1], 'retainMountedGalleryIfEquivalent'),
+    false,
+  );
+});
+
+test('canonical structural readiness rejects fragmented projections that only cover membership in aggregate', () => {
+  const context = loadHelpers();
+  const existingPaths = Array.from({ length: 13 }, (_value, index) => `existing-${index}`);
+  const movedPaths = Array.from({ length: 3 }, (_value, index) => `moved-${index}`);
+  const existingOptimisticProjection = {
+    key: 'stable-target',
+    name: 'Target',
+    album_artist: 'Artist',
+    year: 2020,
+    preview_only: true,
+    track_count_preview: 13,
+    tracks: [],
+  };
+  const movedOptimisticProjection = {
+    key: 'target::year::2020',
+    name: 'Target',
+    album_artist: 'Artist',
+    year: 2020,
+    tracks: movedPaths.map((path) => ({ path })),
+  };
+  const fragmentedPayload = {
+    artist_groups: [{
+      artist: 'Artist',
+      albums: [
+        existingOptimisticProjection,
+        { ...movedOptimisticProjection, key: 'stale-source-fragment' },
+      ],
+    }],
+  };
+  const consolidatedPayload = {
+    artist_groups: [{
+      artist: 'Artist',
+      albums: [{
+        ...existingOptimisticProjection,
+        track_count_preview: 16,
+        track_paths: [...existingPaths, ...movedPaths],
+      }],
+    }],
+  };
+
+  assert.equal(
+    context.canonicalViewPayloadCoversExpectedTagEdit(
+      fragmentedPayload,
+      movedOptimisticProjection,
+      [existingOptimisticProjection, movedOptimisticProjection],
+    ),
+    false,
+  );
+  assert.equal(
+    context.canonicalViewPayloadCoversExpectedTagEdit(
+      consolidatedPayload,
+      movedOptimisticProjection,
+      [existingOptimisticProjection, movedOptimisticProjection],
+    ),
+    true,
   );
 });
 

@@ -676,6 +676,56 @@ begin
     hashtext('album-haven:local-inventory-publication')
   );
 
+  create temporary table targeted_album_key_map (
+    input_album_key text primary key,
+    target_album_key text not null
+  ) on commit drop;
+
+  insert into pg_temp.targeted_album_key_map (
+    input_album_key, target_album_key
+  )
+  select input.album_key,
+         coalesce((
+           select existing.album_key
+             from library.local_albums as existing
+             left join library.local_artists as existing_artist
+               on existing_artist.id = existing.artist_id
+              and existing_artist.library_id = existing.library_id
+            where existing.library_id = claimed_library_id
+              and (
+                existing.album_key = input.album_key
+                or (
+                  existing_artist.artist_key = input.artist_key
+                  and lower(btrim(existing.title)) = lower(btrim(input.title))
+                  and existing.release_year is not distinct from input.release_year
+                  and lower(btrim(coalesce(existing.metadata ->> 'edition', '')))
+                        = lower(btrim(coalesce(input.metadata ->> 'edition', '')))
+                  and not exists (
+                    select 1
+                      from library.separate_releases as separated
+                     where separated.library_id = claimed_library_id
+                       and separated.release_key = concat_ws(
+                             '::',
+                             lower(btrim(coalesce(
+                               nullif(btrim(existing.metadata ->> 'album_artist'), ''),
+                               existing_artist.name,
+                               ''
+                             ))),
+                             lower(btrim(existing.title)),
+                             nullif(lower(btrim(coalesce(
+                               existing.metadata ->> 'edition', ''
+                             ))), '')
+                           )
+                  )
+                )
+              )
+            order by (existing.album_key = input.album_key) desc, existing.id
+            limit 1
+         ), input.album_key)
+    from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
+      as input(artist_key text, album_key text, title text, release_year integer,
+               metadata jsonb);
+
   update library.targeted_reconciliation_intents as intent
      set publication_attempt = p_attempt,
          updated_at = greatest(intent.updated_at, p_now)
@@ -704,11 +754,13 @@ begin
   insert into library.local_albums (
     library_id, artist_id, album_key, title, release_year, cover_path, metadata
   )
-  select claimed_library_id, artist.id, input.album_key, input.title,
+  select claimed_library_id, artist.id, album_map.target_album_key, input.title,
          input.release_year, input.cover_path, input.metadata
     from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
       as input(artist_key text, album_key text, title text, release_year integer,
                cover_path text, metadata jsonb)
+    join pg_temp.targeted_album_key_map as album_map
+      on album_map.input_album_key = input.album_key
     left join library.local_artists as artist
       on artist.library_id = claimed_library_id
      and artist.artist_key = input.artist_key
@@ -734,8 +786,11 @@ begin
          input.featured_kind, input.metadata
     from jsonb_to_recordset(coalesce(p_inventory -> 'featured_artists', '[]'::jsonb))
       as input(album_key text, artist_key text, featured_kind text, metadata jsonb)
+    join pg_temp.targeted_album_key_map as album_map
+      on album_map.input_album_key = input.album_key
     join library.local_albums as album
-      on album.library_id = claimed_library_id and album.album_key = input.album_key
+      on album.library_id = claimed_library_id
+     and album.album_key = album_map.target_album_key
     join library.local_artists as artist
       on artist.library_id = claimed_library_id and artist.artist_key = input.artist_key
   on conflict (library_id, album_id, artist_id, featured_kind) do update
@@ -754,8 +809,11 @@ begin
       as input(album_key text, artist_key text, track_key text, title text,
                disc_number integer, track_number integer,
                duration_seconds integer, metadata jsonb)
+    left join pg_temp.targeted_album_key_map as album_map
+      on album_map.input_album_key = input.album_key
     left join library.local_albums as album
-      on album.library_id = claimed_library_id and album.album_key = input.album_key
+      on album.library_id = claimed_library_id
+     and album.album_key = album_map.target_album_key
     left join library.local_artists as artist
       on artist.library_id = claimed_library_id and artist.artist_key = input.artist_key
   on conflict (library_id, track_key) do update
@@ -797,9 +855,11 @@ begin
   select coalesce(array_agg(distinct key order by key), array[]::text[])
     into affected_keys
     from (
-      select input.album_key as key
+      select album_map.target_album_key as key
         from jsonb_to_recordset(coalesce(p_inventory -> 'albums', '[]'::jsonb))
           as input(album_key text)
+        join pg_temp.targeted_album_key_map as album_map
+          on album_map.input_album_key = input.album_key
        where nullif(input.album_key, '') is not null
       union
       select album.album_key

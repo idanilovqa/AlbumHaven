@@ -1439,6 +1439,67 @@ def test_cleanup_only_reaps_stale_owner_resets_tables_and_releases_without_start
     assert not lock_path.exists()
 
 
+def test_managed_durable_jobs_worker_starts_waits_and_stops_cleanly():
+    events: list[str] = []
+
+    class FakeWorker:
+        def run(self, stop_event):
+            events.append("worker.run")
+            stop_event.wait(2)
+            events.append("worker.stopped")
+
+        def close(self):
+            events.append("worker.close")
+
+    managed = isolatedLibraryApp.ManagedDurableJobsWorker(
+        FakeWorker(),
+        ready_probe=lambda: "worker.run" in events,
+        startup_timeout_seconds=1,
+        shutdown_timeout_seconds=2,
+    )
+
+    managed.start()
+    managed.stop()
+
+    assert events == ["worker.run", "worker.stopped", "worker.close"]
+
+
+def test_isolated_jobs_worker_is_built_only_with_dedicated_worker_database(monkeypatch):
+    monkeypatch.delenv("ALBUM_HAVEN_WORKER_DATABASE_URL", raising=False)
+    assert isolatedLibraryApp.build_isolated_jobs_worker("runtime-url") is None
+
+
+def test_isolated_jobs_worker_uses_one_second_polling_without_idle_backoff(monkeypatch):
+    import config
+    import scripts.run_jobs_worker as run_jobs_worker
+
+    captured_environment = {}
+    fake_worker = object()
+    monkeypatch.setenv("ALBUM_HAVEN_WORKER_DATABASE_URL", "worker-url")
+    monkeypatch.setattr(
+        config,
+        "build_worker_config",
+        lambda environment: captured_environment.update(environment) or "worker-config",
+    )
+    monkeypatch.setattr(config, "build_mail_config", lambda _environment: "mail-config")
+    monkeypatch.setattr(
+        run_jobs_worker,
+        "_build_worker",
+        lambda worker_config, *, mail_config: (
+            fake_worker
+            if (worker_config, mail_config) == ("worker-config", "mail-config")
+            else None
+        ),
+    )
+
+    managed = isolatedLibraryApp.build_isolated_jobs_worker("runtime-url")
+
+    assert managed is not None
+    assert managed._worker is fake_worker
+    assert captured_environment["ALBUM_HAVEN_WORKER_POLL_SECONDS"] == "1"
+    assert captured_environment["ALBUM_HAVEN_WORKER_MAX_IDLE_BACKOFF_SECONDS"] == "1"
+
+
 @pytest.mark.parametrize("failure_point", ["prepare", "none"])
 def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_cleanup(
     failure_point,

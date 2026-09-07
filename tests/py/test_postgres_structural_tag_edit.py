@@ -1284,13 +1284,14 @@ def test_postgres_album_rename_merges_full_source_into_existing_destination(monk
     result = _persist_album_rename(adapter, previous, updated)
 
     assert result["track_file_rows_updated"] == 2
-    mutation_sql = next(
-        sql
-        for sql, _params in connection.executed
+    mutation_sql, mutation_params = next(
+        (sql, params)
+        for sql, params in connection.executed
         if "source_album_track_file_count" in _normalized_sql(sql)
     )
     normalized_sql = _normalized_sql(mutation_sql)
 
+    assert mutation_params["destination_separate_release_key"] == "artist::new album"
     assert "destination_conflict as materialized" not in normalized_sql
     assert "existing_destination_album as materialized" in normalized_sql
     assert "copied_album_ratings as (" in normalized_sql
@@ -1299,6 +1300,9 @@ def test_postgres_album_rename_merges_full_source_into_existing_destination(monk
     assert "cross join destination_album" in normalized_sql
     assert "updated_album_mbid_assertions as (" in normalized_sql
     assert "vacated_source_album as materialized (" in normalized_sql
+    assert "deleted_destination_separate_release as (" in normalized_sql
+    assert "delete from library.separate_releases" in normalized_sql
+    assert "release_key = %(destination_separate_release_key)s" in normalized_sql
     assert "select count(*) from updated_tracks" in normalized_sql
     assert "select count(*) from updated_track_files" in normalized_sql
     assert (

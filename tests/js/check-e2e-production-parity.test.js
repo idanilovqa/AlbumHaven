@@ -135,6 +135,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
   const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
+  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'cloud_verification_gate');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
     'Require OpenAI credential for PR Agent review',
@@ -164,6 +165,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
     'Post Codex feedback',
   );
   const codexComment = workflowStepSource(codexJob, 'Post Codex feedback');
+  const aiCodeReviewAction = workflowStepSource(aiCodeReviewJob, 'Run AI Code Review');
 
   assert.doesNotMatch(prAgentJob, /^    env:\r?\n\s+PR_AGENT_OPENAI_API_KEY:/m);
   assert.match(prAgentCredentialGuard, /PR_AGENT_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
@@ -216,6 +218,12 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.doesNotMatch(workflow, /^  codex_review_comment:/m);
   assert.doesNotMatch(workflow, /needs\.codex_review\.outputs|steps\.run_codex\.outputs/);
   assert.doesNotMatch(codexJob, /[Ss]kip.*(?:credential|key)|if:.*CODEX_OPENAI_API_KEY/);
+
+  assert.match(
+    aiCodeReviewAction,
+    /uses: zxcloli666\/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d/,
+  );
+  assert.match(aiCodeReviewAction, /OPENAI_API_MODEL: "gpt-4o"/);
 });
 
 contractTest('hosted review jobs require successful functional and performance E2E guards', () => {

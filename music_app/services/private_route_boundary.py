@@ -85,7 +85,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/refresh-api"): "library.refresh",
     (
         "POST",
-        "/api/library/albums/{album_key}/confirm-removal",
+        "/api/library/albums/{album_key:path}/confirm-removal",
     ): "library.inventory.manage",
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
     ("GET", "/refresh"): "library.refresh.read",

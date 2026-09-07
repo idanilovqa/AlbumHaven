@@ -84,6 +84,26 @@ def test_create_then_delete_emits_only_deleted_path(tmp_path: Path):
     assert emitted[0].deleted_paths == frozenset({tmp_path / event_path})
 
 
+def test_delete_then_recreate_emits_only_active_path(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    event_path = "Artist/Album/01.flac"
+    coordinator.accept(_event(LibraryEventKind.DELETED, tmp_path, event_path))
+    coordinator.accept(_event(LibraryEventKind.CREATED, tmp_path, event_path))
+    coordinator.flush()
+
+    assert emitted[0].paths == frozenset({tmp_path / event_path})
+    assert emitted[0].deleted_paths == frozenset()
+    assert emitted[0].deleted_subtrees == frozenset()
+
+
 def test_directory_delete_is_emitted_as_deleted_subtree(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

@@ -6,7 +6,6 @@ from collections.abc import Mapping
 from threading import Event
 from time import perf_counter
 from typing import Any
-from urllib.parse import unquote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -111,10 +110,10 @@ from music_app.services.edit_state import find_album_dicts_by_track_paths
 router = APIRouter()
 
 
-@router.post("/api/library/albums/{album_key}/confirm-removal")
+@router.post("/api/library/albums/{album_key:path}/confirm-removal")
 async def confirm_missing_album_removal(request: Request, album_key: str) -> JSONResponse:
     await require_action("library.inventory.manage")(request)
-    normalized_key = unquote(str(album_key or "")).strip()
+    normalized_key = str(album_key or "").strip()
     if not normalized_key:
         return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
     try:

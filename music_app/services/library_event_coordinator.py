@@ -128,8 +128,9 @@ class LibraryEventCoordinator:
             )
             group.moves[(move.source, move.destination)] = move
             return
-        if event.path not in group.deleted_paths:
-            group.active_paths.add(event.path)
+        group.deleted_paths.discard(event.path)
+        group.deleted_subtrees.discard(event.path)
+        group.active_paths.add(event.path)
 
     def _schedule_flush_locked(self) -> None:
         if self._timer is not None:

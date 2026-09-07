@@ -87,7 +87,7 @@ Expected: PASS.
 - Modify: `tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js`
 
 **Interfaces:**
-- Consumes: `POST /api/library/albums/{album_key}/confirm-removal`, Album Details POM, app confirmation POM, and gallery card POM.
+- Consumes: `POST /api/library/albums/{album_key:path}/confirm-removal`, Album Details POM, app confirmation POM, and gallery card POM.
 - Produces: regression coverage for successful response, modal closure, no error toast, no navigation, stable scroll, correct surviving-card order, immediate removal, and reload durability.
 
 - [ ] **Step 1: Add assertions that expose the current failure and missing smoothness contract**

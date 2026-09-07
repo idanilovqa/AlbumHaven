@@ -292,7 +292,7 @@ function buildCloudTestReport(input) {
   const runHtml = `<!doctype html><html lang="en"><meta charset="utf-8"><title>E2E Report</title><h1>E2E Report</h1><p>Run ${escapeHtml(runId)}, attempt ${escapeHtml(runAttempt)} · ${escapeHtml(overallConclusion)}</p>${renderFunctional(functional, input.run.actionsUrl)}${renderPerformance(performance)}</html>`;
   const runIndex = pruneRunIndex([
     { runId, runAttempt, generatedAt: input.run.generatedAt, overallConclusion }, ...(input.previousRunIndex || []),
-  ]);
+  ], { now: input.run.generatedAt });
   const indexLinks = runIndex.map((entry) => {
     const href = entry.runId === runId && entry.runAttempt === runAttempt
       ? `./runs/${entry.runId}/${entry.runAttempt}/`

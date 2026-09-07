@@ -9028,6 +9028,7 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
       previewAlbumsByAlias,
       trustedAliases,
       inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
     },
   );
   while (trackModalHydratedAlbumDetailsLru.size > TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) {
@@ -9138,7 +9139,15 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
     const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
-    if (cachedInventoryRevision !== currentInventoryRevision) {
+    const pendingMutationOwnsCachedMembership = Boolean(
+      cachedEntry?.tagEditMutationClaim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(cachedEntry.tagEditMutationClaim)
+    );
+    if (
+      cachedInventoryRevision !== currentInventoryRevision
+      && !pendingMutationOwnsCachedMembership
+    ) {
       invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
       return null;
     }
@@ -15653,18 +15662,18 @@ async function watchSaveTask(taskId, context = {}) {
   settleTagEditViewMutation(tagEditMutationClaim);
 }
 
-function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases) {
+function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases, options = {}) {
   if (typeof cacheHydratedTrackModalAlbum !== 'function') return;
   candidates.filter((candidate) => candidate !== sourceAliasOwner).forEach((candidate) => {
     const candidateRequestKey = String(getAlbumRequestKey(candidate) || '').trim();
-    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate);
+    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate, options);
   });
   if (!sourceAliasOwner) return;
   const sourceRequestKey = String(getAlbumRequestKey(sourceAliasOwner) || '').trim();
   cacheHydratedTrackModalAlbum(
     sourceRequestKey,
     sourceAliasOwner,
-    { aliases: sourceAliases },
+    { ...options, aliases: sourceAliases },
   );
 }
 
@@ -15735,7 +15744,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     const sourceAliasOwner = candidates.find((candidate) => (
       albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
     )) || candidates[0];
-    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases);
+    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases, {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    });
     return;
   }
   const currentAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
@@ -15799,6 +15810,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     candidates,
     sourceAliasOwner === updatedAlbum ? modalAlbum : sourceAliasOwner,
     aliases,
+    {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    },
   );
   if (!currentModalBelongsToMutation) return;
   const releaseSet = getAlbumReleaseSet(modalAlbum);
@@ -23711,7 +23725,9 @@ async function confirmManualTagEdit() {
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
-  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums);
+  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums, {
+    tagEditMutationClaim,
+  });
   renderView(renderOptions);
   showRepairAlert('Writing tag changes...', 'success', null);
   let failedLogHistoryEntryId = '';

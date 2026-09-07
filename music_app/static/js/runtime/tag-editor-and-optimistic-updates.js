@@ -723,7 +723,9 @@ async function confirmManualTagEdit() {
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
-  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums);
+  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums, {
+    tagEditMutationClaim,
+  });
   renderView(renderOptions);
   showRepairAlert('Writing tag changes...', 'success', null);
   let failedLogHistoryEntryId = '';

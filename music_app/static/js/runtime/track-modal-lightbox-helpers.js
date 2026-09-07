@@ -216,6 +216,7 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
       previewAlbumsByAlias,
       trustedAliases,
       inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
     },
   );
   while (trackModalHydratedAlbumDetailsLru.size > TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) {
@@ -326,7 +327,15 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
     const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
     const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
-    if (cachedInventoryRevision !== currentInventoryRevision) {
+    const pendingMutationOwnsCachedMembership = Boolean(
+      cachedEntry?.tagEditMutationClaim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(cachedEntry.tagEditMutationClaim)
+    );
+    if (
+      cachedInventoryRevision !== currentInventoryRevision
+      && !pendingMutationOwnsCachedMembership
+    ) {
       invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
       return null;
     }

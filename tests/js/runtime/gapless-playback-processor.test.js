@@ -799,7 +799,13 @@ test('an expected empty successor releases terminal playback after its EOS arriv
   });
   play(fixture);
 
-  renderQuantum(fixture);
+  const outgoing = sequence(1, 64);
+  const silence = Array(64).fill(0);
+  assertRenderedStereo(
+    fixture,
+    [...outgoing, ...silence],
+    [...outgoing.map((value) => -value), ...silence],
+  );
   assert.equal(fixture.events('ended').length, 0);
 
   markEos(fixture, {
@@ -808,7 +814,7 @@ test('an expected empty successor releases terminal playback after its EOS arriv
     emittedFrames: 0,
     authoritativeTotalFrames: 0,
   });
-  renderQuantum(fixture);
+  assertRenderedSilence(fixture);
 
   assert.equal(fixture.events('ended').length, 1);
   assert.equal(fixture.processor.playing, false);

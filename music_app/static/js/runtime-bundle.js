@@ -4591,6 +4591,11 @@ function closeStreamingContinuityRole(reason, { releaseWorklet = true } = {}) {
         generation: continuity.generation,
         streamId: continuity.streamId,
       });
+      engine.node.port.postMessage({
+        type: 'expect-continuity',
+        generation: continuity.generation,
+        active: false,
+      });
     } else {
       engine.node.port.postMessage({
         type: 'set-loop',
@@ -6029,6 +6034,13 @@ async function scheduleStreamingContinuity(track, options = {}) {
   const startFrame = Math.round(normalized.startSeconds * STREAMING_SAMPLE_RATE);
   const continuity = openStreamingRole('continuity', track, startFrame, normalized);
   if (!continuity) return null;
+  if (normalized.kind === 'queued-next') {
+    engine.node.port.postMessage({
+      type: 'expect-continuity',
+      generation: engine.generation,
+      active: true,
+    });
+  }
   if (normalized.kind !== 'queued-next') {
     engine.loopContinuity = {
       ...normalized,

@@ -83,17 +83,33 @@ class LibraryEventCoordinator:
         with self._lock:
             if self._stopped:
                 return False
+            if event.kind is LibraryEventKind.MOVED and event.destination is not None:
+                self._clear_superseded_deletions(
+                    event.destination_root_id or event.root_id,
+                    event.destination,
+                )
+            elif event.kind is not LibraryEventKind.DELETED:
+                self._clear_superseded_deletions(event.root_id, event.path)
             group = self._pending.get(group_key)
             if group is None:
                 if len(self._pending) >= self._max_pending_groups:
-                    self._emit_health_event(
-                        LibraryEvent(
-                            LibraryEventKind.OVERFLOW,
-                            event.root_id,
-                            event.path.parent,
-                            observed_at=event.observed_at,
+                    affected_roots = {event.root_id: event.path.parent}
+                    if (
+                        event.kind is LibraryEventKind.MOVED
+                        and event.destination is not None
+                    ):
+                        affected_roots[
+                            event.destination_root_id or event.root_id
+                        ] = event.destination.parent
+                    for root_id, path in affected_roots.items():
+                        self._emit_health_event(
+                            LibraryEvent(
+                                LibraryEventKind.OVERFLOW,
+                                root_id,
+                                path,
+                                observed_at=event.observed_at,
+                            )
                         )
-                    )
                     return False
                 group = _PendingGroup(event.root_id, event.path.parent)
                 self._pending[group_key] = group
@@ -101,6 +117,24 @@ class LibraryEventCoordinator:
             if self._auto_schedule:
                 self._schedule_flush_locked()
             return True
+
+    def _clear_superseded_deletions(self, root_id: str, live_path: Path) -> None:
+        live_path_and_ancestors = {live_path, *live_path.parents}
+        for group_key, group in tuple(self._pending.items()):
+            if group.root_id != root_id:
+                continue
+            superseded = group.deleted_subtrees & live_path_and_ancestors
+            if not superseded:
+                continue
+            group.deleted_subtrees.difference_update(superseded)
+            group.deleted_paths.difference_update(superseded)
+            if not (
+                group.active_paths
+                or group.deleted_paths
+                or group.deleted_subtrees
+                or group.moves
+            ):
+                self._pending.pop(group_key, None)
 
     def _coalesce(self, group: _PendingGroup, event: LibraryEvent) -> None:
         if event.kind is LibraryEventKind.DELETED:
@@ -170,7 +204,11 @@ class LibraryEventCoordinator:
             group.moves.values(),
             key=lambda value: (str(value.source).casefold(), str(value.destination).casefold()),
         ):
-            disposition = self._stable_disposition(move.destination, move.destination_root_id)
+            disposition = self._stable_disposition(
+                move.destination,
+                move.destination_root_id,
+                related_root_ids=(move.source_root_id,),
+            )
             if disposition == "ready":
                 ready_moves.append(move)
             elif disposition == "deleted":
@@ -190,7 +228,13 @@ class LibraryEventCoordinator:
             )
         )
 
-    def _stable_disposition(self, path: Path, root_id: str) -> str:
+    def _stable_disposition(
+        self,
+        path: Path,
+        root_id: str,
+        *,
+        related_root_ids: tuple[str, ...] = (),
+    ) -> str:
         previous: tuple[int, int] | None = None
         for attempt in range(self._max_stable_attempts):
             try:
@@ -204,7 +248,10 @@ class LibraryEventCoordinator:
             previous = current
             if attempt + 1 < self._max_stable_attempts:
                 self._wait(self._stable_sample_interval)
-        self._emit_problem(CoordinatorProblem("stable_write_unavailable", root_id))
+        for affected_root_id in dict.fromkeys((root_id, *related_root_ids)):
+            self._emit_problem(
+                CoordinatorProblem("stable_write_unavailable", affected_root_id)
+            )
         return "problem"
 
     def stop(self) -> bool:

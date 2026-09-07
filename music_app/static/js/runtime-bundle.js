@@ -17548,30 +17548,61 @@ function mountAlertsAppearanceEditor(detail) {
   initializeRepairSelections(selectedAlbum);
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
   if (state.utility.focusedTrackPath) {
-    const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
-    activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
-    if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
-      const listRect = els.list.getBoundingClientRect();
-      const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
-      if (activeAlbumRect.bottom > listRect.bottom) {
-        els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
-      } else if (activeAlbumRect.top < listRect.top) {
-        els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+    const focusedTrackPath = String(state.utility.focusedTrackPath);
+    const scrollFocusedRowsIntoView = () => {
+      let albumGeometryReady = false;
+      const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
+      activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
+      if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
+        const listRect = els.list.getBoundingClientRect();
+        const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
+        albumGeometryReady = listRect.bottom > listRect.top
+          && activeAlbumRect.bottom > activeAlbumRect.top;
+        if (activeAlbumRect.bottom > listRect.bottom) {
+          els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
+        } else if (activeAlbumRect.top < listRect.top) {
+          els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+        }
       }
-    }
-    const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(state.utility.focusedTrackPath)}"]`;
-    const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
-    const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
-    if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
-      const detailRect = els.detail.getBoundingClientRect();
-      const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
-      if (focusedTrackRect.bottom > detailRect.bottom) {
-        els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
-      } else if (focusedTrackRect.top < detailRect.top) {
-        els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+      const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(focusedTrackPath)}"]`;
+      const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
+      const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
+      let trackGeometryReady = false;
+      if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
+        const detailRect = els.detail.getBoundingClientRect();
+        const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
+        trackGeometryReady = detailRect.bottom > detailRect.top
+          && focusedTrackRect.bottom > focusedTrackRect.top;
+        if (focusedTrackRect.bottom > detailRect.bottom) {
+          els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
+        } else if (focusedTrackRect.top < detailRect.top) {
+          els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+        }
       }
+      return {
+        focusedTrackRendered: Boolean(focusedTrackRow),
+        layoutReady: albumGeometryReady && trackGeometryReady,
+      };
+    };
+    const initialFocusedNavigation = scrollFocusedRowsIntoView();
+    const finishFocusedNavigation = (remainingAttempts) => {
+      if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
+      const result = scrollFocusedRowsIntoView();
+      if (result.layoutReady) {
+        state.utility.focusedTrackPath = '';
+      } else if (
+        result.focusedTrackRendered
+        && remainingAttempts > 1
+        && typeof scheduleBrowserAnimationFrame === 'function'
+      ) {
+        scheduleBrowserAnimationFrame(() => finishFocusedNavigation(remainingAttempts - 1));
+      }
+    };
+    if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
+    } else if (initialFocusedNavigation.layoutReady) {
+      state.utility.focusedTrackPath = '';
     }
-    if (focusedTrackRow) state.utility.focusedTrackPath = '';
   }
 }
 
@@ -19095,7 +19126,12 @@ function validateProblematicSummaryPayload(payload) {
     const stateValue = String(item.state || '').trim();
     const rootKey = String(item.root_key || '').trim();
     if (
-      !['overflow', 'root_unavailable'].includes(stateValue)
+      ![
+        'overflow',
+        'reconciliation_failed',
+        'root_unavailable',
+        'stable_write_unavailable',
+      ].includes(stateValue)
       || !/^root_[a-f0-9]{16}$/.test(rootKey)
     ) {
       throw new Error('Problematic Files operational item is invalid.');

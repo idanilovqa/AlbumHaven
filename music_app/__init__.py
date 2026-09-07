@@ -188,7 +188,10 @@ def create_asgi_app():
         WatchdogLibraryEventSource,
     )
     from music_app.services.library_roots import get_library_roots
-    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_event_coordinator import (
+        CoordinatorProblem,
+        LibraryEventCoordinator,
+    )
     from music_app.services.exception_overrides import load_exception_overrides
     from music_app.services.runtime_shutdown import create_daemon_executor
     from music_app.services.scan_cache_persistence import select_scan_cache_adapter
@@ -256,10 +259,18 @@ def create_asgi_app():
             reservation_acquirer=acquire_structural_tag_edit_reservation,
         )
 
+        def targeted_request_root_ids(request) -> tuple[str, ...]:
+            root_ids = {str(request.root_id)}
+            for move in request.moves:
+                root_ids.add(str(move.source_root_id))
+                root_ids.add(str(move.destination_root_id))
+            return tuple(sorted(root_id for root_id in root_ids if root_id))
+
         def reconcile_targeted_request(request) -> None:
-            root_healthy = (
+            root_healthy = all(
                 runtime.library_watch_health_service
-                .root_allows_destructive_reconciliation(request.root_id)
+                .root_allows_destructive_reconciliation(root_id)
+                for root_id in targeted_request_root_ids(request)
             )
             targeted_reconciler.reconcile(
                 request,
@@ -267,6 +278,7 @@ def create_asgi_app():
             )
 
         def submit_targeted_reconciliation(request) -> None:
+            affected_root_ids = targeted_request_root_ids(request)
             future = targeted_executor.submit(reconcile_targeted_request, request)
 
             def report_reconciliation_failure(completed) -> None:
@@ -276,6 +288,13 @@ def create_asgi_app():
                     runtime.logger.exception(
                         "Targeted library reconciliation failed."
                     )
+                    for root_id in affected_root_ids:
+                        persist_library_watch_problem(
+                            CoordinatorProblem(
+                                "reconciliation_failed",
+                                root_id,
+                            )
+                        )
 
             future.add_done_callback(report_reconciliation_failure)
 

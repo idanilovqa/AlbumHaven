@@ -534,9 +534,11 @@ test('late Problematic detail responses are discarded after a newer selection ow
 });
 
 function renderFocusedAlbumWithGeometry({
+  deferAnimationFrame = true,
   detailBottom,
   initialDetailScrollTop,
   initialScrollTop,
+  initialLayoutReady = true,
   listBottom,
   quantizeScrollTop = false,
   rowBottom,
@@ -550,13 +552,18 @@ function renderFocusedAlbumWithGeometry({
   const scrollCalls = [];
   const activeAlbumRow = {
     getBoundingClientRect() {
-      return { top: rowBottom - 60, bottom: rowBottom, height: 60 };
+      return layoutReady
+        ? { top: rowBottom - 60, bottom: rowBottom, height: 60 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     scrollIntoView(options) {
       scrollCalls.push({ target: 'album', options });
     },
   };
   let currentScrollTop = initialScrollTop;
+  let currentDetailScrollTop = initialDetailScrollTop;
+  let layoutReady = initialLayoutReady;
+  const scheduledAnimationFrames = [];
   const list = {
     innerHTML: '',
     get scrollTop() {
@@ -566,7 +573,9 @@ function renderFocusedAlbumWithGeometry({
       currentScrollTop = quantizeScrollTop ? Math.floor(value) : value;
     },
     getBoundingClientRect() {
-      return { top: listBottom - 200, bottom: listBottom, height: 200 };
+      return layoutReady
+        ? { top: listBottom - 200, bottom: listBottom, height: 200 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     querySelector(selector) {
       return selector === '.utility-list-item.is-active' ? activeAlbumRow : null;
@@ -574,7 +583,9 @@ function renderFocusedAlbumWithGeometry({
   };
   const focusedTrackRow = {
     getBoundingClientRect() {
-      return { top: trackBottom - 32, bottom: trackBottom, height: 32 };
+      return layoutReady
+        ? { top: trackBottom - 32, bottom: trackBottom, height: 32 }
+        : { top: 0, bottom: 0, height: 0 };
     },
   };
   const focusedTrackMatch = {
@@ -588,9 +599,16 @@ function renderFocusedAlbumWithGeometry({
   };
   const detail = {
     innerHTML: '',
-    scrollTop: initialDetailScrollTop,
+    get scrollTop() {
+      return currentDetailScrollTop;
+    },
+    set scrollTop(value) {
+      currentDetailScrollTop = value;
+    },
     getBoundingClientRect() {
-      return { top: detailBottom - 200, bottom: detailBottom, height: 200 };
+      return layoutReady
+        ? { top: detailBottom - 200, bottom: detailBottom, height: 200 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     querySelector(selector) {
       return selector === '[data-problematic-track-path="escaped-track-path"]'
@@ -640,6 +658,14 @@ function renderFocusedAlbumWithGeometry({
     cssEscape() {
       return 'escaped-track-path';
     },
+    scheduleBrowserAnimationFrame(callback) {
+      if (deferAnimationFrame) {
+        scheduledAnimationFrames.push(callback);
+        return scheduledAnimationFrames.length;
+      }
+      callback();
+      return 1;
+    },
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
@@ -647,7 +673,16 @@ function renderFocusedAlbumWithGeometry({
 
   context.renderProblematicFiles();
 
-  return { detail, list, scrollCalls };
+  return {
+    context,
+    detail,
+    flushAnimationFrame({ makeLayoutReady = true } = {}) {
+      if (makeLayoutReady) layoutReady = true;
+      scheduledAnimationFrames.shift()?.();
+    },
+    list,
+    scrollCalls,
+  };
 }
 
 function assertNearestAlbumScrollCall(scrollCalls) {
@@ -685,6 +720,33 @@ test('problematic-file render rounds a fractional focused-album clip up to one s
   assertNearestAlbumScrollCall(scrollCalls);
   assert.equal(list.scrollTop, 183);
   assert.equal(detail.scrollTop, 38);
+});
+
+test('problematic-file render corrects focused navigation after the opened modal receives layout', () => {
+  const rendered = renderFocusedAlbumWithGeometry({
+    deferAnimationFrame: true,
+    detailBottom: 240,
+    initialDetailScrollTop: 0,
+    initialLayoutReady: false,
+    initialScrollTop: 0,
+    listBottom: 300,
+    rowBottom: 320,
+    trackBottom: 260,
+  });
+
+  assert.equal(rendered.list.scrollTop, 0);
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
+
+  rendered.flushAnimationFrame({ makeLayoutReady: false });
+
+  assert.equal(rendered.list.scrollTop, 0);
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
+
+  rendered.flushAnimationFrame();
+
+  assert.equal(rendered.list.scrollTop, 20);
+  assert.equal(rendered.detail.scrollTop, 20);
+  assert.equal(rendered.context.state.utility.focusedTrackPath, '');
 });
 
 test('empty log history visibly explains session-only storage and keeps export explicit', () => {

@@ -601,6 +601,28 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
     assert lifecycle.exchanges[0][0] == raw_invite
 
 
+def test_invitation_link_rejects_non_loopback_plaintext_before_token_exchange(
+    auth_asgi,
+):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+
+    status, headers, body = _request(
+        app,
+        "GET",
+        path="/accept-invitation",
+        query="purpose=account-invitation&token=" + INVITATION_RAW,
+        scheme="http",
+        client="192.0.2.44",
+    )
+
+    assert status == 400
+    assert body == b"Invitation link is invalid or expired."
+    assert lifecycle.exchanges == []
+    assert _set_cookies(headers) == []
+
+
 @pytest.mark.parametrize(
     "query",
     (

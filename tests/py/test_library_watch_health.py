@@ -261,7 +261,62 @@ def test_exhausted_stable_write_persists_warning_and_blocks_destructive_work_unt
     assert service.root_allows_destructive_reconciliation("main-root") is True
 
 
-def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch):
+def test_reconciliation_failure_persists_path_free_warning_until_manual_full_scan():
+    from music_app.services.allowed_actions import AllowedActions
+    from music_app.services.library_event_coordinator import CoordinatorProblem
+    from music_app.services.view_payloads import project_library_watch_health
+
+    module = _health_module()
+    connection = _HealthConnection()
+    service = module.LibraryWatchHealthService(
+        module.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _database_url: connection,
+        )
+    )
+
+    assert service.record_problem(
+        CoordinatorProblem("reconciliation_failed", "main-root")
+    ) is True
+
+    [problem] = service.load_problems()
+    assert problem.root_id == "main-root"
+    assert problem.state == "reconciliation_failed"
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+    projected = project_library_watch_health(
+        [problem],
+        AllowedActions(("library.refresh",)),
+    )
+    assert projected == {
+        "state": "warning",
+        "problems": [
+            {
+                "state": "reconciliation_failed",
+                "root_key": module.opaque_root_key("main-root"),
+                "detected_at": problem.detected_at,
+                "message": "Some library changes may have been missed.",
+                "allowed_actions": {"library.refresh": True},
+            }
+        ],
+    }
+    assert "main-root" not in json.dumps(projected)
+
+    assert service.clear_after_scan(
+        scan_mode="background",
+        observed_root_ids={"main-root"},
+    ) == 0
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+    assert service.clear_after_scan(
+        scan_mode="manual_full_rescan",
+        observed_root_ids={"main-root"},
+    ) == 1
+    assert service.load_problems() == []
+    assert service.root_allows_destructive_reconciliation("main-root") is True
+
+
+def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher_health(
+    monkeypatch,
+):
     from music_app import create_asgi_app
     from music_app.services import (
         lastfm_retry,
@@ -293,10 +348,13 @@ def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch
             return root_id not in self._unhealthy_roots
 
     class CompletedFuture:
-        def __init__(self, result):
+        def __init__(self, result=None, error=None):
             self._result = result
+            self._error = error
 
         def result(self):
+            if self._error is not None:
+                raise self._error
             return self._result
 
         def add_done_callback(self, callback):
@@ -304,7 +362,10 @@ def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch
 
     class InlineExecutor:
         def submit(self, function, *args):
-            return CompletedFuture(function(*args))
+            try:
+                return CompletedFuture(result=function(*args))
+            except Exception as exc:
+                return CompletedFuture(error=exc)
 
         def shutdown(self, **_kwargs):
             return None
@@ -337,6 +398,8 @@ def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch
             pass
 
         def reconcile(self, request, *, root_healthy):
+            if request.root_id == "failed-root":
+                raise RuntimeError("database temporarily unavailable")
             reconciled.append((request.root_id, root_healthy))
             return root_healthy
 
@@ -410,20 +473,63 @@ def test_app_wires_coordinator_problems_to_persistent_watcher_health(monkeypatch
         "stable_write_unavailable",
         "main-root",
     )
+    destination_problem = library_event_coordinator.CoordinatorProblem(
+        "stable_write_unavailable",
+        "destination-root",
+    )
 
     async def exercise_problem_callback():
         async with app.router.lifespan_context(app):
             callbacks["emit_problem"](problem)
+            callbacks["emit_problem"](destination_problem)
             callbacks["emit_request"](
                 library_event_coordinator.TargetedReconciliationRequest(
                     root_id="main-root"
                 )
             )
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="healthy-source",
+                    moves=(
+                        library_event_coordinator.TargetedMove(
+                            source=Path("C:/Source/replacement.tmp"),
+                            destination=Path("C:/Destination/01.flac"),
+                            source_root_id="healthy-source",
+                            destination_root_id="destination-root",
+                        ),
+                    ),
+                )
+            )
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="failed-root",
+                    moves=(
+                        library_event_coordinator.TargetedMove(
+                            source=Path("C:/Failed/replacement.tmp"),
+                            destination=Path("C:/Failed Destination/01.flac"),
+                            source_root_id="failed-root",
+                            destination_root_id="failed-destination-root",
+                        ),
+                    ),
+                )
+            )
 
     asyncio.run(exercise_problem_callback())
 
-    assert recorded == [problem]
-    assert reconciled == [("main-root", False)]
+    assert recorded[0] == problem
+    assert reconciled == [
+        ("main-root", False),
+        ("healthy-source", False),
+    ]
+    assert any(
+        item.root_id == "failed-root" and item.code == "reconciliation_failed"
+        for item in recorded
+    )
+    assert any(
+        item.root_id == "failed-destination-root"
+        and item.code == "reconciliation_failed"
+        for item in recorded
+    )
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():

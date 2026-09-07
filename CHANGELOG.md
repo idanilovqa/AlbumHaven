@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.43 - 2026-09-06
+## 0.9.43 - 2026-09-07
 
 - Added local authentication and account administration, including secure owner
   bootstrap, sessions, password recovery, invitations, audit records, and
@@ -18,6 +18,12 @@
   Problematic Files selection and scroll after terminal mutation rendering.
   Preserved recreated tracks across a single watcher debounce window and made
   confirmed missing-album removal round-trip slash and percent-bearing keys.
+  Preserved replacement tracks when a move follows a destination deletion,
+  canceled stale directory deletions when live descendants arrive, and applied
+  watcher health to every root involved in cross-root moves. Rejected invitation
+  token exchange on non-loopback plaintext HTTP, surfaced failed targeted
+  reconciliation as persistent watcher health, and corrected delayed Problematic
+  Files navigation so its active album remains visible after the sidebar opens.
 - Kept the required hosted AI review gate compatible with its pinned action's
   Chat Completions request contract and the available per-minute token budget.
 

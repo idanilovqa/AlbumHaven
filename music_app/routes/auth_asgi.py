@@ -750,6 +750,14 @@ def _generic_reset_unavailable() -> HTMLResponse:
 
 @router.get("/accept-invitation", response_class=HTMLResponse)
 async def accept_invitation_get(request: Request) -> Response:
+    try:
+        config = _policy_config(request)
+        secure = _cookie_secure(request, config)
+    except Exception:
+        return _generic_invitation_unavailable()
+    if secure is None:
+        return _generic_invitation_invalid()
+
     stored_query = hasattr(
         request.state, "account_invitation_link_query_valid"
     )
@@ -797,7 +805,7 @@ async def accept_invitation_get(request: Request) -> Response:
         response.delete_cookie(
             INVITATION_COOKIE,
             path="/",
-            secure=True,
+            secure=secure,
             httponly=True,
             samesite="strict",
         )
@@ -806,7 +814,7 @@ async def accept_invitation_get(request: Request) -> Response:
                 INVITATION_COOKIE,
                 issued.raw_token,
                 max_age=INVITATION_TRANSACTION_SECONDS,
-                secure=True,
+                secure=secure,
                 httponly=True,
                 samesite="strict",
                 path="/",
@@ -815,7 +823,6 @@ async def accept_invitation_get(request: Request) -> Response:
 
     transaction = request.cookies.get(INVITATION_COOKIE)
     try:
-        config = _policy_config(request)
         valid = await run_in_threadpool(
             _invitation_lifecycle(request).validate_transaction,
             transaction,

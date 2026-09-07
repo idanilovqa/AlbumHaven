@@ -40,6 +40,18 @@ const utilityRendererPath = path.join(
   'utility-renderers-and-actions.js',
 );
 const utilityRendererSource = fs.readFileSync(utilityRendererPath, 'utf8');
+const utilityLoaderPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'utility-loaders-and-cover-lookup.js',
+);
+const utilityLoaderSource = fs.readFileSync(utilityLoaderPath, 'utf8');
 const playbackControlClusterPath = path.join(
   __dirname,
   '..',
@@ -6170,6 +6182,64 @@ test('watcher health keeps the operational message but omits the action for a re
 
   assert.match(html, /Some library changes may have been missed\./);
   assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321/);
+});
+
+test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  const result = context.validateProblematicSummaryPayload({
+    ok: true,
+    items: [],
+    operational_items: [{
+      state: 'reconciliation_failed',
+      root_key: 'root_1234567890abcdef',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.operationalItems)),
+    [{
+      state: 'reconciliation_failed',
+      root_key: 'root_1234567890abcdef',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  );
+});
+
+test('Problematic Files accepts a path-free stable-write warning', () => {
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(utilityLoaderSource, context, { filename: utilityLoaderPath });
+
+  const result = context.validateProblematicSummaryPayload({
+    ok: true,
+    items: [],
+    operational_items: [{
+      state: 'stable_write_unavailable',
+      root_key: 'root_fedcba0987654321',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  });
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(result.operationalItems)),
+    [{
+      state: 'stable_write_unavailable',
+      root_key: 'root_fedcba0987654321',
+      detected_at: '2026-09-07T12:00:00+00:00',
+      message: 'Some library changes may have been missed.',
+      allowed_actions: { 'library.refresh': true },
+    }],
+  );
 });
 
 test('Problematic Files keeps watcher health mounted when there are zero problematic albums', () => {

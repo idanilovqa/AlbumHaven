@@ -104,6 +104,138 @@ def test_delete_then_recreate_emits_only_active_path(tmp_path: Path):
     assert emitted[0].deleted_subtrees == frozenset()
 
 
+def test_delete_then_replacement_move_clears_destination_deletion(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    replaced_path = "Artist/Album/01.flac"
+    coordinator.accept(_event(LibraryEventKind.DELETED, tmp_path, replaced_path))
+    coordinator.accept(
+        _event(
+            LibraryEventKind.MOVED,
+            tmp_path,
+            "Artist/Album/replacement.tmp",
+            destination=replaced_path,
+        )
+    )
+    coordinator.flush()
+
+    assert len(emitted[0].moves) == 1
+    assert emitted[0].moves[0].destination == tmp_path / replaced_path
+    assert emitted[0].deleted_paths == frozenset()
+    assert emitted[0].deleted_subtrees == frozenset()
+
+
+def test_cross_root_replacement_move_clears_destination_group_deletion(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    source = tmp_path / "Source Root" / "replacement.tmp"
+    destination = tmp_path / "Destination Root" / "Artist" / "Album" / "01.flac"
+    coordinator.accept(
+        LibraryEvent(LibraryEventKind.DELETED, "destination-root", destination)
+    )
+    coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.MOVED,
+            "source-root",
+            source,
+            destination=destination,
+            destination_root_id="destination-root",
+        )
+    )
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].moves[0].destination == destination
+    assert emitted[0].deleted_paths == frozenset()
+    assert emitted[0].deleted_subtrees == frozenset()
+
+
+def test_created_child_clears_pending_deleted_directory_ancestor(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    track = tmp_path / "Artist" / "Album" / "01.flac"
+    coordinator.accept(
+        _event(
+            LibraryEventKind.DELETED,
+            tmp_path,
+            "Artist/Album",
+        )
+    )
+    coordinator.accept(
+        _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac")
+    )
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].paths == frozenset({track})
+    assert emitted[0].deleted_paths == frozenset()
+    assert emitted[0].deleted_subtrees == frozenset()
+
+
+def test_cross_root_moved_child_clears_pending_destination_directory_ancestor(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    deleted_directory = tmp_path / "Destination Root" / "Artist" / "Album"
+    source = tmp_path / "Source Root" / "replacement.tmp"
+    destination = deleted_directory / "01.flac"
+    coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.DELETED,
+            "z-destination-root",
+            deleted_directory,
+            is_directory=True,
+        )
+    )
+    coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.MOVED,
+            "a-source-root",
+            source,
+            destination=destination,
+            destination_root_id="z-destination-root",
+        )
+    )
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].root_id == "a-source-root"
+    assert emitted[0].moves[0].destination == destination
+    assert emitted[0].deleted_paths == frozenset()
+    assert emitted[0].deleted_subtrees == frozenset()
+
+
 def test_directory_delete_is_emitted_as_deleted_subtree(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
@@ -222,6 +354,44 @@ def test_bounded_groups_emit_overflow_before_dropping_new_work(tmp_path: Path):
     assert [event.kind for event in health] == [LibraryEventKind.OVERFLOW]
 
 
+def test_cross_root_move_overflow_marks_every_affected_root_unhealthy(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    health = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=lambda _request: None,
+        emit_health_event=health.append,
+        max_pending_groups=1,
+    )
+    assert coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.DELETED,
+            "existing-root",
+            tmp_path / "Existing" / "01.flac",
+        )
+    ) is True
+
+    assert coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.MOVED,
+            "source-root",
+            tmp_path / "Source" / "replacement.tmp",
+            destination=tmp_path / "Destination" / "01.flac",
+            destination_root_id="destination-root",
+        )
+    ) is False
+
+    assert [event.kind for event in health] == [
+        LibraryEventKind.OVERFLOW,
+        LibraryEventKind.OVERFLOW,
+    ]
+    assert {event.root_id for event in health} == {
+        "source-root",
+        "destination-root",
+    }
+
+
 def test_stable_write_retries_transient_sharing_violation(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
@@ -295,6 +465,40 @@ def test_exhausted_sharing_violation_reports_problem_without_request(tmp_path: P
     assert emitted == []
     assert problems[0].code == "stable_write_unavailable"
     assert problems[0].root_id == "root-1"
+
+
+def test_cross_root_move_stability_failure_marks_every_affected_root_unhealthy(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    emitted = []
+    problems = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        emit_problem=problems.append,
+        stat_path=lambda _path: (_ for _ in ()).throw(PermissionError("busy")),
+        wait=lambda _seconds: None,
+        max_stable_attempts=2,
+    )
+    coordinator.accept(
+        LibraryEvent(
+            LibraryEventKind.MOVED,
+            "source-root",
+            tmp_path / "Source" / "replacement.tmp",
+            destination=tmp_path / "Destination" / "01.flac",
+            destination_root_id="destination-root",
+        )
+    )
+    coordinator.flush()
+
+    assert emitted == []
+    assert {problem.code for problem in problems} == {"stable_write_unavailable"}
+    assert {problem.root_id for problem in problems} == {
+        "source-root",
+        "destination-root",
+    }
 
 
 def test_stop_flushes_pending_work_and_rejects_new_events(tmp_path: Path):

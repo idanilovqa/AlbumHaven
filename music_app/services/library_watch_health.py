@@ -25,6 +25,10 @@ _HEALTH_EVENT_KINDS = {
     LibraryEventKind.OVERFLOW,
     LibraryEventKind.ROOT_UNAVAILABLE,
 }
+_HEALTH_PROBLEM_STATES = {
+    "reconciliation_failed",
+    "stable_write_unavailable",
+}
 
 _BOOTSTRAP_LIBRARY_SQL = """
 with bootstrap_library as (
@@ -232,11 +236,12 @@ class LibraryWatchHealthService:
     def record_problem(self, problem: object) -> bool:
         """Persist a coordinator failure that means watcher events may be missing."""
 
-        if str(getattr(problem, "code", "") or "").strip() != "stable_write_unavailable":
+        state = str(getattr(problem, "code", "") or "").strip()
+        if state not in _HEALTH_PROBLEM_STATES:
             return False
         return self._record(
             getattr(problem, "root_id", None),
-            "stable_write_unavailable",
+            state,
         )
 
     def _record(self, raw_root_id: object, state: str) -> bool:

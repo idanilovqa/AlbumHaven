@@ -249,7 +249,12 @@ function validateProblematicSummaryPayload(payload) {
     const stateValue = String(item.state || '').trim();
     const rootKey = String(item.root_key || '').trim();
     if (
-      !['overflow', 'root_unavailable'].includes(stateValue)
+      ![
+        'overflow',
+        'reconciliation_failed',
+        'root_unavailable',
+        'stable_write_unavailable',
+      ].includes(stateValue)
       || !/^root_[a-f0-9]{16}$/.test(rootKey)
     ) {
       throw new Error('Problematic Files operational item is invalid.');

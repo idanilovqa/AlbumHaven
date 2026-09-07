@@ -139,6 +139,7 @@ def project_library_watch_health(
             ).strip()
         if not root_id or state not in {
             "overflow",
+            "reconciliation_failed",
             "root_unavailable",
             "stable_write_unavailable",
         }:

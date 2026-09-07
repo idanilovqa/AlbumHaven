@@ -179,7 +179,6 @@ class PostgresJobRepository:
                and subject_kind = %(subject_kind)s
                and subject_ref = %(subject_ref)s
                and idempotency_key = %(idempotency_key)s
-               and request_origin_id is not distinct from %(request_origin_id)s
         """
         if command.request_origin_ref is not None:
             origin_row = connection.execute(request_origin_sql, values).fetchone()

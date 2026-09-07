@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -146,6 +147,21 @@ def test_live_repository_concurrency_cas_cancellation_and_recovery_contracts():
         with ThreadPoolExecutor(max_workers=2) as executor:
             duplicate_ids = list(executor.map(lambda _: app.enqueue(command), range(2)))
         assert len(set(duplicate_ids)) == 1
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            connection.execute(
+                """
+                insert into app.request_origins (
+                  client_surface_class, origin_type, origin_key
+                ) values ('private_web', 'origin', 'phase8-enqueue-retry')
+                on conflict (client_surface_class, origin_type, origin_key)
+                do nothing
+                """
+            )
+        retried_from_another_origin = app.enqueue(
+            replace(command, request_origin_ref="origin:phase8-enqueue-retry")
+        )
+        assert retried_from_another_origin == duplicate_ids[0]
 
         locked_id = _insert_job(setup_url, "locked", 100)
         available_id = _insert_job(setup_url, "available", 90)

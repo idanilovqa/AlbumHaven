@@ -195,6 +195,7 @@ def test_enqueue_inserts_or_returns_existing_identity_in_one_transaction():
     ):
         assert identity in lookup_sql
     assert "coalesce" in lookup_sql
+    assert "request_origin_id is not distinct from" not in lookup_sql
 
 
 def test_enqueue_returns_inserted_job_without_fallback_lookup():

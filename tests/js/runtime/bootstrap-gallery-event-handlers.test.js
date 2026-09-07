@@ -1490,7 +1490,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
       selected_artist: 'Transatlantic',
       selected_artist_source: 'auto_top_match',
       artist_name_match_artists: ['Transatlantic'],
-      direct_match_artists: ['Transatlantic', 'Neal Morse'],
+      direct_match_artists: ['Transatlantic'],
       related_match_artists: [],
     },
     related_artists: ['Neal Morse'],
@@ -1500,7 +1500,11 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
     }],
     family_artist_groups: [{
       artist: 'Neal Morse',
-      albums: [{ key: 'neal-transatlantic-demos', preview_only: true }],
+      albums: [{
+        key: 'neal-transatlantic-demos',
+        name: 'The Transatlantic Demos',
+        preview_only: true,
+      }],
     }],
     artist_groups: [],
     artists_sidebar: [

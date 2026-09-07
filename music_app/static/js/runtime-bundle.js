@@ -33297,6 +33297,17 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
   const isArtistNameMatch = Boolean(artistNameMatchArtists?.some(matchesSearchArtist));
   const isClassifiedSearchMatch = classifiedSearchMatchArtists.some(matchesSearchArtist);
   const matchedSelectedArtistGroupIndex = currentSelectedArtistGroups.findIndex(matchesArtist);
+  const matchedSelectedArtistGroup = matchedSelectedArtistGroupIndex >= 0
+    ? currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]
+    : null;
+  const normalizedQuery = query.toLocaleLowerCase();
+  const hasVisibleAlbumTitleMatch = Boolean(
+    normalizedQuery
+    && (Array.isArray(matchedSelectedArtistGroup?.albums)
+      ? matchedSelectedArtistGroup.albums
+      : []
+    ).some((album) => String(album?.name || '').toLocaleLowerCase().includes(normalizedQuery))
+  );
   const canReuseCurrentSelectedArtistFamilyContext = query
     ? Boolean(
       currentSelectedArtist
@@ -33307,12 +33318,16 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       && (
         artistNameMatchArtists === null
         || isArtistNameMatch
-        || (hasClassifiedSearchMatchArtists && !isClassifiedSearchMatch)
+        || (
+          hasClassifiedSearchMatchArtists
+          && !isClassifiedSearchMatch
+          && !hasVisibleAlbumTitleMatch
+        )
       )
     )
     : hasAuthoritativeMountedFamilyContext;
   if (matchedSelectedArtistGroupIndex >= 0) {
-    const matchedSelectedArtistGroup = deepCloneJson(currentSelectedArtistGroups[matchedSelectedArtistGroupIndex]);
+    const optimisticMatchedSelectedArtistGroup = deepCloneJson(matchedSelectedArtistGroup);
     const familyGroups = currentSelectedArtistGroups
       .filter((_, index) => index !== matchedSelectedArtistGroupIndex)
       .map((group) => deepCloneJson(group));
@@ -33325,7 +33340,7 @@ function buildOptimisticSidebarArtistSelectionGroups(artist) {
       relatedArtists.push(groupArtist);
     });
     return {
-      primaryGroups: [matchedSelectedArtistGroup],
+      primaryGroups: [optimisticMatchedSelectedArtistGroup],
       familyGroups,
       relatedArtists,
       skipFetch: canReuseCurrentSelectedArtistFamilyContext,

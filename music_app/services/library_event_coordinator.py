@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock, Timer
-from time import sleep
+from time import monotonic, sleep
 
 from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
 
@@ -58,7 +58,10 @@ class LibraryEventCoordinator:
         max_stable_attempts: int = 4,
         stable_sample_interval: float = 0.1,
         debounce_seconds: float = 0.5,
+        max_flush_delay_seconds: float = 5.0,
         auto_schedule: bool = False,
+        clock: Callable[[], float] | None = None,
+        timer_factory: Callable[[float, Callable[[], None]], Timer] | None = None,
     ) -> None:
         self._emit_request = emit_request
         self._emit_health_event = emit_health_event or (lambda _event: None)
@@ -69,10 +72,17 @@ class LibraryEventCoordinator:
         self._max_stable_attempts = max(2, int(max_stable_attempts))
         self._stable_sample_interval = max(0.0, float(stable_sample_interval))
         self._debounce_seconds = max(0.0, float(debounce_seconds))
+        self._max_flush_delay_seconds = max(
+            self._debounce_seconds,
+            float(max_flush_delay_seconds),
+        )
         self._auto_schedule = bool(auto_schedule)
+        self._clock = clock or monotonic
+        self._timer_factory = timer_factory or Timer
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
         self._lock = Lock()
         self._timer: Timer | None = None
+        self._pending_started_at: float | None = None
         self._stopped = False
 
     def accept(self, event: LibraryEvent) -> bool:
@@ -80,6 +90,7 @@ class LibraryEventCoordinator:
             self._emit_health_event(event)
             return True
         group_key = (event.root_id, event.path.parent)
+        overflow_events: tuple[LibraryEvent, ...] = ()
         with self._lock:
             if self._stopped:
                 return False
@@ -101,22 +112,26 @@ class LibraryEventCoordinator:
                         affected_roots[
                             event.destination_root_id or event.root_id
                         ] = event.destination.parent
-                    for root_id, path in affected_roots.items():
-                        self._emit_health_event(
-                            LibraryEvent(
-                                LibraryEventKind.OVERFLOW,
-                                root_id,
-                                path,
-                                observed_at=event.observed_at,
-                            )
+                    overflow_events = tuple(
+                        LibraryEvent(
+                            LibraryEventKind.OVERFLOW,
+                            root_id,
+                            path,
+                            observed_at=event.observed_at,
                         )
-                    return False
-                group = _PendingGroup(event.root_id, event.path.parent)
-                self._pending[group_key] = group
-            self._coalesce(group, event)
-            if self._auto_schedule:
-                self._schedule_flush_locked()
-            return True
+                        for root_id, path in affected_roots.items()
+                    )
+                else:
+                    group = _PendingGroup(event.root_id, event.path.parent)
+                    self._pending[group_key] = group
+            if not overflow_events:
+                self._coalesce(group, event)
+                if self._auto_schedule:
+                    self._schedule_flush_locked()
+                return True
+        for overflow_event in overflow_events:
+            self._emit_health_event(overflow_event)
+        return False
 
     def _clear_superseded_deletions(self, root_id: str, live_path: Path) -> None:
         for group_key, group in tuple(self._pending.items()):
@@ -166,9 +181,19 @@ class LibraryEventCoordinator:
         group.active_paths.add(event.path)
 
     def _schedule_flush_locked(self) -> None:
+        now = self._clock()
+        if self._pending_started_at is None:
+            self._pending_started_at = now
+        maximum_delay_remaining = max(
+            0.0,
+            self._max_flush_delay_seconds - (now - self._pending_started_at),
+        )
         if self._timer is not None:
             self._timer.cancel()
-        timer = Timer(self._debounce_seconds, self.flush)
+        timer = self._timer_factory(
+            min(self._debounce_seconds, maximum_delay_remaining),
+            self.flush,
+        )
         timer.daemon = True
         self._timer = timer
         timer.start()
@@ -179,6 +204,7 @@ class LibraryEventCoordinator:
             self._pending.clear()
             timer = self._timer
             self._timer = None
+            self._pending_started_at = None
         if timer is not None:
             timer.cancel()
         for group in sorted(

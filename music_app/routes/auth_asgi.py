@@ -1009,14 +1009,24 @@ async def _form_payload(
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
     if content_type != _FORM_CONTENT_TYPE:
         return None
-    try:
-        content_length = int(request.headers.get("content-length", "0"))
-    except ValueError:
-        return None
-    if content_length < 1 or content_length > _MAXIMUM_BODY_BYTES:
-        return None
-    body = await request.body()
-    if len(body) != content_length or len(body) > _MAXIMUM_BODY_BYTES:
+    raw_content_length = request.headers.get("content-length")
+    content_length: int | None = None
+    if raw_content_length is not None:
+        try:
+            content_length = int(raw_content_length)
+        except ValueError:
+            return None
+        if content_length < 1 or content_length > _MAXIMUM_BODY_BYTES:
+            return None
+    chunks: list[bytes] = []
+    body_length = 0
+    async for chunk in request.stream():
+        body_length += len(chunk)
+        if body_length > _MAXIMUM_BODY_BYTES:
+            return None
+        chunks.append(chunk)
+    body = b"".join(chunks)
+    if not body or (content_length is not None and body_length != content_length):
         return None
     try:
         pairs = parse_qsl(

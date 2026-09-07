@@ -235,6 +235,8 @@ def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, t
         "library_revision": 22,
     }
     assert calls == [ALBUM_KEY]
+    assert app.state.library_state["inventory_mutation_revision"] == 22
+    assert app.state.library_state["targeted_inventory_album_keys"] == (ALBUM_KEY,)
 
 
 @pytest.mark.parametrize(

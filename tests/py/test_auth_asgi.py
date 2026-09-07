@@ -194,21 +194,39 @@ def _app(auth_asgi, *, outcome=LoginOutcome.INVALID, origins=("https://music.tes
     return app, preauth, login
 
 
-async def _request_async(app, method, path="/login", *, form=None, headers=None, scheme="https", client="127.0.0.1", host="music.test", query=""):
+async def _request_async(
+    app,
+    method,
+    path="/login",
+    *,
+    form=None,
+    headers=None,
+    scheme="https",
+    client="127.0.0.1",
+    host="music.test",
+    query="",
+    include_content_length=True,
+    body_chunks=None,
+):
     body = urlencode(form or {}).encode("utf-8") if form is not None else b""
     raw_headers = [(b"host", host.encode("ascii"))]
     for key, value in (headers or {}).items():
         raw_headers.append((key.lower().encode("latin1"), value.encode("latin1")))
     if form is not None:
-        raw_headers.extend([(b"content-type", b"application/x-www-form-urlencoded"), (b"content-length", str(len(body)).encode())])
+        raw_headers.append((b"content-type", b"application/x-www-form-urlencoded"))
+        if include_content_length:
+            raw_headers.append((b"content-length", str(len(body)).encode()))
     messages = []
-    sent = False
+    pending_chunks = list(body_chunks if body_chunks is not None else (body,))
     async def receive():
-        nonlocal sent
-        if sent:
+        if not pending_chunks:
             return {"type": "http.disconnect"}
-        sent = True
-        return {"type": "http.request", "body": body, "more_body": False}
+        chunk = pending_chunks.pop(0)
+        return {
+            "type": "http.request",
+            "body": chunk,
+            "more_body": bool(pending_chunks),
+        }
     async def send(message):
         messages.append(message)
     await app({"type":"http","asgi":{"version":"3.0"},"http_version":"1.1","method":method,"scheme":scheme,"path":path,"raw_path":path.encode(),"query_string":query.encode("ascii"),"headers":raw_headers,"client":(client,50000),"server":(host,443 if scheme=="https" else 80)}, receive, send)
@@ -236,6 +254,43 @@ def _valid_headers(**overrides):
     payload = {"origin": "https://music.test", "cookie": f"{CSRF_COOKIE}={CSRF}", "user-agent": "Browser"}
     payload.update(overrides)
     return payload
+
+
+def test_login_accepts_bounded_chunked_form_without_content_length(auth_asgi):
+    app, preauth, login = _app(auth_asgi, outcome=LoginOutcome.SUCCESS)
+    form = _valid_form()
+    encoded = urlencode(form).encode("utf-8")
+
+    status, _headers, _body = _request(
+        app,
+        "POST",
+        form=form,
+        headers={**_valid_headers(), "transfer-encoding": "chunked"},
+        include_content_length=False,
+        body_chunks=(encoded[:17], encoded[17:]),
+    )
+
+    assert status == 303
+    assert preauth.consumed == [CSRF]
+    assert login.calls[0]["entered_username"] == "Rendref"
+
+
+def test_login_rejects_chunked_form_that_exceeds_the_body_limit(auth_asgi):
+    app, preauth, login = _app(auth_asgi)
+    oversized = b"username=Rendref&password=" + (b"x" * 8_192)
+
+    status, _headers, _body = _request(
+        app,
+        "POST",
+        form=_valid_form(),
+        headers={**_valid_headers(), "transfer-encoding": "chunked"},
+        include_content_length=False,
+        body_chunks=(oversized[:4096], oversized[4096:]),
+    )
+
+    assert status == 400
+    assert preauth.consumed == []
+    assert login.calls == []
 
 
 def test_get_login_mints_hidden_one_time_token_and_hardened_cookie(auth_asgi):

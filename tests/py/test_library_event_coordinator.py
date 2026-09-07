@@ -401,6 +401,94 @@ def test_cross_root_move_overflow_marks_every_affected_root_unhealthy(tmp_path: 
     }
 
 
+def test_overflow_health_callback_can_reenter_coordinator_without_locking(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    class ReentryDetectingLock:
+        def __init__(self):
+            self.entered = False
+
+        def __enter__(self):
+            assert self.entered is False, "health callback re-entered the coordinator lock"
+            self.entered = True
+
+        def __exit__(self, *_args):
+            self.entered = False
+
+    coordinator = None
+    health = []
+
+    def record_health(event):
+        health.append(event)
+        assert coordinator is not None
+        coordinator.accept(
+            _event(LibraryEventKind.DELETED, tmp_path, "Artist/First/02.flac")
+        )
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=lambda _request: None,
+        emit_health_event=record_health,
+        max_pending_groups=1,
+    )
+    coordinator._lock = ReentryDetectingLock()
+    coordinator.accept(_event(LibraryEventKind.DELETED, tmp_path, "Artist/First/01.flac"))
+
+    assert coordinator.accept(
+        _event(LibraryEventKind.DELETED, tmp_path, "Artist/Second/01.flac")
+    ) is False
+    assert [event.kind for event in health] == [LibraryEventKind.OVERFLOW]
+
+
+def test_auto_schedule_flushes_within_maximum_delay_under_continuous_events(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    now = [0.0]
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, delay, callback):
+            self.delay = delay
+            self.callback = callback
+            self.cancelled = False
+            self.daemon = False
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+        debounce_seconds=0.5,
+        max_flush_delay_seconds=2.0,
+        auto_schedule=True,
+        clock=lambda: now[0],
+        timer_factory=FakeTimer,
+    )
+
+    for index in range(6):
+        coordinator.accept(
+            _event(
+                LibraryEventKind.CREATED,
+                tmp_path,
+                f"Artist/Album-{index}/01.flac",
+            )
+        )
+        now[0] += 0.4
+
+    assert timers[-1].delay == pytest.approx(0.0)
+    timers[-1].callback()
+    assert len(emitted) == 6
+
+
 def test_stable_write_retries_transient_sharing_violation(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

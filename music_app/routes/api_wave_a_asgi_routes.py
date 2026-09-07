@@ -85,6 +85,7 @@ from music_app.services.repair_previews import (
 )
 from music_app.services.state import (
     hydrate_library_state_for_config,
+    invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
     start_background_refresh_for_state,
 )
@@ -155,13 +156,12 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
             ).strip()
             != normalized_key
         ]
-    from music_app.services.problematic_albums import (
-        invalidate_problematic_albums_payload_cache,
+    invalidate_targeted_library_projections(
+        library_state,
+        _app_config(request),
+        revision=int(result["library_revision"]),
+        affected_album_keys=(normalized_key,),
     )
-    from music_app.services.utility_rules import invalidate_utility_rules_payload_cache
-
-    invalidate_problematic_albums_payload_cache(library_state)
-    invalidate_utility_rules_payload_cache(library_state)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2

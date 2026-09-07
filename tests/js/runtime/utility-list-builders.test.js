@@ -3355,6 +3355,79 @@ test('Problematic Files mutation restores sidebar scroll after deferred browser 
   assert.equal(listElement.scrollTop, 1266);
 });
 
+test('Problematic Files mutation preserves sidebar scroll when list geometry shrinks on the next frame', async () => {
+  const context = loadHelpers();
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  const removedAlbum = {
+    key: 'album-removed',
+    name: 'Album Removed',
+    tracks: [{ path: 'C:/Music/Removed/01 Track.flac' }],
+  };
+  const survivingAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+    tracks: [{ path: 'C:/Music/Previous/01 Track.flac' }],
+  };
+  let contentHeight = 2000;
+  let storedScrollTop = 1266;
+  let retainedNode = null;
+  const listElement = {
+    clientHeight: 200,
+    ownerDocument: {
+      createElement() {
+        return {
+          style: {},
+          setAttribute() {},
+          remove() {
+            retainedNode = null;
+          },
+        };
+      },
+    },
+    appendChild(node) {
+      retainedNode = node;
+      return node;
+    },
+    get scrollHeight() {
+      const retainedHeight = Number.parseFloat(retainedNode?.style?.height || '') || 0;
+      return Math.max(contentHeight + retainedHeight, this.clientHeight);
+    },
+    get scrollTop() {
+      return storedScrollTop;
+    },
+    set scrollTop(value) {
+      storedScrollTop = Math.min(Number(value) || 0, Math.max(0, this.scrollHeight - this.clientHeight));
+    },
+  };
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [survivingAlbum, removedAlbum],
+    selectedProblematicKey: removedAlbum.key,
+  };
+  context.getUtilityModalElements = () => ({ list: listElement });
+  context.renderUtilityModalContent = () => {};
+
+  context.claimProblematicSaveTaskMutation('remove-before-layout', removedAlbum);
+  context.state.utility.problematicFiles = [survivingAlbum];
+  await context.settleProblematicSaveTaskMutation('remove-before-layout', { reconcileSelection: true });
+  assert.equal(listElement.scrollTop, 1266);
+
+  contentHeight = 1300;
+  listElement.scrollTop = 1266;
+  assert.equal(listElement.scrollTop, 1100, 'the delayed layout shrink should initially clamp the list');
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
+
+  assert.equal(listElement.scrollTop, 1266, 'retained geometry must restore the exact owned position');
+  assert.equal(listElement.scrollHeight, 2000, 'the pre-mutation list geometry must remain available');
+});
+
 test('watchSaveTask reloads Problematic Files after an in-flight stale load settles', async () => {
   const context = loadHelpers();
   const loadEvents = [];

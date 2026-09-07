@@ -1992,6 +1992,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     albumKey: selectedKey,
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
+    priorScrollHeight: Number(list?.scrollHeight || 0),
   };
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
@@ -2032,16 +2033,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     ? getUtilityModalElements()?.list
     : null;
   if (list && mutationOwnsView) {
-    const requiredScrollHeight = priorScrollTop + Number(list.clientHeight || 0);
-    const missingScrollHeight = Math.max(0, requiredScrollHeight - Number(list.scrollHeight || 0));
+    const targetScrollHeight = Math.max(
+      Number(mutation.priorScrollHeight || 0),
+      priorScrollTop + Number(list.clientHeight || 0),
+    );
     const ownerDocument = list.ownerDocument
       || (typeof document !== 'undefined' ? document : null);
-    if (missingScrollHeight > 0 && ownerDocument?.createElement && typeof list.appendChild === 'function') {
-      const retainedContent = ownerDocument.createElement('div');
+    const retainedContent = ownerDocument?.createElement && typeof list.appendChild === 'function'
+      ? ownerDocument.createElement('div')
+      : null;
+    let retainedContentHeight = Math.max(
+      0,
+      targetScrollHeight - Number(list.scrollHeight || 0),
+    );
+    if (retainedContent) {
       retainedContent.setAttribute('data-problematic-scroll-retainer', '');
       retainedContent.setAttribute('aria-hidden', 'true');
-      retainedContent.style.flex = `0 0 ${missingScrollHeight}px`;
-      retainedContent.style.height = `${missingScrollHeight}px`;
+      retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+      retainedContent.style.height = `${retainedContentHeight}px`;
       retainedContent.style.pointerEvents = 'none';
       list.appendChild(retainedContent);
       const releaseRetainedGeometry = () => {
@@ -2055,6 +2064,15 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
     const restoreOwnedScroll = () => {
+      if (retainedContent) {
+        const naturalScrollHeight = Math.max(
+          0,
+          Number(list.scrollHeight || 0) - retainedContentHeight,
+        );
+        retainedContentHeight = Math.max(0, targetScrollHeight - naturalScrollHeight);
+        retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+        retainedContent.style.height = `${retainedContentHeight}px`;
+      }
       list.scrollTop = priorScrollTop;
     };
     restoreOwnedScroll();

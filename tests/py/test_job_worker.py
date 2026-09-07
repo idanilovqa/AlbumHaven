@@ -140,13 +140,25 @@ def test_worker_reconciles_bounded_domain_due_work_before_claim_selection():
     assert repository.calls[1][0] == "claim"
 
 
-def test_due_reconciliation_failure_is_bounded_and_does_not_block_generic_claims():
+def test_due_reconciliation_failure_is_bounded_observable_and_does_not_block_generic_claims(
+    caplog,
+):
     repository = Repository()
-    reconciler = DueReconciler(fail=True)
+    outcomes = iter(("fail", "fail", "success", "fail", "fail"))
+
+    def reconciler(*, now, limit):
+        if next(outcomes) == "fail":
+            raise RuntimeError("bounded due reconciliation failure")
+        return 0
+
     stop = threading.Event()
+    wait_count = 0
 
     def wait(_event, _seconds):
-        stop.set()
+        nonlocal wait_count
+        wait_count += 1
+        if wait_count == 5:
+            stop.set()
         return True
 
     worker = Worker(
@@ -165,8 +177,16 @@ def test_due_reconciliation_failure_is_bounded_and_does_not_block_generic_claims
 
     worker.run(stop)
 
-    assert worker.due_reconciliation_failures == 1
+    assert worker.due_reconciliation_failures == 4
     assert any(call[0] == "claim" for call in repository.calls)
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "durable jobs due reconciliation failed reason=due_reconciliation_failed consecutive_count=1 total=1",
+        "durable jobs due reconciliation failed reason=due_reconciliation_failed consecutive_count=2 total=2",
+        "durable jobs due reconciliation failed reason=due_reconciliation_failed consecutive_count=1 total=3",
+        "durable jobs due reconciliation failed reason=due_reconciliation_failed consecutive_count=2 total=4",
+    ]
+    assert all("reconciler failure" not in message for message in messages)
 
 
 class Authorization:

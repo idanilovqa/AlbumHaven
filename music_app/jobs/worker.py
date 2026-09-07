@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -21,6 +22,7 @@ from .dispatch import JobHandlerRegistry
 
 
 _COMPATIBLE_SCHEMA_VERSION = 1
+_LOGGER = logging.getLogger(__name__)
 
 
 def combine_due_reconcilers(
@@ -309,6 +311,7 @@ class Worker:
         self._claim_kinds = claim_kinds
         self._due_reconciler = due_reconciler
         self._due_reconciliation_failures = 0
+        self._due_reconciliation_consecutive_failures = 0
         self._contexts_lock = threading.Lock()
         self._active_contexts: set[ExecutionContext] = set()
         self._owned_threads_lock = threading.Lock()
@@ -417,8 +420,21 @@ class Worker:
                 if self._due_reconciler is not None:
                     try:
                         self._due_reconciler(now=self._clock(), limit=100)
+                        self._due_reconciliation_consecutive_failures = 0
                     except Exception:
                         self._due_reconciliation_failures += 1
+                        self._due_reconciliation_consecutive_failures += 1
+                        consecutive_count = (
+                            self._due_reconciliation_consecutive_failures
+                        )
+                        if consecutive_count & (consecutive_count - 1) == 0:
+                            _LOGGER.warning(
+                                "durable jobs due reconciliation failed "
+                                "reason=due_reconciliation_failed "
+                                "consecutive_count=%d total=%d",
+                                consecutive_count,
+                                self._due_reconciliation_failures,
+                            )
                 if stop_event.is_set():
                     break
                 batch = self._launch_batch(results)

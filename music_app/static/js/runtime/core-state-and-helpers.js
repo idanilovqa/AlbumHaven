@@ -562,7 +562,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing'
-    && Number(data.album_total || 0) > 100;
+    && Number(data.album_total || 0) > 0;
   const canBrowseScanned = shouldShow
     && !pendingViewTransition
     && (

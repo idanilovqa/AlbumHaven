@@ -166,7 +166,7 @@ def test_cross_root_replacement_move_clears_destination_group_deletion(
     assert emitted[0].deleted_subtrees == frozenset()
 
 
-def test_created_child_clears_pending_deleted_directory_ancestor(tmp_path: Path):
+def test_created_child_preserves_pending_deleted_directory_ancestor(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
 
@@ -189,13 +189,16 @@ def test_created_child_clears_pending_deleted_directory_ancestor(tmp_path: Path)
     )
     coordinator.flush()
 
-    assert len(emitted) == 1
-    assert emitted[0].paths == frozenset({track})
-    assert emitted[0].deleted_paths == frozenset()
-    assert emitted[0].deleted_subtrees == frozenset()
+    assert len(emitted) == 2
+    deletion_request = next(
+        request for request in emitted if request.deleted_subtrees
+    )
+    assert deletion_request.paths == frozenset({track})
+    assert deletion_request.deleted_paths == frozenset({track.parent})
+    assert deletion_request.deleted_subtrees == frozenset({track.parent})
 
 
-def test_cross_root_moved_child_clears_pending_destination_directory_ancestor(
+def test_cross_root_moved_child_preserves_pending_destination_directory_ancestor(
     tmp_path: Path,
 ):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
@@ -229,11 +232,17 @@ def test_cross_root_moved_child_clears_pending_destination_directory_ancestor(
     )
     coordinator.flush()
 
-    assert len(emitted) == 1
-    assert emitted[0].root_id == "a-source-root"
-    assert emitted[0].moves[0].destination == destination
-    assert emitted[0].deleted_paths == frozenset()
-    assert emitted[0].deleted_subtrees == frozenset()
+    assert len(emitted) == 2
+    move_request = next(request for request in emitted if request.moves)
+    deletion_request = next(
+        request for request in emitted if request.deleted_subtrees
+    )
+    assert move_request.root_id == "a-source-root"
+    assert move_request.moves[0].destination == destination
+    assert deletion_request.root_id == "z-destination-root"
+    assert deletion_request.paths == frozenset({destination})
+    assert deletion_request.deleted_paths == frozenset()
+    assert deletion_request.deleted_subtrees == frozenset({deleted_directory})
 
 
 def test_directory_delete_is_emitted_as_deleted_subtree(tmp_path: Path):

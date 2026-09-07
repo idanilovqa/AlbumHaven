@@ -114,6 +114,7 @@ def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "private_path = any(%(deleted_paths)s::text[])" in normalized_sql
     assert "unnest(%(deleted_subtrees)s::text[])" in normalized_sql
     assert "starts_with(" in normalized_sql
+    assert "private_path <> all(%(active_paths)s::text[])" in normalized_sql
     assert " like " not in normalized_sql
 
 
@@ -208,6 +209,12 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
     )
     assert lock_index < upsert_index < stale_index < revision_index
     assert connection.commit_calls == 1
+    stale_params = next(
+        params
+        for sql, params in connection.executed
+        if "private_path = any(%(deleted_paths)s::text[])" in _normalized_sql(sql)
+    )
+    assert stale_params["active_paths"] == [active_path]
     assert connection.exit_exc_type is None
 
 

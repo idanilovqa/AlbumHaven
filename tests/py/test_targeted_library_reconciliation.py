@@ -137,6 +137,51 @@ def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
     }
 
 
+def test_targeted_reconciler_enumerates_each_affected_directory_once(tmp_path):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    album.mkdir(parents=True)
+    tracks = tuple(album / f"{number:02}.flac" for number in range(1, 5))
+    for track in tracks:
+        track.write_bytes(b"media")
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[
+            {"id": "main", "path": root, "category": "main_library_roots"}
+        ],
+        metadata_reader=lambda path: {
+            "path": str(path),
+            "album": "Album",
+            "album_artist": "Artist",
+            "artist": "Artist",
+            "title": path.stem,
+            "mtime": 1.0,
+            "size": 5,
+        },
+    )
+    original = reconciler._supported_media_siblings
+    enumerated_directories: list[Path] = []
+
+    def record_enumeration(path: Path):
+        enumerated_directories.append(path.parent)
+        return original(path)
+
+    reconciler._supported_media_siblings = record_enumeration
+
+    reconciler.reconcile(_request(paths=tracks))
+
+    assert enumerated_directories == [album]
+    assert set(repository.calls[0]["active_file_entries"]) == {
+        str(track) for track in tracks
+    }
+
+
 def test_targeted_reconciler_holds_track_reservations_while_reading_and_persisting(
     tmp_path,
 ):

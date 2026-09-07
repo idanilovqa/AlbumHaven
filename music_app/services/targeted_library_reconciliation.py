@@ -139,9 +139,17 @@ class TargetedLibraryReconciler:
         if not active_targets and not deleted_paths and not deleted_subtrees and not normalized_moves:
             return TargetedReconciliationResult(0, ())
 
-        expanded_targets: list[tuple[Path, dict[str, object]]] = []
+        expanded_targets: list[tuple[Path, dict[str, object]]] = list(active_targets)
+        affected_directories: dict[
+            tuple[str, str], tuple[Path, dict[str, object]]
+        ] = {}
         for candidate, matched_root in active_targets:
-            expanded_targets.append((candidate, matched_root))
+            directory_key = (
+                str(matched_root.get("id") or ""),
+                str(candidate.parent.resolve(strict=False)).casefold(),
+            )
+            affected_directories.setdefault(directory_key, (candidate, matched_root))
+        for candidate, matched_root in affected_directories.values():
             expanded_targets.extend(
                 (sibling, matched_root)
                 for sibling in self._supported_media_siblings(candidate)

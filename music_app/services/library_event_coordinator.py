@@ -119,15 +119,14 @@ class LibraryEventCoordinator:
             return True
 
     def _clear_superseded_deletions(self, root_id: str, live_path: Path) -> None:
-        live_path_and_ancestors = {live_path, *live_path.parents}
         for group_key, group in tuple(self._pending.items()):
             if group.root_id != root_id:
                 continue
-            superseded = group.deleted_subtrees & live_path_and_ancestors
-            if not superseded:
-                continue
-            group.deleted_subtrees.difference_update(superseded)
-            group.deleted_paths.difference_update(superseded)
+            if live_path in group.deleted_paths or live_path in group.deleted_subtrees:
+                group.deleted_subtrees.discard(live_path)
+                group.deleted_paths.discard(live_path)
+            if any(subtree in live_path.parents for subtree in group.deleted_subtrees):
+                group.active_paths.add(live_path)
             if not (
                 group.active_paths
                 or group.deleted_paths

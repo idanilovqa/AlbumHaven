@@ -223,6 +223,12 @@ class PostgresScanCacheAdapter:
                 },
             }
         }
+        active_paths_by_root: dict[str, set[str]] = {}
+        for path, entry in file_cache.items():
+            active_root_id = str(
+                entry.get("library_root_id") or normalized_root_id
+            ).strip()
+            active_paths_by_root.setdefault(active_root_id, set()).add(path)
         for move in moves:
             source_root_id = str(
                 move.get("source_root_id") or normalized_root_id
@@ -299,6 +305,9 @@ class PostgresScanCacheAdapter:
                         "root_id": stale_root_id,
                         "deleted_paths": paths,
                         "deleted_subtrees": subtrees,
+                        "active_paths": sorted(
+                            active_paths_by_root.get(stale_root_id, ())
+                        ),
                         "source": _SOURCE,
                     },
                 ).fetchall()
@@ -5371,6 +5380,8 @@ def _mark_targeted_track_files_stale_sql() -> str:
                 ) = %(root_id)s
             and library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
             and library.local_track_files.scan_cache_stale is false
+            and library.local_track_files.private_path
+              <> all(%(active_paths)s::text[])
             and (
               library.local_track_files.private_path = any(%(deleted_paths)s::text[])
               or exists (

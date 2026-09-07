@@ -16,12 +16,15 @@ def _stop_library_watch_runtime(
     targeted_executor,
 ) -> None:
     try:
-        watch_service.stop()
+        if watch_service is not None:
+            watch_service.stop()
     finally:
         try:
-            event_coordinator.stop()
+            if event_coordinator is not None:
+                event_coordinator.stop()
         finally:
-            targeted_executor.shutdown(wait=False, cancel_futures=True)
+            if targeted_executor is not None:
+                targeted_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _recover_library_watch_after_manual_scan(
@@ -238,26 +241,74 @@ def create_asgi_app():
                 library_state["cold_scan_pending"] = True
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
-        start_lastfm_retry_worker(runtime)
-        targeted_executor = create_daemon_executor(
-            max_workers=1,
-            thread_name_prefix="albumhaven-targeted-reconciliation",
-        )
-        targeted_reconciler = TargetedLibraryReconciler(
-            runtime.config,
-            repository=select_scan_cache_adapter(runtime.config),
-            root_definitions=get_library_roots(runtime.config),
-            exception_overrides_provider=lambda: load_exception_overrides(
-                runtime.config
-            ),
-            after_commit=lambda result: invalidate_targeted_library_projections(
-                runtime.library_state,
+        lastfm_started = False
+        targeted_executor = None
+        targeted_reconciler = None
+        runtime.library_event_coordinator = None
+        runtime.library_watch_service = None
+
+        async def shutdown_resources() -> None:
+            runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
+            shutdown_errors: list[tuple[str, BaseException]] = []
+            shutdown_stages = (
+                (
+                    "library filesystem watcher",
+                    lambda: _stop_library_watch_runtime(
+                        watch_service=runtime.library_watch_service,
+                        event_coordinator=runtime.library_event_coordinator,
+                        targeted_executor=targeted_executor,
+                    ),
+                ),
+                (
+                    "Last.fm retry worker",
+                    lambda: stop_lastfm_retry_worker(runtime)
+                    if lastfm_started
+                    else None,
+                ),
+                ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
+                ("playback PCM", _app.state.playback_pcm_registry.shutdown),
+                ("runtime", lambda: request_runtime_shutdown(runtime)),
+            )
+            for stage, shutdown in shutdown_stages:
+                try:
+                    result = shutdown()
+                    if isawaitable(result):
+                        await result
+                except BaseException as exc:
+                    shutdown_errors.append((stage, exc))
+            if shutdown_errors:
+                details = "; ".join(
+                    f"{stage}: {error}" for stage, error in shutdown_errors
+                )
+                raise RuntimeError(
+                    f"application shutdown failed: {details}"
+                ) from shutdown_errors[0][1]
+
+        lastfm_started = True
+        try:
+            start_lastfm_retry_worker(runtime)
+            targeted_executor = create_daemon_executor(
+                max_workers=1,
+                thread_name_prefix="albumhaven-targeted-reconciliation",
+            )
+            targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
-                revision=result.revision,
-                affected_album_keys=result.affected_album_keys,
-            ),
-            reservation_acquirer=acquire_structural_tag_edit_reservation,
-        )
+                repository=select_scan_cache_adapter(runtime.config),
+                root_definitions=get_library_roots(runtime.config),
+                exception_overrides_provider=lambda: load_exception_overrides(
+                    runtime.config
+                ),
+                after_commit=lambda result: invalidate_targeted_library_projections(
+                    runtime.library_state,
+                    runtime.config,
+                    revision=result.revision,
+                    affected_album_keys=result.affected_album_keys,
+                ),
+                reservation_acquirer=acquire_structural_tag_edit_reservation,
+            )
+        except BaseException:
+            await shutdown_resources()
+            raise
 
         def targeted_request_root_ids(request) -> tuple[str, ...]:
             root_ids = {str(request.root_id)}
@@ -314,17 +365,21 @@ def create_asgi_app():
                     "Unable to persist library watcher health problem."
                 )
 
-        runtime.library_event_coordinator = LibraryEventCoordinator(
-            emit_request=submit_targeted_reconciliation,
-            emit_health_event=persist_library_watch_health,
-            emit_problem=persist_library_watch_problem,
-            auto_schedule=True,
-        )
-        runtime.library_watch_service = LibraryWatchService(
-            WatchdogLibraryEventSource(get_library_roots(runtime.config)),
-            runtime.library_event_coordinator.accept,
-        )
-        _app.state.library_watch_service = runtime.library_watch_service
+        try:
+            runtime.library_event_coordinator = LibraryEventCoordinator(
+                emit_request=submit_targeted_reconciliation,
+                emit_health_event=persist_library_watch_health,
+                emit_problem=persist_library_watch_problem,
+                auto_schedule=True,
+            )
+            runtime.library_watch_service = LibraryWatchService(
+                WatchdogLibraryEventSource(get_library_roots(runtime.config)),
+                runtime.library_event_coordinator.accept,
+            )
+            _app.state.library_watch_service = runtime.library_watch_service
+        except BaseException:
+            await shutdown_resources()
+            raise
 
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
@@ -353,46 +408,15 @@ def create_asgi_app():
         runtime.config["_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK"] = (
             recover_library_watch_after_manual_scan
         )
-        runtime.library_watch_service.start()
-
-        def stop_library_watch() -> None:
-            _stop_library_watch_runtime(
-                watch_service=runtime.library_watch_service,
-                event_coordinator=runtime.library_event_coordinator,
-                targeted_executor=targeted_executor,
-            )
+        try:
+            runtime.library_watch_service.start()
+        except BaseException:
+            await shutdown_resources()
+            raise
         try:
             yield
         finally:
-            runtime.config.pop(
-                "_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK",
-                None,
-            )
-            shutdown_errors: list[tuple[str, BaseException]] = []
-            shutdown_stages = (
-                (
-                    "library filesystem watcher",
-                    stop_library_watch,
-                ),
-                ("Last.fm retry worker", lambda: stop_lastfm_retry_worker(runtime)),
-                ("waveform peaks", _app.state.waveform_peaks_registry.shutdown),
-                ("playback PCM", _app.state.playback_pcm_registry.shutdown),
-                ("runtime", lambda: request_runtime_shutdown(runtime)),
-            )
-            for stage, shutdown in shutdown_stages:
-                try:
-                    result = shutdown()
-                    if isawaitable(result):
-                        await result
-                except BaseException as exc:
-                    shutdown_errors.append((stage, exc))
-            if shutdown_errors:
-                details = "; ".join(
-                    f"{stage}: {error}" for stage, error in shutdown_errors
-                )
-                raise RuntimeError(
-                    f"application shutdown failed: {details}"
-                ) from shutdown_errors[0][1]
+            await shutdown_resources()
 
     app = FastAPI(
         title=APP_NAME,

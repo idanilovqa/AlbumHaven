@@ -47,7 +47,7 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const source = fs.readFileSync(runnerPath, 'utf8');
 
-  assert.match(source, /fixtures-v1\.0\.20/);
+  assert.match(source, /fixtures-v1\.0\.21/);
   assert.match(source, /functional-core/);
   assert.match(source, /manifest\.json/);
   assert.match(source, /Import-Module\s+Microsoft\.PowerShell\.Utility/);

@@ -48,7 +48,7 @@ function fingerprint(overrides = {}) {
   return {
     runnerImage: 'windows-2025',
     chromeVersion: '151.0.7922.138',
-    fixtureRelease: 'fixtures-v1.0.20',
+    fixtureRelease: 'fixtures-v1.0.21',
     fixtureSchemaVersion: 1,
     postgresMajor: 17,
     measurementContract: 'performance-v1',
@@ -163,8 +163,8 @@ function sampleInput() {
       actionsUrl: `https://github.com/idanilovqa/AlbumHaven/actions/runs/${RUN_ID}`,
     },
     fixture: {
-      release: 'fixtures-v1.0.20',
-      manifestSha256: 'b1b53a4a439aa1ae58beaf8b7a86b2bea7b74397045c10a5be7eff7c367af7fc',
+      release: 'fixtures-v1.0.21',
+      manifestSha256: '094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f',
       schemaVersion: 1,
     },
     resultArtifacts: [
@@ -692,7 +692,7 @@ mergerTest('history partitions on every approved environment fingerprint field',
   const variants = [
     { runnerImage: 'windows-2028' },
     { chromeVersion: '152.0.0.0' },
-    { fixtureRelease: 'fixtures-v1.0.21' },
+    { fixtureRelease: 'fixtures-v1.0.20' },
     { fixtureSchemaVersion: 2 },
     { postgresMajor: 18 },
     { measurementContract: 'performance-v2' },

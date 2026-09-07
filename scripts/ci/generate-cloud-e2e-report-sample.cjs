@@ -14,7 +14,7 @@ const screenshotBytes = Buffer.from(
 );
 const inventory = buildExpectedCloudE2EInventory({ runAttempt });
 const fingerprint = {
-  runnerImage: 'windows-2025', chromeVersion: '151.0.7922.138', fixtureRelease: 'fixtures-v1.0.20',
+  runnerImage: 'windows-2025', chromeVersion: '151.0.7922.138', fixtureRelease: 'fixtures-v1.0.21',
   fixtureSchemaVersion: 1, postgresMajor: 17, measurementContract: 'performance-v1',
 };
 
@@ -71,8 +71,8 @@ const report = mergeCloudE2EResults({
     actionsUrl: `https://github.com/idanilovqa/AlbumHaven/actions/runs/${runId}`,
   },
   fixture: {
-    release: 'fixtures-v1.0.20',
-    manifestSha256: 'b1b53a4a439aa1ae58beaf8b7a86b2bea7b74397045c10a5be7eff7c367af7fc',
+    release: 'fixtures-v1.0.21',
+    manifestSha256: '094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f',
     schemaVersion: 1,
   },
   resultArtifacts, previousPerformanceHistory: [], now: new Date('2026-08-25T20:00:00.000Z'),

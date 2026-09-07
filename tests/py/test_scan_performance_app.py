@@ -838,6 +838,90 @@ def test_launch_sampler_persists_error_event_after_successful_prefix(tmp_path, m
     assert entries[-1]["error"]
 
 
+def test_launch_sampler_recovers_from_one_transient_timeout_after_success(tmp_path, monkeypatch):
+    module = _load_module()
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"scan_in_progress":true}'
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise TimeoutError("transient runner contention")
+        return Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    samples_path = tmp_path / "status-transient-timeout.jsonl"
+    sampler = module.ProductionStatusFileSampler(
+        status_url="http://127.0.0.1:4174/status",
+        samples_path=samples_path,
+        interval_seconds=0.005,
+    )
+    sampler._session_cookie = "test-session"
+    sampler.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and calls < 3 and sampler.error is None:
+        time.sleep(0.005)
+    sampler.stop()
+
+    entries = [json.loads(line) for line in samples_path.read_text(encoding="utf-8").splitlines()]
+    assert calls >= 3
+    assert sum(1 for entry in entries if entry.get("status")) >= 2
+    assert not any(entry.get("event") == "error" for entry in entries)
+
+
+def test_launch_sampler_fails_after_three_consecutive_transient_timeouts(tmp_path, monkeypatch):
+    module = _load_module()
+    calls = 0
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"scan_in_progress":true}'
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise TimeoutError("sustained runner contention")
+        return Response()
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+    samples_path = tmp_path / "status-sustained-timeout.jsonl"
+    sampler = module.ProductionStatusFileSampler(
+        status_url="http://127.0.0.1:4174/status",
+        samples_path=samples_path,
+        interval_seconds=0.005,
+        request_timeout_seconds=0.1,
+    )
+    sampler._session_cookie = "test-session"
+    sampler.start()
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and sampler.error is None:
+        time.sleep(0.005)
+    with pytest.raises(RuntimeError, match="Production status sampler failed"):
+        sampler.stop()
+
+    entries = [json.loads(line) for line in samples_path.read_text(encoding="utf-8").splitlines()]
+    assert calls == 4
+    assert entries[0]["status"]["scan_in_progress"] is True
+    assert entries[-1]["event"] == "error"
+
+
 @pytest.mark.parametrize("setup_fails", [False, True])
 def test_launcher_holds_database_lock_through_server_and_cleanup(setup_fails, monkeypatch):
     module = _load_module()

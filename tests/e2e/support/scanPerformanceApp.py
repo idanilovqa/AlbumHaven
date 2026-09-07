@@ -946,19 +946,23 @@ class ProductionStatusFileSampler:
         self._thread.start()
 
     def _run(self) -> None:
+        consecutive_transient_errors = 0
         try:
             with self.samples_path.open("a", encoding="utf-8", buffering=1) as stream:
                 while not self._stop.is_set():
                     try:
                         payload = self._read_status()
                         self._observed_response = True
+                        consecutive_transient_errors = 0
                         stream.write(json.dumps({
                             "recordedAtEpochMs": int(time.time() * 1000),
                             "status": payload,
                         }, separators=(",", ":")) + "\n")
                     except (urllib.error.URLError, TimeoutError, ConnectionError):
                         if self._observed_response:
-                            raise
+                            consecutive_transient_errors += 1
+                            if consecutive_transient_errors >= 3:
+                                raise
                     self._stop.wait(self.interval_seconds)
         except Exception as exc:
             self.error = exc

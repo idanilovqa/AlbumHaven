@@ -2054,7 +2054,13 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('wheel', releaseRetainedGeometry, { passive: true });
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
-    list.scrollTop = priorScrollTop;
+    const restoreOwnedScroll = () => {
+      list.scrollTop = priorScrollTop;
+    };
+    restoreOwnedScroll();
+    if (typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+    }
   }
   return true;
 }

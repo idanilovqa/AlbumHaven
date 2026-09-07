@@ -21,7 +21,7 @@ Set these values in `.env` for local HTTPS testing on the server computer:
 MUSIC_DIR=C:\path\to\your\music
 ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app:YOUR_APP_DB_PASSWORD@localhost:5432/album_haven_core
 ALBUM_HAVEN_MIGRATOR_DATABASE_URL=postgresql://album_haven_migrator:YOUR_MIGRATOR_DB_PASSWORD@localhost:5432/album_haven_core
-ALBUM_HAVEN_BOOTSTRAP_USERNAME=your-owner-username
+ALBUM_HAVEN_BOOTSTRAP_USERNAME=Rendref
 ALBUM_HAVEN_BOOTSTRAP_EMAIL=your-real-or-local-test-address@example.com
 ALBUM_HAVEN_PUBLIC_BASE_URL=https://127.0.0.1:5000
 MUSIC_APP_TLS_MODE=local
@@ -61,7 +61,8 @@ Run the bootstrap once in an interactive terminal:
 python scripts/bootstrap_auth_owner.py
 ```
 
-Your owner username is the configured `ALBUM_HAVEN_BOOTSTRAP_USERNAME`. Album Haven does not define, store, or print a
+Your owner username is `Rendref`, the required value of
+`ALBUM_HAVEN_BOOTSTRAP_USERNAME`. Album Haven does not define, store, or print a
 default password. The password is the value you enter twice at this prompt. It
 must contain 8 to 256 Unicode code points, must not contain the username or
 email context, and must pass Pwned Passwords screening. Store it in your

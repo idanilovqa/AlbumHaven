@@ -3297,6 +3297,49 @@ test('final-row mutation retains enough list geometry to restore scrollTop 659 a
   assert.equal(context.state.utility.selectedProblematicKey, survivingAlbum.key);
 });
 
+test('Problematic Files mutation restores sidebar scroll after deferred browser anchoring', async () => {
+  const context = loadHelpers();
+  const scheduledFrames = [];
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    scheduledFrames.push(callback);
+    return scheduledFrames.length;
+  };
+  const removedAlbum = {
+    key: 'album-removed',
+    name: 'Album Removed',
+    tracks: [{ path: 'C:/Music/Removed/01 Track.flac' }],
+  };
+  const survivingAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+    tracks: [{ path: 'C:/Music/Previous/01 Track.flac' }],
+  };
+  const listElement = {
+    clientHeight: 200,
+    scrollHeight: 2000,
+    scrollTop: 1266,
+  };
+  context.state.utility = {
+    activeTab: 'problematic-files',
+    loaded: true,
+    problematicFiles: [survivingAlbum, removedAlbum],
+    selectedProblematicKey: removedAlbum.key,
+  };
+  context.getUtilityModalElements = () => ({ list: listElement });
+  context.renderUtilityModalContent = () => {};
+
+  context.claimProblematicSaveTaskMutation('remove-after-anchor', removedAlbum);
+  context.state.utility.problematicFiles = [survivingAlbum];
+  await context.settleProblematicSaveTaskMutation('remove-after-anchor', { reconcileSelection: true });
+  assert.equal(listElement.scrollTop, 1266, 'the synchronous restore should preserve the owned position');
+
+  listElement.scrollTop = 0;
+  assert.equal(scheduledFrames.length, 1, 'the restore must survive browser scroll anchoring on the next frame');
+  scheduledFrames.shift()();
+  assert.equal(listElement.scrollTop, 1266);
+});
+
 test('watchSaveTask reloads Problematic Files after an in-flight stale load settles', async () => {
   const context = loadHelpers();
   const loadEvents = [];

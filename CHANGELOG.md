@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.43 - 2026-09-05
+## 0.9.43 - 2026-09-06
 
 - Added local authentication and account administration, including secure owner
   bootstrap, sessions, password recovery, invitations, audit records, and

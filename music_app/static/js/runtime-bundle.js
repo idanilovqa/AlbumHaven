@@ -17640,9 +17640,7 @@ function mountAlertsAppearanceEditor(detail) {
     const finishFocusedNavigation = (remainingAttempts) => {
       if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
       const result = scrollFocusedRowsIntoView();
-      if (result.layoutReady) {
-        state.utility.focusedTrackPath = '';
-      } else if (
+      if (!result.layoutReady &&
         result.focusedTrackRendered
         && remainingAttempts > 1
         && typeof scheduleBrowserAnimationFrame === 'function'
@@ -17652,8 +17650,6 @@ function mountAlertsAppearanceEditor(detail) {
     };
     if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
       scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
-    } else if (initialFocusedNavigation.layoutReady) {
-      state.utility.focusedTrackPath = '';
     }
   }
 }
@@ -31022,6 +31018,7 @@ function attachRepairConfirmEvents() {
   if (problematicAlbumButton) {
     event.preventDefault();
     state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    state.utility.focusedTrackPath = '';
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
     state.utility.repairSelections = {};

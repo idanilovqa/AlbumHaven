@@ -345,6 +345,7 @@ test('removing a problem filter preserves the selected album in the live bootstr
 test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', () => {
   const { context } = createContext({
     deferProblematicAutoSelection: true,
+    focusedTrackPath: 'C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem.flac',
   });
   const { event } = createEvent({
     '[data-problematic-album-key]': createElement({
@@ -356,6 +357,7 @@ test('clicking a problematic album row clears deferred auto-selection in the liv
 
   assert.equal(context.state.utility.selectedProblematicKey, 'album-7');
   assert.equal(context.state.utility.deferProblematicAutoSelection, false);
+  assert.equal(context.state.utility.focusedTrackPath, '');
 });
 
 test('Problematic Files uses the shared missing-album removal confirmation', () => {

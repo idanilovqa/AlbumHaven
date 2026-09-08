@@ -158,6 +158,6 @@ Run: `node --test tests/js/pr-review-scope.test.js tests/js/cloud-verification-g
 
 Expected: no diff errors and all affected tests pass.
 
-- [ ] **Step 4: Commit both repositories**
+- [x] **Step 4: Commit both repositories**
 
 Commit the app workflow, tests, rules, spec, and plan together. Commit the private owner-rule and workflow documentation changes separately in the internal repository. Leave the test-data repository unchanged unless the active playback fixture correction requires a test-data commit.

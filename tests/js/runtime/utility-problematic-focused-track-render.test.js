@@ -122,7 +122,16 @@ test('problematic-file render scrolls the focused track row into view determinis
   };
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
+    list: {
+      innerHTML: '',
+      scrollTop: 0,
+      getBoundingClientRect() { return { top: 0, bottom: 200 }; },
+      querySelector(selector) {
+        return selector === '.utility-list-item.is-active'
+          ? { getBoundingClientRect() { return { top: 20, bottom: 60 }; } }
+          : null;
+      },
+    },
     detail,
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
@@ -173,6 +182,15 @@ test('problematic-file render scrolls the focused track row into view determinis
   assert.deepEqual(cssEscapeCalls, [trackPath]);
   assert.deepEqual(selectorCalls, [`[data-problematic-track-path="${escapedTrackPath}"]`]);
   assert.equal(detail.scrollTop, 88);
+
+  detail.scrollTop = 0;
+  context.renderProblematicFiles();
+
+  assert.equal(
+    detail.scrollTop,
+    76,
+    'a late summary/detail rerender must keep the requested track row in view',
+  );
 });
 
 test('rerender leaves a failed problematic album detail in its terminal state', () => {
@@ -730,7 +748,7 @@ test('problematic-file render rounds a fractional focused-album clip up to one s
   assert.equal(detail.scrollTop, 38);
 });
 
-test('problematic-file render corrects focused navigation after the opened modal receives layout', () => {
+test('problematic-file render corrects focused navigation after layout and retains it for late rerenders', () => {
   const rendered = renderFocusedAlbumWithGeometry({
     deferAnimationFrame: true,
     detailBottom: 240,
@@ -754,7 +772,7 @@ test('problematic-file render corrects focused navigation after the opened modal
 
   assert.equal(rendered.list.scrollTop, 20);
   assert.equal(rendered.detail.scrollTop, 20);
-  assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
 });
 
 test('problematic-file render preserves the selected album viewport across a late rerender', () => {

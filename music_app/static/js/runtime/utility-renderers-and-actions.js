@@ -142,9 +142,7 @@
     const finishFocusedNavigation = (remainingAttempts) => {
       if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
       const result = scrollFocusedRowsIntoView();
-      if (result.layoutReady) {
-        state.utility.focusedTrackPath = '';
-      } else if (
+      if (!result.layoutReady &&
         result.focusedTrackRendered
         && remainingAttempts > 1
         && typeof scheduleBrowserAnimationFrame === 'function'
@@ -154,8 +152,6 @@
     };
     if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
       scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
-    } else if (initialFocusedNavigation.layoutReady) {
-      state.utility.focusedTrackPath = '';
     }
   }
 }

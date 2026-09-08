@@ -162,6 +162,7 @@
   if (problematicAlbumButton) {
     event.preventDefault();
     state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    state.utility.focusedTrackPath = '';
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
     state.utility.repairSelections = {};

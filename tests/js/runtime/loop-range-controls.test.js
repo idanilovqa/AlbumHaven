@@ -1170,6 +1170,33 @@ test('main and Utility editors share the same selection and edge-safe handle pri
   assert.match(css, /\.loop-range-handle\.is-end/);
 });
 
+test('shared loop range handles are excluded from generic button interaction painting', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+
+  assert.match(
+    css,
+    /:root :is\(button,[^{]+:not\(\.loop-range-handle\):not\(\.global-player \*\):hover/,
+  );
+  assert.match(
+    css,
+    /:root\[data-appearance-palette\] :is\(button,[^{]+:not\(\.loop-range-handle\):not\(\.global-player \*\):hover/,
+  );
+  assert.match(
+    css,
+    /:root :is\(button,[^{]+:not\(\.loop-range-handle\):not\(\.global-player \*\):active/,
+  );
+  assert.match(
+    css,
+    /:root\[data-appearance-palette\] :is\(button,[^{]+:not\(\.loop-range-handle\):not\(\.global-player \*\):active/,
+  );
+  assert.match(
+    css,
+    /:root :is\(button, input, select,[^{]+:not\(\.loop-range-handle\):not\(\.global-player \*\):focus-visible/,
+  );
+});
+
 test('player and Utility adapters persist the controller range returned after duration correction', () => {
   const player = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'player-loop-playback.js',

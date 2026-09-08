@@ -140,24 +140,24 @@ html .cover-lookup-drawer {
 :root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
 .shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
 .shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
 :root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 2px; }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
-:root :is(button, input, select, [role='button'], [data-actionable]):not(.global-player *):focus-visible {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.loop-range-handle):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
+:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-range-handle):not(.global-player *):focus-visible {
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
 }

@@ -3,6 +3,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const ButtonComponent = require(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'button-component.js',
+));
 
 const helperPath = path.join(
   __dirname,
@@ -50,6 +60,7 @@ const primaryModalsTemplate = fs.readFileSync(path.join(
 function loadHelper(albums, overrides = {}) {
   const context = {
     console,
+    ButtonComponent,
     claimTagEditViewMutation(album, editedPaths, updates) {
       return { album, editedPaths, updates };
     },
@@ -180,12 +191,16 @@ test('track modal playback refresh preserves generic Play track and Pause track 
 
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
   assert.equal(durationEl.innerHTML, '0:00 / 0:00');
   assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
   playback.paused = true;
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Play track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--play"/);
+  assert.doesNotMatch(button.innerHTML, /&#x25B6;|▶/);
 });
 
 test('Loose Tracks playback refresh applies the AlbumTrackTable current and animation contract', () => {
@@ -229,6 +244,8 @@ test('Loose Tracks playback refresh applies the AlbumTrackTable current and anim
   assert.equal(classes.get('album-track-table__row--animated'), true);
   assert.equal(row.dataset.trackPlaying, 'true');
   assert.equal(buttonAttributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
   assert.equal(durationEl.innerHTML, '0:42 / 3:00');
   assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
@@ -2711,6 +2728,7 @@ function createTrackModalCoverContext(options = {}) {
   const directFetchCalls = [];
   const documentBody = new TrackModalTestElement('body');
   const context = {
+    ButtonComponent,
     console,
     Promise,
     URL,
@@ -3754,6 +3772,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   const folder = { dataset: {} };
   const editTags = { dataset: {} };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3858,6 +3877,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     ],
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -4037,6 +4057,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     editTags: { dataset: {} },
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {

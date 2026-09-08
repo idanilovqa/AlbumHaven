@@ -13200,7 +13200,11 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const coverPath = String(track.coverPath || track.cover_path || '');
   const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
   const isPlaying = Boolean(track.isPlaying);
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${isPlaying ? '&#x23F8;' : '&#x25B6;'}</button>`;
+  const iconName = isPlaying ? 'pause' : 'play';
+  const icon = ButtonComponent.renderIconSvg(iconName, {
+    className: `album-track-table__play-icon ui-icon--${iconName}`,
+  });
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
@@ -25362,7 +25366,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   });
   if (typeof buildAlbumTrackTableHtml !== 'function') {
     return componentGroups.flatMap((group) => group.tracks).map((track) => (
-      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
   const hasBonusDisc = componentGroups.some((group) => group.isBonus);
@@ -25574,7 +25578,10 @@ function refreshTrackModalPlaybackState() {
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+        className: `album-track-table__play-icon ui-icon--${iconName}`,
+      });
       button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
     }
 
@@ -25611,7 +25618,10 @@ function refreshNonAlbumModalPlaybackState() {
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+        className: `album-track-table__play-icon ui-icon--${iconName}`,
+      });
       button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
     }
 

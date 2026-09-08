@@ -129,6 +129,18 @@ def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
     assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
 
 
+def test_targeted_featured_artist_sync_is_scoped_to_affected_scan_owned_albums():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql()
+    )
+    assert "unnest(%(affected_album_keys)s::text[])" in normalized_sql
+    assert "album_id = affected_albums.album_id" in normalized_sql
+    assert "metadata ->> 'source' = %(source)s" in normalized_sql
+    assert "not exists" in normalized_sql
+
+
 def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
     from music_app.services import scan_cache_persistence
     from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter

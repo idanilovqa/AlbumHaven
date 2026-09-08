@@ -23,3 +23,5 @@ Return concise Markdown with these sections:
 3. Residual risks
 
 If you do not find an actionable issue for a section, say so plainly.
+
+End with exactly one verdict line. Use `ALBUM_HAVEN_REVIEW_VERDICT=pass` only when Findings and Missing tests contain no actionable item. Otherwise use `ALBUM_HAVEN_REVIEW_VERDICT=block`. Never omit or qualify the verdict.

@@ -1355,6 +1355,9 @@ jobs:
               body,
             });
 
+      - name: Enforce Codex review verdict
+        run: node scripts/ci/validate-codex-review-verdict.cjs codex-output.md
+
   ai_code_review:
     name: AI Code Review // VERY POWERFULL
     needs:
@@ -1422,6 +1425,9 @@ jobs:
               issue_number: context.payload.pull_request.number,
               body,
             });
+
+      - name: Enforce AI Code Review verdict
+        run: node scripts/ci/validate-codex-review-verdict.cjs ai-code-review-output.md
 
   focused_e2e_gate:
     name: Focused E2E Verification

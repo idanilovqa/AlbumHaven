@@ -10,7 +10,13 @@ const {
   isDocumentationPath,
   parseFocusedE2eRequest,
   parseNumstat,
+  selectReviewDiffBase,
 } = require(classifierPath);
+
+test('forced full review classifies the complete PR delta', () => {
+  assert.equal(selectReviewDiffBase({ action: 'synchronize', baseSha: 'base', lastReviewedSha: 'reviewed', forceFullReview: true }), 'base');
+  assert.equal(selectReviewDiffBase({ action: 'synchronize', baseSha: 'base', lastReviewedSha: 'reviewed' }), 'reviewed');
+});
 
 test('focused E2E request parses exact cases and supported product areas', () => {
   const body = [

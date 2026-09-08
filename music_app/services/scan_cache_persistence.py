@@ -318,6 +318,23 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            connection.execute(
+                _synchronize_targeted_local_album_featured_artists_sql(),
+                {
+                    "affected_album_keys": sorted(affected_album_keys),
+                    "current_featured_rows": _jsonb(
+                        [
+                            {
+                                "album_key": row["album_key"],
+                                "artist_key": row["artist_key"],
+                                "featured_kind": row["featured_kind"],
+                            }
+                            for row in featured_artist_rows
+                        ]
+                    ),
+                    "source": _SOURCE,
+                },
+            )
             revision_row = _first_row(
                 connection.execute(_increment_inventory_mutation_revision_sql())
             )
@@ -5354,6 +5371,54 @@ def _mark_stale_track_files_sql() -> str:
           and (
             %(current_path_count)s = 0
             or library.local_track_files.private_path <> all(%(current_paths)s::text[])
+          );
+    """
+
+
+def _synchronize_targeted_local_album_featured_artists_sql() -> str:
+    return """
+        with bootstrap_context as (
+          select library.libraries.id as library_id
+          from app.bootstrap_owners
+          join library.libraries
+            on library.libraries.owner_account_id = app.bootstrap_owners.account_id
+           and library.libraries.name = 'Local Library'
+           and library.libraries.library_kind = 'local'
+          where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
+          limit 1
+        ),
+        affected_albums as (
+          select library.local_albums.id as album_id
+          from unnest(%(affected_album_keys)s::text[]) as affected(album_key)
+          join bootstrap_context on true
+          join library.local_albums
+            on library.local_albums.library_id = bootstrap_context.library_id
+           and library.local_albums.album_key = affected.album_key
+        ),
+        current_featured_rows as (
+          select library.local_albums.id as album_id,
+                 library.local_artists.id as artist_id,
+                 incoming.featured_kind
+          from jsonb_to_recordset(%(current_featured_rows)s::jsonb)
+            as incoming(album_key text, artist_key text, featured_kind text)
+          join bootstrap_context on true
+          join library.local_albums
+            on library.local_albums.library_id = bootstrap_context.library_id
+           and library.local_albums.album_key = incoming.album_key
+          join library.local_artists
+            on library.local_artists.library_id = bootstrap_context.library_id
+           and library.local_artists.artist_key = incoming.artist_key
+        )
+        delete from library.local_album_featured_artists
+        using bootstrap_context, affected_albums
+        where library.local_album_featured_artists.library_id = bootstrap_context.library_id
+          and library.local_album_featured_artists.album_id = affected_albums.album_id
+          and library.local_album_featured_artists.metadata ->> 'source' = %(source)s
+          and not exists (
+            select 1 from current_featured_rows
+            where current_featured_rows.album_id = library.local_album_featured_artists.album_id
+              and current_featured_rows.artist_id = library.local_album_featured_artists.artist_id
+              and current_featured_rows.featured_kind = library.local_album_featured_artists.featured_kind
           );
     """
 

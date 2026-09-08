@@ -16,3 +16,5 @@ Prioritize issues that a general correctness pass can miss:
 - missing tests for any actionable finding
 
 Avoid style-only feedback. Return concise Markdown with sections named `Findings`, `Missing tests`, and `Residual risks`. State plainly when a section has no actionable item.
+
+End with exactly one verdict line. Use `ALBUM_HAVEN_REVIEW_VERDICT=pass` only when Findings and Missing tests contain no actionable item. Otherwise use `ALBUM_HAVEN_REVIEW_VERDICT=block`. Never omit or qualify the verdict.

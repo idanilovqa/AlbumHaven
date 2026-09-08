@@ -73,10 +73,12 @@ test('workflow runs reviewers before tests and lets tests run after failed revie
   assert.match(prAgent, /\["\/review"\]/);
   assert.match(codex, /BASE_SHA: \$\{\{ needs\.review_scope\.outputs\.base_sha \}\}/);
   assert.match(codex, /HEAD_SHA: \$\{\{ needs\.review_scope\.outputs\.head_sha \}\}/);
+  assert.match(codex, /validate-codex-review-verdict\.cjs codex-output\.md/);
   assert.match(third, /needs\.review_scope\.outputs\.mode == 'full'/);
   assert.match(third, /uses: openai\/codex-action@v1/);
   assert.match(third, /prompt-file: \.github\/codex\/prompts\/deep-review\.md/);
   assert.match(third, /output-file: ai-code-review-output\.md/);
+  assert.match(third, /validate-codex-review-verdict\.cjs ai-code-review-output\.md/);
   assert.doesNotMatch(third, /zxcloli666\/AI-Code-Review/);
 
   for (const jobName of [

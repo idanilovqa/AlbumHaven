@@ -3353,6 +3353,11 @@ test('Problematic Files mutation restores sidebar scroll after deferred browser 
   assert.equal(scheduledFrames.length, 1, 'the restore must survive browser scroll anchoring on the next frame');
   scheduledFrames.shift()();
   assert.equal(listElement.scrollTop, 1266);
+
+  listElement.scrollTop = 0;
+  assert.equal(scheduledFrames.length, 1, 'a second bounded frame must survive late layout anchoring');
+  scheduledFrames.shift()();
+  assert.equal(listElement.scrollTop, 1266);
 });
 
 test('Problematic Files mutation preserves sidebar scroll when list geometry shrinks on the next frame', async () => {
@@ -3426,6 +3431,8 @@ test('Problematic Files mutation preserves sidebar scroll when list geometry shr
 
   assert.equal(listElement.scrollTop, 1266, 'retained geometry must restore the exact owned position');
   assert.equal(listElement.scrollHeight, 2000, 'the pre-mutation list geometry must remain available');
+  assert.equal(scheduledFrames.length, 1);
+  scheduledFrames.shift()();
 });
 
 test('watchSaveTask reloads Problematic Files after an in-flight stale load settles', async () => {

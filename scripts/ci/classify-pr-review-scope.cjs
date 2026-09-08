@@ -273,6 +273,11 @@ function isUsableBaseline(lastReviewedSha, headSha, runGit = execFileSync) {
   }
 }
 
+function selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview = false }) {
+  if (forceFullReview) return baseSha;
+  return action === 'synchronize' && lastReviewedSha ? lastReviewedSha : baseSha;
+}
+
 function runCli(env = process.env) {
   const action = requireValue(env.PR_EVENT_ACTION, 'PR_EVENT_ACTION');
   const baseSha = requireSha(env.PR_BASE_SHA, 'PR_BASE_SHA');
@@ -293,7 +298,7 @@ function runCli(env = process.env) {
   }
   const focusedRequest = parseFocusedE2eRequest(env.PR_BODY || '');
   const pipeline = classifyPipelineLabels(labels, focusedRequest, action, headSha);
-  const diffBase = action === 'synchronize' && lastReviewedSha ? lastReviewedSha : baseSha;
+  const diffBase = selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview: pipeline.forceFullReview });
   const numstat = execFileSync(
     'git',
     ['diff', '--numstat', '--no-renames', diffBase, headSha],
@@ -373,5 +378,6 @@ module.exports = {
   parseNumstat,
   classifyReviewScope,
   isUsableBaseline,
+  selectReviewDiffBase,
   runCli,
 };

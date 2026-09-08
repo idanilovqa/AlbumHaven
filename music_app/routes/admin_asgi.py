@@ -70,6 +70,9 @@ _CAPABILITY_GROUPS = (
             ("library.playlists.items.manage", "Manage playlist items"),
             ("library.track_preferences.manage", "Track preferences"),
             ("library.discovery.read", "Discovery and listening views"),
+            ("library.loops.read", "View saved loops"),
+            ("library.loops.media.read", "Play saved loop media"),
+            ("library.opinions.read", "View album opinions"),
         ),
     ),
     (

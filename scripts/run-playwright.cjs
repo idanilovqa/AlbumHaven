@@ -857,6 +857,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
 
 async function startManagedScanApp(childEnv, options = {}) {
   const spawnFn = options.spawnFn || spawn;
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const port = Number(options.port || childEnv.PLAYWRIGHT_PORT || 4174);
   const stdout = options.stdout || process.stdout;
   const stderr = options.stderr || process.stderr;
@@ -884,6 +885,10 @@ async function startManagedScanApp(childEnv, options = {}) {
     launchError = error;
   });
   try {
+    child.albumHavenCreationIdentity = readProcessCreationIdentityFn(child.pid);
+    if (!child.albumHavenCreationIdentity) {
+      throw new Error('Managed scan app process had no creation identity after launch.');
+    }
     await waitForManagedScanAppReady(child, port, {
       ...options,
       getLaunchErrorFn: () => launchError,
@@ -891,28 +896,43 @@ async function startManagedScanApp(childEnv, options = {}) {
     return child;
   } catch (error) {
     try {
-      (options.stopProcessTreeFn || stopProcessTree)(child.pid);
+      await stopManagedScanApp(child, port, options);
     } catch (_cleanupError) {
-      try {
-        child.kill();
-      } catch (_killError) {
-        // Preserve the startup error after best-effort cleanup.
-      }
+      // Preserve the startup error after best-effort cleanup.
     }
     throw error;
   }
 }
 
 async function stopManagedScanApp(child, port, options = {}) {
-  if (!child || (child.exitCode !== null && child.exitCode !== undefined)) {
-    return;
-  }
+  if (!child) return;
+  const expectedCreationIdentity = String(child.albumHavenCreationIdentity || '');
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const stopProcessTreeFn = options.stopProcessTreeFn || stopProcessTree;
+  const waitForReclaimedProcessesExitedFn = options.waitForReclaimedProcessesExitedFn
+    || waitForReclaimedProcessesExited;
   const waitForPortReleasedFn = options.waitForPortReleasedFn || waitForPortReleased;
-  stopProcessTreeFn(child.pid);
+  if (!expectedCreationIdentity) {
+    await (options.abortManagedIsolatedAppStartupFn || abortManagedIsolatedAppStartup)(child, options);
+  } else {
+    const currentIdentity = readProcessCreationIdentityFn(child.pid);
+    if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
+      throw new Error(`Managed scan app PID ${child.pid} changed creation identity before teardown.`);
+    }
+    if (currentIdentity === expectedCreationIdentity) {
+      stopProcessTreeFn(child.pid, { expectedCreationIdentity });
+      await waitForReclaimedProcessesExitedFn([
+        { pid: child.pid, creationIdentity: expectedCreationIdentity },
+      ], {
+        timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+        pollIntervalMs: 250,
+      });
+    }
+  }
   const released = await waitForPortReleasedFn(port, {
     timeoutMs: Number(options.timeoutMs || MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS),
     pollIntervalMs: Number(options.pollIntervalMs || 250),
+    readPortOwningProcessesFn: () => [],
   });
   if (!released) {
     throw new Error(`Managed scan app port ${port} was not reusable after teardown.`);

@@ -72,10 +72,6 @@ class PostgresAdminMemberMutationService:
         capabilities = _capabilities(capability_keys)
         reference = _request_ref(request_ref)
         now = self._recent_now(actor_authenticated_at)
-        if not active and not disable_confirmed:
-            raise DestructiveConfirmationRequired("Account disable confirmation is required.")
-        if not access and not removal_confirmed:
-            raise DestructiveConfirmationRequired("Library removal confirmation is required.")
 
         try:
             with self._operation() as connection:
@@ -91,6 +87,14 @@ class PostgresAdminMemberMutationService:
                     # Owner capabilities are inherited; saving their displayed
                     # values must not replace the owner membership or grants.
                     return
+                if locked.get("target_is_active") is True and not active and not disable_confirmed:
+                    raise DestructiveConfirmationRequired("Account disable confirmation is required.")
+                if (
+                    locked.get("target_has_library_access") is True
+                    and not access
+                    and not removal_confirmed
+                ):
+                    raise DestructiveConfirmationRequired("Library removal confirmation is required.")
                 connection.execute(
                     """
                     update app.accounts

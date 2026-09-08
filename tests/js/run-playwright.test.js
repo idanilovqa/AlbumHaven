@@ -2884,6 +2884,10 @@ test('startManagedScanApp launches Python directly and waits for injected readin
       calls.push({ command, args, options });
       return child;
     },
+    readProcessCreationIdentityFn(pid) {
+      assert.equal(pid, 5151);
+      return 'scan-python-start';
+    },
     probeHttpStatusReadyFn: async (url) => {
       probes += 1;
       assert.equal(url, 'http://127.0.0.1:4317/health');
@@ -2900,6 +2904,7 @@ test('startManagedScanApp launches Python directly and waits for injected readin
   });
 
   assert.equal(started, child);
+  assert.equal(child.albumHavenCreationIdentity, 'scan-python-start');
   assert.equal(calls.length, 1);
   assert.equal(calls[0].command, 'python-test.exe');
   assert.deepEqual(calls[0].args, [
@@ -2929,6 +2934,9 @@ test('startManagedScanApp preserves an explicit performance-runner samples path'
     spawnFn(_command, _args, options) {
       spawnOptions = options;
       return child;
+    },
+    readProcessCreationIdentityFn() {
+      return 'scan-python-start';
     },
     probeHttpStatusReadyFn: async (url) => {
       assert.equal(url, 'http://127.0.0.1:4318/health');
@@ -2983,14 +2991,23 @@ test('waitForManagedScanAppReady ignores a listening port until the public healt
   assert.equal(portProbes, 0);
 });
 
-test('stopManagedScanApp uses injected process-tree teardown and waits for port reuse', async () => {
+test('stopManagedScanApp verifies the exact process exited before waiting for port reuse', async () => {
   const child = createFakeChildProcess(5353);
+  child.albumHavenCreationIdentity = 'scan-python-start';
   const stopped = [];
+  const processWaits = [];
   const waited = [];
 
   await _private.stopManagedScanApp(child, 4319, {
-    stopProcessTreeFn(pid) {
-      stopped.push(pid);
+    readProcessCreationIdentityFn(pid) {
+      assert.equal(pid, 5353);
+      return 'scan-python-start';
+    },
+    stopProcessTreeFn(pid, options) {
+      stopped.push({ pid, options });
+    },
+    waitForReclaimedProcessesExitedFn(processes, options) {
+      processWaits.push({ processes, options });
     },
     waitForPortReleasedFn: async (port, options) => {
       waited.push({ port, options });
@@ -2998,7 +3015,17 @@ test('stopManagedScanApp uses injected process-tree teardown and waits for port 
     },
   });
 
-  assert.deepEqual(stopped, [5353]);
+  assert.deepEqual(stopped, [{
+    pid: 5353,
+    options: { expectedCreationIdentity: 'scan-python-start' },
+  }]);
+  assert.deepEqual(processWaits, [{
+    processes: [{ pid: 5353, creationIdentity: 'scan-python-start' }],
+    options: {
+      timeoutMs: _private.RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+      pollIntervalMs: 250,
+    },
+  }]);
   assert.equal(waited.length, 1);
   assert.equal(waited[0].port, 4319);
   assert.equal(waited[0].options.timeoutMs, _private.MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS);

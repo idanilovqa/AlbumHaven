@@ -311,6 +311,8 @@ def test_members_add_and_edit_are_in_place_pages_with_back_navigation():
 
 
 def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+
     app, service = _app()
 
     status, _headers, body = _get(app, "/admin/accounts/7")
@@ -324,14 +326,7 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     inputs = FormInputs(body, "capability_keys").inputs
     switches = [item for item in inputs if item.get("type") == "checkbox"]
     inherited_values = [item for item in inputs if item.get("type") == "hidden"]
-    expected_keys = {
-        "library.browse.read", "library.media.read", "library.problems.read",
-        "library.inventory.manage",
-        "library.resources.read", "library.playlists.create", "library.playlists.manage",
-        "library.playlists.items.manage", "library.track_preferences.manage",
-        "library.discovery.read", "library.rules.read", "library.logs.read",
-        "library.virtual_discography.read",
-    }
+    expected_keys = set(MANAGED_CAPABILITY_KEYS)
     assert len(switches) == len(expected_keys)
     assert {item["value"] for item in switches} == expected_keys
     assert all("checked" in item and "disabled" in item for item in switches)
@@ -364,6 +359,8 @@ def test_owner_role_projects_all_inherited_permissions_and_submittable_values():
     ],
 )
 def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path, selected_keys):
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+
     app, _service = _app()
 
     status, _headers, body = _get(app, path)
@@ -373,7 +370,8 @@ def test_nonowner_role_remains_listener_with_editable_explicit_permissions(path,
     assert '<option value="owner"' not in body
     assert "Individual permissions below override" in body
     inputs = FormInputs(body, "capability_keys").inputs
-    assert len(inputs) == 13
+    assert len(inputs) == len(MANAGED_CAPABILITY_KEYS)
+    assert {item["value"] for item in inputs} == set(MANAGED_CAPABILITY_KEYS)
     assert all(item["type"] == "checkbox" and "disabled" not in item for item in inputs)
     assert {item["value"] for item in inputs if "checked" in item} == selected_keys
 

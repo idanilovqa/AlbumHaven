@@ -75,6 +75,15 @@ function resolvePerformanceShard(shard) {
   return { shard: key, ...config, targets: [...config.targets] };
 }
 
+function selectFocusedPerformanceTargets(config, requestedTargets, focusedStage) {
+  if (focusedStage !== 'exact' || !requestedTargets.length) return config;
+  const selectedTargets = config.targets.filter((target) => requestedTargets.includes(target));
+  if (!selectedTargets.length) {
+    throw new Error(`Performance shard ${config.shard} does not own a requested focused target`);
+  }
+  return { ...config, targets: selectedTargets };
+}
+
 function outputEntries(kind, config) {
   if (kind === 'functional') {
     return [
@@ -103,9 +112,25 @@ function runCli(args = process.argv.slice(2), write = (text) => process.stdout.w
   if (!['functional', 'performance'].includes(kind) || !shard) {
     throw new Error('Usage: resolve-ci-shard.cjs <functional|performance> <shard>');
   }
-  const config = kind === 'functional'
+  let config = kind === 'functional'
     ? resolveFunctionalShard(shard)
     : resolvePerformanceShard(shard);
+  if (kind === 'performance') {
+    let requestedTargets = [];
+    try {
+      requestedTargets = JSON.parse(process.env.FOCUSED_PERFORMANCE_TARGETS_JSON || '[]');
+    } catch (error) {
+      throw new Error(`FOCUSED_PERFORMANCE_TARGETS_JSON must be valid JSON: ${error.message}`);
+    }
+    if (!Array.isArray(requestedTargets)) {
+      throw new Error('FOCUSED_PERFORMANCE_TARGETS_JSON must be an array');
+    }
+    config = selectFocusedPerformanceTargets(
+      config,
+      requestedTargets.map((target) => String(target || '').trim()).filter(Boolean),
+      String(process.env.FOCUSED_STAGE || ''),
+    );
+  }
   const outputPath = String(process.env.GITHUB_OUTPUT || '').trim();
   const output = `${outputEntries(kind, config).map(([key, value]) => `${key}=${value}`).join('\n')}\n`;
   if (outputPath) {
@@ -123,5 +148,6 @@ module.exports = {
   PERFORMANCE_SHARDS,
   resolveFunctionalShard,
   resolvePerformanceShard,
+  selectFocusedPerformanceTargets,
   runCli,
 };

@@ -20,6 +20,7 @@ test('focused E2E request parses exact cases and supported product areas', () =>
   assert.deepEqual(parseFocusedE2eRequest(body), {
     exactCases: ['FTC-UTIL-PROBLEMS-007'],
     areas: ['problematic-files'],
+    performanceTargets: [],
     promotion: null,
   });
   assert.deepEqual(parseFocusedE2eRequest(
@@ -41,6 +42,23 @@ test('focused E2E request parses exact cases and supported product areas', () =>
   assert.throws(
     () => parseFocusedE2eRequest('<!-- album-haven-focused-e2e:{"exactCases":["FTC-X"],"areas":["playback"],"promotion":{"stage":"related","headSha":"stale"}} -->'),
     /promotion head/i,
+  );
+});
+
+test('focused E2E request accepts exact performance targets and rejects unknown targets', () => {
+  assert.deepEqual(parseFocusedE2eRequest(
+    '<!-- album-haven-focused-e2e:{"performanceTargets":["scan-cached"]} -->',
+  ), {
+    exactCases: [],
+    areas: [],
+    performanceTargets: ['scan-cached'],
+    promotion: null,
+  });
+  assert.throws(
+    () => parseFocusedE2eRequest(
+      '<!-- album-haven-focused-e2e:{"performanceTargets":["scan-unknown"]} -->',
+    ),
+    /unsupported focused performance target/i,
   );
 });
 
@@ -191,11 +209,22 @@ test('focused E2E labels select only named functional, Phase 7, and performance 
     focusedStage: 'exact',
     focusedExactCases: [],
     focusedAreas: [],
+    focusedPerformanceTargets: [],
     forceFullReview: false,
     focusedFunctionalShards: ['gallery-search-visual'],
     focusedPhase7Targets: ['phase7-auth'],
     focusedPerformanceShards: ['playback-media'],
   });
+});
+
+test('an exact performance target selects its owning shard without expanding the target', () => {
+  const request = parseFocusedE2eRequest(
+    '<!-- album-haven-focused-e2e:{"performanceTargets":["scan-cached"]} -->',
+  );
+  const result = classifyPipelineLabels(['ci:focused-e2e'], request);
+  assert.equal(result.focusedStage, 'exact');
+  assert.deepEqual(result.focusedPerformanceTargets, ['scan-cached']);
+  assert.deepEqual(result.focusedPerformanceShards, ['scan-library']);
 });
 
 test('focused E2E mode requires a supported target and rejects misspelled target labels', () => {
@@ -262,6 +291,7 @@ test('full mode is the default and accepts the explicit full-review label', () =
     focusedStage: 'full',
     focusedExactCases: [],
     focusedAreas: [],
+    focusedPerformanceTargets: [],
     forceFullReview: false,
     focusedFunctionalShards: [],
     focusedPhase7Targets: [],

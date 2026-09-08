@@ -25,8 +25,10 @@ class Transaction:
 
 
 class Connection:
-    def __init__(self, *, target_owner=False):
+    def __init__(self, *, target_owner=False, target_active=True, target_access=True):
         self.target_owner = target_owner
+        self.target_active = target_active
+        self.target_access = target_access
         self.events = []
         self.operations = []
 
@@ -47,9 +49,9 @@ class Connection:
                 "actor_account_id": 7,
                 "library_id": 9,
                 "target_account_id": 41,
-                "target_is_active": True,
+                "target_is_active": self.target_active,
                 "target_is_bootstrap_owner": self.target_owner,
-                "target_has_library_access": True,
+                "target_has_library_access": self.target_access,
             },))
         return Cursor()
 
@@ -185,6 +187,28 @@ def test_admin_update_cannot_disable_or_detach_bootstrap_owner():
     else:
         raise AssertionError("bootstrap owner protection must fail closed")
     assert connection.events[-1] == "rollback"
+
+
+def test_admin_update_allows_permission_edits_without_reconfirming_retained_disabled_state():
+    connection = Connection(target_active=False, target_access=False)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=False,
+        current_library_access=False,
+        capability_keys=("library.browse.read",),
+        confirm_disable=False,
+        confirm_remove_access=False,
+        request_ref="admin-update-retained-disabled-state",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert statements[0].startswith("with locked_accounts")
+    assert any("set is_active = %s" in sql for sql in statements)
+    assert connection.events == ["begin", "commit"]
 
 
 def test_admin_owner_save_preserves_membership_grants_and_account_state():

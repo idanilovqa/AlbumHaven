@@ -18,7 +18,7 @@ test('functional shard resolver preserves the existing port and artifact mapping
 });
 
 test('performance shard resolver preserves the existing fixture and target mapping', () => {
-  const { resolvePerformanceShard } = require(resolverPath);
+  const { resolvePerformanceShard, selectFocusedPerformanceTargets } = require(resolverPath);
   assert.deepEqual(resolvePerformanceShard('playback-media'), {
     shard: 'playback-media',
     fixtureProfile: 'playback-media',
@@ -30,6 +30,18 @@ test('performance shard resolver preserves the existing fixture and target mappi
   });
   assert.equal(resolvePerformanceShard('synthetic-large-library').targets.length, 10);
   assert.throws(() => resolvePerformanceShard('unknown'), /Unknown performance shard/);
+  assert.deepEqual(
+    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'exact').targets,
+    ['scan-cached'],
+  );
+  assert.equal(
+    selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['scan-cached'], 'related').targets.length,
+    5,
+  );
+  assert.throws(
+    () => selectFocusedPerformanceTargets(resolvePerformanceShard('scan-library'), ['playback-start'], 'exact'),
+    /does not own a requested focused target/i,
+  );
 });
 
 test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {

@@ -168,6 +168,11 @@ contractTest('hosted review gates fail closed without credentials and run their 
   const codexComment = workflowStepSource(codexJob, 'Post Codex feedback');
   const aiCodeReviewAction = workflowStepSource(aiCodeReviewJob, 'Run AI Code Review');
 
+  assert.match(aiCodeReviewAction, /uses: openai\/codex-action@v1/);
+  assert.match(aiCodeReviewAction, /prompt-file: \.github\/codex\/prompts\/deep-review\.md/);
+  assert.match(aiCodeReviewAction, /output-file: ai-code-review-output\.md/);
+  assert.doesNotMatch(aiCodeReviewJob, /zxcloli666\/AI-Code-Review/);
+
   assert.doesNotMatch(prAgentJob, /^    env:\r?\n\s+PR_AGENT_OPENAI_API_KEY:/m);
   assert.match(prAgentCredentialGuard, /PR_AGENT_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
   assert.match(prAgentCredentialGuard, /if \[\[ -z "\$\{PR_AGENT_OPENAI_API_KEY:-\}" \]\]; then[\s\S]*?exit 1/);
@@ -183,7 +188,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(prAgentAction, /github_action_config\.auto_improve: "false"/);
   assert.match(
     prAgentAction,
-    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review"\]'/,
+    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review", "labeled", "unlabeled"\]'/,
   );
   assert.match(prAgentAction, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
   assert.match(prAgentAction, /github_action_config\.push_commands: .*\["\/review -i"\].*\["\/review"\]/);
@@ -220,11 +225,10 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.doesNotMatch(workflow, /needs\.codex_review\.outputs|steps\.run_codex\.outputs/);
   assert.doesNotMatch(codexJob, /[Ss]kip.*(?:credential|key)|if:.*CODEX_OPENAI_API_KEY/);
 
-  assert.match(
-    aiCodeReviewAction,
-    /uses: zxcloli666\/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d/,
-  );
-  assert.match(aiCodeReviewAction, /OPENAI_API_MODEL: "gpt-4\.1-mini"/);
+  assert.match(aiCodeReviewAction, /permission-profile: ":read-only"/);
+  assert.match(aiCodeReviewAction, /run: test -s ai-code-review-output\.md/);
+  assert.match(aiCodeReviewAction, /name: ai-code-review-output/);
+  assert.match(aiCodeReviewAction, /fs\.readFileSync\('ai-code-review-output\.md', 'utf8'\)\.trim\(\)/);
 });
 
 contractTest('hosted review jobs run after scope and before E2E without test dependencies', () => {

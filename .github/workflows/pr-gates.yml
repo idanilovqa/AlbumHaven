@@ -776,6 +776,9 @@ jobs:
 
       - name: Resolve performance shard configuration
         id: shard
+        env:
+          FOCUSED_PERFORMANCE_TARGETS_JSON: ${{ needs.review_scope.outputs.focused_performance_targets_json }}
+          FOCUSED_STAGE: ${{ needs.review_scope.outputs.focused_stage }}
         run: node scripts/ci/resolve-ci-shard.cjs performance ${{ matrix.shard }}
 
       - name: Initialize performance shard result evidence
@@ -1134,6 +1137,7 @@ jobs:
       focused_stage: ${{ steps.classify.outputs.focused_stage }}
       focused_exact_cases_json: ${{ steps.classify.outputs.focused_exact_cases_json }}
       focused_areas_json: ${{ steps.classify.outputs.focused_areas_json }}
+      focused_performance_targets_json: ${{ steps.classify.outputs.focused_performance_targets_json }}
       focused_run_cases_json: ${{ steps.classify.outputs.focused_run_cases_json }}
       base_sha: ${{ steps.classify.outputs.base_sha }}
       head_sha: ${{ steps.classify.outputs.head_sha }}
@@ -1250,7 +1254,7 @@ jobs:
           github_action_config.auto_review: "${{ github.event.action != 'synchronize' }}"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
-          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review"]'
+          github_action_config.pr_actions: '["opened", "reopened", "ready_for_review", "labeled", "unlabeled"]'
           github_action_config.handle_push_trigger: "${{ github.event.action == 'synchronize' }}"
           github_action_config.push_trigger_ignore_bot_commits: "false"
           github_action_config.push_trigger_ignore_merge_commits: "false"
@@ -1337,7 +1341,7 @@ jobs:
       - review_scope
     if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode == 'full' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     permissions:
       contents: read
       issues: write
@@ -1360,12 +1364,44 @@ jobs:
           persist-credentials: false
 
       - name: Run AI Code Review
-        uses: zxcloli666/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d
+        id: run_ai_code_review
+        uses: openai/codex-action@v1
+        env:
+          BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_API_MODEL: "gpt-4.1-mini"
-          ENABLE_LINTERS: "false"
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":read-only"
+          prompt-file: .github/codex/prompts/deep-review.md
+          output-file: ai-code-review-output.md
+
+      - name: Require AI Code Review output file
+        shell: bash
+        run: test -s ai-code-review-output.md
+
+      - name: Upload AI Code Review output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-code-review-output
+          path: ai-code-review-output.md
+          if-no-files-found: error
+
+      - name: Post AI Code Review feedback
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require('node:fs');
+            const body = fs.readFileSync('ai-code-review-output.md', 'utf8').trim();
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body,
+            });
 
   focused_e2e_gate:
     name: Focused E2E Verification

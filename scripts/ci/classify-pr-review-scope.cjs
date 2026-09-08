@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
+const { PERFORMANCE_SHARDS: PERFORMANCE_SHARD_CONFIGS } = require('./resolve-ci-shard.cjs');
 
 const INCREMENTAL_LINE_LIMIT = 250;
 const FOCUSED_E2E_LABEL = 'ci:focused-e2e';
@@ -24,12 +25,10 @@ const FUNCTIONAL_SHARDS = [
   'playback-utilities',
 ];
 const PHASE7_TARGETS = ['phase7-auth', 'phase7-admin'];
-const PERFORMANCE_SHARDS = [
-  'synthetic-large-library',
-  'utility-problematic-files',
-  'playback-media',
-  'scan-library',
-];
+const PERFORMANCE_SHARDS = Object.freeze(Object.keys(PERFORMANCE_SHARD_CONFIGS));
+const SUPPORTED_PERFORMANCE_TARGETS = Object.freeze(PERFORMANCE_SHARDS.flatMap(
+  (shard) => PERFORMANCE_SHARD_CONFIGS[shard].targets,
+));
 
 function normalizePath(filePath) {
   return String(filePath || '').replaceAll('\\', '/').replace(/^\.\//, '');
@@ -120,7 +119,9 @@ function normalizeLabels(labels) {
 
 function parseFocusedE2eRequest(body) {
   const matches = [...String(body || '').matchAll(FOCUSED_REQUEST_PATTERN)];
-  if (!matches.length) return { exactCases: [], areas: [], promotion: null };
+  if (!matches.length) return {
+    exactCases: [], areas: [], performanceTargets: [], promotion: null,
+  };
   if (matches.length !== 1) throw new Error('Focused E2E request must contain exactly one marker');
   const match = matches[0];
   if (match[1].length > 4096) throw new Error('Focused E2E request exceeds 4096 characters');
@@ -134,10 +135,20 @@ function parseFocusedE2eRequest(body) {
     .map((value) => String(value || '').trim()).filter(Boolean))];
   const areas = [...new Set((Array.isArray(parsed.areas) ? parsed.areas : [])
     .map((value) => String(value || '').trim()).filter(Boolean))];
+  const performanceTargets = [...new Set(
+    (Array.isArray(parsed.performanceTargets) ? parsed.performanceTargets : [])
+      .map((value) => String(value || '').trim()).filter(Boolean),
+  )];
   const unsupported = areas.find((area) => !SUPPORTED_FOCUSED_AREAS.includes(area));
   if (unsupported) throw new Error(`Unsupported focused E2E area: ${unsupported}`);
   const invalidCase = exactCases.find((caseId) => !/^FTC-[A-Z0-9-]+$/.test(caseId));
   if (invalidCase) throw new Error(`Focused E2E case must be an exact FTC ID: ${invalidCase}`);
+  const unsupportedPerformanceTarget = performanceTargets.find(
+    (target) => !SUPPORTED_PERFORMANCE_TARGETS.includes(target),
+  );
+  if (unsupportedPerformanceTarget) {
+    throw new Error(`Unsupported focused performance target: ${unsupportedPerformanceTarget}`);
+  }
   let promotion = null;
   if (parsed.promotion != null) {
     if (!parsed.promotion || typeof parsed.promotion !== 'object' || Array.isArray(parsed.promotion)) {
@@ -153,18 +164,23 @@ function parseFocusedE2eRequest(body) {
     }
     promotion = { stage, headSha };
   }
-  return { exactCases, areas, promotion };
+  return { exactCases, areas, performanceTargets, promotion };
 }
 
 function classifyPipelineLabels(
   labels,
-  request = { exactCases: [], areas: [], promotion: null },
+  request = {
+    exactCases: [], areas: [], performanceTargets: [], promotion: null,
+  },
   action = '',
   headSha = '',
 ) {
   const normalized = normalizeLabels(labels);
   const labelSet = new Set(normalized);
   const promotion = request.promotion || null;
+  const performanceTargets = Array.isArray(request.performanceTargets)
+    ? request.performanceTargets
+    : [];
   const promotionMatchesHead = Boolean(
     promotion && promotion.headSha === String(headSha || '').trim().toLowerCase(),
   );
@@ -188,6 +204,9 @@ function classifyPipelineLabels(
   ));
   const focusedPerformanceShards = PERFORMANCE_SHARDS.filter((shard) => (
     labelSet.has(`ci:e2e-performance:${shard}`)
+    || performanceTargets.some((target) => (
+      PERFORMANCE_SHARD_CONFIGS[shard].targets.includes(target)
+    ))
   ));
 
   if (focused) {
@@ -202,15 +221,15 @@ function classifyPipelineLabels(
       && !supportedTargetLabels.has(label)
     ));
     if (unsupported) throw new Error(`Unsupported focused E2E target label: ${unsupported}`);
-    const markerSelection = request.exactCases.length + request.areas.length > 0;
-    if (markerSelection && (!request.exactCases.length || !request.areas.length)) {
+    const functionalMarkerSelection = request.exactCases.length + request.areas.length > 0;
+    if (functionalMarkerSelection && (!request.exactCases.length || !request.areas.length)) {
       throw new Error(`${FOCUSED_E2E_LABEL} marker requires both exact cases and related areas`);
     }
     if (
       focusedFunctionalShards.length
       + focusedPhase7Targets.length
       + focusedPerformanceShards.length === 0
-      && request.exactCases.length + request.areas.length === 0
+      && request.exactCases.length + request.areas.length + performanceTargets.length === 0
     ) {
       throw new Error(`${FOCUSED_E2E_LABEL} requires at least one supported target label`);
     }
@@ -221,6 +240,7 @@ function classifyPipelineLabels(
     focusedStage,
     focusedExactCases: focused ? request.exactCases : [],
     focusedAreas: focused ? request.areas : [],
+    focusedPerformanceTargets: focused ? performanceTargets : [],
     forceFullReview: !focused && labelSet.has(FORCE_FULL_REVIEW_LABEL),
     focusedFunctionalShards: focused ? focusedFunctionalShards : [],
     focusedPhase7Targets: focused ? focusedPhase7Targets : [],
@@ -308,6 +328,7 @@ function runCli(env = process.env) {
     `focused_stage=${pipeline.focusedStage}`,
     `focused_exact_cases_json=${JSON.stringify(pipeline.focusedExactCases)}`,
     `focused_areas_json=${JSON.stringify(pipeline.focusedAreas)}`,
+    `focused_performance_targets_json=${JSON.stringify(pipeline.focusedPerformanceTargets)}`,
     `focused_run_cases_json=${JSON.stringify(focusedSelection.selectedCases.map((ownedCase) => ownedCase.case))}`,
     `functional_shards_json=${JSON.stringify(functionalShards)}`,
     `performance_shards_json=${JSON.stringify(performanceShards)}`,

@@ -68,6 +68,8 @@ test('workflow has four selectable fixture-profile runners owning all 19 targets
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
   assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
   assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(job, /FOCUSED_PERFORMANCE_TARGETS_JSON:\s*\$\{\{\s*needs\.review_scope\.outputs\.focused_performance_targets_json\s*\}\}/);
+  assert.match(job, /FOCUSED_STAGE:\s*\$\{\{\s*needs\.review_scope\.outputs\.focused_stage\s*\}\}/);
   assert.match(job, /fail-fast:\s*false/);
   assert.match(job, /max-parallel:\s*4/);
   assert.deepEqual(

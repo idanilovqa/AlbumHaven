@@ -1197,6 +1197,21 @@ test('shared loop range handles are excluded from generic button interaction pai
   );
 });
 
+test('saved-loop action children do not paint a moving outline beside the fixed divider', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const interactionSelectors = [
+    /:root :is\(button,[^{]+:not\(\.loop-edit-action\):not\(\.loop-range-handle\):not\(\.global-player \*\):hover/,
+    /:root\[data-appearance-palette\] :is\(button,[^{]+:not\(\.loop-edit-action\):not\(\.loop-range-handle\):not\(\.global-player \*\):hover/,
+    /:root :is\(button,[^{]+:not\(\.loop-edit-action\):not\(\.loop-range-handle\):not\(\.global-player \*\):active/,
+    /:root\[data-appearance-palette\] :is\(button,[^{]+:not\(\.loop-edit-action\):not\(\.loop-range-handle\):not\(\.global-player \*\):active/,
+    /:root :is\(button, input, select,[^{]+:not\(\.loop-edit-action\):not\(\.loop-range-handle\):not\(\.global-player \*\):focus-visible/,
+  ];
+
+  interactionSelectors.forEach((selector) => assert.match(css, selector));
+});
+
 test('player and Utility adapters persist the controller range returned after duration correction', () => {
   const player = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'player-loop-playback.js',

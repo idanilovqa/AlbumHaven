@@ -489,6 +489,26 @@ test('shared scissors matches the owner-reference hover intensity and neutral ic
   );
 });
 
+test('themed bottom player preserves the approved scissors icon and pod hover glow', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const themedPodHover = css.match(
+    /:root\[data-appearance-player\] \.global-player \.loop-edit-actions:not\(\.is-disabled\):hover \.loop-edit-action-pod\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const themedIconHover = css.match(
+    /:root\[data-appearance-player\] \.global-player \.loop-edit-action-enter:hover \.loop-edit-action-icon,[^]*?\.loop-edit-action-create:focus-visible \.loop-edit-action-icon\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const themedActionHover = css.match(
+    /:root\[data-appearance-player\] \.global-player :is\(\.loop-edit-action-enter:hover,[^)]*\.loop-edit-action-create:focus-visible\)\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+
+  assert.match(themedPodHover, /box-shadow:\s*0 0 7px color-mix\(in srgb, var\(--appearance-play\) 48%, transparent\)/);
+  assert.match(themedActionHover, /color:\s*var\(--appearance-play\)/);
+  assert.match(themedActionHover, /text-shadow:\s*0 0 9px color-mix\(in srgb, var\(--appearance-play\) 90%, transparent\)/);
+  assert.match(themedIconHover, /filter:\s*drop-shadow\(0 0 5px var\(--appearance-play\)\)/);
+});
+
 test('shared scissors keeps owner-measured glyph centers inside the compact idle and active pods', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',

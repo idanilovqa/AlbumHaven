@@ -455,7 +455,12 @@ html .cover-lookup-drawer {
 :root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-pod::after { background: var(--appearance-player); }
 :root[data-appearance-player]:not([data-appearance-native-controls]) .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) { color: var(--appearance-player-ink); text-shadow: none; }
 :root[data-appearance-player]:not([data-appearance-native-controls]) .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) .loop-edit-action-icon { filter: none; }
-:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-waveform-fill); box-shadow: 0 0 0 1px var(--appearance-waveform-fill); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player :is(.loop-edit-action-enter:hover, .loop-edit-action-enter:focus-visible, .loop-edit-action-create:hover, .loop-edit-action-create:focus-visible) { color: var(--appearance-play); text-shadow: 0 0 9px color-mix(in srgb, var(--appearance-play) 90%, transparent); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-enter:hover .loop-edit-action-icon,
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-enter:focus-visible .loop-edit-action-icon,
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-create:hover .loop-edit-action-icon,
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-create:focus-visible .loop-edit-action-icon { filter: drop-shadow(0 0 5px var(--appearance-play)); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-play); box-shadow: 0 0 7px color-mix(in srgb, var(--appearance-play) 48%, transparent), 0 3px 9px rgba(0, 0, 0, 0.34); }
 :root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-actions.is-disabled .loop-edit-action-pod { border-color: color-mix(in srgb, var(--appearance-player-ink) 48%, transparent); }
 
 /* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */

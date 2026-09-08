@@ -27,7 +27,7 @@ const INTERACTION_COLORS = Object.freeze({
   focus: 'rgb(134, 183, 239)',
 });
 
-test(`${CASE_ID} applies every Appearance control family to real UI and preserves it across reload`, async ({
+test(`${CASE_ID} applies every Appearance control family to real UI and preserves it across reload`, { tag: '@area:responsive-visual' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,

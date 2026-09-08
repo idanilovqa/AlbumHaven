@@ -31,7 +31,7 @@ async function viewResponseHasAlbumTrackCount(response, albumName, expectedCount
   return count === expectedCount;
 }
 
-test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal', async ({
+test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal', { tag: '@area:album-details' }, async ({
   appBarActions,
   galleryActions,
   libraryFilesystemWatcherActions,

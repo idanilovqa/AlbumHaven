@@ -43,7 +43,7 @@
 - Modify: `tests/e2e/**/*.spec.js`
 - Modify: `scripts/ci/validate-functional-shards.cjs`
 - Modify: `tests/js/validate-functional-shards.test.js`
-- Modify: `tests/e2e/functional-shards.json`
+- Modify: `tests/ci/functional-shards.json`
 
 **Interfaces:**
 - Consumes: Playwright case titles and native `@area:<name>` tags returned by list discovery.

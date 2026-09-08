@@ -37,7 +37,7 @@ const ARTIST_CONJUNCTION_TARGET = Object.freeze({
   year: '2006',
 });
 
-test('FTC-COVERS-022 cover gallery loading starts before the task list responds', async ({
+test('FTC-COVERS-022 cover gallery loading starts before the task list responds', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -88,7 +88,7 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
   });
 });
 
-test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can be canceled and cleared', async ({
+test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can be canceled and cleared', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -138,7 +138,7 @@ test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can 
   });
 });
 
-test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', async ({
+test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -200,7 +200,7 @@ test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', as
   });
 });
 
-test('FTC-COVERS-007 notification states and bulk clear preserve active work', async ({
+test('FTC-COVERS-007 notification states and bulk clear preserve active work', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -376,7 +376,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', a
   });
 });
 
-test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', async ({
+test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -512,7 +512,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   });
 });
 
-test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally', async ({
+test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -579,7 +579,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
   });
 });
 
-test('FTC-COVERS-011 selected local art remains authoritative after rescan and app restart', async ({
+test('FTC-COVERS-011 selected local art remains authoritative after rescan and app restart', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   freshBrowserSession,
@@ -918,7 +918,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
   });
 });
 
-test('FTC-COVERS-017 manual lookup progressively retains provider alternatives', async ({
+test('FTC-COVERS-017 manual lookup progressively retains provider alternatives', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   page,
@@ -1043,7 +1043,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
   });
 });
 
-test('FTC-COVERS-020 provider deadline keeps candidates found by earlier services', async ({
+test('FTC-COVERS-020 provider deadline keeps candidates found by earlier services', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -1077,7 +1077,7 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
   });
 });
 
-test('FTC-COVERS-021 artist conjunction differences still publish a visible remote candidate', async ({
+test('FTC-COVERS-021 artist conjunction differences still publish a visible remote candidate', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -1105,7 +1105,7 @@ test('FTC-COVERS-021 artist conjunction differences still publish a visible remo
   });
 });
 
-test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers', async ({
+test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1257,7 +1257,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
   });
 });
 
-test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open', async ({
+test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1377,7 +1377,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
   });
 });
 
-test('FTC-COVERS-019 later automatic improvement restores the unseen indicator', async ({
+test('FTC-COVERS-019 later automatic improvement restores the unseen indicator', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1414,7 +1414,7 @@ test('FTC-COVERS-019 later automatic improvement restores the unseen indicator',
   });
 });
 
-test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save', async ({
+test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,

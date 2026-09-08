@@ -11,7 +11,7 @@ const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 
-test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback stay grouped under one track`, async ({
+test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback stay grouped under one track`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
@@ -735,7 +735,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
 
 });
 
-test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal', async ({
+test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   settingsModalAppBarActions,
@@ -771,7 +771,7 @@ test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal'
   expect((await utilityLoopsActions.confirmDeleteByName(loopName)).requestCount).toBe(1);
 });
 
-test('FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor', async ({
+test('FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   settingsModalAppBarActions,
@@ -813,7 +813,7 @@ test('FTC-UTIL-LOOPS-024 Enter opens naming from the active saved-loop editor', 
   expect((await utilityLoopsActions.confirmDeleteByName(loopName)).requestCount).toBe(1);
 });
 
-test('FTC-PLAYER-017 scissors remains available after saving a loop', async ({
+test('FTC-PLAYER-017 scissors remains available after saving a loop', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   trackModalActions,
@@ -837,7 +837,7 @@ test('FTC-PLAYER-017 scissors remains available after saving a loop', async ({
   expect((await globalPlayerActions.cancelLoopEditorWithEscape()).requestCount).toBe(0);
 });
 
-test('FTC-PLAYER-017 loop-edit reload restores the active playhead', async ({
+test('FTC-PLAYER-017 loop-edit reload restores the active playhead', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
@@ -880,7 +880,7 @@ test('FTC-PLAYER-017 loop-edit reload restores the active playhead', async ({
   expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
 });
 
-test('FTC-PLAYER-017 paused reload restores the current waveform', async ({
+test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
   settingsModalAppBarActions,

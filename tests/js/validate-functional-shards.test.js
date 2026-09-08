@@ -84,6 +84,13 @@ test('functional shard contract pins the approved four-way 97-case assignment', 
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
   assert.equal(total, 97);
+  for (const ownedCase of ownedCases(contract)) {
+    assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
+  }
+  const multiArea = ownedCases(contract).find((ownedCase) => (
+    ownedCase.case.startsWith('FTC-UTIL-PROBLEMS-007 ')
+  ));
+  assert.deepEqual([multiArea.area, ...multiArea.relatedAreas], ['problematic-files', 'tag-edit']);
 
   const autoplayOwners = contract.shards.filter((shard) => shard.invocations.some(
     (invocation) => invocation.config === 'playwright.autoplay-allowed.config.js',
@@ -395,6 +402,45 @@ test('functional cold-browser warmup is one read-only worker setup rather than p
   assert.match(helperSource, /#artist-groups \.album-card/);
   assert.match(helperSource, /__ALBUM_HAVEN_STARTUP_METRICS__/);
   assert.match(source, /\{\s*scope:\s*['"]worker['"],\s*auto:\s*true\s*\}/);
+});
+
+validatorTest('validator rejects a contract area missing from native Playwright tags', () => {
+  const validator = loadValidator();
+  const contract = readJson(shardContractPath);
+  const discovered = ownedCases(contract).map((ownedCase) => ({
+    ...ownedCase,
+    areas: [ownedCase.area],
+  }));
+  discovered[0].areas = [];
+  assert.match(
+    errorText(validator.validateFunctionalShardContract(contract, discovered)),
+    /missing native @area:/i,
+  );
+});
+
+validatorTest('product-area selection crosses shard boundaries and keeps only tagged cases', () => {
+  const validator = loadValidator();
+  const contract = readJson(shardContractPath);
+  const selection = validator.selectFunctionalCases(contract, {
+    areas: ['playback'],
+  });
+  assert.ok(selection.shards.length >= 2, 'playback coverage must not be defined by one runner shard');
+  assert.ok(selection.shards.flatMap((shard) => shard.invocations)
+    .flatMap((invocation) => invocation.cases).length > 1);
+  for (const ownedCase of selection.shards.flatMap((shard) => shard.invocations)
+    .flatMap((invocation) => invocation.cases)) {
+    assert.equal(ownedCase.area, 'playback');
+  }
+});
+
+validatorTest('exact selection resolves one case ID without expanding to its runner shard', () => {
+  const validator = loadValidator();
+  const contract = readJson(shardContractPath);
+  const selection = validator.selectFunctionalCases(contract, {
+    exactCases: ['FTC-UTIL-PROBLEMS-007'],
+  });
+  assert.equal(selection.selectedCases.length, 1);
+  assert.match(selection.selectedCases[0].case, /^FTC-UTIL-PROBLEMS-007 /);
 });
 
 test('functional fixtures restore one genuine worker login into every production browser context', () => {
@@ -864,7 +910,8 @@ test('functional workflow uses the approved selectable four-shard Windows matrix
     assert.equal(new Set(values).size, 4, `${field} must be unique per functional shard`);
   }
   assert.ok(matrix.every((entry) => Number(entry.portBase) > 1024));
-  assert.match(job, /validate-functional-shards\.cjs\s+--run-shard=\$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(job, /\$arguments = @\("--run-shard=\$\{\{\s*matrix\.shard\s*\}\}"\)/);
+  assert.match(job, /validate-functional-shards\.cjs @arguments/);
   assert.match(job, /ALBUM_HAVEN_FUNCTIONAL_FIXTURE_WORK_ROOT/);
   assert.match(job, /album-haven-e2e-functional-fixtures-/);
   assert.ok(Object.hasOwn(FUNCTIONAL_SHARDS, 'playback-utilities'));

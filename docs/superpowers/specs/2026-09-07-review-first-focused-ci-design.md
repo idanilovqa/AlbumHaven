@@ -1,5 +1,9 @@
 # Review-First Focused CI Design
 
+> Superseded for focused selection and promotion by
+> `2026-09-08-case-tagged-focused-ci-design.md`; the review-first ordering and
+> complete failure-inventory rules below remain active.
+
 ## Goal
 
 Make pull-request verification review-first, preserve a complete combined failure inventory, and provide a non-authoritative focused E2E repair loop that automatically promotes to a full reviewed pipeline after the selected E2E shards pass.

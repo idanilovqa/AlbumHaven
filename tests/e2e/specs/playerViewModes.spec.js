@@ -6,7 +6,7 @@ const ALBUM = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, async ({
+test(`${CASE_ID} switches expanded, docked, and floating player views without sharing runner state`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   page,

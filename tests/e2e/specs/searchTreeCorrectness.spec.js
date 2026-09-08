@@ -43,7 +43,7 @@ const DIRECT_COUNT_ALBUMS = 60;
 const DIRECT_COUNT_SELECTED_URL = `/?surface=albums&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 const DIRECT_COUNT_SEARCH_URL = `/?surface=albums&q=${encodeURIComponent(DIRECT_COUNT_ARTIST)}&artist=${encodeURIComponent(DIRECT_COUNT_ARTIST)}`;
 
-test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload', async ({
+test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload', { tag: '@area:gallery-search' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -120,7 +120,7 @@ test('FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and
   testArtifacts.queueJsonAttachment('ftc-search-nav-027-card-counts', observations);
 });
 
-test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match', async ({
+test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -176,7 +176,7 @@ test('FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a n
   });
 });
 
-test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete', async ({
+test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -251,7 +251,7 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   });
 });
 
-test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree', async ({
+test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -332,7 +332,7 @@ test('FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selecte
   });
 });
 
-test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', async ({
+test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -573,7 +573,7 @@ test('FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-fa
   });
 });
 
-test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear', async ({
+test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -644,7 +644,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
   });
 });
 
-test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search', async ({
+test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -718,7 +718,7 @@ test('FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as 
   });
 });
 
-test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', async ({
+test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -783,7 +783,7 @@ test('FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the 
   });
 });
 
-test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads', async ({
+test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -839,7 +839,7 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
   });
 });
 
-test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection', async ({
+test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -937,7 +937,7 @@ test('FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clear
   });
 });
 
-test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover', async ({
+test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -998,7 +998,7 @@ test('FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and m
   });
 });
 
-test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes', async ({
+test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -1021,7 +1021,7 @@ test('FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query a
   });
 });
 
-test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input', async ({
+test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   page,
   searchToolbarActions,

@@ -1,5 +1,8 @@
 # Review-First Focused CI Implementation Plan
 
+> Historical implementation record. The shard-selected focused mode described
+> here is superseded by `2026-09-08-case-tagged-focused-ci.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make hosted PR review run before tests, add a non-authoritative label-selected focused E2E repair mode, and automatically promote a passing focused run to an authoritative full-review pipeline.

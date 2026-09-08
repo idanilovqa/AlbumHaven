@@ -57,7 +57,7 @@ function expectedNames(initialNames, suffixes) {
   ];
 }
 
-test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', async ({
+test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

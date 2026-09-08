@@ -20,7 +20,7 @@ const SOUNDTRACK_GUEST = 'Soundtrack Signal Guest';
 const SOUNDTRACK_OWNER = 'Sia / Soundtrack Signal Guest';
 const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
-test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relations while keeping ordinary shared releases related', async ({
+test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relations while keeping ordinary shared releases related', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -128,7 +128,7 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
   });
 });
 
-test('FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation', async ({
+test('FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,

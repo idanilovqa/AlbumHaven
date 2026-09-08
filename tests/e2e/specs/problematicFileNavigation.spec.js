@@ -33,7 +33,7 @@ const EXPECTED_EDIT_TAG_FILENAMES = Array.from({ length: 17 }, (_, index) => {
     : `${String(trackNumber).padStart(2, '0')} - Track ${trackNumber}.mp3`;
 });
 
-test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album', async ({
+test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -78,7 +78,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
   });
 });
 
-test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', async ({
+test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -182,7 +182,7 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
 
 });
 
-test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload', async ({
+test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -628,7 +628,7 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
   }
 });
 
-test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion', async ({
+test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,

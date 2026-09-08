@@ -8,8 +8,30 @@ const {
   classifyReviewScope,
   isUsableBaseline,
   isDocumentationPath,
+  parseFocusedE2eRequest,
   parseNumstat,
 } = require(classifierPath);
+
+test('focused E2E request parses exact cases and supported product areas', () => {
+  const body = [
+    'Repair notes.',
+    '<!-- album-haven-focused-e2e:{"exactCases":["FTC-UTIL-PROBLEMS-007"],"areas":["problematic-files"]} -->',
+  ].join('\n');
+  assert.deepEqual(parseFocusedE2eRequest(body), {
+    exactCases: ['FTC-UTIL-PROBLEMS-007'],
+    areas: ['problematic-files'],
+  });
+  assert.throws(
+    () => parseFocusedE2eRequest('<!-- album-haven-focused-e2e:{"exactCases":[],"areas":["unknown"]} -->'),
+    /unsupported focused E2E area/i,
+  );
+  assert.throws(
+    () => parseFocusedE2eRequest(`${body}\n${body}`),
+    /exactly one marker/i,
+  );
+  const oversized = `<!-- album-haven-focused-e2e:{"exactCases":["FTC-X"],"areas":["${'x'.repeat(4097)}"]} -->`;
+  assert.throws(() => parseFocusedE2eRequest(oversized), /exceeds 4096/i);
+});
 
 test('successful baseline must exist and be an ancestor of the current head', () => {
   const calls = [];
@@ -155,6 +177,9 @@ test('focused E2E labels select only named functional, Phase 7, and performance 
     'unrelated-label',
   ]), {
     pipelineMode: 'focused-e2e',
+    focusedStage: 'exact',
+    focusedExactCases: [],
+    focusedAreas: [],
     forceFullReview: false,
     focusedFunctionalShards: ['gallery-search-visual'],
     focusedPhase7Targets: ['phase7-auth'],
@@ -173,9 +198,25 @@ test('focused E2E mode requires a supported target and rejects misspelled target
   );
 });
 
+test('focused E2E marker selects exact then related stages without runner labels', () => {
+  const request = {
+    exactCases: ['FTC-UTIL-PROBLEMS-007'],
+    areas: ['problematic-files'],
+  };
+  const exact = classifyPipelineLabels(['ci:focused-e2e'], request);
+  assert.equal(exact.focusedStage, 'exact');
+  assert.deepEqual(exact.focusedExactCases, request.exactCases);
+  const related = classifyPipelineLabels(['ci:focused-e2e', 'ci:focused-related'], request);
+  assert.equal(related.focusedStage, 'related');
+  assert.deepEqual(related.focusedAreas, request.areas);
+});
+
 test('full mode is the default and accepts the explicit full-review label', () => {
   assert.deepEqual(classifyPipelineLabels([]), {
     pipelineMode: 'full',
+    focusedStage: 'full',
+    focusedExactCases: [],
+    focusedAreas: [],
     forceFullReview: false,
     focusedFunctionalShards: [],
     focusedPhase7Targets: [],

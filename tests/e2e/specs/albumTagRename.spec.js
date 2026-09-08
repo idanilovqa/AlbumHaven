@@ -41,7 +41,7 @@ const EXPECTED_SPLIT_TRACK_TITLES = Array.from(
   (_, index) => `Split Track ${index + 1}`,
 );
 
-test('FTC-TAGS-008 completes an album rename before reporting the save task complete', async ({
+test('FTC-TAGS-008 completes an album rename before reporting the save task complete', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -224,7 +224,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
   });
 });
 
-test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', async ({
+test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   stepLogger,
@@ -332,7 +332,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
   }
 });
 
-test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', async ({
+test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -408,7 +408,7 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
   });
 });
 
-test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', async ({
+test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -841,7 +841,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
   });
 });
 
-test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', async ({
+test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', { tag: '@area:problematic-files' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

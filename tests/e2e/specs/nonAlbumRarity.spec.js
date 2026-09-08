@@ -26,7 +26,7 @@ const INFERRED_TRACK_FILENAME = '02 - Rename Track 2.mp3';
 const INFERRED_TRACK_TITLE = 'Rename Track 2';
 const INFERRED_TRACK_COUNT = 18;
 
-test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details', async ({
+test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details', { tag: '@area:album-details' }, async ({
   appBarActions,
   artistPageSettingsActions,
   galleryActions,
@@ -125,7 +125,7 @@ test('FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and
   }
 });
 
-test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History', async ({
+test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in Log History', { tag: '@area:tag-edit' }, async ({
   appBarActions,
   galleryActions,
   searchToolbarActions,
@@ -205,7 +205,7 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
   }
 });
 
-test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry', async ({
+test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   searchToolbarActions,
   stepLogger,
@@ -314,7 +314,7 @@ test('FTC-TAGS-023 failed tag saves preserve the source modal for a successful r
   }
 });
 
-test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track table', async ({
+test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track table', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -407,7 +407,7 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
   }
 });
 
-test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', async ({
+test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -518,7 +518,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
   }
 });
 
-test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', async ({
+test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', { tag: '@area:album-details' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -638,7 +638,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', a
   }
 });
 
-test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions', async ({
+test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edits across gallery transitions', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -800,7 +800,7 @@ test('FTC-TAGS-004 and FTC-NON-ALBUM-014 preserve rapid Album and Exception edit
   }
 });
 
-test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical', async ({
+test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-007 / FTC-NON-ALBUM-006 / FTC-TAGS-007 / FTC-NON-ALBUM-005 keeps rarity modal transitions and sibling album state canonical', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   navigationPanelActions,
@@ -986,7 +986,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
   });
 });
 
-test('FTC-TAGS-024 completes a verified Album and Exception intent during app restart', async ({
+test('FTC-TAGS-024 completes a verified Album and Exception intent during app restart', { tag: '@area:tag-edit' }, async ({
   artistPageSettingsActions,
   galleryActions,
   managedAppLifecycle,

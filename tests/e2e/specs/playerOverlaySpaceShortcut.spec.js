@@ -16,7 +16,7 @@ function expectedPlayback(paused) {
   };
 }
 
-test(`${CASE_ID} Space controls background playback across Album Details, notifications, and Settings`, async ({
+test(`${CASE_ID} Space controls background playback across Album Details, notifications, and Settings`, { tag: '@area:playback' }, async ({
   coverLookupActions,
   galleryActions,
   globalPlayerActions,

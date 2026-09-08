@@ -20,7 +20,7 @@ const ALBUM = 'Joseph: Part One - The Dreamer';
 const YEAR = '2023';
 const VISIBLE_COVER_BUDGET = Object.freeze({ targetMaximum: 1000, graceMs: 200 });
 
-test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions', async ({
+test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions', { tag: '@area:cover-providers' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -152,7 +152,7 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
   });
 });
 
-test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox', async ({
+test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -233,7 +233,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
   });
 });
 
-test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', async ({
+test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   page,

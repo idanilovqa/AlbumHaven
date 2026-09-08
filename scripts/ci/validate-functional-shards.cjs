@@ -38,9 +38,24 @@ function caseKey(value) {
     .join('\u0000');
 }
 
+function functionalCaseAreas(ownedCase) {
+  return [...new Set([
+    String(ownedCase.area || '').trim(),
+    ...(Array.isArray(ownedCase.relatedAreas) ? ownedCase.relatedAreas : [])
+      .map((value) => String(value || '').trim()),
+  ].filter(Boolean))];
+}
+
 function parseListOutput(output, config) {
   const cases = [];
   for (const line of String(output || '').split(/\r?\n/)) {
+    if (line.startsWith('ALBUM_HAVEN_FUNCTIONAL_CASE=')) {
+      cases.push({
+        config,
+        ...JSON.parse(line.slice('ALBUM_HAVEN_FUNCTIONAL_CASE='.length)),
+      });
+      continue;
+    }
     const match = line.match(/^\s*\[([^\]]+)\]\s+›\s+(.+?):\d+:\d+\s+›\s+(.+?)\s*$/);
     if (!match) continue;
     cases.push({
@@ -57,11 +72,12 @@ function discoverFunctionalCases(options = {}) {
   const repoRoot = path.resolve(options.repoRoot || path.join(__dirname, '..', '..'));
   const spawnSyncFn = options.spawnSyncFn || spawnSync;
   const cliPath = path.join(repoRoot, 'node_modules', '@playwright', 'test', 'cli.js');
+  const reporterPath = path.join(repoRoot, 'scripts', 'ci', 'playwright-functional-list-reporter.cjs');
   const discovered = [];
   for (const config of EXPECTED_CONFIGS) {
     const result = spawnSyncFn(
       process.execPath,
-      [cliPath, 'test', '--list', '--reporter=line', `--config=${config}`],
+      [cliPath, 'test', '--list', `--reporter=${reporterPath}`, `--config=${config}`],
       {
         cwd: repoRoot,
         env: { ...process.env, PLAYWRIGHT_MANAGED_APP: '1' },
@@ -138,6 +154,14 @@ function validateFunctionalShardContract(contract, discoveredCases) {
 
   const owned = flattenOwnedCases(contract || {});
   for (const ownedCase of owned) {
+    if (!/^[a-z]+(?:-[a-z]+)*$/.test(String(ownedCase.area || ''))) {
+      errors.push(`functional case requires a product area: ${ownedCase.case}`);
+    }
+    for (const area of functionalCaseAreas(ownedCase)) {
+      if (!/^[a-z]+(?:-[a-z]+)*$/.test(area)) {
+        errors.push(`functional case has an invalid product area ${area}: ${ownedCase.case}`);
+      }
+    }
     if (!EXPECTED_CONFIGS.includes(ownedCase.invocationConfig)) {
       errors.push(`unknown functional config: ${ownedCase.invocationConfig}`);
     }
@@ -161,6 +185,15 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   const ownedDuplicates = duplicateKeys(owned);
   if (ownedDuplicates.size > 0) errors.push('duplicate functional case ownership detected');
   const discovered = Array.isArray(discoveredCases) ? discoveredCases : [];
+  for (const discoveredCase of discovered) {
+    if (!Object.hasOwn(discoveredCase, 'areas')) continue;
+    const ownedCase = owned.find((candidate) => caseKey(candidate) === caseKey(discoveredCase));
+    const missingArea = ownedCase && functionalCaseAreas(ownedCase)
+      .find((area) => !discoveredCase.areas?.includes(area));
+    if (missingArea) {
+      errors.push(`functional case is missing native @area:${missingArea} tag: ${ownedCase.case}`);
+    }
+  }
   const discoveredDuplicates = duplicateKeys(discovered);
   if (discoveredDuplicates.size > 0) errors.push('duplicate Playwright functional discovery detected');
 
@@ -435,7 +468,7 @@ function runFunctionalShard(contract, shardName, options = {}) {
         path.basename(invocation.config).replace(/[^a-z0-9]+/gi, '-'),
       ].join('-');
       const testPaths = [...new Set(invocation.cases.map((ownedCase) => normalizeTestPath(ownedCase.test)))];
-      const titlePattern = `(?:${invocation.cases.map((ownedCase) => regexEscape(ownedCase.case)).join('|')})$`;
+      const titlePattern = `(?:${invocation.cases.map((ownedCase) => regexEscape(ownedCase.case)).join('|')})(?:\\s+@area:[a-z-]+)*$`;
       const childEnv = {
         ...checkpointEnv,
         ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP: '1',
@@ -524,6 +557,39 @@ function filterFunctionalShardCases(shard, focusedCases = []) {
   };
 }
 
+function selectFunctionalCases(contract, { exactCases = [], areas = [] } = {}) {
+  const requestedCases = new Set(exactCases.map((value) => String(value || '').trim()).filter(Boolean));
+  const requestedAreas = new Set(areas.map((value) => String(value || '').trim()).filter(Boolean));
+  const matchesCase = (title) => [...requestedCases].some((selector) => (
+    title === selector || title.startsWith(`${selector} `)
+  ));
+  const matches = (ownedCase) => (
+    matchesCase(String(ownedCase.case || '').trim())
+    || functionalCaseAreas(ownedCase).some((area) => requestedAreas.has(area))
+  );
+  const shards = (contract.shards || []).map((shard) => ({
+    ...shard,
+    invocations: (shard.invocations || []).map((invocation) => ({
+      ...invocation,
+      cases: (invocation.cases || []).filter(matches),
+    })).filter((invocation) => invocation.cases.length > 0),
+  })).filter((shard) => shard.invocations.length > 0);
+  const selectedCases = shards.flatMap((shard) => shard.invocations)
+    .flatMap((invocation) => invocation.cases);
+  if ((requestedCases.size || requestedAreas.size) && !selectedCases.length) {
+    throw new Error('Focused functional selection did not match any owned case.');
+  }
+  for (const selector of requestedCases) {
+    const matches = selectedCases.filter((ownedCase) => (
+      ownedCase.case === selector || ownedCase.case.startsWith(`${selector} `)
+    ));
+    if (matches.length !== 1) {
+      throw new Error(`Focused case selector ${selector} matched ${matches.length} owned cases; expected exactly one.`);
+    }
+  }
+  return { shards, selectedCases };
+}
+
 function main(argv = process.argv.slice(2)) {
   const repoRoot = path.resolve(path.join(__dirname, '..', '..'));
   const contractPath = path.join(repoRoot, 'tests', 'ci', 'functional-shards.json');
@@ -536,9 +602,24 @@ function main(argv = process.argv.slice(2)) {
   }
   const shardArgument = argv.find((argument) => String(argument).startsWith('--run-shard='));
   if (shardArgument) {
-    const focusedCases = argv
+    let focusedCases = argv
       .filter((argument) => String(argument).startsWith('--run-case='))
       .map((argument) => String(argument).slice('--run-case='.length));
+    const focusedAreas = argv
+      .filter((argument) => String(argument).startsWith('--run-area='))
+      .map((argument) => String(argument).slice('--run-area='.length));
+    if (focusedCases.length || focusedAreas.length) {
+      const selected = selectFunctionalCases(contract, {
+        exactCases: focusedCases,
+        areas: focusedAreas,
+      });
+      const selectedShard = selected.shards.find((shard) => (
+        shard.name === shardArgument.slice('--run-shard='.length)
+      ));
+      focusedCases = (selectedShard?.invocations || []).flatMap((invocation) => (
+        invocation.cases.map((ownedCase) => ownedCase.case)
+      ));
+    }
     const result = runFunctionalShard(contract, shardArgument.slice('--run-shard='.length), {
       repoRoot,
       focusedCases,
@@ -564,6 +645,7 @@ module.exports = {
   discoverFunctionalCases,
   executionWavesForShard,
   filterFunctionalShardCases,
+  selectFunctionalCases,
   parseListOutput,
   runFunctionalShard,
   validateFunctionalShardContract,

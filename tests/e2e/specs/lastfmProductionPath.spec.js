@@ -19,7 +19,7 @@ const FORBIDDEN_HISTORY_VALUES = [
   '<lfm',
 ];
 
-test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm provider path`, async ({
+test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm provider path`, { tag: '@area:playback' }, async ({
   galleryActions,
   navigationPanelActions,
   playbackEvidence,
@@ -215,7 +215,7 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
   });
 });
 
-test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order', async ({
+test('FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order', { tag: '@area:playback' }, async ({
   galleryActions,
   navigationPanelActions,
   playbackEvidence,

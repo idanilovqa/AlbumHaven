@@ -17,7 +17,7 @@ async function openAppearanceAlbumPage({
   await utilityAppearanceActions.openSection('album-page');
 }
 
-test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components', async ({
+test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components', { tag: '@area:album-details' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
@@ -126,7 +126,7 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   });
 });
 
-test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states', async ({
+test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states', { tag: '@area:album-details' }, async ({
   galleryActions,
   globalPlayerActions,
   page,

@@ -18,7 +18,7 @@ import {
   expectStartupProjectionRebuilt,
 } from '../helpers/artistAliasParityHelpers.js';
 
-test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and keeps both raw credits', async ({
+test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and keeps both raw credits', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -155,7 +155,7 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
   });
 });
 
-test('FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated', async ({
+test('FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -186,7 +186,7 @@ test('FTC-SEARCH-NAV-021 keeps empty normalized artist keys isolated', async ({
   }
 });
 
-test('FTC-SEARCH-NAV-022 starts with a collapsed scan identity and browses its repeated-space artist family', async ({
+test('FTC-SEARCH-NAV-022 starts with a collapsed scan identity and browses its repeated-space artist family', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,

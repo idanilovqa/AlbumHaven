@@ -206,7 +206,7 @@ test('each target retains individual result, diagnostics, and foundation artifac
 
 test('functional shards and all-19 authenticated target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
-  assert.match(workflow, /validate-functional-shards\.cjs --run-shard=\$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
   assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target10\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

@@ -20,7 +20,7 @@ const SELECTED_SCALE_CARD_CEILING_PX = resolveSelectedScaleCardCeiling(
 const WIDE_VIEWPORT = Object.freeze({ width: 1440, height: 960 });
 const NARROW_VIEWPORT = Object.freeze({ width: 1024, height: 960 });
 
-test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', async ({
+test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', { tag: '@area:responsive-visual' }, async ({
   galleryActions,
   page,
   searchToolbarActions,

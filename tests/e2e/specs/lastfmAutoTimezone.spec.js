@@ -1,6 +1,6 @@
 import { expect, test } from '../support/baseFixtures.js';
 
-test('FTC-PLAYBACK-LASTFM-015 browser timezone is auto-detected and persisted exactly once', async ({
+test('FTC-PLAYBACK-LASTFM-015 browser timezone is auto-detected and persisted exactly once', { tag: '@area:playback' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,

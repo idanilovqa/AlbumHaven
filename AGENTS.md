@@ -44,11 +44,12 @@ not need the private repository to build or use Album Haven.
   baseline, fewer than 250 changed functional lines uses incremental review;
   250 or more lines, a binary functional change, an unavailable baseline, or
   `ci:full-review` uses whole-PR review.
-- For an E2E repair push, apply `ci:focused-e2e` and one or more supported
-  `ci:e2e:*` or `ci:e2e-performance:*` target labels. That non-authoritative run
-  skips reviews and unrelated suites and runs only the selected hosted E2E jobs.
-  After they pass, CI removes the focused labels, applies `ci:full-review`, and
-  automatically starts the authoritative full review-first pipeline.
+- For an E2E repair, reproduce the exact failing test locally before pushing.
+  Put its exact FTC ID and approved `@area:<name>` selectors in the bounded
+  `album-haven-focused-e2e` PR-body marker, then apply `ci:focused-e2e`. CI runs
+  exactly those cases first, promotes a green run to the cross-shard related-area
+  tests, and promotes a green related run to the authoritative full review-first
+  pipeline. Runner or shard membership never defines focused scope.
 - Only a successful full pipeline may record review coverage, authorize merge,
   or authorize publication. Focused verification never weakens or replaces an
   existing E2E acceptance contract.

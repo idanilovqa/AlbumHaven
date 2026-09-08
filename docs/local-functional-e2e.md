@@ -11,7 +11,7 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   `postgresql-x64-18` service is available.
 - Python resolves from `PLAYWRIGHT_PYTHON` or `PATH` and has the application test
   dependencies installed.
-- The expanded `fixtures-v1.0.20` distribution is available at
+- The expanded `fixtures-v1.0.22` distribution is available at
   `..\album-haven-test-data\dist`. Its `profiles\functional-core` directory must
   contain `database`, `media`, and `loopback`.
 - PostgreSQL passwordless automation is configured in `PGPASSFILE`. When that
@@ -36,6 +36,12 @@ Run one exact case. The command resolves its owning shard automatically:
 ```powershell
 npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
 ```
+
+During release repair work, run the failing exact case locally before hosted
+verification. Hosted focused CI then runs the exact FTC ID, the selected native
+`@area:<name>` groups across every owning shard, and finally the complete
+review-first pipeline. Do not substitute a complete local shard for the exact
+local reproduction, and do not treat a shard as a product area.
 
 Run one complete shard:
 

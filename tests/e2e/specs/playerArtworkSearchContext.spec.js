@@ -7,7 +7,7 @@ const PLAYING_TRACK_ARTIST = 'Solo Voice';
 const UNRELATED_ARTIST = 'Album Haven Last.fm Fixture';
 const UNRELATED_ALBUM = 'Signed Scrobble Journey';
 
-test(`${CASE_ID} player artwork reopens the playing album after selecting an unrelated search result`, async ({
+test(`${CASE_ID} player artwork reopens the playing album after selecting an unrelated search result`, { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
   navigationPanelActions,

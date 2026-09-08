@@ -501,14 +501,17 @@ def test_targeted_reconciler_uses_destination_root_identity_for_cross_root_move(
     assert repository.calls[0]["moves"][0]["destination_root_id"] == "hoard"
 
 
-def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_path):
+@pytest.mark.parametrize("cross_root", [False, True], ids=["same-root", "cross-root"])
+def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_path, cross_root):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
     )
 
     root = tmp_path / "Music"
+    destination_root = tmp_path / "Hoard" if cross_root else root
+    destination_root_id = "hoard" if cross_root else "main"
     source = root / "Artist" / "Old Album"
-    destination = root / "Artist" / "New Album"
+    destination = destination_root / "Artist" / "New Album"
     disc = destination / "Disc 1"
     disc.mkdir(parents=True)
     first_track = destination / "01.flac"
@@ -517,6 +520,17 @@ def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_pa
     second_track.write_bytes(b"second")
     (destination / "cover.jpg").write_bytes(b"cover")
     (destination / "notes.txt").write_text("notes", encoding="utf-8")
+    outside = (root if cross_root else tmp_path) / "Outside" / "private.flac"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"private media")
+    (destination / "03.flac").symlink_to(outside)
+    root_definitions = [
+        {"id": "main", "path": root, "category": "main_library_roots"}
+    ]
+    if cross_root:
+        root_definitions.append(
+            {"id": "hoard", "path": destination_root, "category": "hoarding_library_roots"}
+        )
     parsed: list[Path] = []
     repository = RecordingRepository()
     reconciler = TargetedLibraryReconciler(
@@ -525,9 +539,7 @@ def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_pa
             "IMAGE_EXTENSIONS": {".jpg"},
         },
         repository=repository,
-        root_definitions=[
-            {"id": "main", "path": root, "category": "main_library_roots"}
-        ],
+        root_definitions=root_definitions,
         metadata_reader=lambda path: (
             parsed.append(path)
             or {
@@ -545,7 +557,7 @@ def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_pa
         source=source,
         destination=destination,
         source_root_id="main",
-        destination_root_id="main",
+        destination_root_id=destination_root_id,
         is_directory=True,
     )
 
@@ -558,6 +570,17 @@ def test_directory_move_reads_only_supported_media_in_destination_subtree(tmp_pa
         str(first_track),
         str(second_track),
     }
+    assert repository.calls[0]["moves"] == ({
+        "source_path": str(source),
+        "destination_path": str(destination),
+        "source_root_id": "main",
+        "destination_root_id": destination_root_id,
+        "is_directory": True,
+    },)
+    assert {
+        entry["library_root_id"]
+        for entry in repository.calls[0]["active_file_entries"].values()
+    } == {destination_root_id}
 
 
 def test_targeted_reconciler_ignores_non_media_file_events(tmp_path):

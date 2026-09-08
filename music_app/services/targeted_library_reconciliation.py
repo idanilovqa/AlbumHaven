@@ -118,7 +118,8 @@ class TargetedLibraryReconciler:
             if is_directory:
                 deleted_subtrees += (source,)
                 for media_path in self._supported_media_descendants(destination):
-                    active_targets.append((media_path, destination_root))
+                    if self._belongs_to_root(media_path, destination_root):
+                        active_targets.append((media_path, destination_root))
             else:
                 if is_supported_media(source):
                     deleted_paths += (source,)

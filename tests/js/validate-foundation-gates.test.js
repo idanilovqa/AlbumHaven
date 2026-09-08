@@ -293,3 +293,23 @@ test('foundation validator enforces the approved portable and Windows gate contr
     /imageio-ffmpeg 0\.6\.0/i,
   );
 });
+
+
+test('foundation validator rejects every test family losing its review-success dependency or condition', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const job of [
+    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
+    'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
+  ]) {
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /      - review_prerequisites\r?\n/, ''),
+      /review_prerequisites dependency/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /needs\.review_prerequisites\.result == 'success'/, "needs.review_prerequisites.result != 'cancelled'"),
+      /successful review prerequisite/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /!cancelled\(\)/, 'always()'),
+      /cancellable job condition/);
+  }
+});

@@ -139,7 +139,9 @@ class PostgresCurrentActorResolver:
         if not any(
             item.library_id == current_library_id for item in relationships
         ):
-            raise RuntimeError("Current actor current library context is invalid.")
+            if payload.get("is_bootstrap_owner") is True:
+                raise RuntimeError("Current actor current library context is invalid.")
+            current_library_id = None
         return CurrentActor(
             state=ActorState.ACTIVE,
             account_id=account_id,

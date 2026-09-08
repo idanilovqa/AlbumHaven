@@ -24,6 +24,9 @@ PLAYER_AWARE_OUTLINE_MIGRATION = (
 MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION = (
     MIGRATIONS_DIR / "0061_create_missing_album_removal_function.sql"
 )
+MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION = (
+    MIGRATIONS_DIR / "0063_replace_missing_album_removal_lock_snapshot.sql"
+)
 READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
     MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
 )
@@ -426,7 +429,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-24:] == [
+    assert migration_names[-26:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -451,6 +454,8 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0060_player_aware_interaction_outline.sql",
         "0061_create_missing_album_removal_function.sql",
         "0062_narrow_readonly_account_privileges.sql",
+        "0063_replace_missing_album_removal_lock_snapshot.sql",
+        "0064_grant_library_membership_delete.sql",
     ]
 
 
@@ -558,10 +563,14 @@ def test_player_aware_outline_migration_validates_every_nested_appearance_value(
         assert f"interaction_overrides->'{field}'" in sql
 
 
-def test_missing_album_removal_uses_a_bounded_security_definer_capability():
-    assert MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.exists()
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_uses_a_bounded_security_definer_capability(migration_path):
+    assert migration_path.exists()
     sql = _normalized_sql(
-        MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.read_text(encoding="utf-8")
+        migration_path.read_text(encoding="utf-8")
     )
 
     assert "create or replace function library.confirm_missing_album_removal(target_album_key text)" in sql
@@ -583,15 +592,34 @@ def test_missing_album_removal_uses_a_bounded_security_definer_capability():
     assert "on all tables" not in sql
 
 
-def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relations():
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relations(migration_path):
+    assert migration_path.exists()
     sql = _normalized_sql(
-        MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION.read_text(encoding="utf-8")
+        migration_path.read_text(encoding="utf-8")
     )
 
     assert "library_watch_health" in sql
     assert "root_id" in sql
     assert "'{scan_cache,relation_projection,status}'" in sql
     assert "to_jsonb('stale'::text)" in sql
+
+
+def test_missing_album_removal_takes_a_fresh_snapshot_after_publication_lock():
+    assert MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.exists()
+    sql = _normalized_sql(MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.read_text(encoding="utf-8"))
+    assert "language sql volatile security definer" in sql
+    body = sql.split("as $function$", 1)[1].split("$function$", 1)[0].strip()
+    lock_statement, inventory_statement = body.split(";", 1)
+    assert lock_statement == (
+        "select pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtext('album-haven:local-inventory-publication') )"
+    )
+    assert inventory_statement.strip().startswith("with bootstrap_context as (")
+    assert "inventory_lock" not in inventory_statement
 
 
 def test_aggregate_appearance_migration_adds_revisioned_bounded_workspace_state():

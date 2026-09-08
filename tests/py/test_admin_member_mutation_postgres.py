@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 
 NOW = datetime(2026, 8, 31, 22, 30, tzinfo=timezone.utc)
 
@@ -209,6 +211,53 @@ def test_admin_update_allows_permission_edits_without_reconfirming_retained_disa
     assert statements[0].startswith("with locked_accounts")
     assert any("set is_active = %s" in sql for sql in statements)
     assert connection.events == ["begin", "commit"]
+
+
+@pytest.mark.parametrize("is_active", [False, True])
+def test_admin_can_change_account_state_after_access_removal_without_grants(is_active):
+    connection = Connection(target_access=False)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=is_active,
+        current_library_access=False,
+        capability_keys=(),
+        confirm_disable=not is_active,
+        confirm_remove_access=False,
+        request_ref="admin-detached-account-state",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert connection.events == ["begin", "commit"]
+    assert not any("insert into app.capabilities" in sql for sql in statements)
+    assert not any("insert into library.library_memberships" in sql for sql in statements)
+    assert any(
+        sql.startswith("update app.account_sessions") and "administrator_disabled" in sql
+        for sql in statements
+    ) is not is_active
+
+
+def test_admin_cannot_restore_access_without_selecting_capabilities():
+    connection = Connection(target_access=False)
+
+    with pytest.raises(ValueError, match="capabilities"):
+        _service(connection).update_account(
+            actor_account_id=7,
+            actor_authenticated_at=NOW,
+            library_id=9,
+            target_account_id=41,
+            is_active=True,
+            current_library_access=True,
+            capability_keys=(),
+            confirm_disable=False,
+            confirm_remove_access=False,
+            request_ref="admin-detached-account-restore",
+        )
+
+    assert connection.operations == []
 
 
 def test_admin_owner_save_preserves_membership_grants_and_account_state():

@@ -10,7 +10,7 @@ const validatorPath = path.join(root, 'scripts', 'ci', 'validate-cloud-verificat
 const REQUIRED_JOBS = [
   'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
   'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
-  'review_scope', 'pr_agent_review', 'codex_review', 'ai_code_review',
+  'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review', 'ai_code_review',
 ];
 
 const REVIEW_JOBS = ['pr_agent_review', 'codex_review', 'ai_code_review'];
@@ -23,7 +23,7 @@ function validInput(mode = 'trusted', reviewMode = 'full') {
     full: ['success', 'success', 'success'],
   }[reviewMode];
   const jobResults = Object.fromEntries(REQUIRED_JOBS.map((job) => [job, trusted ? 'success' : (
-    ['test_js', 'test_components', 'e2e_production_parity', 'review_scope'].includes(job) ? 'success' : 'skipped'
+    ['test_js', 'test_components', 'e2e_production_parity', 'review_scope', 'review_prerequisites'].includes(job) ? 'success' : 'skipped'
   )]));
   if (trusted) REVIEW_JOBS.forEach((job, index) => { jobResults[job] = reviewExpectations[index]; });
   return {
@@ -34,13 +34,13 @@ function validInput(mode = 'trusted', reviewMode = 'full') {
   };
 }
 
-test('workflow defines the always-running Cloud Verification Gate for pull-request runs', () => {
+test('workflow defines the cancellable Cloud Verification Gate for pull-request runs', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /^on:\s*\r?\n\s+pull_request:\s*$/m);
   assert.doesNotMatch(workflow, /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m);
   assert.match(workflow, /cloud_verification_gate:\s*\r?\n\s+name: Cloud Verification Gate/);
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
-  assert.match(gate, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(gate, /if: \$\{\{ !cancelled\(\) \}\}/);
   for (const job of REQUIRED_JOBS) assert.match(gate, new RegExp(`\\s+- ${job}\\r?$`, 'm'));
   assert.doesNotMatch(gate, /merge_cloud_reports|deploy_cloud_reports|cloud-test-report-/);
   assert.match(gate, /Non-authoritative fork conclusion/);
@@ -48,7 +48,7 @@ test('workflow defines the always-running Cloud Verification Gate for pull-reque
   assert.match(gate, /validate-cloud-verification-gate\.cjs/);
 });
 
-test('workflow runs reviewers before tests and lets tests run after failed review', () => {
+test('workflow holds every test family behind successful review prerequisites', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /review_scope:\s*\r?\n\s+name: PR Review Scope/);
   assert.match(workflow, /node scripts\/ci\/classify-pr-review-scope\.cjs/);
@@ -63,10 +63,12 @@ test('workflow runs reviewers before tests and lets tests run after failed revie
 
   const prAgent = workflow.slice(workflow.indexOf('  pr_agent_review:'), workflow.indexOf('  codex_review:'));
   const codex = workflow.slice(workflow.indexOf('  codex_review:'), workflow.indexOf('  ai_code_review:'));
-  const third = workflow.slice(workflow.indexOf('  ai_code_review:'), workflow.indexOf('  focused_e2e_gate:'));
+  const third = workflow.slice(workflow.indexOf('  ai_code_review:'), workflow.indexOf('  review_prerequisites:'));
   for (const block of [prAgent, codex, third]) {
     assert.match(block, /needs\.review_scope\.result == 'success'/);
-    assert.doesNotMatch(block, /needs\.e2e_/);
+    assert.doesNotMatch(block, /needs\.(?:e2e_|review_prerequisites)/);
+    assert.match(block, /if: \$\{\{ !cancelled\(\)/);
+    assert.equal((block.match(/^      - (?:review_scope|pr_agent_review|codex_review|ai_code_review)$/gm) || []).length, 1);
   }
   assert.match(prAgent, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
   assert.match(prAgent, /\["\/review -i"\]/);
@@ -92,7 +94,8 @@ test('workflow runs reviewers before tests and lets tests run after failed revie
     assert.match(block, /pr_agent_review/);
     assert.match(block, /codex_review/);
     assert.match(block, /ai_code_review/);
-    assert.match(block, /if: \$\{\{ always\(\)/);
+    assert.match(block, /^      - review_prerequisites\r?$/m);
+    assert.match(block, /if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/);
   }
 
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
@@ -176,4 +179,77 @@ test('fork conclusion is non-authoritative, portable-only, and deterministic', (
   const secretJobRan = validInput('fork');
   secretJobRan.jobResults.test_python = 'success';
   assert.equal(validateCloudVerificationGate(secretJobRan).conclusion, 'failure');
+});
+
+
+function prerequisiteInput({ mode = 'trusted', pipelineMode = 'full', reviewMode = 'full', isDraft = false } = {}) {
+  const input = validInput(mode, reviewMode);
+  Object.assign(input, { pipelineMode, isDraft });
+  if (mode === 'fork' || isDraft || pipelineMode === 'focused-e2e') {
+    for (const job of REVIEW_JOBS) input.jobResults[job] = 'skipped';
+  }
+  return input;
+}
+
+test('review prerequisites accept only the exact applicable reviewer matrix in every supported context', () => {
+  const { validateReviewPrerequisites } = require(validatorPath);
+  for (const mode of ['trusted', 'fork']) {
+    for (const isDraft of [false, true]) {
+      for (const reviewMode of ['none', 'incremental', 'full']) {
+        const input = prerequisiteInput({ mode, isDraft, reviewMode });
+        assert.equal(validateReviewPrerequisites(input).conclusion, 'success', JSON.stringify(input));
+        for (const job of REVIEW_JOBS) {
+          for (const result of [undefined, 'failure', 'cancelled', 'skipped', 'success']) {
+            if (result === input.jobResults[job]) continue;
+            const changed = { ...input, jobResults: { ...input.jobResults, [job]: result } };
+            assert.equal(validateReviewPrerequisites(changed).conclusion, 'failure', JSON.stringify(changed));
+          }
+        }
+      }
+      const focused = prerequisiteInput({ mode, isDraft, reviewMode: 'none', pipelineMode: 'focused-e2e' });
+      assert.equal(validateReviewPrerequisites(focused).conclusion, 'success');
+      focused.jobResults.codex_review = 'success';
+      assert.equal(validateReviewPrerequisites(focused).conclusion, 'failure');
+    }
+  }
+});
+
+test('review prerequisites reject unavailable scope and malformed applicability context', () => {
+  const { validateReviewPrerequisites } = require(validatorPath);
+  for (const result of [undefined, 'failure', 'cancelled', 'skipped']) {
+    const input = prerequisiteInput();
+    input.jobResults.review_scope = result;
+    assert.equal(validateReviewPrerequisites(input).conclusion, 'failure');
+  }
+  for (const patch of [
+    { mode: undefined }, { mode: 'other' }, { pipelineMode: undefined }, { pipelineMode: 'other' },
+    { reviewMode: undefined }, { reviewMode: 'other' }, { reviewMode: 'constructor' },
+    { isDraft: undefined }, { isDraft: 'false' },
+    { pipelineMode: 'focused-e2e', reviewMode: 'full' },
+  ]) assert.equal(validateReviewPrerequisites({ ...prerequisiteInput(), ...patch }).conclusion, 'failure');
+});
+
+test('workflow review prerequisite uses explicit PR context and final gates require its result', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  const gate = workflow.slice(workflow.indexOf('  review_prerequisites:'), workflow.indexOf('  focused_e2e_gate:'));
+  assert.match(gate, /if: \$\{\{ !cancelled\(\) \}\}/);
+  assert.match(gate, /--review-prerequisites/);
+  assert.match(gate, /github\.event\.pull_request\.draft/);
+  assert.match(gate, /github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.doesNotMatch(gate, /secrets\.|issues: write|pull-requests: write/);
+  for (const name of ['review_scope', ...REVIEW_JOBS]) assert.match(gate, new RegExp(`^      - ${name}\\r?$`, 'm'));
+  for (const name of ['focused_e2e_gate', 'cloud_verification_gate']) {
+    const start = workflow.indexOf(`  ${name}:`);
+    const block = workflow.slice(start, name === 'focused_e2e_gate' ? workflow.indexOf('  cloud_verification_gate:') : undefined);
+    assert.match(block, /^      - review_prerequisites\r?$/m);
+    assert.match(block, /REVIEW_PREREQUISITES_RESULT: \$\{\{ needs\.review_prerequisites\.result \}\}/);
+    assert.match(block, /review_prerequisites = \$env:REVIEW_PREREQUISITES_RESULT/);
+  }
+  assert.doesNotMatch(workflow, /^    if: .*always\(\)/m, 'job conditions must permit cancellation');
+  assert.match(workflow, /^        if: .*always\(\)/m, 'step cleanup and artifact collection remain unconditional');
+});
+
+test('draft reviews remain inapplicable without authorizing the final cloud gate', () => {
+  const { validateCloudVerificationGate } = require(validatorPath);
+  assert.equal(validateCloudVerificationGate({ ...validInput('trusted', 'none'), isDraft: true }).conclusion, 'failure');
 });

@@ -35,17 +35,19 @@ not need the private repository to build or use Album Haven.
 
 ## Review-first CI execution
 
-- In the authoritative pull-request pipeline, classify review scope first, run
-  applicable hosted reviews before tests, and start every applicable test and
-  E2E job after the reviewers reach a terminal result even when review failed.
-  Collect the complete review and test failure inventory while the current head
-  remains a merge candidate.
+- In the authoritative pull-request pipeline, classify review scope first and
+  run applicable hosted reviews independently. Start test and E2E jobs only
+  after every applicable reviewer succeeds. A failed, cancelled, missing, or
+  unexpectedly skipped review holds tests; intentional skips are checked against
+  the exact review scope and pull-request context. Collect all applicable review
+  results, then the complete test failure inventory after reviews pass.
 - If a hosted-review finding is validated against the code and requires another
   commit, preserve the review evidence and cancel that superseded run before
   expensive tests start. Verify its jobs have stopped, fix the finding, run
   focused local checks, and push to a new complete native pull-request pipeline.
-  A reviewer failure alone does not invoke this exception; the replacement head
-  still requires a successful full pipeline.
+  Review failures keep tests blocked while their cause is investigated. The
+  replacement head still requires a successful full pipeline; a held or cancelled
+  pipeline never records review coverage or authorizes merge or publication.
 - Review only functional or E2E-relevant changes. Documentation-only changes
   skip hosted review. On a synchronize event with a valid successfully reviewed
   baseline, fewer than 250 changed functional lines uses incremental review;

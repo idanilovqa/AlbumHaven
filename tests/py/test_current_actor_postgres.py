@@ -210,7 +210,33 @@ def test_account_disabled_after_session_resolution_returns_inactive_without_auth
     assert actor.current_library_id is None
 
 
-def test_actor_without_current_library_membership_fails_closed(actors):
+@pytest.mark.parametrize("relationships", [[], [
+    {"library_id": 73, "membership_role": "member", "is_primary_owner": False}
+]])
+def test_active_account_without_current_membership_retains_only_account_authority(
+    actors, relationships,
+):
+    row = _row(
+        is_bootstrap_owner=False,
+        current_library_id=99,
+        library_relationships=relationships,
+        capability_grants=[],
+    )
+
+    actor = _resolver(actors, Sessions(_resolved()), Connection((row,))).resolve(RAW_SESSION)
+
+    assert actor.state is actors.ActorState.ACTIVE
+    assert actor.account_id == 41
+    assert actor.session_id == 8
+    assert actor.current_library_id is None
+    assert actor.capability_grants == ()
+    assert actor.is_bootstrap_owner is False
+    assert {item.library_id for item in actor.library_relationships} == {
+        item["library_id"] for item in relationships
+    }
+
+
+def test_bootstrap_actor_without_current_library_membership_fails_closed(actors):
     row = _row(
         current_library_id=99,
         library_relationships=[

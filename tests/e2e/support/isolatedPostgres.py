@@ -40,6 +40,7 @@ _RUNTIME_DELETE_TABLES = (
     ("integration", "scrobble_retry_state"),
     ("integration", "listen_history"),
     ("library", "move_policy_settings"),
+    ("library", "library_memberships"),
     ("library", "ignored_versions"),
     ("library", "ignored_repairs"),
     ("library", "manual_versions"),

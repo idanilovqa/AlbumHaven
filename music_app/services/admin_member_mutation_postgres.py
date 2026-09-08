@@ -69,7 +69,7 @@ class PostgresAdminMemberMutationService:
         access = _boolean(current_library_access)
         disable_confirmed = _boolean(confirm_disable)
         removal_confirmed = _boolean(confirm_remove_access)
-        capabilities = _capabilities(capability_keys)
+        capabilities = _capabilities(capability_keys, allow_empty=not access)
         reference = _request_ref(request_ref)
         now = self._recent_now(actor_authenticated_at)
 
@@ -337,13 +337,13 @@ def _boolean(value: object) -> bool:
     return value
 
 
-def _capabilities(values: Iterable[object]) -> tuple[str, ...]:
+def _capabilities(values: Iterable[object], *, allow_empty: bool = False) -> tuple[str, ...]:
     try:
         received = tuple(values)
     except TypeError:
         raise ValueError("Account management capabilities are invalid.") from None
     if (
-        not received
+        (not received and not allow_empty)
         or any(not isinstance(item, str) for item in received)
         or len(set(received)) != len(received)
         or any(item not in MANAGED_CAPABILITY_KEYS for item in received)

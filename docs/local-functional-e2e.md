@@ -45,13 +45,18 @@ Preserve native `@area:<name>` tags for diagnosis and reporting. Do not substitu
 a complete local shard for exact local reproduction, or treat a shard as a
 product area.
 
+The pipeline runs applicable reviewers independently and holds test jobs until
+all required reviews succeed. Intentional review skips must match the classified
+scope and pull-request context. Collect all review results before fixing their
+findings; once reviews pass, collect the complete test failure inventory. If a
+validated review finding requires a new commit, preserve its evidence and cancel
+the superseded run. Verify its jobs have stopped, fix and verify locally, then
+push to a new complete native pull-request pipeline. Held or cancelled runs do
+not record review coverage or authorize publication. Final full CI must pass.
+
 GitHub may withhold downloadable job logs until the job finishes. For live case
 progress, use the signed-in Actions job page. An unchanged test-execution step
-alone does not prove a hang. Collect the full failure inventory while the current
-head remains a merge candidate. If a validated hosted-review finding requires a
-new commit, preserve its evidence and cancel the superseded run before expensive
-tests start. Verify its jobs have stopped, fix and verify locally, then push to a
-new complete native pull-request pipeline. Final full CI must still pass.
+alone does not prove a hang.
 
 Run one complete shard:
 

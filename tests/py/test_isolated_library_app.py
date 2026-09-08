@@ -977,6 +977,7 @@ def test_runtime_grant_verification_accepts_only_required_table_privileges(monke
     ("failed_check", "message"),
     [
         (("integration", "pending_scrobbles", "DELETE"), "integration.pending_scrobbles DELETE"),
+        (("library", "library_memberships", "DELETE"), "library.library_memberships DELETE"),
         (("library", "manual_versions", "TRUNCATE"), "library.manual_versions TRUNCATE denied"),
         ("ops_schema_create_denied", "ops schema CREATE denied"),
         ("sequence_update_denied", "cover lookup sequence UPDATE denied"),

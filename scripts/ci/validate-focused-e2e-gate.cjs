@@ -28,6 +28,7 @@ function validateFocusedE2eGate(input) {
   if (input?.jobResults?.[REQUIRED_SCOPE_JOB] !== 'success') {
     errors.push(`${REQUIRED_SCOPE_JOB} must be success`);
   }
+  if (input?.jobResults?.review_prerequisites !== 'success') errors.push('review_prerequisites must be success');
   for (const job of FOCUSED_SKIPPED_JOBS) {
     if (input?.jobResults?.[job] !== 'skipped') errors.push(`focused job ${job} must be skipped`);
   }

@@ -25,10 +25,11 @@ jobs:
     name: JavaScript Tests (Portable)
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -88,10 +89,11 @@ jobs:
     name: Component Tests (Pinned Chrome)
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -142,10 +144,11 @@ jobs:
     name: JavaScript Tests (Windows Contract)
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -236,10 +239,11 @@ jobs:
     name: Python Tests
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -351,10 +355,11 @@ jobs:
     name: "E2E: Production Parity"
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -380,10 +385,11 @@ jobs:
     name: "E2E: Phase 7 Auth Lifecycle"
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -475,10 +481,11 @@ jobs:
     name: "E2E: Phase 7 Admin Management"
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -570,10 +577,11 @@ jobs:
     name: "E2E: ${{ matrix.shard }}"
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -755,10 +763,11 @@ jobs:
     name: "E2E Performance: ${{ matrix.shard }}"
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     strategy:
       fail-fast: false
@@ -1237,7 +1246,7 @@ jobs:
     name: PR Agent Review
     needs:
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1290,7 +1299,7 @@ jobs:
     name: Codex PR Review
     needs:
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1362,7 +1371,7 @@ jobs:
     name: AI Code Review // VERY POWERFULL
     needs:
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode == 'full' }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1429,10 +1438,56 @@ jobs:
       - name: Enforce AI Code Review verdict
         run: node scripts/ci/validate-codex-review-verdict.cjs ai-code-review-output.md
 
+  review_prerequisites:
+    name: Review Prerequisites
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Require every applicable reviewer to succeed
+        shell: pwsh
+        env:
+          REVIEW_CONTEXT: ${{ github.event.pull_request.head.repo.full_name == github.repository && 'trusted' || 'fork' }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
+          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
+          REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
+          CODEX_RESULT: ${{ needs.codex_review.result }}
+          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
+        run: |
+          $reviewPrerequisitesInput = @{
+            mode = $env:REVIEW_CONTEXT
+            isDraft = $env:IS_DRAFT | ConvertFrom-Json
+            pipelineMode = $env:PIPELINE_MODE
+            reviewMode = $env:REVIEW_MODE
+            jobResults = @{
+              review_scope = $env:REVIEW_SCOPE_RESULT
+              pr_agent_review = $env:PR_AGENT_RESULT
+              codex_review = $env:CODEX_RESULT
+              ai_code_review = $env:AI_CODE_REVIEW_RESULT
+            }
+          }
+          $inputPath = Join-Path "${{ runner.temp }}" "review-prerequisites-input.json"
+          $reviewPrerequisitesInput | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $inputPath -Encoding utf8
+          node scripts/ci/validate-cloud-verification-gate.cjs $inputPath --review-prerequisites
+
   focused_e2e_gate:
     name: Focused E2E Verification
     needs:
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
@@ -1445,7 +1500,7 @@ jobs:
       - e2e_phase7_admin
       - e2e_functional
       - e2e_performance_ci
-    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'focused-e2e' }}
+    if: ${{ !cancelled() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'focused-e2e' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1461,6 +1516,7 @@ jobs:
         env:
           SELECTED_FAMILIES_JSON: ${{ needs.review_scope.outputs.selected_families_json }}
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
           AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
@@ -1479,6 +1535,7 @@ jobs:
             selectedFamilies = @($env:SELECTED_FAMILIES_JSON | ConvertFrom-Json)
             jobResults = @{
               review_scope = $env:REVIEW_SCOPE_RESULT
+              review_prerequisites = $env:REVIEW_PREREQUISITES_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
               ai_code_review = $env:AI_CODE_REVIEW_RESULT
@@ -1511,10 +1568,11 @@ jobs:
       - e2e_functional
       - e2e_performance_ci
       - review_scope
+      - review_prerequisites
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1536,16 +1594,19 @@ jobs:
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
           AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
           PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           test "$TEST_JS_RESULT" = success
           test "$TEST_COMPONENTS_RESULT" = success
           test "$PRODUCTION_PARITY_RESULT" = success
           test "$REVIEW_SCOPE_RESULT" = success
+          test "$REVIEW_PREREQUISITES_RESULT" = success
           case "$REVIEW_MODE" in none|incremental|full) ;; *) exit 1 ;; esac
           for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT" "$AI_CODE_REVIEW_RESULT"; do
             test "$result" = skipped
@@ -1578,14 +1639,17 @@ jobs:
           FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
           PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
           AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
           PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           $input = @{
             mode = "trusted"
+            isDraft = $env:IS_DRAFT | ConvertFrom-Json
             pipelineMode = $env:PIPELINE_MODE
             reviewMode = $env:REVIEW_MODE
             jobResults = @{
@@ -1599,6 +1663,7 @@ jobs:
               e2e_functional = $env:FUNCTIONAL_RESULT
               e2e_performance_ci = $env:PERFORMANCE_RESULT
               review_scope = $env:REVIEW_SCOPE_RESULT
+              review_prerequisites = $env:REVIEW_PREREQUISITES_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
               ai_code_review = $env:AI_CODE_REVIEW_RESULT

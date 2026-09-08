@@ -14,6 +14,7 @@ test('focused gate validator accepts only successful selected job families', () 
     selectedFamilies: ['e2e_functional'],
     jobResults: {
       review_scope: 'success',
+      review_prerequisites: 'success',
       pr_agent_review: 'skipped',
       codex_review: 'skipped',
       ai_code_review: 'skipped',
@@ -41,6 +42,7 @@ test('focused gate fails closed for absent targets, failed targets, and unselect
     selectedFamilies: ['e2e_functional'],
     jobResults: {
       review_scope: 'success',
+      review_prerequisites: 'success',
       pr_agent_review: 'skipped',
       codex_review: 'skipped',
       ai_code_review: 'skipped',
@@ -55,6 +57,9 @@ test('focused gate fails closed for absent targets, failed targets, and unselect
       e2e_performance_ci: 'skipped',
     },
   };
+  for (const result of [undefined, 'failure', 'cancelled', 'skipped']) {
+    assert.equal(validateFocusedE2eGate({ ...valid, jobResults: { ...valid.jobResults, review_prerequisites: result } }).conclusion, 'failure');
+  }
   assert.equal(validateFocusedE2eGate({
     ...valid,
     jobResults: { ...valid.jobResults, e2e_functional: 'failure' },
@@ -88,7 +93,7 @@ test('workflow keeps focused verification non-authoritative and leaves promotion
   assert.doesNotMatch(focusedGate, /album-haven-reviewed-head/);
 
   const fullGate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
-  assert.match(fullGate, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(fullGate, /if: \$\{\{ !cancelled\(\) \}\}/);
   assert.match(fullGate, /PIPELINE_MODE: \$\{\{ needs\.review_scope\.outputs\.pipeline_mode \}\}/);
   assert.match(fullGate, /album-haven-reviewed-head/);
 });

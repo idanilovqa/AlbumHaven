@@ -143,6 +143,14 @@ function validateWorkflowContract(workflow) {
     }
   }
 
+  for (const [name, source] of Object.entries(jobs)) {
+    if (!source) continue;
+    requirePatterns(source, [
+      [/^      - review_prerequisites\r?$/m, 'review_prerequisites dependency'],
+      [/^    if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/m, 'successful review prerequisite and cancellable job condition'],
+    ], `${name} job`, errors);
+  }
+
   for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {
     if (!source) continue;
     if (!/runs-on:\s*ubuntu-latest/.test(source)) errors.push(`${name} job must run on Ubuntu`);

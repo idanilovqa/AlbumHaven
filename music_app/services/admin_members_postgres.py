@@ -110,6 +110,13 @@ class PostgresAdminMembersService:
                          where scoped_membership.library_id = authority.library_id
                            and scoped_membership.account_id = account.id
                        )
+                       or exists (
+                         select 1
+                         from app.capabilities prior_access
+                         where prior_access.account_id = account.id
+                           and prior_access.scope_kind = 'library'
+                           and prior_access.scope_id = authority.library_id
+                       )
                      )
                     left join app.bootstrap_owners owner
                       on owner.account_id = account.id

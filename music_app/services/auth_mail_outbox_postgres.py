@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable
 
+from starlette.concurrency import run_in_threadpool
+
 from music_app.services.auth_mail import (
     DeliveryResult,
     compose_invitation_email,
@@ -780,7 +782,7 @@ async def deliver_welcome(
 ) -> DeliveryResult:
     """Attempt one claimed welcome without changing account readiness."""
 
-    claim = repository.claim_welcome(outbox_id)
+    claim = await run_in_threadpool(repository.claim_welcome, outbox_id)
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     if isinstance(claim, AmbiguousWelcomeClaim):
@@ -796,7 +798,7 @@ async def deliver_welcome(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_welcome(claim, result)
+    await run_in_threadpool(repository.finalize_welcome, claim, result)
     return result
 
 
@@ -815,7 +817,7 @@ async def deliver_password_reset(
         repository = PostgresPasswordResetOutboxService(
             {_DATABASE_URL_KEY: str(database_url or "").strip()}
         )
-    claim = repository.claim_password_reset(delivery)
+    claim = await run_in_threadpool(repository.claim_password_reset, delivery)
     if isinstance(claim, AmbiguousPasswordResetClaim):
         return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
@@ -832,7 +834,7 @@ async def deliver_password_reset(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_password_reset(claim, result)
+    await run_in_threadpool(repository.finalize_password_reset, claim, result)
     return result
 
 
@@ -846,7 +848,7 @@ async def deliver_invitation(
 ) -> DeliveryResult:
     """Attempt one committed invitation without persisting its bearer token."""
 
-    claim = repository.claim_invitation(delivery)
+    claim = await run_in_threadpool(repository.claim_invitation, delivery)
     if isinstance(claim, AmbiguousInvitationClaim):
         return DeliveryResult(delivered=False, reason="unknown")
     if claim is None:
@@ -867,7 +869,7 @@ async def deliver_invitation(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    repository.finalize_invitation(claim, result)
+    await run_in_threadpool(repository.finalize_invitation, claim, result)
     return result
 
 

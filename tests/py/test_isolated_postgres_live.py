@@ -5053,3 +5053,314 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
     finally:
         if not cleanup_complete:
             isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_removed_member_retains_account_access_and_scoped_admin_recovery(monkeypatch):
+    import asyncio
+
+    from fastapi import Depends, FastAPI
+
+    from music_app.services.admin_account_creation_postgres import PostgresAdminAccountRepository
+    from music_app.services.admin_member_mutation_postgres import PostgresAdminMemberMutationService
+    from music_app.services.admin_members_postgres import PostgresAdminMembersService
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    from music_app.services.current_actor_postgres import PostgresCurrentActorResolver
+    from music_app.services.policy_asgi import require_action
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    config = {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url}
+    now = datetime.now(timezone.utc)
+    try:
+        isolatedPostgres.reset_application_tables(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            authority = connection.execute(
+                """
+                select owner.account_id, library.id as library_id
+                from app.bootstrap_owners owner
+                join library.libraries library on library.owner_account_id = owner.account_id
+                where owner.owner_key = 'local-bootstrap-owner'
+                  and library.library_kind = 'local'
+                """
+            ).fetchone()
+            owner_id, library_id = int(authority["account_id"]), int(authority["library_id"])
+            unrelated_id = int(connection.execute(
+                """
+                insert into app.accounts (
+                  display_name, account_kind, username_display, username_normalized,
+                  contact_email, contact_email_normalized
+                ) values ('Unrelated', 'managed_user', 'unrelated', 'unrelated',
+                          'unrelated@example.test', 'unrelated@example.test')
+                returning id
+                """
+            ).fetchone()["id"])
+            connection.execute(
+                """
+                insert into app.capabilities (
+                  account_id, capability_key, scope_kind, scope_id, revoked_at
+                ) values (%s, 'library.browse.read', 'library', %s, %s)
+                """,
+                (unrelated_id, library_id + 100_000, now),
+            )
+        target = PostgresAdminAccountRepository(config).create_account(
+            actor_account_id=owner_id, library_id=library_id,
+            username_display="Restorable", username_normalized="restorable",
+            contact_email="restorable@example.test",
+            contact_email_normalized="restorable@example.test",
+            capability_keys=("library.browse.read",), invitation=None,
+            invitation_expires_at=None, created_at=now, request_ref="member-created",
+        )
+        sessions = PostgresAuthSessionService(config, clock=lambda: now)
+        session = sessions.issue_session(target.account_id)
+        resolver = PostgresCurrentActorResolver(config, session_service=sessions)
+        members = PostgresAdminMembersService(config, clock=lambda: now)
+        mutations = PostgresAdminMemberMutationService(config, clock=lambda: now)
+
+        def update(*, access, active=True, capabilities=("library.browse.read",)):
+            mutations.update_account(
+                actor_account_id=owner_id, actor_authenticated_at=now,
+                library_id=library_id, target_account_id=target.account_id,
+                is_active=active, current_library_access=access,
+                capability_keys=capabilities, confirm_disable=not active,
+                confirm_remove_access=not access, request_ref="member-updated",
+            )
+
+        update(access=False)
+        roster = members.load_roster(actor_account_id=owner_id, library_id=library_id)
+        assert {member.account_id for member in roster.members} == {owner_id, target.account_id}
+        removed = next(member for member in roster.members if member.account_id == target.account_id)
+        assert removed.membership_role is None
+        assert removed.capability_keys == ()
+        assert removed.active_session_count == 1
+        actor = resolver.resolve(session.raw_token)
+        assert actor.is_authenticated
+        assert actor.current_library_id is None
+
+        for action, expected_status in (
+            ("library.browse.read", 403),
+            ("account.self.profile.read", 200),
+            ("auth.session.logout", 200),
+        ):
+            app = FastAPI()
+            app.state.current_actor_resolver = resolver
+            app.state.auth_policy_config = {
+                "hmac": {"secret": "isolated-policy-key-" * 3, "key_version": 1}
+            }
+
+            @app.get("/protected", dependencies=[Depends(require_action(action))])
+            async def protected():
+                return {"ok": True}
+
+            messages = []
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                messages.append(message)
+
+            asyncio.run(app(
+                {
+                    "type": "http", "asgi": {"version": "3.0"},
+                    "http_version": "1.1", "method": "GET", "scheme": "https",
+                    "path": "/protected", "raw_path": b"/protected", "query_string": b"",
+                    "headers": [(b"host", b"music.test"), (b"cookie", (
+                        f"__Host-album_haven_session={session.raw_token}"
+                    ).encode("ascii"))],
+                    "client": ("127.0.0.1", 50000), "server": ("music.test", 443),
+                }, receive, send,
+            ))
+            response = next(message for message in messages if message["type"] == "http.response.start")
+            assert response["status"] == expected_status, action
+
+        update(access=True)
+        assert resolver.resolve(session.raw_token).current_library_id == library_id
+        restored = next(
+            member for member in members.load_roster(
+                actor_account_id=owner_id, library_id=library_id,
+            ).members if member.account_id == target.account_id
+        )
+        assert restored.membership_role == "member"
+        assert restored.capability_keys == ("library.browse.read",)
+        update(access=False)
+        update(access=False, active=False, capabilities=())
+        assert sessions.resolve_session(session.raw_token) is None
+        disabled = next(
+            member for member in members.load_roster(
+                actor_account_id=owner_id, library_id=library_id,
+            ).members if member.account_id == target.account_id
+        )
+        assert disabled.account_status == "Disabled"
+        assert disabled.membership_role is None
+        assert disabled.capability_keys == ()
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_missing_album_removal_rechecks_inventory_after_waiting_for_publisher(
+    monkeypatch, tmp_path,
+):
+    from time import monotonic
+
+    from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+    from music_app.services.missing_album_removal_postgres import (
+        MissingAlbumReappeared,
+        PostgresMissingAlbumRemovalService,
+    )
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    music_dir = (tmp_path / "Music").resolve()
+    album_dir = music_dir / "Owner" / "Republished Album"
+    album_dir.mkdir(parents=True)
+    old_path = album_dir / "01 Missing.flac"
+    new_path = album_dir / "02 New.flac"
+    root_id = "removal-snapshot-root"
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(music_dir),
+        "APP_NAME": "Album Haven",
+    }
+    removal_started = Event()
+    removal_worker = None
+    removal_pids = []
+    outcomes = []
+
+    def connect_removal(database_url):
+        connection = isolatedPostgres._connect(database_url)
+        connection.execute("set statement_timeout = '10s'")
+        connection.commit()
+        removal_pids.append(connection.info.backend_pid)
+        removal_started.set()
+        return connection
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        PostgresLibraryRootSettingsStore(config).save_settings({
+            "main_library_roots": [{
+                "id": root_id, "path": str(music_dir), "layout_mode": "artist",
+            }],
+            "hoarding_library_roots": [],
+            "new_arrivals_roots": [],
+        })
+        PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect).save_snapshot(
+            Path("unused-removal-snapshot.json"),
+            {str(old_path): {
+                "path": str(old_path), "mtime": 1.0, "size": 100,
+                "album": "Republished Album", "album_artist": "Owner",
+                "artist": "Owner feat. Guest", "title": "Republished Track",
+                "track_number": 1, "disc_number": 1, "duration_seconds": 60,
+                "year": 2026, "edition": "", "album_rating": 0,
+                "library_root_id": root_id, "library_root_category": "main_library",
+                "exception_type": None,
+            }},
+            "removal-snapshot-root-identity", 1.0,
+            observed_library_root_ids={root_id},
+        )
+        with isolatedPostgres._connect(setup_url) as connection:
+            seeded = connection.execute(
+                """
+                select file.id as file_id, track.id as track_id,
+                       album.id as album_id, album.album_key
+                from library.local_track_files file
+                join library.local_tracks track on track.id = file.track_id
+                join library.local_albums album on album.id = track.album_id
+                where file.private_path = %s
+                """,
+                (str(old_path),),
+            ).fetchone()
+            connection.execute(
+                """
+                update library.local_track_files
+                set metadata = jsonb_set(metadata, '{scan_cache,stale}', 'true'::jsonb)
+                where id = %s
+                """,
+                (seeded["file_id"],),
+            )
+            featured_before = connection.execute(
+                "select artist_id from library.local_album_featured_artists "
+                "where album_id = %s order by artist_id",
+                (seeded["album_id"],),
+            ).fetchall()
+        assert featured_before
+        assert not old_path.exists()
+
+        def remove_album():
+            try:
+                outcomes.append(PostgresMissingAlbumRemovalService(
+                    config, connect=connect_removal,
+                ).confirm_removal(seeded["album_key"]))
+            except BaseException as error:
+                outcomes.append(error)
+
+        with isolatedPostgres._connect(setup_url) as publisher:
+            publisher.execute("set statement_timeout = '10s'")
+            publisher.execute(
+                "select pg_advisory_xact_lock("
+                "hashtext('album-haven:local-inventory-publication'))"
+            )
+            removal_worker = Thread(target=remove_album)
+            removal_worker.start()
+            assert removal_started.wait(5), "removal did not connect"
+            deadline = monotonic() + 5
+            while True:
+                waiting = publisher.execute(
+                    "select exists(select 1 from pg_locks "
+                    "where pid = %s and locktype = 'advisory' and not granted) as waiting",
+                    (removal_pids[0],),
+                ).fetchone()["waiting"]
+                if waiting:
+                    break
+                assert monotonic() < deadline, "removal did not wait for the publication lock"
+                Event().wait(0.01)
+
+            new_path.write_bytes(b"newly published fixture media")
+            publisher.execute(
+                """
+                insert into library.local_track_files (
+                  track_id, library_root_id, private_path, metadata
+                )
+                select track_id, library_root_id, %s,
+                       jsonb_set(
+                         jsonb_set(metadata, '{scan_cache,stale}', 'false'::jsonb),
+                         '{scan_cache,file_entry,path}', to_jsonb(%s::text)
+                       )
+                from library.local_track_files
+                where id = %s
+                """,
+                (str(new_path), str(new_path), seeded["file_id"]),
+            )
+        removal_worker.join(15)
+        assert not removal_worker.is_alive(), "removal worker did not stop"
+        assert len(outcomes) == 1
+        assert isinstance(outcomes[0], MissingAlbumReappeared), outcomes
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            assert connection.execute(
+                "select album_key from library.local_albums where id = %s",
+                (seeded["album_id"],),
+            ).fetchone()["album_key"] == seeded["album_key"]
+            assert connection.execute(
+                "select album_id from library.local_tracks where id = %s",
+                (seeded["track_id"],),
+            ).fetchone()["album_id"] == seeded["album_id"]
+            assert connection.execute(
+                "select artist_id from library.local_album_featured_artists "
+                "where album_id = %s order by artist_id",
+                (seeded["album_id"],),
+            ).fetchall() == featured_before
+            files = connection.execute(
+                "select private_path, scan_cache_stale from library.local_track_files "
+                "where track_id = %s",
+                (seeded["track_id"],),
+            ).fetchall()
+            assert {row["private_path"]: row["scan_cache_stale"] for row in files} == {
+                str(old_path): True, str(new_path): False,
+            }
+        assert new_path.is_file()
+    finally:
+        if removal_worker is not None:
+            removal_worker.join(15)
+            assert not removal_worker.is_alive(), "cannot reset while removal is running"
+        isolatedPostgres.reset_application_tables(setup_url)

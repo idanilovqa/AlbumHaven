@@ -326,7 +326,7 @@ def _privacy_reference(value: str, request: Request) -> str:
     hmac_config = config.get("hmac") if isinstance(config, Mapping) else None
     secret = hmac_config.get("secret") if isinstance(hmac_config, Mapping) else None
     version = hmac_config.get("key_version") if isinstance(hmac_config, Mapping) else None
-    if not isinstance(secret, str) or len(secret) < 32:
+    if not isinstance(secret, str) or len(secret.encode("utf-8")) < 32:
         raise RuntimeError("Policy resource-key configuration is invalid.")
     digest = hmac.new(
         secret.encode("utf-8"),

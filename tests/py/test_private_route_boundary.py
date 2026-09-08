@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI, Request
 
+from music_app.services.auth_config import build_auth_config
 from music_app.services.current_actor import CurrentActor
 from music_app.services.private_route_boundary import (
     _redact_lifecycle_link_query,
@@ -387,7 +388,8 @@ def test_authenticated_bootstrap_owner_reaches_private_route():
     assert resolver.calls == ["opaque-session"]
 
 
-def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_auth():
+@pytest.mark.parametrize("secret", ["0123456789abcdef0123456789abcdef", "é" * 16])
+def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_auth(secret):
     actor = CurrentActor(
         state=__import__("music_app.services.current_actor", fromlist=["ActorState"]).ActorState.ACTIVE,
         account_id=7,
@@ -396,6 +398,13 @@ def test_media_resource_is_privacy_minimized_before_policy_and_resolved_after_au
         is_bootstrap_owner=True,
     )
     app, _ = _app(actor)
+    app.state.auth_policy_config = build_auth_config({
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": secret,
+        "ALBUM_HAVEN_AUTH_HMAC_KEY_VERSION": "7",
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "rendref@example.test",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.test",
+    })
     contexts = []
     app.state.policy_constraint_resolver = lambda context: (
         contexts.append(context)

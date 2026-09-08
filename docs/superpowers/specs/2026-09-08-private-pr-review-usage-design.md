@@ -35,8 +35,8 @@ verified. Local test suites ran sequentially; no inference requests were made.
 
 The local GitHub reporting command was also exercised against existing run
 34280919801, attempt 1. It resolved the expected head and produced a private report
-with both historical usage artifacts unavailable and costs unknown. Actual hosted
-capture remains pending the next funded pipeline. The implementation guide is
+with both historical usage artifacts unavailable and costs unknown. At that
+checkpoint, hosted capture still awaited funding. The implementation guide is
 [private-pr-review-usage.md](../../private-pr-review-usage.md).
 
 The funded-run intake also repaired PR Agent's existing output gate: valid JSON
@@ -45,3 +45,9 @@ review schema, an empty key-issues list, and an explicit clear security verdict
 when present. Four focused checks passed after three reproduced failures; the
 metadata score and review effort do not block a clear review. Both reviewer jobs
 now hold downstream tests when they report findings.
+
+Hosted capture was verified on run 34288372612 at commit f644300: both encrypted
+reviewer artifacts were uploaded and the local command decrypted and summarized
+them successfully. Readable usage and cost details remain in the owner's private
+report. Both reviewers reported product findings, and all downstream test jobs
+were held; this run does not authorize release.

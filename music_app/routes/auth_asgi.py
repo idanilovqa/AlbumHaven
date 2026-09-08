@@ -627,12 +627,10 @@ async def get_reset_password(request: Request) -> Response:
                 and sum(key == "token" for key, _value in query_pairs) == 1
             )
         )
+    if not query_valid:
+        return _generic_reset_invalid()
     if supplied_token is not None or supplied_purpose is not None:
-        if (
-            not query_valid
-            or supplied_purpose != "password-reset"
-            or not supplied_token
-        ):
+        if supplied_purpose != "password-reset" or not supplied_token:
             return _generic_reset_invalid()
         try:
             issued = await run_in_threadpool(
@@ -640,18 +638,26 @@ async def get_reset_password(request: Request) -> Response:
                 supplied_token,
                 request_ref=uuid4().hex,
             )
+            preserve_transaction = False
+            if issued is None:
+                existing_transaction = request.cookies.get(_RESET_TRANSACTION_COOKIE)
+                if existing_transaction:
+                    preserve_transaction = await run_in_threadpool(
+                        service.validate_transaction, existing_transaction
+                    )
         except Exception:
             return _generic_reset_unavailable()
         if issued is None:
             response = RedirectResponse("/reset-password?invalid=1", status_code=303)
             response.headers["Referrer-Policy"] = "no-referrer"
-            response.delete_cookie(
-                _RESET_TRANSACTION_COOKIE,
-                path="/",
-                secure=secure,
-                httponly=True,
-                samesite="lax",
-            )
+            if not preserve_transaction:
+                response.delete_cookie(
+                    _RESET_TRANSACTION_COOKIE,
+                    path="/",
+                    secure=secure,
+                    httponly=True,
+                    samesite="lax",
+                )
             return _no_store(response)
         response = RedirectResponse("/reset-password", status_code=303)
         response.set_cookie(

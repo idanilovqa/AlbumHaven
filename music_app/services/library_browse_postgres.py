@@ -4,6 +4,7 @@ import base64
 import binascii
 from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
+import fnmatch
 import json
 from pathlib import Path
 import re
@@ -279,7 +280,8 @@ class PostgresLibraryBrowseRepository:
                 root_alias_to_canonical,
             )
             missing_albums = _missing_album_projection_payloads(
-                self._load_missing_album_rows(connection=connection)
+                self._load_missing_album_rows(connection=connection),
+                view_state=view_state,
             )
         finally:
             try:
@@ -296,7 +298,7 @@ class PostgresLibraryBrowseRepository:
         album_count += len(missing_albums)
         for album in missing_albums:
             artist_counts.setdefault(
-                _artist_display_dedupe_key(str(album.get("album_artist") or "")),
+                _row_artist_identity({"artist_name": album.get("album_artist")}),
                 0,
             )
         return {
@@ -354,7 +356,8 @@ class PostgresLibraryBrowseRepository:
             )
             preview_artist_groups = _root_album_browse_artist_groups(preview_rows)
             missing_albums = _missing_album_projection_payloads(
-                self._load_missing_album_rows(connection=connection)
+                self._load_missing_album_rows(connection=connection),
+                view_state=view_state,
             )
             _merge_missing_albums_into_artist_groups(
                 preview_artist_groups,
@@ -385,7 +388,7 @@ class PostgresLibraryBrowseRepository:
         album_count += len(missing_albums)
         for album in missing_albums:
             artist = str(album.get("album_artist") or "Unknown Artist").strip()
-            artist_key = _artist_display_dedupe_key(artist)
+            artist_key = _row_artist_identity({"artist_name": artist})
             artist_displays.setdefault(artist_key, artist)
             artist_sort_values.setdefault(artist_key, artist)
             artist_counts[artist_key] = int(artist_counts.get(artist_key, 0)) + 1
@@ -571,7 +574,13 @@ class PostgresLibraryBrowseRepository:
         missing_albums = [
             album
             for album in _missing_album_projection_payloads(
-                self._load_missing_album_rows(connection=_connection)
+                self._load_missing_album_rows(connection=_connection),
+                view_state=view_state,
+                query=(
+                    query
+                    if not hydrate_query_primary_albums and not selected_artist_name_matches_query
+                    else ""
+                ),
             )
             if _artist_display_dedupe_key(str(album.get("album_artist") or ""))
             in selected_artist_keys
@@ -991,7 +1000,8 @@ class PostgresLibraryBrowseRepository:
         )
         artist_groups = _root_album_browse_artist_groups(rows)
         missing_albums = _missing_album_projection_payloads(
-            self._load_missing_album_rows()
+            self._load_missing_album_rows(),
+            view_state=view_state,
         )
         _merge_missing_albums_into_artist_groups(artist_groups, missing_albums)
         self._apply_private_album_rating_overlays(
@@ -2721,10 +2731,33 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
     return projected_albums
 
 
-def _missing_album_projection_payloads(rows: list[object]) -> list[dict[str, object]]:
-    """Project albums whose complete known file inventory is stale."""
+def _missing_album_query_pattern(query: str) -> re.Pattern[str]:
+    # Match the existing SQL LIKE search, using fnmatch's atomic star groups to
+    # prevent repeated user-supplied wildcards from causing regex backtracking.
+    pattern: list[str] = []
+    escaped = False
+    for character in f"%{query.lower()}%":
+        if not escaped and character == "\\":
+            escaped = True
+            continue
+        if not escaped and character in ("%", "_"):
+            pattern.append("*" if character == "%" else "?")
+        else:
+            pattern.append({"*": "[*]", "?": "[?]", "[": "[[]"}.get(character, character))
+        escaped = False
+    return re.compile(fnmatch.translate("".join(pattern)))
+
+
+def _missing_album_projection_payloads(
+    rows: list[object],
+    *,
+    view_state: Mapping[str, object] | None = None,
+    query: str = "",
+) -> list[dict[str, object]]:
+    """Classify complete stale inventories before applying browse visibility."""
 
     grouped: dict[str, list[dict[str, object]]] = {}
+    query_pattern = _missing_album_query_pattern(query) if query else None
     for row in rows:
         payload = _row_mapping(row)
         album_key = str(payload.get("album_key") or "").strip()
@@ -2738,14 +2771,40 @@ def _missing_album_projection_payloads(rows: list[object]) -> list[dict[str, obj
             continue
         first = album_rows[0]
         metadata = _problematic_album_metadata_from_row(first)
+        artists = metadata.get("artists")
+        if not isinstance(artists, list):
+            artists = []
+        visible_categories = list((view_state or {}).get("visible_library_categories") or [])
+        if not any(
+            entry_visible_in_categories(
+                {"library_root_category": row.get("file_library_root_category")},
+                visible_categories,
+            )
+            for row in album_rows
+        ):
+            continue
+        if query_pattern is not None:
+            search_fields = [
+                first.get("album_title"),
+                first.get("artist_name"),
+                metadata.get("album_artist"),
+                *artists,
+                *(first.get("album_featured_artist_names") or []),
+                *(row.get("track_title") for row in album_rows),
+            ]
+            for row in album_rows:
+                filename = str(row.get("file_private_path") or "").replace("\\", "/").rsplit("/", 1)[-1]
+                search_fields.extend((filename, filename.rsplit(".", 1)[0]))
+            if not any(
+                query_pattern.fullmatch(str(value or "").strip().lower())
+                for value in search_fields
+            ):
+                continue
         stale_timestamps = sorted(
             str(row.get("file_stale_marked_at") or "").strip()
             for row in album_rows
             if str(row.get("file_stale_marked_at") or "").strip()
         )
-        artists = metadata.get("artists")
-        if not isinstance(artists, list):
-            artists = []
         album_artist = str(
             metadata.get("album_artist") or first.get("artist_name") or ""
         ).strip()
@@ -6705,6 +6764,7 @@ def _missing_albums_sql() -> str:
         missing_albums as (
           select
             library.local_albums.id as album_id,
+            library.local_albums.library_id,
             bool_and(library.local_track_files.scan_cache_stale) as all_files_stale,
             min(library.local_track_files.metadata #>> '{scan_cache,stale_marked_at}')
               as missing_since
@@ -6718,6 +6778,19 @@ def _missing_albums_sql() -> str:
             on library.local_track_files.track_id = library.local_tracks.id
           group by library.local_albums.id
           having bool_and(library.local_track_files.scan_cache_stale)
+        ),
+        missing_album_featured_artists as (
+          select
+            missing_albums.album_id,
+            array_agg(library.local_artists.name::text) as artist_names
+          from missing_albums
+          join library.local_album_featured_artists
+            on library.local_album_featured_artists.album_id = missing_albums.album_id
+           and library.local_album_featured_artists.library_id = missing_albums.library_id
+          join library.local_artists
+            on library.local_artists.id = library.local_album_featured_artists.artist_id
+           and library.local_artists.library_id = missing_albums.library_id
+          group by missing_albums.album_id
         )
         select
           library.local_artists.id as artist_id,
@@ -6729,16 +6802,21 @@ def _missing_albums_sql() -> str:
           library.local_albums.release_year as album_release_year,
           library.local_albums.cover_path as album_cover_path,
           library.local_albums.metadata as album_metadata,
+          coalesce(missing_album_featured_artists.artist_names, array[]::text[])
+            as album_featured_artist_names,
           library.local_tracks.id as track_id,
           library.local_tracks.track_key,
           library.local_tracks.title as track_title,
           library.local_tracks.duration_seconds,
+          library.local_track_files.private_path as file_private_path,
           library.local_track_files.scan_cache_stale as file_scan_cache_stale,
           library.local_track_files.metadata #>> '{scan_cache,stale_marked_at}'
             as file_stale_marked_at,
           library.local_track_files.library_root_id as file_library_root_id,
           library.library_roots.root_kind as file_library_root_category
         from missing_albums
+        left join missing_album_featured_artists
+          on missing_album_featured_artists.album_id = missing_albums.album_id
         join library.local_albums on library.local_albums.id = missing_albums.album_id
         left join library.local_artists on library.local_artists.id = library.local_albums.artist_id
         join library.local_tracks on library.local_tracks.album_id = library.local_albums.id

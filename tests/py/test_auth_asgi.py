@@ -501,6 +501,92 @@ def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):
     )
 
 
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("failed_token", [CSRF, NEXT_CSRF], ids=["replayed", "unrelated"])
+def test_unrelated_failed_reset_link_preserves_a_valid_transaction(
+    auth_asgi, with_private_boundary, failed_token
+):
+    class OneUseResetLifecycle(FakeResetLifecycle):
+        def exchange_reset_token(self, raw, *, request_ref):
+            if not self.exchanges and raw == CSRF:
+                return super().exchange_reset_token(raw, request_ref=request_ref)
+            self.exchanges.append((raw, request_ref))
+            return None
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = OneUseResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+
+    status, headers, _ = _request(
+        app, "GET", path="/reset-password", query="purpose=password-reset&token=" + CSRF
+    )
+    assert status == 303
+    cookie = SimpleCookie()
+    for value in _set_cookies(headers):
+        cookie.load(value)
+    assert cookie["__Host-album_haven_reset"].value == RESET_TRANSACTION
+    browser_cookie = f"__Host-album_haven_reset={RESET_TRANSACTION}"
+    csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+
+    status, headers, body = _request(
+        app, "GET", path="/reset-password",
+        query="purpose=password-reset&token=" + failed_token,
+        headers={"cookie": browser_cookie},
+    )
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password?invalid=1"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert not any(value.startswith("__Host-album_haven_reset=") for value in _set_cookies(headers))
+    invalid_status, _, invalid_body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": browser_cookie},
+    )
+    assert invalid_status == 400
+    assert invalid_body == b"This password reset link is invalid or expired."
+    assert csrf.encode() not in invalid_body
+    assert lifecycle.completions == []
+
+    status, headers, body = _request(
+        app, "POST", path="/reset-password",
+        form={"new_password": "a private replacement password",
+              "confirm_password": "a private replacement password", "csrf_token": csrf},
+        headers={"cookie": browser_cookie, "origin": "https://music.test"},
+    )
+    assert status == 200
+    assert b"Password changed" in body
+    assert lifecycle.completions[0][:2] == (RESET_TRANSACTION, "a private replacement password")
+    assert any(
+        value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+def test_invalid_reset_marker_never_renders_an_existing_valid_transaction(
+    auth_asgi, with_private_boundary
+):
+    app, _, _ = _app(auth_asgi)
+    lifecycle = FakeResetLifecycle()
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    status, headers, body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
+    )
+    assert status == 400
+    assert body == b"This password reset link is invalid or expired."
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert not _set_cookies(headers)
+    assert lifecycle.exchanges == [] and lifecycle.completions == []
+
+
 def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeResetLifecycle()

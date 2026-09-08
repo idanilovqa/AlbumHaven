@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.43 - 2026-09-07
+## 0.9.43 - 2026-09-08
 
 - Added local authentication and account administration, including secure owner
   bootstrap, sessions, password recovery, invitations, audit records, and
@@ -43,6 +43,14 @@
   so completed repairs preserve sidebar scroll.
 - Restored exact local verification followed by full CI as the normal repair
   workflow; retained case and area selectors for difficult CI-only diagnosis.
+- Preserved an existing valid password-reset transaction when an unrelated or
+  replayed reset link fails, while keeping invalid-link pages and stale-cookie
+  cleanup intact.
+- Applied gallery categories and search constraints to missing albums, preserved
+  whole-album missing-state classification, and corrected sidebar artist counts
+  when an artist has both active and missing albums.
+- Kept Codex and PR Agent as the hosted reviewers, held tests on review findings,
+  and added encrypted usage records with private local reporting.
 
 ## 0.9.42 - 2026-08-30
 

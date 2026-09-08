@@ -575,6 +575,15 @@ jobs:
           path: .trusted-ci
           persist-credentials: false
 
+      - name: Fetch functional fixture
+        env:
+          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+        run: |
+          & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+            -Release fixtures-v1.0.21 `
+            -Profile functional-core `
+            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -605,15 +614,6 @@ jobs:
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: "151.0.7922.138"
-
-      - name: Fetch functional fixture
-        env:
-          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
-        run: |
-          & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.21 `
-            -Profile functional-core `
-            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
 
       - name: Prepare writable functional fixture
         run: |
@@ -749,6 +749,15 @@ jobs:
           path: .trusted-ci
           persist-credentials: false
 
+      - name: Fetch immutable performance fixture
+        env:
+          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
+        run: |
+          & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+            -Release fixtures-v1.0.21 `
+            -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
+            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -758,15 +767,6 @@ jobs:
       - name: Resolve performance shard configuration
         id: shard
         run: node scripts/ci/resolve-ci-shard.cjs performance ${{ matrix.shard }}
-
-      - name: Fetch immutable performance fixture
-        env:
-          ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
-        run: |
-          & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.21 `
-            -Profile ${{ steps.shard.outputs.fixture_download_profile }} `
-            -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
 
       - name: Initialize performance shard result evidence
         if: ${{ always() }}

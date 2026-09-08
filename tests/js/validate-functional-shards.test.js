@@ -942,6 +942,8 @@ test('functional workflow fetches the exact read-only fixture through a trusted 
   assert.match(fetchStep, /-Profile\s+['"]?functional-core['"]?/);
   assert.match(fetchStep, new RegExp(`-ManifestSha256\\s+['"]?${FIXTURE_MANIFEST_SHA256}['"]?`));
   assert.doesNotMatch(fetchStep, /(?:Invoke-RestMethod|gh\s+api)[^\r\n]*(?:-Method|--method)\s+(?:POST|PUT|PATCH|DELETE)/i);
+  assert.ok(job.indexOf('Fetch functional fixture') < job.indexOf('Install Node dependencies'));
+  assert.ok(job.indexOf('Fetch functional fixture') < job.indexOf('Resolve functional shard configuration'));
   assert.doesNotMatch(job.slice(job.indexOf(fetchStep) + fetchStep.length), /ALBUM_HAVEN_FIXTURES_TOKEN/);
 });
 

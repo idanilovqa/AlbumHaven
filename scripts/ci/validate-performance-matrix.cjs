@@ -189,9 +189,10 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
   const fixtureFetch = namedWorkflowStep(job, 'Fetch immutable performance fixture');
   if (/\n\s+if:/.test(trustedCheckout) || /\n\s+if:/.test(fixtureFetch)) errors.push('trusted fixture seed must be fetched for every performance shard');
   if (!/github\.event\.pull_request\.base\.sha/.test(job) || !/path:\s*\.trusted-ci/.test(job)) errors.push('performance shards must use a trusted base checkout');
-  if (!/-Profile\s+\$\{\{\s*steps\.shard\.outputs\.fixture_download_profile\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the reviewed download profile');
+  if (!/-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/.test(fixtureFetch)) errors.push('performance fixture fetch must use the static reviewed download-profile mapping');
   if (!/generated-isolated[\s\S]*ALBUM_HAVEN_APPROVED_COVER_ROOT[\s\S]*ALBUM_HAVEN_FIXTURE_ROOT[\s\S]*ALBUM_HAVEN_MEDIA_ROOT/.test(job)) errors.push('generated shards must isolate a verified released cover seed from runtime fixture roots');
   if (job.indexOf('Fetch immutable performance fixture') > job.indexOf('Install Node dependencies')
+    || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Resolve performance shard configuration')
     || job.indexOf('Fetch immutable performance fixture') > job.indexOf('Validate performance matrix ownership')) {
     errors.push('secret-bearing fixture fetch must precede pull-request executable code');
   }

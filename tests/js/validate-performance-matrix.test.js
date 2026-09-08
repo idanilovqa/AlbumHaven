@@ -176,10 +176,11 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
   assert.doesNotMatch(trustedCheckout, /\n\s+if:/);
   assert.doesNotMatch(fixtureFetch, /\n\s+if:/);
   assert.match(trustedCheckout, /persist-credentials:\s*false/);
-  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*steps\.shard\.outputs\.fixture_download_profile\s*\}\}/);
+  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/);
   assert.match(fixtureFetch, new RegExp(`-Release\\s+${FIXTURE_RELEASE.replaceAll('.', '\\.')}`));
   assert.match(fixtureFetch, new RegExp(`-ManifestSha256\\s+${FIXTURE_MANIFEST_SHA256}`));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Install Node dependencies'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Resolve performance shard configuration'));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Validate performance matrix ownership'));
   assert.match(job, /ALBUM_HAVEN_APPROVED_COVER_ROOT=\$approvedCoverRoot/);
   assert.match(job, /ALBUM_HAVEN_FIXTURE_ROOT= /);

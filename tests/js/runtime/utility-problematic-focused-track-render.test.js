@@ -541,6 +541,7 @@ function renderFocusedAlbumWithGeometry({
   initialLayoutReady = true,
   listBottom,
   quantizeScrollTop = false,
+  resetScrollOnInnerHTML = false,
   rowBottom,
   trackBottom,
 }) {
@@ -563,9 +564,16 @@ function renderFocusedAlbumWithGeometry({
   let currentScrollTop = initialScrollTop;
   let currentDetailScrollTop = initialDetailScrollTop;
   let layoutReady = initialLayoutReady;
+  let listInnerHTML = '';
   const scheduledAnimationFrames = [];
   const list = {
-    innerHTML: '',
+    get innerHTML() {
+      return listInnerHTML;
+    },
+    set innerHTML(value) {
+      listInnerHTML = value;
+      if (resetScrollOnInnerHTML) currentScrollTop = 0;
+    },
     get scrollTop() {
       return currentScrollTop;
     },
@@ -747,6 +755,25 @@ test('problematic-file render corrects focused navigation after the opened modal
   assert.equal(rendered.list.scrollTop, 20);
   assert.equal(rendered.detail.scrollTop, 20);
   assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+});
+
+test('problematic-file render preserves the selected album viewport across a late rerender', () => {
+  const rendered = renderFocusedAlbumWithGeometry({
+    detailBottom: 240,
+    initialDetailScrollTop: 0,
+    initialScrollTop: 0,
+    listBottom: 300,
+    resetScrollOnInnerHTML: true,
+    rowBottom: 280,
+    trackBottom: 220,
+  });
+
+  rendered.context.state.utility.focusedTrackPath = '';
+  rendered.list.scrollTop = 182;
+
+  rendered.context.renderProblematicFiles();
+
+  assert.equal(rendered.list.scrollTop, 182);
 });
 
 test('empty log history visibly explains session-only storage and keeps export explicit', () => {

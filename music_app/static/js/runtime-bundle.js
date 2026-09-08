@@ -17500,6 +17500,14 @@ function mountAlertsAppearanceEditor(detail) {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
 
+  const priorListScrollTop = Number(els.list.scrollTop);
+  const replaceListContents = (html) => {
+    els.list.innerHTML = html;
+    if (Number.isFinite(priorListScrollTop) && priorListScrollTop > 0) {
+      els.list.scrollTop = priorListScrollTop;
+    }
+  };
+
   const items = getFilteredProblematicAlbums();
   const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
     ? state.utility.libraryWatchHealthProblems
@@ -17536,13 +17544,13 @@ function mountAlertsAppearanceEditor(detail) {
   els.detail.removeAttribute?.('inert');
 
   if (state.utility.loading) {
-    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`;
+    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`);
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    els.list.innerHTML = `${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`;
+    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`);
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -17550,7 +17558,7 @@ function mountAlertsAppearanceEditor(detail) {
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
+    replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join(''));
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -17577,7 +17585,7 @@ function mountAlertsAppearanceEditor(detail) {
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  els.list.innerHTML = operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
+  replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join(''));
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;

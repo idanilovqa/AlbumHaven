@@ -488,11 +488,17 @@ def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):
         "GET",
         path="/reset-password",
         query="purpose=password-reset&token=" + CSRF,
+        headers={"cookie": f"__Host-album_haven_reset={RESET_TRANSACTION}"},
     )
 
     assert status == 303 and body == b""
     assert dict(headers)["location"] == "/reset-password?invalid=1"
     assert CSRF not in dict(headers)["location"]
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert any(
+        value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
 
 
 def test_clean_reset_page_uses_transaction_bound_csrf(auth_asgi):

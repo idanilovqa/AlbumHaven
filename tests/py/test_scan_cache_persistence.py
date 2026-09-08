@@ -227,7 +227,54 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         if "private_path = any(%(deleted_paths)s::text[])" in _normalized_sql(sql)
     )
     assert stale_params["active_paths"] == [active_path]
+    featured_sync_params = next(
+        params
+        for sql, params in connection.executed
+        if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+    )
+    assert featured_sync_params["affected_album_keys"] == ["artist::new album"]
     assert connection.exit_exc_type is None
+
+
+def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artists(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    class DeletionOnlyConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            normalized = _normalized_sql(sql)
+            if "as affected_album_key" in normalized:
+                return FakeCursor([{"affected_album_key": "artist::surviving album"}])
+            if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
+                return FakeCursor([{"inventory_mutation_revision": 8}])
+            return cursor
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = DeletionOnlyConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    )
+
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={},
+        deleted_paths=("C:/Music/Artist/Surviving Album/01.flac",),
+    )
+
+    assert result == {
+        "inventory_mutation_revision": 8,
+        "affected_album_keys": ["artist::surviving album"],
+    }
+    featured_sync_params = next(
+        params
+        for sql, params in connection.executed
+        if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+    )
+    assert featured_sync_params["affected_album_keys"] == []
 
 
 def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():

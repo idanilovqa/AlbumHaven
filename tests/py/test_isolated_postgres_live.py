@@ -4420,6 +4420,118 @@ def test_live_startup_relation_projection_accepts_malformed_legacy_stale_metadat
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projection(
+    monkeypatch,
+    tmp_path,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    music_dir = (tmp_path / "Music").resolve()
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(music_dir),
+        "APP_NAME": "Album Haven",
+    }
+
+    def file_entry(path: Path, *, title: str, track_number: int, artist: str):
+        return {
+            "path": str(path),
+            "mtime": 1.0,
+            "size": 100,
+            "album": "Surviving Album",
+            "album_artist": "Owner",
+            "artist": artist,
+            "title": title,
+            "track_number": track_number,
+            "disc_number": 1,
+            "duration_seconds": 60,
+            "year": 2026,
+            "edition": "",
+            "album_rating": 0,
+            "library_root_id": "deletion-only-root",
+            "library_root_category": "main_library",
+            "exception_type": None,
+        }
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        from music_app.services.library_roots_postgres import PostgresLibraryRootSettingsStore
+        from music_app.services.relation_projection_postgres import load_relation_source_rows_sql
+        from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {
+                        "id": "deletion-only-root",
+                        "path": str(music_dir),
+                        "layout_mode": "artist",
+                    }
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+            }
+        )
+        deleted_path = music_dir / "Owner" / "Surviving Album" / "01 Deleted.flac"
+        surviving_path = music_dir / "Owner" / "Surviving Album" / "02 Survives.flac"
+        adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
+        adapter.save_snapshot(
+            Path("unused-deletion-only.json"),
+            {
+                str(deleted_path): file_entry(
+                    deleted_path,
+                    title="Deleted",
+                    track_number=1,
+                    artist="Owner feat. Guest",
+                ),
+                str(surviving_path): file_entry(
+                    surviving_path,
+                    title="Survives",
+                    track_number=2,
+                    artist="Owner",
+                ),
+            },
+            "deletion-only-root-identity",
+            1.0,
+            observed_library_root_ids={"deletion-only-root"},
+        )
+
+        mutation = adapter.persist_targeted_inventory_mutation(
+            root_id="deletion-only-root",
+            active_file_entries={},
+            deleted_paths=(str(deleted_path),),
+        )
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            memberships = connection.execute(
+                """
+                select library.local_artists.name
+                from library.local_album_featured_artists
+                join library.local_albums
+                  on library.local_albums.id = library.local_album_featured_artists.album_id
+                join library.local_artists
+                  on library.local_artists.id = library.local_album_featured_artists.artist_id
+                where library.local_albums.title = 'Surviving Album'
+                order by library.local_artists.name
+                """
+            ).fetchall()
+            relation_rows = list(connection.execute(load_relation_source_rows_sql()).fetchall())
+
+        assert mutation["affected_album_keys"] == ["owner::surviving album"]
+        assert {str(row["name"]) for row in memberships} == {"Guest", "Owner"}
+        projected_paths = {str(row["private_path"]) for row in relation_rows}
+        assert str(surviving_path) in projected_paths
+        assert str(deleted_path) not in projected_paths
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships(
     monkeypatch,
     tmp_path,

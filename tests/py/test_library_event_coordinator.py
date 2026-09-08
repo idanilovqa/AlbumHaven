@@ -599,20 +599,67 @@ def test_cross_root_move_stability_failure_marks_every_affected_root_unhealthy(
     }
 
 
-def test_stop_flushes_pending_work_and_rejects_new_events(tmp_path: Path):
+def test_stop_cancels_pending_work_without_stability_waits_and_rejects_new_events(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
 
     emitted = []
-    coordinator = LibraryEventCoordinator(emit_request=emitted.append)
-    coordinator.accept(_event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/01.flac"))
+    waits = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda _path: (100, 10),
+        wait=waits.append,
+    )
+    coordinator.accept(_event(LibraryEventKind.MODIFIED, tmp_path, "Artist/Album/01.flac"))
 
     assert coordinator.stop() is True
-    assert len(emitted) == 1
+    assert emitted == []
+    assert waits == []
     assert coordinator.stop() is False
     assert coordinator.accept(
         _event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/02.flac")
     ) is False
+
+
+def test_stop_returns_while_an_existing_flush_is_blocked_in_filesystem_io(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    stat_started = Event()
+    release_stat = Event()
+    stop_finished = Event()
+    emitted = []
+
+    def blocking_stat(_path):
+        stat_started.set()
+        assert release_stat.wait(timeout=3.0)
+        return (100, 10)
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=blocking_stat,
+    )
+    coordinator.accept(_event(LibraryEventKind.MODIFIED, tmp_path, "Artist/Album/01.flac"))
+    flush_thread = Thread(target=coordinator.flush, daemon=True)
+    flush_thread.start()
+    assert stat_started.wait(timeout=3.0)
+
+    def stop_coordinator():
+        coordinator.stop()
+        stop_finished.set()
+
+    stop_thread = Thread(target=stop_coordinator, daemon=True)
+    stop_thread.start()
+    try:
+        assert stop_finished.wait(timeout=1.0)
+    finally:
+        release_stat.set()
+        stop_thread.join(timeout=3.0)
+        flush_thread.join(timeout=3.0)
+
+    assert not stop_thread.is_alive()
+    assert not flush_thread.is_alive()
+    assert emitted == []
 
 
 def test_concurrent_flushes_preserve_delete_then_recreation_order(tmp_path: Path):

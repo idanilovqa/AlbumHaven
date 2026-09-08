@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Lock, Timer
-from time import monotonic, sleep
+from threading import Event, Lock, Timer
+from time import monotonic
 
 from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
 
@@ -64,10 +64,11 @@ class LibraryEventCoordinator:
         timer_factory: Callable[[float, Callable[[], None]], Timer] | None = None,
     ) -> None:
         self._emit_request = emit_request
+        self._stop_event = Event()
         self._emit_health_event = emit_health_event or (lambda _event: None)
         self._emit_problem = emit_problem or (lambda _problem: None)
         self._stat_path = stat_path or Path.stat
-        self._wait = wait or sleep
+        self._wait = wait or self._stop_event.wait
         self._max_pending_groups = max(1, int(max_pending_groups))
         self._max_stable_attempts = max(2, int(max_stable_attempts))
         self._stable_sample_interval = max(0.0, float(stable_sample_interval))
@@ -216,10 +217,14 @@ class LibraryEventCoordinator:
                 self._emit_group(group)
 
     def _emit_group(self, group: _PendingGroup) -> None:
+        if self._stop_event.is_set():
+            return
         ready: set[Path] = set()
         deleted = set(group.deleted_paths)
         deleted_subtrees = set(group.deleted_subtrees)
         for path in sorted(group.active_paths, key=lambda value: str(value).casefold()):
+            if self._stop_event.is_set():
+                return
             disposition = self._stable_disposition(path, group.root_id)
             if disposition == "ready":
                 ready.add(path)
@@ -231,6 +236,8 @@ class LibraryEventCoordinator:
             group.moves.values(),
             key=lambda value: (str(value.source).casefold(), str(value.destination).casefold()),
         ):
+            if self._stop_event.is_set():
+                return
             disposition = self._stable_disposition(
                 move.destination,
                 move.destination_root_id,
@@ -264,6 +271,8 @@ class LibraryEventCoordinator:
     ) -> str:
         previous: tuple[int, int] | None = None
         for attempt in range(self._max_stable_attempts):
+            if self._stop_event.is_set():
+                return "cancelled"
             try:
                 current = _stat_signature(self._stat_path(path))
             except FileNotFoundError:
@@ -286,7 +295,13 @@ class LibraryEventCoordinator:
             if self._stopped:
                 return False
             self._stopped = True
-        self.flush()
+            self._stop_event.set()
+            self._pending.clear()
+            timer = self._timer
+            self._timer = None
+            self._pending_started_at = None
+        if timer is not None:
+            timer.cancel()
         return True
 
 

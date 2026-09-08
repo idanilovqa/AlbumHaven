@@ -277,6 +277,7 @@ class PostgresScanCacheAdapter:
                 for row in album_rows
                 if str(row.get("album_key") or "").strip()
             }
+            synchronized_featured_album_keys = sorted(affected_album_keys)
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
             _execute_pipeline_batches(
                 connection,
@@ -321,7 +322,7 @@ class PostgresScanCacheAdapter:
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
                 {
-                    "affected_album_keys": sorted(affected_album_keys),
+                    "affected_album_keys": synchronized_featured_album_keys,
                     "current_featured_rows": _jsonb(
                         [
                             {

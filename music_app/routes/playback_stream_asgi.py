@@ -402,6 +402,18 @@ class _PlaybackPcmConnection:
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         if self._closed:
             return False
+        try:
+            await require_action(
+                "library.media.read",
+                refresh_actor=True,
+            )(self._websocket)
+        except HTTPException as exc:
+            await self.reject(
+                CLOSE_UNAUTHENTICATED
+                if exc.status_code == 401
+                else CLOSE_FORBIDDEN_ORIGIN
+            )
+            return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
         )

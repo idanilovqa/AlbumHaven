@@ -643,9 +643,16 @@ async def get_reset_password(request: Request) -> Response:
         except Exception:
             return _generic_reset_unavailable()
         if issued is None:
-            return _no_store(
-                RedirectResponse("/reset-password?invalid=1", status_code=303)
+            response = RedirectResponse("/reset-password?invalid=1", status_code=303)
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.delete_cookie(
+                _RESET_TRANSACTION_COOKIE,
+                path="/",
+                secure=secure,
+                httponly=True,
+                samesite="lax",
             )
+            return _no_store(response)
         response = RedirectResponse("/reset-password", status_code=303)
         response.set_cookie(
             _RESET_TRANSACTION_COOKIE,

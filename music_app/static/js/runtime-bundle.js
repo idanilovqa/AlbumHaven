@@ -15231,6 +15231,7 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
     const restoreOwnedScroll = () => {
+      if (retainedContent && !retainedContent.isConnected && 'isConnected' in retainedContent) return;
       if (retainedContent) {
         const naturalScrollHeight = Math.max(
           0,
@@ -15244,7 +15245,10 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     };
     restoreOwnedScroll();
     if (typeof scheduleBrowserAnimationFrame === 'function') {
-      scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      scheduleBrowserAnimationFrame(() => {
+        restoreOwnedScroll();
+        scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      });
     }
   }
   return true;

@@ -232,6 +232,61 @@ def test_pcm_socket_uses_managed_account_playback_permission(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("revoked_actor", "expected_close_code"),
+    [
+        ("anonymous", 4401),
+        ("missing-capability", 4403),
+    ],
+)
+def test_pcm_socket_revalidates_durable_authority_before_each_open(
+    playback_app,
+    media_path,
+    decoder_factory,
+    revoked_actor,
+    expected_close_code,
+):
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    class RevocableResolver:
+        revoked = False
+
+        def resolve(self, _token):
+            if self.revoked and revoked_actor == "anonymous":
+                return CurrentActor.anonymous()
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(
+                    ()
+                    if self.revoked
+                    else (CapabilityGrant("library.media.read", "library", 23),)
+                ),
+            )
+
+    resolver = RevocableResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is True
+            resolver.revoked = True
+            await socket.send_json(open_command(media_path))
+            assert await socket.receive_close() == expected_close_code
+
+    asyncio.run(scenario())
+    assert decoder_factory.instances == []
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,

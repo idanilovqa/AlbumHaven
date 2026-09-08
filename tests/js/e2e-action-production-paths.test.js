@@ -4921,6 +4921,71 @@ test('Problematic Files readiness uses one POM-owned condition over the real ren
   }
 });
 
+test('Problematic Files mutation completion ignores matching identities outside its sidebar list', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/utilityProblematicFilesActions.js')).href;
+  const { UtilityProblematicFilesActions } = await import(moduleUrl);
+  const originalDocument = global.document;
+  try {
+    const removed = { getAttribute: () => 'album-removed' };
+    const survivor = { getAttribute: () => 'album-previous' };
+    const list = {
+      scrollTop: 237,
+      querySelectorAll(selector) {
+        assert.equal(selector, '[data-problematic-album-key]');
+        return [survivor];
+      },
+      querySelector(selector) {
+        assert.equal(selector, '[data-problematic-album-key].is-active');
+        return survivor;
+      },
+    };
+    global.document = {
+      querySelector(selector) {
+        if (selector === '#utility-problematic-list') return list;
+        if (selector === '[data-problematic-album-key].is-active') return survivor;
+        return null;
+      },
+      querySelectorAll(selector) {
+        assert.equal(selector, '[data-problematic-album-key]');
+        return [removed, survivor];
+      },
+    };
+    let disposed = false;
+    const activeListItem = {
+      async getAttribute() { return 'album-previous'; },
+    };
+    const actions = new UtilityProblematicFilesActions({
+      sidebarListSelector: '#utility-problematic-list',
+      listItemSelector: '[data-problematic-album-key]',
+      activeListItemSelector: '[data-problematic-album-key].is-active',
+      activeListItem,
+      titleForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Album Previous'; } };
+      },
+      async waitForPageCondition(callback, options, argument) {
+        assert.equal(options.timeout, 4321);
+        assert.equal(callback(argument), true);
+      },
+    });
+    actions.mutationObservation = {
+      async dispose() { disposed = true; },
+    };
+
+    assert.deepEqual(await actions.waitForMutationRemovalAndPreviousSelection({
+      removedKey: 'album-removed',
+      previousKey: 'album-previous',
+      scrollTop: 237,
+    }, { timeout: 4321 }), {
+      key: 'album-previous',
+      title: 'Album Previous',
+    });
+    assert.equal(disposed, true);
+  } finally {
+    global.document = originalDocument;
+  }
+});
+
 test('Settings measurement prepares the real button action and observes the modal in one POM condition', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/settingsModalAppBarActions.js')).href;
   const { SettingsModalAppBarActions } = await import(moduleUrl);

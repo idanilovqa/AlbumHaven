@@ -784,12 +784,13 @@ export class UtilityProblematicFilesActions {
   async waitForMutationRemovalAndPreviousSelection(expected, options = {}) {
     await this.utilityProblematicFilesTab.waitForPageCondition((value) => {
       const list = document.querySelector(value.listSelector);
-      const items = Array.from(document.querySelectorAll(value.itemSelector));
+      if (!list || typeof list.querySelectorAll !== 'function') return false;
+      const items = Array.from(list.querySelectorAll(value.itemSelector));
       const removed = items.find((item) => item.getAttribute('data-problematic-album-key') === value.removedKey);
-      const active = document.querySelector(value.activeSelector);
+      const active = list.querySelector(value.activeSelector);
       return !removed
         && active?.getAttribute('data-problematic-album-key') === value.previousKey
-        && Math.abs(Number(list?.scrollTop || 0) - Number(value.scrollTop || 0)) <= 1;
+        && Math.abs(Number(list.scrollTop || 0) - Number(value.scrollTop || 0)) <= 1;
     }, { timeout: options.timeout || 90000 }, {
       ...expected,
       listSelector: this.utilityProblematicFilesTab.sidebarListSelector,

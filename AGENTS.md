@@ -26,9 +26,10 @@ not need the private repository to build or use Album Haven.
 - Push the branch and use CI to run every required complete suite and produce the
   authoritative full-suite failure inventory. Do not run complete release-suite
   inventories locally unless the owner explicitly requests a local full run.
-- Let the initial CI sweep finish every required suite and collect all genuine
-  failures before making fixes. Do not stop at the first failing CI suite unless
-  continuing would be unsafe or impossible.
+- While the current head remains a merge candidate, let CI finish every required
+  suite and collect all genuine failures before making fixes. Apply the
+  superseded-run exception below when a validated review finding requires a new
+  commit; otherwise stop early only when continuing would be unsafe or impossible.
 - Fix the complete CI failure set, verify each fix with its focused local tests,
   then push and rerun all required CI suites. Repeat until CI is fully green.
 
@@ -37,8 +38,14 @@ not need the private repository to build or use Album Haven.
 - In the authoritative pull-request pipeline, classify review scope first, run
   applicable hosted reviews before tests, and start every applicable test and
   E2E job after the reviewers reach a terminal result even when review failed.
-  Let the entire pipeline finish before addressing the combined review and test
-  failure inventory.
+  Collect the complete review and test failure inventory while the current head
+  remains a merge candidate.
+- If a hosted-review finding is validated against the code and requires another
+  commit, preserve the review evidence and cancel that superseded run before
+  expensive tests start. Verify its jobs have stopped, fix the finding, run
+  focused local checks, and push to a new complete native pull-request pipeline.
+  A reviewer failure alone does not invoke this exception; the replacement head
+  still requires a successful full pipeline.
 - Review only functional or E2E-relevant changes. Documentation-only changes
   skip hosted review. On a synchronize event with a valid successfully reviewed
   baseline, fewer than 250 changed functional lines uses incremental review;

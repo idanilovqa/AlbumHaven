@@ -83,11 +83,39 @@ test('successful baseline must exist and be an ancestor of the current head', ()
 
 test('documentation paths exclude docs and root Markdown but keep functional Markdown', () => {
   assert.equal(isDocumentationPath('docs/guide/setup.md'), true);
+  assert.equal(isDocumentationPath('docs/future-feature-plans/foobar-reference-assets/how-to-modal-copy.md'), true);
+  assert.equal(isDocumentationPath('docs/future-feature-plans/foobar-reference-assets/text-tools-standard-preset.txt'), true);
   assert.equal(isDocumentationPath('README.md'), true);
   assert.equal(isDocumentationPath('CHANGELOG.MD'), true);
   assert.equal(isDocumentationPath('.github/codex/prompts/review.md'), false);
   assert.equal(isDocumentationPath('music_app/routes/api.py'), false);
 });
+
+for (const filename of [
+  'backup_foobar_db.ps1',
+  'register_foobar_db_task.ps1',
+  'export_text_tools_stats.py',
+]) {
+  for (const [lastReviewedSha, expectedMode] of [['', 'full'], ['reviewed', 'incremental']]) {
+    test(`downloadable Foobar ${filename} selects ${expectedMode} review`, () => {
+      const result = classifyReviewScope({
+        action: 'synchronize',
+        baseSha: 'base',
+        lastReviewedSha,
+        headSha: 'head',
+        numstat: `4\t1\tdocs/future-feature-plans/foobar-reference-assets/${filename}\n100\t50\tdocs/guide.md\n`,
+      });
+      assert.deepEqual(result, {
+        mode: expectedMode,
+        baseSha: lastReviewedSha || 'base',
+        headSha: 'head',
+        functionalChange: true,
+        functionalLines: 5,
+        hasBinaryFunctionalChange: false,
+      });
+    });
+  }
+}
 
 test('numstat parsing identifies line counts and binary files', () => {
   assert.deepEqual(parseNumstat('10\t4\tmusic_app/a.py\n-\t-\tmusic_app/logo.png\n'), [

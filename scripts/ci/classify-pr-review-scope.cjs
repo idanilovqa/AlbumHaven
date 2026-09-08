@@ -37,6 +37,8 @@ function normalizePath(filePath) {
 function isDocumentationPath(filePath) {
   const normalized = normalizePath(filePath);
   const lower = normalized.toLowerCase();
+  // Downloadable helpers remain executable code even when shipped under docs/.
+  if (/\.(?:ps1|py)$/.test(lower)) return false;
   return lower.startsWith('docs/') || (!normalized.includes('/') && lower.endsWith('.md'));
 }
 

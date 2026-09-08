@@ -47,8 +47,11 @@ product area.
 
 GitHub may withhold downloadable job logs until the job finishes. For live case
 progress, use the signed-in Actions job page. An unchanged test-execution step
-alone does not prove a hang. Preserve the full failure inventory before fixing
-failures or rerunning jobs.
+alone does not prove a hang. Collect the full failure inventory while the current
+head remains a merge candidate. If a validated hosted-review finding requires a
+new commit, preserve its evidence and cancel the superseded run before expensive
+tests start. Verify its jobs have stopped, fix and verify locally, then push to a
+new complete native pull-request pipeline. Final full CI must still pass.
 
 Run one complete shard:
 

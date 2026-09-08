@@ -6,7 +6,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -4524,6 +4524,268 @@ def test_live_deletion_only_targeted_mutation_preserves_surviving_album_projecti
         projected_paths = {str(row["private_path"]) for row in relation_rows}
         assert str(surviving_path) in projected_paths
         assert str(deleted_path) not in projected_paths
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+def test_live_watch_health_keeps_newer_warning_when_older_write_finishes_last(
+    monkeypatch,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    release_older = Event()
+    older_write: Thread | None = None
+    older_errors: list[BaseException] = []
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        from music_app.services.library_watch_health import (
+            LibraryWatchHealthProblem,
+            LibraryWatchHealthService,
+            PostgresLibraryWatchHealthStore,
+        )
+
+        older = LibraryWatchHealthProblem(
+            root_id="main-root",
+            state="root_unavailable",
+            detected_at="2026-09-08T10:00:00+00:00",
+        )
+        newer = LibraryWatchHealthProblem(
+            root_id="main-root",
+            state="overflow",
+            detected_at="2026-09-08T10:02:00+00:00",
+        )
+        older_started = Event()
+
+        class DelayedConnection:
+            def __init__(self, connection):
+                self._connection = connection
+
+            def __enter__(self):
+                self._connection.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self._connection.__exit__(*args)
+
+            def execute(self, sql, params=None):
+                received = dict(params or {})
+                if (
+                    "watch_health_upsert" in str(sql)
+                    and received.get("detected_at") == older.detected_at
+                ):
+                    older_started.set()
+                    assert release_older.wait(5)
+                return self._connection.execute(sql, params)
+
+            def commit(self):
+                return self._connection.commit()
+
+        delayed_store = PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=lambda _database_url: DelayedConnection(
+                isolatedPostgres._connect(runtime_url)
+            ),
+        )
+        store = PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url},
+            connect=isolatedPostgres._connect,
+        )
+
+        def write_older():
+            try:
+                delayed_store.upsert(older)
+            except BaseException as error:
+                older_errors.append(error)
+
+        older_write = Thread(target=write_older)
+        older_write.start()
+        assert older_started.wait(5)
+        store.upsert(newer)
+        assert store.load() == [newer]
+        release_older.set()
+        older_write.join(5)
+
+        assert not older_write.is_alive()
+        if older_errors:
+            raise older_errors[0]
+        service = LibraryWatchHealthService(store)
+        assert service.clear_after_scan(
+            scan_mode="manual_full_rescan",
+            observed_root_ids={"main-root"},
+            scan_started_at="2026-09-08T10:01:00+00:00",
+        ) == 0
+        assert store.load() == [newer]
+        assert service.root_allows_destructive_reconciliation("main-root") is False
+
+        isolatedPostgres.reset_application_tables(setup_url)
+        cleanup_complete = True
+    finally:
+        release_older.set()
+        if older_write is not None:
+            older_write.join(5)
+            assert not older_write.is_alive()
+        if not cleanup_complete:
+            isolatedPostgres.reset_application_tables(setup_url)
+
+
+@pytest.mark.parametrize(
+    ("category", "layout_mode", "album_relative", "first_disc_name"),
+    [
+        ("main_library_roots", "artist", "Owner/Multi Disc Album", "Disc 1"),
+        ("hoarding_library_roots", None, "Multi Disc Album", "Disc 1"),
+        ("new_arrivals_roots", None, "Multi Disc Album", "CD1 (Bonus)"),
+    ],
+    ids=["main", "hoard", "arrivals-bonus-disc"],
+)
+def test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse(
+    monkeypatch,
+    tmp_path,
+    category,
+    layout_mode,
+    album_relative,
+    first_disc_name,
+):
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    cleanup_complete = False
+    music_dir = (tmp_path / "Music").resolve()
+    config = {
+        "ALBUM_HAVEN_APP_DATABASE_URL": runtime_url,
+        "MUSIC_DIR": str(music_dir),
+        "APP_NAME": "Album Haven",
+        "SUPPORTED_EXTENSIONS": {".flac"},
+        "IMAGE_EXTENSIONS": set(),
+    }
+    album = music_dir / album_relative
+    changed = album / first_disc_name / "01.flac"
+    untouched_guest = album / "Disc 2" / "02.flac"
+
+    def file_entry(path: Path) -> dict[str, object]:
+        return {
+            "path": str(path),
+            "mtime": path.stat().st_mtime,
+            "size": path.stat().st_size,
+            "album": "Multi Disc Album",
+            "album_artist": "Owner",
+            "artist": "Owner feat. Guest" if path == untouched_guest else "Owner",
+            "title": path.stem,
+            "track_number": 2 if path == untouched_guest else 1,
+            "disc_number": 2 if path == untouched_guest else 1,
+            "duration_seconds": 60,
+            "year": 2026,
+            "edition": "",
+            "album_rating": 0,
+            "library_root_id": "multi-disc-root",
+            "library_root_category": {
+                "main_library_roots": "main_library",
+                "hoarding_library_roots": "hoard",
+                "new_arrivals_roots": "new_arrivals",
+            }[category],
+            "exception_type": None,
+        }
+
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+
+        from music_app.services.library_browse_postgres import (
+            PostgresLibraryBrowseRepository,
+        )
+        from music_app.services.library_roots_postgres import (
+            PostgresLibraryRootSettingsStore,
+        )
+        from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+        from music_app.services.targeted_library_reconciliation import (
+            TargetedLibraryReconciler,
+        )
+
+        changed.parent.mkdir(parents=True)
+        untouched_guest.parent.mkdir(parents=True)
+        changed.write_bytes(b"disc-one")
+        untouched_guest.write_bytes(b"disc-two-guest")
+        root_definition = {
+            "id": "multi-disc-root",
+            "path": str(music_dir),
+            "category": category,
+            **({"layout_mode": layout_mode} if layout_mode is not None else {}),
+        }
+        PostgresLibraryRootSettingsStore(config).save_settings(
+            {
+                "main_library_roots": [
+                    {
+                        "id": "empty-main-root",
+                        "path": str(tmp_path / "Main"),
+                        "layout_mode": "artist",
+                    }
+                ],
+                "hoarding_library_roots": [],
+                "new_arrivals_roots": [],
+                category: [root_definition],
+            }
+        )
+        adapter = PostgresScanCacheAdapter(config, connect=isolatedPostgres._connect)
+        adapter.save_snapshot(
+            Path("unused-multi-disc.json"),
+            {
+                str(changed): file_entry(changed),
+                str(untouched_guest): file_entry(untouched_guest),
+            },
+            "multi-disc-root-identity",
+            1.0,
+            observed_library_root_ids={"multi-disc-root"},
+        )
+
+        changed.write_bytes(b"disc-one-updated")
+        result = TargetedLibraryReconciler(
+            config,
+            repository=adapter,
+            root_definitions=[root_definition],
+            metadata_reader=file_entry,
+        ).reconcile(
+            SimpleNamespace(
+                root_id="multi-disc-root",
+                paths=(changed,),
+                deleted_paths=(),
+                deleted_subtrees=(),
+                moves=(),
+            )
+        )
+
+        with isolatedPostgres._connect(setup_url) as connection:
+            guest_membership = connection.execute(
+                """
+                select count(*) as membership_count
+                from library.local_album_featured_artists
+                join library.local_albums
+                  on library.local_albums.id = library.local_album_featured_artists.album_id
+                join library.local_artists
+                  on library.local_artists.id = library.local_album_featured_artists.artist_id
+                where library.local_albums.title = 'Multi Disc Album'
+                  and library.local_artists.name = 'Guest'
+                  and library.local_album_featured_artists.featured_kind = 'featured_track_artist'
+                """
+            ).fetchone()
+        browse_payload = PostgresLibraryBrowseRepository(
+            config,
+            connect=isolatedPostgres._connect,
+        ).build_root_sidebar_payload()
+        guest_group = next(
+            group
+            for group in browse_payload["artist_groups"]
+            if group["artist"] == "Guest"
+        )
+
+        assert result.affected_album_keys == ("owner::multi disc album",)
+        assert int(guest_membership["membership_count"]) == 1
+        assert any(
+            item["name"] == "Multi Disc Album" for item in guest_group["albums"]
+        )
 
         isolatedPostgres.reset_application_tables(setup_url)
         cleanup_complete = True

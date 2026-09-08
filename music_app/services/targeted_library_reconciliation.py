@@ -144,16 +144,20 @@ class TargetedLibraryReconciler:
             tuple[str, str], tuple[Path, dict[str, object]]
         ] = {}
         for candidate, matched_root in active_targets:
+            album_directory = self._album_directory(candidate, matched_root)
             directory_key = (
                 str(matched_root.get("id") or ""),
-                str(candidate.parent.resolve(strict=False)).casefold(),
+                str(album_directory.resolve(strict=False)).casefold(),
             )
-            affected_directories.setdefault(directory_key, (candidate, matched_root))
-        for candidate, matched_root in affected_directories.values():
+            affected_directories.setdefault(
+                directory_key,
+                (album_directory, matched_root),
+            )
+        for album_directory, matched_root in affected_directories.values():
             expanded_targets.extend(
-                (sibling, matched_root)
-                for sibling in self._supported_media_siblings(candidate)
-                if self._belongs_to_root(sibling, matched_root)
+                (media_path, matched_root)
+                for media_path in self._supported_album_media(album_directory)
+                if self._belongs_to_root(media_path, matched_root)
             )
         active_targets = expanded_targets
 
@@ -253,6 +257,28 @@ class TargetedLibraryReconciler:
             return False
         return True
 
+    def _supported_album_media(self, directory: Path) -> tuple[Path, ...]:
+        from music_app.services.library import _DISC_FOLDER_RE
+
+        supported = {
+            str(extension).casefold()
+            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
+        }
+        if not supported or not directory.is_dir():
+            return ()
+        media_paths: list[Path] = []
+        for candidate in directory.iterdir():
+            if candidate.is_file() and candidate.suffix.casefold() in supported:
+                media_paths.append(candidate)
+            elif candidate.is_dir() and _DISC_FOLDER_RE.search(candidate.name):
+                media_paths.extend(
+                    media_path
+                    for media_path in candidate.iterdir()
+                    if media_path.is_file()
+                    and media_path.suffix.casefold() in supported
+                )
+        return tuple(media_paths)
+
     def _supported_media_descendants(self, directory: Path) -> tuple[Path, ...]:
         supported = {
             str(extension).casefold()
@@ -266,17 +292,16 @@ class TargetedLibraryReconciler:
             if path.is_file() and path.suffix.casefold() in supported
         )
 
-    def _supported_media_siblings(self, path: Path) -> tuple[Path, ...]:
-        supported = {
-            str(extension).casefold()
-            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
-        }
-        if not supported or not path.parent.is_dir():
-            return ()
-        return tuple(
-            sibling
-            for sibling in path.parent.iterdir()
-            if sibling != path
-            and sibling.is_file()
-            and sibling.suffix.casefold() in supported
-        )
+    @staticmethod
+    def _album_directory(path: Path, root: dict[str, object]) -> Path:
+        from music_app.services.library import _track_album_container
+
+        resolved_root = Path(str(root.get("path") or "")).resolve(strict=False)
+        album_directory = Path(
+            _track_album_container(path.resolve(strict=False))
+        ).resolve(strict=False)
+        try:
+            album_directory.relative_to(resolved_root)
+        except (OSError, ValueError):
+            return resolved_root
+        return album_directory

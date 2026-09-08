@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -165,6 +166,12 @@ def open_command(media_path: Path, **changes) -> dict[str, object]:
     }
     command.update(changes)
     return command
+
+
+def configure_authenticated_request_double(websocket: object) -> None:
+    websocket.cookies = {}
+    websocket.state = SimpleNamespace()
+    websocket.client = SimpleNamespace(host="testclient")
 
 
 def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app):
@@ -2266,6 +2273,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
             self.app = playback_app
             self.client_closed = False
             self.receive_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2302,7 +2310,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
         assert connection is not None
 
         run_task = asyncio.create_task(connection.run())
-        await start_entered.wait()
+        await asyncio.wait_for(start_entered.wait(), timeout=1)
         websocket.client_closed = True
         allow_start.set()
 
@@ -2324,6 +2332,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     class FailingMetadataWebSocketDouble:
         def __init__(self) -> None:
             self.app = playback_app
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2379,6 +2388,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1},
             ]
             self.decoder_error_send_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2481,6 +2491,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
+            configure_authenticated_request_double(self)
 
         async def send_json(self, event: dict[str, object]) -> None:
             self.events.append(event)

@@ -77,11 +77,22 @@ PostgreSQL projection, clears owner runtime paths from the child environment,
 and invokes `scripts/ci/validate-functional-shards.cjs` with the approved shard
 and exact case title.
 
+Read-only cases share an invocation. Each mutating case runs in its own app
+invocation, with the captured PostgreSQL and media baseline restored before the
+next invocation. An ordinary test failure is retained in the final result while
+the remaining cases continue from that baseline.
+
 Successful runs remove their temporary fixture, reports, database, and roles.
-Failed runs still tear down PostgreSQL and remove the large fixture copies, but
-retain Playwright output and blob reports at the printed
-`album-haven-functional-local-*` path for diagnosis. The command never targets
-the owner's application process, database, music library, or media paths.
+After ordinary test failures, the runner tears down PostgreSQL and removes the
+large fixture copies, retaining Playwright output and blob reports at the
+printed `album-haven-functional-local-*` path for diagnosis.
+
+Exit code 2 means the runner could not verify an owned process had stopped. It
+stops the remaining cases and shards, preserves the database, fixture, and
+failure evidence, and prints their temporary root. Verify the recorded owned
+process tree and scoped ports are clear before cleaning up those exact resources
+or starting another test wave. The command never targets the owner's
+application process, database, music library, or media paths.
 
 ## Avoid the low-level runner
 

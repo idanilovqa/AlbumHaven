@@ -52,17 +52,28 @@ set metadata = jsonb_set(
       '{library_watch_health}',
       coalesce(library.libraries.metadata -> 'library_watch_health', '{}'::jsonb)
         || jsonb_build_object(
-             %(root_id)s,
+             %(root_id)s::text,
              jsonb_build_object(
-               'state', %(state)s,
-               'detected_at', %(detected_at)s
+               'state', %(state)s::text,
+               'detected_at', %(detected_at_text)s::text
              )
            ),
       true
     ),
     updated_at = now()
 from bootstrap_library
-where library.libraries.id = bootstrap_library.id;
+where library.libraries.id = bootstrap_library.id
+  and (
+    nullif(
+      library.libraries.metadata
+        #>> array['library_watch_health', %(root_id)s::text, 'detected_at'],
+      ''
+    ) is null
+    or (
+      library.libraries.metadata
+        #>> array['library_watch_health', %(root_id)s::text, 'detected_at']
+    )::timestamptz <= %(detected_at)s::timestamptz
+  );
 """
 
 _LOAD_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
@@ -151,6 +162,7 @@ class PostgresLibraryWatchHealthStore:
                     "root_id": problem.root_id,
                     "state": problem.state,
                     "detected_at": problem.detected_at,
+                    "detected_at_text": problem.detected_at,
                 },
             )
             _commit_if_supported(connection)

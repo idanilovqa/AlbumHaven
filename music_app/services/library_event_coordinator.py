@@ -84,6 +84,7 @@ class LibraryEventCoordinator:
         self._lock = Lock()
         self._flush_lock = Lock()
         self._timer: Timer | None = None
+        self._scheduled_flush_running = False
         self._pending_started_at: float | None = None
         self._stopped = False
 
@@ -183,6 +184,8 @@ class LibraryEventCoordinator:
         group.active_paths.add(event.path)
 
     def _schedule_flush_locked(self) -> None:
+        if self._stopped or self._scheduled_flush_running:
+            return
         now = self._clock()
         if self._pending_started_at is None:
             self._pending_started_at = now
@@ -192,13 +195,33 @@ class LibraryEventCoordinator:
         )
         if self._timer is not None:
             self._timer.cancel()
+        timer: Timer | None = None
+
+        def run_scheduled_flush() -> None:
+            assert timer is not None
+            self._run_scheduled_flush(timer)
+
         timer = self._timer_factory(
             min(self._debounce_seconds, maximum_delay_remaining),
-            self.flush,
+            run_scheduled_flush,
         )
         timer.daemon = True
         self._timer = timer
         timer.start()
+
+    def _run_scheduled_flush(self, timer: Timer) -> None:
+        with self._lock:
+            if self._stopped or self._timer is not timer:
+                return
+            self._timer = None
+            self._scheduled_flush_running = True
+        try:
+            self.flush()
+        finally:
+            with self._lock:
+                self._scheduled_flush_running = False
+                if self._pending and not self._stopped:
+                    self._schedule_flush_locked()
 
     def flush(self) -> None:
         with self._flush_lock:

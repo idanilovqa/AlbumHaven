@@ -5127,7 +5127,14 @@ test('runPlaywrightProcess terminates a never-closing child once when run-final 
   assert.ok(hardTimeoutTimer, 'expected the original bounded run timeout');
   hardTimeoutTimer.fn();
 
-  await assert.rejects(runPromise, /owned support cleanup failed/);
+  await assert.rejects(runPromise, (error) => {
+    assert.match(error.message, /owned support cleanup failed/);
+    assert.equal(_private.finalizeMainResult(
+      { exitCode: 1, lifecycle: error.lifecycle },
+      { processObject: { exitCode: null }, stderr: { write() {} } },
+    ), 2);
+    return true;
+  });
   assert.equal(ownerWaitCalls, 1);
   assert.equal(stopCalls, 1);
 });
@@ -5537,6 +5544,42 @@ test('owned scan teardown failure records all remaining cleanup evidence before 
   assert.deepEqual(passivelyInspectedPorts, [4173, 4175]);
 });
 
+test('main final decision preserves the process cleanup failure exit code', () => {
+  const cases = [
+    { name: 'reserved result', resultCode: 2, expected: 2 },
+    { name: 'reserved prior exit', priorCode: 2, expected: 2 },
+    ...['scanAppCleanup', 'isolatedAppCleanup'].flatMap((stage) => (
+      ['failed', 'pending', 'running'].map((status) => ({
+        name: `${stage}:${status}`, stage, status, expected: 2,
+      }))
+    )),
+    { name: 'scan cleanup error', reason: 'managed-scan-cleanup-error', expected: 2 },
+    { name: 'isolated cleanup error', reason: 'managed-isolated-app-cleanup-error', expected: 2 },
+    { name: 'ordinary test failure after completed cleanup', expected: 1 },
+  ];
+  const actual = cases.map((testCase) => {
+    const processObject = { exitCode: testCase.priorCode ?? null };
+    const managedAttempt = {
+      scanAppCleanup: { status: 'completed' },
+      isolatedAppCleanup: { status: 'completed' },
+    };
+    if (testCase.stage) managedAttempt[testCase.stage].status = testCase.status;
+    const exitCode = _private.finalizeMainResult({
+      exitCode: testCase.resultCode ?? 1,
+      lifecycle: {
+        exitReason: testCase.reason ?? 'authoritative-fail',
+        authoritativeResult: {
+          phase: 'run-final', status: 'failed', total: 1, completed: 1,
+          failed: 1, skipped: 0, errors: 0,
+        },
+        managedAttempt,
+      },
+    }, { processObject, stderr: { write() {} } });
+    return [testCase.name, exitCode, processObject.exitCode];
+  });
+  assert.deepEqual(actual, cases.map(({ name, expected }) => [name, expected, expected]));
+});
+
 test('main final decision reports every post-pass lifecycle stage before returning nonzero', () => {
   const writes = [];
   const processObject = { exitCode: null };
@@ -5720,7 +5763,7 @@ test('final-decision marker rebuilds injected lifecycle data from a closed safe 
   );
   const payload = JSON.parse(writes[0].slice(writes[0].indexOf('{')));
   assert.deepEqual(payload, {
-    wrapperExitCode: 1,
+    wrapperExitCode: 2,
     attemptReturn: { exitCode: 0, exitReason: 'unknown' },
     fakeDatabaseCleanup: { status: 'unknown', error: null },
     scanAppCleanup: { status: 'unknown', error: null },

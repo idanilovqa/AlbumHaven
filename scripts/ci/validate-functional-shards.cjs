@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('../playwright-exit-codes.cjs');
 
 const EXPECTED_CONFIGS = Object.freeze([
   'playwright.config.js',
@@ -272,6 +273,7 @@ function executionWavesForShard(shard, matrixRows) {
         waves.set(waveNumber, wave);
       }
       const isGlobalMutation = matrixRow.stateMode === 'global-mutation';
+      const isOwnedMutation = matrixRow.stateMode === 'owned-mutation';
       const setupGroup = String(matrixRow.setupGroup || '').trim();
       const appProcessScope = String(matrixRow.appProcessScope || '').trim();
       if (appProcessScope && appProcessScope !== 'isolated') {
@@ -288,9 +290,9 @@ function executionWavesForShard(shard, matrixRows) {
       const invocationKey = [
         invocation.config,
         invocation.project,
-        isGlobalMutation
-          ? ownedCase.case
-          : isIsolatedAppProcess ? setupGroup || ownedCase.case : 'compatible',
+        isGlobalMutation || isOwnedMutation
+          ? caseKey(normalizedCase)
+          : isIsolatedAppProcess ? setupGroup || caseKey(normalizedCase) : 'compatible',
       ].join('\0');
       let groupedInvocation = wave.invocationByKey.get(invocationKey);
       if (!groupedInvocation) {
@@ -300,7 +302,9 @@ function executionWavesForShard(shard, matrixRows) {
           workers: 1,
           baselineMode: isGlobalMutation
             ? 'global-mutation'
-            : isIsolatedAppProcess ? 'isolated-app-process' : 'shared-setup',
+            : isIsolatedAppProcess
+              ? 'isolated-app-process'
+              : isOwnedMutation ? 'owned-mutation' : 'shared-setup',
           appProcessOrder: isIsolatedAppProcess ? appProcessOrder || 'before-shared' : null,
           cases: [],
         };
@@ -330,12 +334,13 @@ function executionWavesForShard(shard, matrixRows) {
     }
     const invocationRank = (invocation) => {
       if (invocation.baselineMode === 'isolated-app-process') {
-        return invocation.appProcessOrder === 'after-shared' ? 2 : 0;
+        return invocation.appProcessOrder === 'after-shared' ? 3 : 0;
       }
       return ({
         'shared-setup': 1,
-        'global-mutation': 3,
-      }[invocation.baselineMode] ?? 4);
+        'owned-mutation': 2,
+        'global-mutation': 4,
+      }[invocation.baselineMode] ?? 5);
     };
     wave.invocations.sort((left, right) => invocationRank(left) - invocationRank(right));
     delete wave.invocationByKey;
@@ -445,22 +450,22 @@ function runFunctionalShard(contract, shardName, options = {}) {
   }
 
   let invocationIndex = 0;
-  for (const [waveIndex, wave] of executionWaves.entries()) {
-    if (waveIndex > 0) {
-      const mediaRestoreResult = runMediaCheckpoint('restore');
-      if (mediaRestoreResult.signal) return { exitCode: 1, signal: mediaRestoreResult.signal };
-      if (mediaRestoreResult.error || mediaRestoreResult.status !== 0) {
-        failed = true;
-        break;
-      }
-      const restoreResult = runCheckpoint('restore');
-      if (restoreResult.signal) return { exitCode: 1, signal: restoreResult.signal };
-      if (restoreResult.error || restoreResult.status !== 0) {
-        failed = true;
-        break;
-      }
-    }
+  execution: for (const wave of executionWaves) {
     for (const invocation of wave.invocations) {
+      if (invocationIndex > 0) {
+        const mediaRestoreResult = runMediaCheckpoint('restore');
+        if (mediaRestoreResult.signal) return { exitCode: 1, signal: mediaRestoreResult.signal };
+        if (mediaRestoreResult.error || mediaRestoreResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
+        const restoreResult = runCheckpoint('restore');
+        if (restoreResult.signal) return { exitCode: 1, signal: restoreResult.signal };
+        if (restoreResult.error || restoreResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
+      }
       invocationIndex += 1;
       const invocationName = [
         `wave-${String(wave.wave).padStart(2, '0')}`,
@@ -506,6 +511,9 @@ function runFunctionalShard(contract, shardName, options = {}) {
         },
       );
       if (result.signal) return { exitCode: 1, signal: result.signal };
+      if (result.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+        return { exitCode: PROCESS_CLEANUP_FAILURE_EXIT_CODE, signal: null };
+      }
       if (result.error || result.status !== 0) failed = true;
     }
   }

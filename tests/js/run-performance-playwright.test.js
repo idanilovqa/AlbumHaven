@@ -1379,6 +1379,30 @@ test('scan status sample file is removed when the Playwright attempt throws', (t
   assert.equal(fs.existsSync(samplesPath), false);
 });
 
+for (const targetInput of ['scan-cold', '']) {
+  test(`performance process cleanup failure stops ${targetInput ? 'repeats' : 'later targets'} and preserves evidence`, (t) => {
+    const originalSpawnSync = childProcess.spawnSync;
+    const samplePaths = [];
+    childProcess.spawnSync = (_command, _args, options) => {
+      const samplePath = options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH;
+      samplePaths.push(samplePath);
+      fs.writeFileSync(samplePath, '{"status":{}}\n', 'utf8');
+      return { status: 2, signal: null, stdout: '', stderr: '' };
+    };
+    t.after(() => {
+      childProcess.spawnSync = originalSpawnSync;
+      for (const samplePath of samplePaths) fs.rmSync(samplePath, { force: true });
+    });
+
+    assert.throws(() => _private.runSequentialPerformanceSuite({
+      browser: 'chrome', group: 'scan', headless: true, repeatCount: 3,
+      targetInput, useLegacyArtifacts: true,
+    }), (error) => error.exitCode === 2);
+    assert.equal(samplePaths.length, 1, 'cleanup failure must prevent later launches');
+    assert.equal(fs.existsSync(samplePaths[0]), true);
+  });
+}
+
 test('non-scan single-target runs preserve an inherited scan status sample path', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
   const originalSpawnSync = childProcess.spawnSync;

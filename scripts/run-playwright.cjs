@@ -5,6 +5,7 @@ const net = require('node:net');
 const http = require('node:http');
 const { randomBytes } = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 const { resolveRuntimeFlags } = require('./playwright-runtime-flags.cjs');
 const {
   DEFAULT_PLAYWRIGHT_PYTHON,
@@ -131,6 +132,7 @@ const SAFE_LIFECYCLE_EXIT_REASONS = new Set([
   'fake-database-cleanup-error',
   'managed-scan-cleanup-error',
   'managed-isolated-app-cleanup-error',
+  'owned-process-cleanup-error',
   'owned-temp-cleanup-error',
   'unknown',
 ]);
@@ -246,7 +248,22 @@ function finalizeMainResult(result, options = {}) {
   const stderr = options.stderr || process.stderr;
   const requestedExitCode = hasCompletedAuthoritativePassLifecycle(result) ? 0 : 1;
   const priorExitCode = Number(processObject.exitCode || 0);
-  const exitCode = requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
+  const lifecycle = result?.lifecycle || {};
+  const managedAttempt = lifecycle.managedAttempt || {};
+  const processCleanupUnproven = [
+    managedAttempt.scanAppCleanup,
+    managedAttempt.isolatedAppCleanup,
+  ].some((stage) => stage && !['completed', 'not-required'].includes(stage.status))
+    || [
+      'managed-scan-cleanup-error',
+      'managed-isolated-app-cleanup-error',
+      'owned-process-cleanup-error',
+    ].includes(lifecycle.exitReason);
+  const exitCode = processCleanupUnproven
+    || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    || priorExitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    ? PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    : requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
   const diagnostic = buildAuthoritativePassFinalDecisionDiagnostic({
     ...result,
     exitCode,
@@ -1908,10 +1925,10 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         && cleanupIsolatedLibraryDatabaseFn
       ) {
         if (portReclaimErrors.length > 0) {
-          throw new Error(
+          throw attachLifecycle(new Error(
             'Could not safely snapshot and reclaim all isolated Playwright port owners: '
             + portReclaimErrors.map((error) => String(error?.message || error)).join('; '),
-          );
+          ), 'owned-process-cleanup-error');
         }
         lifecycle.fakeDatabaseCleanup.status = 'running';
         try {
@@ -2064,6 +2081,9 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         }
       } catch (error) {
         cleanupOutcome = 'failed';
+        if (!portCleanupCompleted) {
+          throw attachLifecycle(error, 'owned-process-cleanup-error');
+        }
         throw error;
       }
     };

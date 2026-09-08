@@ -794,32 +794,42 @@ test('problematic-file render preserves the selected album viewport across a lat
   assert.equal(rendered.list.scrollTop, 182);
 });
 
-test('problematic-file render preserves owned mutation scroll geometry across a late rerender', () => {
+for (const withLoadingRefresh of [false, true]) {
+test(`problematic-file render preserves owned mutation scroll geometry across a late ${withLoadingRefresh ? 'loading refresh' : 'rerender'}`, () => {
   const selectedAlbum = {
     key: 'album-previous',
     name: 'Album Previous',
     detail_loaded: true,
   };
   let currentScrollTop = 1335;
+  let listHtml = '<button>Album Previous</button>';
+  let naturalContentHeight = 1456;
   let retainedNode = {
+    style: { height: '79px' },
     matches(selector) {
       return selector === '[data-problematic-scroll-retainer]';
     },
   };
   const originalRetainedNode = retainedNode;
+  const clampScrollTop = (value) => Math.min(
+    Number(value),
+    Math.max(0, naturalContentHeight + (retainedNode ? 79 : 0) - 200),
+  );
   const list = {
     get innerHTML() {
-      return '';
+      return listHtml;
     },
-    set innerHTML(_value) {
+    set innerHTML(value) {
+      listHtml = value;
+      naturalContentHeight = value.includes('Loading...') ? 40 : 1456;
       retainedNode = null;
-      currentScrollTop = 1248;
+      currentScrollTop = clampScrollTop(currentScrollTop);
     },
     get scrollTop() {
       return currentScrollTop;
     },
     set scrollTop(value) {
-      currentScrollTop = Number(value);
+      currentScrollTop = clampScrollTop(value);
     },
     querySelector(selector) {
       return retainedNode?.matches(selector) ? retainedNode : null;
@@ -846,6 +856,7 @@ test('problematic-file render preserves owned mutation scroll geometry across a 
       utility: {
         activeTab: 'problematic-files',
         focusedTrackPath: '',
+        loaded: true,
         loading: false,
         problematicFiles: [selectedAlbum],
         searchQuery: '',
@@ -865,11 +876,17 @@ test('problematic-file render preserves owned mutation scroll geometry across a 
   vm.createContext(context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
+  if (withLoadingRefresh) {
+    context.state.utility.loading = true;
+    context.renderProblematicFiles();
+    context.state.utility.loading = false;
+  }
   context.renderProblematicFiles();
 
   assert.equal(retainedNode, originalRetainedNode, 'the owned scroll geometry must survive list replacement');
   assert.equal(list.scrollTop, 1335, 'the late render must restore the mutation-owned scroll position');
 });
+}
 
 test('empty log history visibly explains session-only storage and keeps export explicit', () => {
   const elements = {

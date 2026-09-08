@@ -163,6 +163,24 @@ test('a child signal stops immediately and is returned for propagation', () => {
   assert.equal(callCount, 1, 'the second suite must not be launched after interruption');
 });
 
+test('process cleanup failure stops functional execution and focused discovery immediately', () => {
+  for (const argv of [['test'], ['test', '--grep', 'FTC-COVERS']]) {
+    let callCount = 0;
+    const result = _private.runFunctionalSuites(argv, {
+      stderr: { write() {} },
+      spawnSyncFn() {
+        callCount += 1;
+        return { status: 2, signal: null, stdout: '', stderr: '' };
+      },
+    });
+    assert.deepEqual(result, { exitCode: 2, signal: null }, argv.join(' '));
+    assert.equal(callCount, 1, 'no later discovery or suite may run after failed cleanup');
+    const processObject = { exitCode: null };
+    _private.applyFunctionalSuiteResult(result, processObject);
+    assert.equal(processObject.exitCode, 2);
+  }
+});
+
 test('unexpected focused discovery errors are surfaced and fail the run', () => {
   const stderrWrites = [];
   let callCount = 0;
@@ -171,7 +189,7 @@ test('unexpected focused discovery errors are surfaced and fail the run', () => 
     spawnSyncFn() {
       callCount += 1;
       return callCount === 1
-        ? { status: 2, signal: null, stdout: '', stderr: 'configuration exploded\n' }
+        ? { status: 1, signal: null, stdout: '', stderr: 'configuration exploded\n' }
         : { status: 1, signal: null, stdout: '', stderr: 'Error: No tests found.\n' };
     },
   });

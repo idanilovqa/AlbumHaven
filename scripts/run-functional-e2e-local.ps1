@@ -254,6 +254,9 @@ $environmentKeys = @(
 )
 
 $overallFailed = $false
+# Matches PROCESS_CLEANUP_FAILURE_EXIT_CODE in playwright-exit-codes.cjs.
+$processCleanupFailureExitCode = 2
+$processCleanupFailed = $false
 foreach ($selectedShard in $selectedShards) {
     $invocationId = [guid]::NewGuid().ToString('N').Substring(0, 12)
     $safeShard = ([string]$selectedShard.name).Replace('-', '_')
@@ -326,7 +329,12 @@ foreach ($selectedShard in $selectedShards) {
         }
         Write-Host "Running shard $($selectedShard.name) on ports $portBase/$($portBase + 2)..."
         & $node @validatorArguments
-        if ($LASTEXITCODE -ne 0) { throw "Functional shard failed: $($selectedShard.name)" }
+        $shardExitCode = $LASTEXITCODE
+        if ($shardExitCode -eq $processCleanupFailureExitCode) {
+            $processCleanupFailed = $true
+            throw "Process cleanup is unproven for shard $($selectedShard.name); stopping remaining shards."
+        }
+        if ($shardExitCode -ne 0) { throw "Functional shard failed: $($selectedShard.name)" }
     } catch {
         $runFailed = $true
         $overallFailed = $true
@@ -335,7 +343,7 @@ foreach ($selectedShard in $selectedShards) {
             Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
         }
     } finally {
-        if ($provisionAttempted -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
+        if (-not $processCleanupFailed -and $provisionAttempted -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
             try {
                 $env:POSTGRESQL_ADMIN_PASSWORD = $postgresAdminPassword
                 Invoke-PostgresBootstrap `
@@ -356,7 +364,9 @@ foreach ($selectedShard in $selectedShards) {
         }
 
         $ownedRoot = Assert-OwnedTempRoot $runnerTemp
-        if ($runFailed) {
+        if ($processCleanupFailed) {
+            Write-Host "Database, fixtures, and failure artifacts retained until process shutdown is verified: $ownedRoot"
+        } elseif ($runFailed) {
             $disposablePaths = @($immutableFixtureRoot, $fixtureWorkRoot)
             if (-not $teardownFailed) { $disposablePaths += @($githubEnv, $statePath) }
             foreach ($disposable in $disposablePaths) {
@@ -369,7 +379,9 @@ foreach ($selectedShard in $selectedShards) {
             Remove-Item -LiteralPath $ownedRoot -Recurse -Force
         }
     }
+    if ($processCleanupFailed) { break }
 }
 
+if ($processCleanupFailed) { exit $processCleanupFailureExitCode }
 if ($overallFailed) { exit 1 }
 exit 0

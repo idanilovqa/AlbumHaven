@@ -630,6 +630,14 @@ def test_postgres_health_queries_use_library_metadata_without_path_columns():
     assert "local_track_files" not in sql
 
 
+def test_postgres_health_upsert_keeps_the_newest_detected_timestamp():
+    module = _health_module()
+    sql = " ".join(module._UPSERT_LIBRARY_WATCH_HEALTH_SQL.split()).casefold()
+
+    assert "#>> array['library_watch_health', %(root_id)s::text, 'detected_at']" in sql
+    assert ")::timestamptz <= %(detected_at)s::timestamptz" in sql
+
+
 def test_problematic_files_endpoint_includes_path_free_operational_health_when_album_list_is_empty(
     monkeypatch,
 ):

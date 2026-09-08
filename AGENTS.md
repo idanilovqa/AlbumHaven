@@ -44,20 +44,8 @@ not need the private repository to build or use Album Haven.
   baseline, fewer than 250 changed functional lines uses incremental review;
   250 or more lines, a binary functional change, an unavailable baseline, or
   `ci:full-review` uses whole-PR review.
-- For an E2E repair, reproduce the exact failing test locally before pushing.
-  Put its exact FTC ID and approved `@area:<name>` selectors in the bounded
-  `album-haven-focused-e2e` PR-body marker, then apply `ci:focused-e2e`. CI runs
-  exactly those cases first. After each green focused run, the release operator
-  must bind the next stage and exact head SHA in the PR marker. To start related
-  tests, clear and reapply `ci:focused-related` so an already-present label still
-  emits a real pull-request event. To start full CI, create a no-tree-change
-  promotion commit locally, bind the marker's `full` promotion to that commit
-  SHA, replace focused labels with `ci:full-review`, then push the promotion
-  commit so reviewers receive a native `synchronize` payload. CI falls back to
-  exact selection whenever promotion evidence does not match the event head.
-  Never use `workflow_dispatch`: review actions require the native pull-request
-  payload, and `GITHUB_TOKEN` label writes do not trigger another workflow.
-  Runner or shard membership never defines focused scope.
+- Reproduce and verify failing cases locally, then push directly to the complete review-first CI pipeline. Use focused hosted tests only for unusually difficult failures or CI-specific infrastructure diagnosis; state the reason and return to full CI as soon as the focused failure is fixed. Keep native area tags and focused-selection tooling available. A focused result never authorizes merge or publication.
+  If the focused exception is needed, follow the authenticated PR-head promotion procedure in the private E2E investigation workflow. Never use `workflow_dispatch` for hosted reviews or assume a `GITHUB_TOKEN` label write emits a new workflow event.
 - Only a successful full pipeline may record review coverage, authorize merge,
   or authorize publication. Focused verification never weakens or replaces an
   existing E2E acceptance contract.

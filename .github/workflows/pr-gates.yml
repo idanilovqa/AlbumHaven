@@ -315,7 +315,7 @@ jobs:
       - name: Run Python tests
         run: |
           $env:PGPASSWORD = $null
-          python -m pytest -q --junitxml="${{ runner.temp }}\pytest-results.xml"
+          python -m pytest -q --junitxml="${{ runner.temp }}\pytest-results.xml" -vv --durations=20 -o faulthandler_timeout=60
 
       - name: Validate Python skip policy
         if: ${{ !cancelled() }}

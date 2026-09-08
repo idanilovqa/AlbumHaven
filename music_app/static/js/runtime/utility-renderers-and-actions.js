@@ -49,7 +49,7 @@
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  if (state.utility.loading) {
+  if (state.utility.loading && !state.utility.loaded) {
     replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`);
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;

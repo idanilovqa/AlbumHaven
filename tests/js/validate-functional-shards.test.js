@@ -56,6 +56,47 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function invocationIsolationFixture() {
+  const rows = [
+    { case: 'reads baseline A', stateMode: 'read-only', setupScope: 'suite' },
+    { case: 'reads baseline B', stateMode: 'read-only', setupScope: 'suite' },
+    { case: 'mutates baseline A', stateMode: 'owned-mutation' },
+    { case: 'mutates baseline B', stateMode: 'owned-mutation' },
+    { case: 'explicit isolated A', stateMode: 'owned-mutation', appProcessScope: 'isolated', appProcessOrder: 'after-shared' },
+    { case: 'explicit isolated B', stateMode: 'owned-mutation', appProcessScope: 'isolated', appProcessOrder: 'after-shared' },
+    { case: 'global mutation', stateMode: 'global-mutation' },
+  ];
+  const matrix = rows.map((row, index) => ({
+    config: 'playwright.config.js',
+    project: 'functional',
+    test: 'tests/e2e/specs/invocationIsolation.spec.js',
+    setupScope: 'isolated',
+    setupGroup: 'same-prepared-fixture',
+    executionWave: 1,
+    ...(row.stateMode === 'read-only' ? {} : {
+      mutationOwnership: {
+        databaseIdentity: `declared-row-${index}`,
+        filesystemCopy: `declared-copy-${index}`,
+      },
+    }),
+    ...row,
+  }));
+  return {
+    matrix,
+    shard: {
+      name: 'invocation-isolation',
+      invocations: [{
+        config: 'playwright.config.js',
+        project: 'functional',
+        workers: 1,
+        cases: matrix.map(({ config, project, test, case: title }) => ({
+          config, project, test, case: title,
+        })),
+      }],
+    },
+  };
+}
+
 function errorText(errors) {
   return errors.map((error) => String(error)).join('\n');
 }
@@ -186,12 +227,38 @@ validatorTest('validator accepts the exact approved ownership and rejects every 
   assert.match(errorText(validator.validateFunctionalShardContract(mismatch, discovered)), /mismatch|disagree/i);
 });
 
-validatorTest('single-wave shard runner executes every invocation with isolated Chrome outputs', () => {
+validatorTest('execution waves share readers and isolate each mutator despite shared setup groups', () => {
+  const { shard, matrix } = invocationIsolationFixture();
+  const [wave] = loadValidator().executionWavesForShard(shard, matrix);
+  const readerInvocation = wave.invocations.find((invocation) => (
+    invocation.cases.some((ownedCase) => ownedCase.case === 'reads baseline A')
+  ));
+  assert.deepEqual(readerInvocation.cases.map((ownedCase) => ownedCase.case), [
+    'reads baseline A', 'reads baseline B',
+  ]);
+  assert.equal(wave.invocations.length, 6);
+  for (const row of matrix.filter((candidate) => candidate.stateMode !== 'read-only')) {
+    const invocation = wave.invocations.find((candidate) => (
+      candidate.cases.some((ownedCase) => ownedCase.case === row.case)
+    ));
+    assert.deepEqual(invocation.cases.map((ownedCase) => ownedCase.case), [row.case]);
+    if (row.appProcessScope === 'isolated') {
+      assert.equal(invocation.baselineMode, 'isolated-app-process');
+      assert.equal(invocation.appProcessOrder, 'after-shared');
+      assert.ok(wave.invocations.indexOf(invocation) > wave.invocations.indexOf(readerInvocation));
+    }
+  }
+  assert.equal(wave.invocations.at(-1).baselineMode, 'global-mutation');
+});
+
+for (const [failureCode, name] of [
+  [1, 'single-wave shard runner restores before each later invocation even after a failed mutator'],
+  [2, 'single-wave shard runner stops before later cases or restoration when process cleanup fails'],
+]) {
+validatorTest(name, () => {
   const validator = loadValidator();
-  const contract = readJson(shardContractPath);
-  const shard = clone(contract.shards.find((candidate) => candidate.name === 'cover-providers'));
-  shard.invocations = shard.invocations.slice(0, 2);
-  shard.invocations[0].cases = shard.invocations[0].cases.slice(0, 1);
+  const { shard, matrix } = invocationIsolationFixture();
+  shard.invocations[0].cases = shard.invocations[0].cases.slice(0, 4);
   const runnerTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-functional-shard-'));
   const fixtureWorkRoot = path.join(runnerTemp, 'fixture-work');
   const fixtureRoot = path.join(fixtureWorkRoot, 'shared');
@@ -203,6 +270,7 @@ validatorTest('single-wave shard runner executes every invocation with isolated 
   try {
     const result = validator.runFunctionalShard({ shards: [shard] }, shard.name, {
       repoRoot,
+      caseMatrix: matrix,
       env: {
         RUNNER_TEMP: runnerTemp,
         ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT: path.join(runnerTemp, 'output'),
@@ -225,24 +293,54 @@ validatorTest('single-wave shard runner executes every invocation with isolated 
       spawnSyncFn(executable, args, options) {
         calls.push({ executable, args, options });
         return {
-          status: args[0].endsWith('run-playwright.cjs') && calls.length === 2 ? 1 : 0,
+          status: args[0].endsWith('run-playwright.cjs')
+            && args[args.indexOf('--grep') + 1].includes('mutates baseline A') ? failureCode : 0,
           signal: null,
         };
       },
     });
 
-    assert.deepEqual(result, { exitCode: 1, signal: null });
-    assert.equal(calls.length, 7, 'one final restore and verification clean both mutation authorities');
+    const cleanupFailed = failureCode === 2;
+    assert.deepEqual(result, { exitCode: failureCode, signal: null });
+    assert.equal(calls.length, cleanupFailed ? 5 : 12);
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-    assert.equal(checkpointCalls.length, 3);
-    assert.equal(playwrightCalls.length, 2, 'a failed invocation must not hide later shard failures');
-    assert.deepEqual(mediaCalls.map((call) => call.args[1]), ['--mode=restore', '--mode=verify']);
+    assert.equal(checkpointCalls.length, cleanupFailed ? 2 : 5);
+    assert.equal(playwrightCalls.length, cleanupFailed ? 2 : 3);
+    assert.deepEqual(mediaCalls.map((call) => call.args[1]), cleanupFailed ? ['--mode=restore'] : [
+      '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
+    ]);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
-      ['--mode=capture', '--mode=restore', '--mode=verify'],
+      cleanupFailed ? ['--mode=capture', '--mode=restore'] : [
+        '--mode=capture', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify',
+      ],
     );
+    const expectedCalls = [
+      'database:--mode=capture',
+      'reads baseline A, reads baseline B',
+      'media:--mode=restore',
+      'database:--mode=restore',
+      'mutates baseline A',
+      'media:--mode=restore',
+      'database:--mode=restore',
+      'mutates baseline B',
+      'media:--mode=restore',
+      'database:--mode=restore',
+      'media:--mode=verify',
+      'database:--mode=verify',
+    ];
+    assert.deepEqual(calls.map((call) => {
+      if (call.args[0].endsWith('run-playwright.cjs')) {
+        const pattern = new RegExp(call.args[call.args.indexOf('--grep') + 1]);
+        return shard.invocations[0].cases
+          .filter((ownedCase) => pattern.test(ownedCase.case))
+          .map((ownedCase) => ownedCase.case).join(', ');
+      }
+      const authority = call.executable === 'fixture-python' ? 'database' : 'media';
+      return `${authority}:${call.args.find((arg) => arg.startsWith('--mode='))}`;
+    }), cleanupFailed ? expectedCalls.slice(0, 5) : expectedCalls);
     for (const call of checkpointCalls) {
       assert.match(call.args[0], /scripts[\\/]ci[\\/]functional-fixture-checkpoint\.py$/);
       assert.ok(call.args.some((arg) => arg.includes('album_haven_ci_f_123')));
@@ -280,6 +378,7 @@ validatorTest('single-wave shard runner executes every invocation with isolated 
     fs.rmSync(runnerTemp, { recursive: true, force: true });
   }
 });
+}
 
 validatorTest('shard runner can isolate one exact owned case for CI diagnosis', () => {
   const validator = loadValidator();
@@ -351,19 +450,20 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-    assert.equal(checkpointCalls.length, 5);
+    const mutationCount = shard.invocations.flatMap((invocation) => invocation.cases).length;
+    assert.equal(checkpointCalls.length, mutationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
-      ['--mode=capture', '--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify'],
+      ['--mode=capture', ...Array(mutationCount).fill('--mode=restore'), '--mode=verify'],
     );
     assert.ok(checkpointCalls.every((call) => (
       call.args[0].endsWith(path.join('scripts', 'ci', 'functional-fixture-checkpoint.py'))
       && call.args.some((arg) => arg.includes('album_haven_ci_f_123'))
     )));
-    assert.equal(playwrightCalls.length, 6, 'a failed invocation must not hide later waves');
+    assert.equal(playwrightCalls.length, mutationCount, 'a failed invocation must not hide later cases');
     assert.deepEqual(
       mediaCalls.map((call) => call.args[1]),
-      ['--mode=restore', '--mode=restore', '--mode=restore', '--mode=verify'],
+      [...Array(mutationCount).fill('--mode=restore'), '--mode=verify'],
     );
     assert.ok(mediaCalls.every((call) => (
       call.args.includes(`--source-media-root=${path.join(sourceFixtureRoot, 'media')}`)
@@ -564,7 +664,7 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
   );
 });
 
-validatorTest('cover baseline-sensitive cases use fresh app processes after shared cleanup-sensitive cases', () => {
+validatorTest('cover baseline-sensitive cases use separate app processes after ordinary mutations', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
@@ -582,17 +682,17 @@ validatorTest('cover baseline-sensitive cases use fresh app processes after shar
     (invocation) => invocation.baselineMode === 'isolated-app-process',
   );
 
-  assert.equal(isolatedInvocations.length, 2);
+  assert.equal(isolatedInvocations.length, 4);
   assert.deepEqual(
     new Set(isolatedInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name))),
     expectedCases,
   );
   assert.deepEqual(
     isolatedInvocations.map((invocation) => invocation.cases.length),
-    [2, 2],
+    [1, 1, 1, 1],
   );
   const sharedIndexes = firstWave.invocations
-    .map((invocation, index) => invocation.baselineMode === 'shared-setup' ? index : -1)
+    .map((invocation, index) => invocation.baselineMode === 'owned-mutation' ? index : -1)
     .filter((index) => index >= 0);
   const isolatedIndexes = firstWave.invocations
     .map((invocation, index) => invocation.baselineMode === 'isolated-app-process' ? index : -1)
@@ -604,7 +704,9 @@ validatorTest('cover baseline-sensitive cases use fresh app processes after shar
   assert.ok(Math.max(...isolatedIndexes) < Math.min(...globalIndexes));
   assert.equal(secondWave.invocations[0].baselineMode, 'isolated-app-process');
   assert.deepEqual(
-    secondWave.invocations[0].cases.map((ownedCase) => ownedCase.case),
+    secondWave.invocations
+      .filter((invocation) => invocation.baselineMode === 'isolated-app-process')
+      .flatMap((invocation) => invocation.cases.map((ownedCase) => ownedCase.case)),
     [
       'FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save',
       'FTC-COVERS-016 lookup matching rejects larger false Metallica releases before provider autoselection',
@@ -622,19 +724,12 @@ validatorTest('gallery startup projections share one early app process before is
 
   assert.equal(waves.length, 2);
   assert.deepEqual(waves.map((wave) => wave.wave), [1, 2]);
-  assert.equal(waves[0].invocations.length, 5);
-  assert.deepEqual(
-    waves.flatMap((wave) => wave.invocations).map((invocation) => invocation.baselineMode),
-    [
-      'isolated-app-process',
-      'shared-setup',
-      'isolated-app-process',
-      'isolated-app-process',
-      'isolated-app-process',
-      'shared-setup',
-      'isolated-app-process',
-    ],
-  );
+  const isolatedFirstWave = waves[0].invocations.filter((invocation) => (
+    invocation.baselineMode === 'isolated-app-process'
+  ));
+  assert.equal(isolatedFirstWave.length, 4);
+  assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
+  assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
   assert.deepEqual(
     waves[0].invocations[0].cases.map((ownedCase) => ownedCase.case),
     [
@@ -645,33 +740,45 @@ validatorTest('gallery startup projections share one early app process before is
     ],
   );
   assert.deepEqual(
-    waves[0].invocations[2].cases.map((ownedCase) => ownedCase.case),
+    isolatedFirstWave[1].cases.map((ownedCase) => ownedCase.case),
     ['FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery interactions'],
   );
   assert.deepEqual(
-    waves[0].invocations[3].cases.map((ownedCase) => ownedCase.case),
+    isolatedFirstWave[2].cases.map((ownedCase) => ownedCase.case),
     ['FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, modal, and fullscreen lightbox'],
   );
   assert.deepEqual(
-    waves[0].invocations[4].cases.map((ownedCase) => ownedCase.case),
+    isolatedFirstWave[3].cases.map((ownedCase) => ownedCase.case),
     ['FTC-SEARCH-NAV-002 keeps every projected family artist in the tree for a non-exact best match'],
   );
+  const mobileInvocationIndex = waves[1].invocations.findIndex((invocation) => invocation.cases.some(
+    ({ case: name }) => name.startsWith('FTC-MOBILE-WEB-007 '),
+  ));
+  const ddtInvocationIndex = waves[1].invocations.findIndex((invocation) => invocation.cases.some(
+    ({ case: name }) => name.startsWith('FTC-TAGS-020 '),
+  ));
+  assert.ok(mobileInvocationIndex >= 0);
+  assert.ok(ddtInvocationIndex > mobileInvocationIndex);
   assert.deepEqual(
-    waves[1].invocations[0].cases.map((ownedCase) => ownedCase.case),
+    waves[1].invocations[mobileInvocationIndex].cases.map((ownedCase) => ownedCase.case),
     ['FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale'],
   );
   assert.deepEqual(
-    waves[1].invocations[1].cases.map((ownedCase) => ownedCase.case),
+    waves[1].invocations[ddtInvocationIndex].cases.map((ownedCase) => ownedCase.case),
     ['FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores'],
   );
 });
 
-validatorTest('playback uses three shared baselines and isolates conflicting exclusion mutations', () => {
+validatorTest('playback restores three wave baselines and isolates conflicting exclusion mutations', () => {
   const validator = loadValidator();
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const shard = contract.shards.find((candidate) => candidate.name === 'playback-utilities');
   const waves = validator.executionWavesForShard(shard, matrix);
+  const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
+  const groupInvocations = (setupGroup) => waves[1].invocations.filter((invocation) => (
+    invocation.cases.some((ownedCase) => matrixByCase.get(ownedCase.case).setupGroup === setupGroup)
+  ));
 
   assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3]);
   assert.deepEqual(
@@ -692,7 +799,7 @@ validatorTest('playback uses three shared baselines and isolates conflicting exc
   );
   const ordinaryInvocationIndex = waves[1].invocations.findIndex(
     (invocation) => invocation.config === 'playwright.config.js'
-      && invocation.baselineMode === 'shared-setup',
+      && invocation.baselineMode === 'owned-mutation',
   );
   const expiryInvocationIndex = waves[1].invocations.findIndex(
     (invocation) => invocation.config === 'playwright.config.js'
@@ -701,20 +808,24 @@ validatorTest('playback uses three shared baselines and isolates conflicting exc
   );
   assert.ok(ordinaryInvocationIndex >= 0);
   assert.ok(expiryInvocationIndex > ordinaryInvocationIndex);
+  assert.equal(waves[1].invocations[expiryInvocationIndex].appProcessOrder, 'after-shared');
+  assert.ok(waves[1].invocations.every((invocation, index) => (
+    invocation.baselineMode !== 'shared-setup' || index < expiryInvocationIndex
+  )));
+  const expiryInvocations = groupInvocations('loop-edit-expiry');
+  assert.deepEqual(expiryInvocations.map((invocation) => invocation.cases.length), [1, 1, 1]);
   assert.deepEqual(
-    waves[1].invocations[expiryInvocationIndex].cases.map(({ case: name }) => name),
+    expiryInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller',
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 page reload exits bottom-player loop edit mode',
       'FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 returning to a suspended tab reconciles an overdue loop edit lease',
     ],
   );
-  const lateNonAlbumInvocation = waves[1].invocations.find(
-    (invocation) => invocation.baselineMode === 'isolated-app-process'
-      && invocation.cases.some(({ case: name }) => name.includes('clears Album durably')),
-  );
+  const lateNonAlbumInvocations = groupInvocations('late-non-album-mutations');
+  assert.deepEqual(lateNonAlbumInvocations.map((invocation) => invocation.cases.length), [1, 1, 1, 1, 1]);
   assert.deepEqual(
-    lateNonAlbumInvocation?.cases.map(({ case: name }) => name),
+    lateNonAlbumInvocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-NON-ALBUM-012 renders exception groups as the approved compact track table',
       'FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files',
@@ -762,6 +873,14 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
       budget.cases,
     );
     for (const wave of waves) {
+      for (const invocation of wave.invocations) {
+        const invocationRows = invocation.cases.map((ownedCase) => matrixByCase.get(ownedCase.case));
+        if (invocationRows.some((row) => row.stateMode !== 'read-only')) {
+          assert.equal(invocation.cases.length, 1, `${shard.name}: ${invocation.cases[0].case}`);
+        } else {
+          assert.ok(invocationRows.every((row) => row.setupScope === 'suite'));
+        }
+      }
       const ordered = wave.invocations.flatMap((invocation) => invocation.cases);
       const rows = ordered.map((ownedCase) => matrixByCase.get(ownedCase.case));
       assert.ok(rows.every((row) => (

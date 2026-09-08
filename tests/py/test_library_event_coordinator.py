@@ -490,6 +490,95 @@ def test_auto_schedule_flushes_within_maximum_delay_under_continuous_events(
     assert len(emitted) == 6
 
 
+def test_auto_schedule_coalesces_events_while_one_scheduled_flush_is_running(
+    tmp_path: Path,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    flush_entered = Event()
+    release_flush = Event()
+    pending_flushed = Event()
+    emitted = []
+    worker_errors = []
+    timers = []
+
+    class ImmediateThreadTimer:
+        def __init__(self, _delay, callback):
+            self.callback = callback
+            self.cancelled = False
+            self.daemon = False
+            self.started = Event()
+            self.thread = Thread(target=self._run, daemon=True)
+
+        def _run(self):
+            self.started.set()
+            try:
+                self.callback()
+            except BaseException as error:
+                worker_errors.append(error)
+
+        def start(self):
+            timers.append(self)
+            self.thread.start()
+
+        def cancel(self):
+            self.cancelled = True
+
+    def block_first_emit(request):
+        emitted.append(request)
+        if len(emitted) == 1:
+            flush_entered.set()
+            assert release_flush.wait(timeout=3.0)
+        else:
+            pending_flushed.set()
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=block_first_emit,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+        debounce_seconds=0,
+        max_flush_delay_seconds=0,
+        auto_schedule=True,
+        timer_factory=ImmediateThreadTimer,
+    )
+    try:
+        coordinator.accept(
+            _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac")
+        )
+        assert flush_entered.wait(timeout=3.0)
+
+        for number in range(2, 12):
+            coordinator.accept(
+                _event(
+                    LibraryEventKind.CREATED,
+                    tmp_path,
+                    f"Artist/Album/{number:02}.flac",
+                )
+            )
+
+        assert len(timers) == 1
+        release_flush.set()
+        assert pending_flushed.wait(timeout=3.0)
+        assert len(timers) == 2
+        assert [request.paths for request in emitted] == [
+            frozenset({tmp_path / "Artist/Album/01.flac"}),
+            frozenset(
+                tmp_path / f"Artist/Album/{number:02}.flac"
+                for number in range(2, 12)
+            ),
+        ]
+    finally:
+        coordinator.stop()
+        release_flush.set()
+        for timer in timers:
+            timer.thread.join(timeout=3.0)
+
+    assert all(not timer.thread.is_alive() for timer in timers)
+    if worker_errors:
+        raise worker_errors[0]
+
+
 def test_stable_write_retries_transient_sharing_violation(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

@@ -32,6 +32,17 @@
 - Made focused Phase 7 CI select exact FTC cases before expanding to the related
   suite, kept the authoritative cloud gate fail-closed when classification
   fails, and finalized generated pytest temp cleanup after plugin shutdown.
+- Preserved album-wide artist associations when a watcher event changes one disc,
+  using the same album-container rules as normal scanning for Main Library,
+  Hoard, and New Arrivals. Prevented stale health writes from replacing newer
+  warnings and coalesced events received during a running watcher flush.
+- Isolated mutating functional cases with the existing Postgres and media
+  checkpoints, including after a failed case, while keeping read-only cases
+  grouped. Separated reset-link replay cookies from the active reset browser.
+  Kept the loaded Problematic Files list visible during background refreshes
+  so completed repairs preserve sidebar scroll.
+- Restored exact local verification followed by full CI as the normal repair
+  workflow; retained case and area selectors for difficult CI-only diagnosis.
 
 ## 0.9.42 - 2026-08-30
 

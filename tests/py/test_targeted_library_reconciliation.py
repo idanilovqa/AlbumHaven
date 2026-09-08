@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 class RecordingRepository:
@@ -137,6 +140,124 @@ def test_targeted_reconciler_rebuilds_complete_album_folder_from_sibling_files(
     }
 
 
+@pytest.mark.parametrize(
+    ("category", "layout_mode", "album_relative", "first_disc_name"),
+    [
+        ("main_library_roots", "artist", "Owner/Multi Disc Album", "Disc 1"),
+        (
+            "main_library_roots",
+            "genre/artist",
+            "Rock/Owner/Multi Disc Album",
+            "Disc 1",
+        ),
+        ("main_library_roots", "album-at-root", "Multi Disc Album", "Disc 1"),
+        ("hoarding_library_roots", None, "Multi Disc Album", "Disc 1"),
+        ("new_arrivals_roots", None, "Multi Disc Album", "Disc 1"),
+        ("new_arrivals_roots", None, "Multi Disc Album", "CD1 (Bonus)"),
+    ],
+    ids=["artist", "genre-artist", "album-at-root", "hoard", "arrivals", "bonus-disc"],
+)
+def test_targeted_reconciler_rebuilds_all_disc_folders_for_one_album(
+    tmp_path,
+    category,
+    layout_mode,
+    album_relative,
+    first_disc_name,
+):
+    from music_app.services.targeted_library_reconciliation import (
+        TargetedLibraryReconciler,
+    )
+
+    root = tmp_path / "Music"
+    album = root / album_relative
+    changed = album / first_disc_name / "01.flac"
+    untouched_guest = album / "Disc 2" / "02.flac"
+    unrelated = album.parent / "Unrelated Album" / "01.flac"
+    changed.parent.mkdir(parents=True)
+    untouched_guest.parent.mkdir(parents=True)
+    unrelated.parent.mkdir(parents=True)
+    changed.write_bytes(b"one")
+    untouched_guest.write_bytes(b"two")
+    unrelated.write_bytes(b"unrelated")
+    parsed: list[Path] = []
+    repository = RecordingRepository()
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[
+            {
+                "id": "main",
+                "path": root,
+                "category": category,
+                **({"layout_mode": layout_mode} if layout_mode is not None else {}),
+            }
+        ],
+        metadata_reader=lambda path: (
+            parsed.append(path)
+            or {
+                "path": str(path),
+                "album": "Multi Disc Album",
+                "album_artist": "Owner",
+                "artist": "Owner feat. Guest" if path == untouched_guest else "Owner",
+                "title": path.stem,
+                "disc_number": 2 if path == untouched_guest else 1,
+                "mtime": 1.0,
+                "size": path.stat().st_size,
+            }
+        ),
+    )
+
+    reconciler.reconcile(_request(paths=(changed,)))
+
+    assert set(parsed) == {changed, untouched_guest}
+    assert set(repository.calls[0]["active_file_entries"]) == {
+        str(changed),
+        str(untouched_guest),
+    }
+
+
+@pytest.mark.parametrize("requested_relative", ["loose.flac", "CD1 (Bonus)/01.flac"])
+def test_targeted_reconciler_keeps_root_album_expansion_out_of_unrelated_albums(
+    tmp_path, monkeypatch, requested_relative
+):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    expected = {root / name for name in (
+        "loose.flac", "02.flac", "CD1 (Bonus)/01.flac", "Disc 2/03.flac"
+    )}
+    unrelated = root / "Artist" / "Unrelated Album" / "01.flac"
+    for media_path in expected | {unrelated}:
+        media_path.parent.mkdir(parents=True, exist_ok=True)
+        media_path.write_bytes(b"media")
+    parsed: list[Path] = []
+    enumerated: list[Path] = []
+    original_scandir = os.scandir
+
+    def record_scandir(directory):
+        enumerated.append(Path(directory))
+        return original_scandir(directory)
+
+    monkeypatch.setattr(os, "scandir", record_scandir)
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root, "category": "main_library_roots"}],
+        metadata_reader=lambda path: parsed.append(path) or {
+            "path": str(path), "album": "Root Album", "album_artist": "Owner",
+            "artist": "Owner", "title": path.stem, "mtime": 1.0, "size": 5,
+        },
+    )
+
+    reconciler.reconcile(_request(paths=(root / requested_relative,)))
+
+    assert set(parsed) == expected
+    assert set(repository.calls[0]["active_file_entries"]) == {str(path) for path in expected}
+    assert not any(path.is_relative_to(root / "Artist") for path in enumerated)
+
+
 def test_targeted_reconciler_enumerates_each_affected_directory_once(tmp_path):
     from music_app.services.targeted_library_reconciliation import (
         TargetedLibraryReconciler,
@@ -165,14 +286,14 @@ def test_targeted_reconciler_enumerates_each_affected_directory_once(tmp_path):
             "size": 5,
         },
     )
-    original = reconciler._supported_media_siblings
+    original = reconciler._supported_album_media
     enumerated_directories: list[Path] = []
 
-    def record_enumeration(path: Path):
-        enumerated_directories.append(path.parent)
-        return original(path)
+    def record_enumeration(directory: Path):
+        enumerated_directories.append(directory)
+        return original(directory)
 
-    reconciler._supported_media_siblings = record_enumeration
+    reconciler._supported_album_media = record_enumeration
 
     reconciler.reconcile(_request(paths=tracks))
 

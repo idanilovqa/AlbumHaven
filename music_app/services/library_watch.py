@@ -132,7 +132,7 @@ def publish_watchdog_event(
     root_definitions = tuple(dict(root) for root in roots)
     observed_at = clock()
     source_path = Path(getattr(event, "src_path", "")).resolve(strict=False)
-    if bool(getattr(event, "is_directory", False)) and kind in {
+    if kind in {
         LibraryEventKind.DELETED,
         LibraryEventKind.MOVED,
     }:

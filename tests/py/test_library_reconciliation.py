@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 def test_library_events_normalize_against_configured_root(tmp_path: Path):
     from music_app.services.library_reconciliation import (
@@ -65,7 +67,14 @@ def test_library_event_normalization_rejects_out_of_root(
     assert moved.destination_root_id == "second"
 
 
-def test_watchdog_mapping_keeps_directory_delete_and_move_events(tmp_path: Path):
+@pytest.mark.parametrize("event_type", ["deleted", "moved"])
+@pytest.mark.parametrize(
+    ("relative_path", "is_directory"),
+    [("Artist/Deleted Album", True), ("Artist/Album/01.flac", False)],
+)
+def test_watchdog_mapping_keeps_child_delete_and_move_events(
+    tmp_path: Path, event_type: str, relative_path: str, is_directory: bool,
+):
     from music_app.services.library_reconciliation import (
         LibraryEventKind,
         publish_watchdog_event,
@@ -77,21 +86,33 @@ def test_watchdog_mapping_keeps_directory_delete_and_move_events(tmp_path: Path)
     roots = [{"id": "main", "path": str(root)}]
     published = []
 
-    class Event:
-        event_type = "deleted"
-        src_path = str(root / "Artist" / "Deleted Album")
-        is_directory = True
+    event = SimpleNamespace(
+        event_type=event_type,
+        src_path=str(root / relative_path),
+        dest_path=str(root / "Artist" / "Moved Item") if event_type == "moved" else None,
+        is_directory=is_directory,
+    )
 
-    publish_watchdog_event(Event(), roots=roots, publish=published.append, clock=lambda: 3.0)
+    publish_watchdog_event(event, roots=roots, publish=published.append, clock=lambda: 3.0)
 
-    assert published[0].kind is LibraryEventKind.DELETED
-    assert published[0].path == (root / "Artist" / "Deleted Album").resolve(strict=False)
-    assert published[0].is_directory is True
+    assert len(published) == 1
+    assert published[0].kind is LibraryEventKind(event_type)
+    assert published[0].path == (root / relative_path).resolve(strict=False)
+    assert published[0].is_directory is is_directory
+    assert published[0].destination == (
+        (root / "Artist" / "Moved Item").resolve(strict=False)
+        if event_type == "moved" else None
+    )
     assert watchdog_event_kind("closed") is None
     assert watchdog_event_kind("created") is LibraryEventKind.CREATED
 
 
-def test_watchdog_maps_configured_root_deletion_to_unavailable_health_event(tmp_path: Path):
+@pytest.mark.parametrize("event_type", ["deleted", "moved"])
+@pytest.mark.parametrize("is_directory", [True, False])
+def test_watchdog_maps_configured_root_disappearance_to_unavailable_health_event(
+    tmp_path: Path, event_type: str, is_directory: bool,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import (
         LibraryEventKind,
         publish_watchdog_event,
@@ -99,24 +120,35 @@ def test_watchdog_maps_configured_root_deletion_to_unavailable_health_event(tmp_
 
     root = tmp_path / "music"
     root.mkdir()
+    root.rmdir()
     published = []
+    requests = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=requests.append,
+        emit_health_event=published.append,
+    )
 
     event = SimpleNamespace(
-        event_type="deleted",
+        event_type=event_type,
         src_path=str(root),
-        is_directory=True,
+        dest_path=str(tmp_path / "moved-music") if event_type == "moved" else None,
+        is_directory=is_directory,
     )
     publish_watchdog_event(
         event,
         roots=[{"id": "main", "path": str(root)}],
-        publish=published.append,
+        publish=coordinator.accept,
         clock=lambda: 4.0,
     )
+    coordinator.flush()
 
+    assert requests == []
     assert len(published) == 1
     assert published[0].kind is LibraryEventKind.ROOT_UNAVAILABLE
     assert published[0].root_id == "main"
     assert published[0].path == root.resolve(strict=False)
+    assert published[0].is_directory is True
+    assert published[0].observed_at == 4.0
 
 
 def test_library_watch_service_starts_and_stops_injected_source_once(tmp_path: Path):

@@ -58,7 +58,7 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has four literal fixture-profile runners owning all 19 targets once', () => {
+test('workflow has four selectable fixture-profile runners owning all 19 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
@@ -66,7 +66,8 @@ test('workflow has four literal fixture-profile runners owning all 19 targets on
   assert.equal(owned.length, 19);
   assert.equal(new Set(owned).size, 19);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
-  assert.doesNotMatch(job, /matrix:\s*\$\{\{/i);
+  assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
+  assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
   assert.match(job, /fail-fast:\s*false/);
   assert.match(job, /max-parallel:\s*4/);
   assert.deepEqual(
@@ -77,34 +78,20 @@ test('workflow has four literal fixture-profile runners owning all 19 targets on
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
-test('validator accepts shards and rejects ownership, compatibility, and case drift', () => {
+test('validator accepts selectable shards and rejects routing and case drift', () => {
   assert.deepEqual(validator.validateWorkflowContract(workflow, contract, runnerModule, testDataMatrix), []);
 
-  const duplicate = workflow.replace(
-    'targets: utility-problematic-files,problematic-files-focused',
-    'targets: utility-problematic-files,idle-memory',
+  const missingResolver = workflow.replace(
+    'resolve-ci-shard.cjs performance',
+    'resolve-ci-shard.cjs disabled',
   );
-  assert.match(validator.validateWorkflowContract(duplicate, contract, runnerModule, testDataMatrix).join('\n'), /owned exactly once|disagree/i);
+  assert.match(validator.validateWorkflowContract(missingResolver, contract, runnerModule, testDataMatrix).join('\n'), /resolve.*checked-in registry/i);
 
-  const workflowLineEndingVariants = [
-    workflow.replace(/\r?\n/g, '\n'),
-    workflow.replace(/\r?\n/g, '\r\n'),
-  ];
-  for (const workflowSource of workflowLineEndingVariants) {
-    const mixedProfile = workflowSource.replace(
-      /(shard: playback-media\r?\n\s+fixtureProfile:) playback-media/,
-      '$1 synthetic-large-library',
-    );
-    assert.notEqual(mixedProfile, workflowSource, 'fixture compatibility mutation must apply on LF and CRLF checkouts');
-    assert.match(validator.validateWorkflowContract(mixedProfile, contract, runnerModule, testDataMatrix).join('\n'), /fixture|compatible/i);
-
-    const mixedHarness = workflowSource.replace(
-      /(shard: utility-problematic-files\r?\n(?:\s+[^\r\n]+\r?\n){3}\s+harness:)\s+[^\r\n]+/,
-      '$1 scan',
-    );
-    assert.notEqual(mixedHarness, workflowSource, 'harness-family mutation must apply on LF and CRLF checkouts');
-    assert.match(validator.validateWorkflowContract(mixedHarness, contract, runnerModule, testDataMatrix).join('\n'), /harness|compatible/i);
-  }
+  const unclassifiedMatrix = workflow.replace(
+    '${{ fromJSON(needs.review_scope.outputs.performance_shards_json) }}',
+    '[synthetic-large-library]',
+  );
+  assert.match(validator.validateWorkflowContract(unclassifiedMatrix, contract, runnerModule, testDataMatrix).join('\n'), /classified checked-in shard names/i);
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
@@ -137,8 +124,8 @@ test('profile runners remain PR-only same-repository Windows Chrome jobs capped 
   assert.doesNotMatch(job, /continue-on-error:/);
   assert.match(job, /-Browser\s+chrome/);
   assert.match(job, /run-performance-shard\.ps1/);
-  assert.match(job, /-Targets\s+["']?\$\{\{\s*matrix\.targets\s*\}\}/);
-  assert.match(job, /-BasePort\s+["']?\$\{\{\s*matrix\.basePort\s*\}\}/);
+  assert.match(job, /-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/);
+  assert.match(job, /-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/);
 });
 
 test('performance foundations are written only after shared shard PostgreSQL provisioning', () => {
@@ -189,7 +176,7 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
   assert.doesNotMatch(trustedCheckout, /\n\s+if:/);
   assert.doesNotMatch(fixtureFetch, /\n\s+if:/);
   assert.match(trustedCheckout, /persist-credentials:\s*false/);
-  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*matrix\.fixtureDownloadProfile\s*\}\}/);
+  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*steps\.shard\.outputs\.fixture_download_profile\s*\}\}/);
   assert.match(fixtureFetch, new RegExp(`-Release\\s+${FIXTURE_RELEASE.replaceAll('.', '\\.')}`));
   assert.match(fixtureFetch, new RegExp(`-ManifestSha256\\s+${FIXTURE_MANIFEST_SHA256}`));
   assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Install Node dependencies'));
@@ -202,7 +189,7 @@ test('each shard fetches an immutable profile or cover seed before pull-request 
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {
   const job = performanceJobSource();
   for (let slot = 1; slot <= 10; slot += 1) {
-    const expression = `\${{ matrix.target${slot} }}`;
+    const expression = `\${{ steps.shard.outputs.target${slot} }}`;
     const result = stepContaining(job, `performance-result-${expression}`);
     const foundation = stepContaining(job, `foundation-versions-performance-${expression}`);
     const diagnostics = stepContaining(job, `performance-diagnostics-${expression}`);
@@ -219,6 +206,6 @@ test('each target retains individual result, diagnostics, and foundation artifac
 test('functional shards and all-19 authenticated target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
   assert.match(workflow, /validate-functional-shards\.cjs --run-shard=\$\{\{\s*matrix\.shard\s*\}\}/);
-  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*matrix\.target10\s*\}\}/);
+  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target10\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

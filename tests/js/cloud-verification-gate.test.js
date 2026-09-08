@@ -28,6 +28,7 @@ function validInput(mode = 'trusted', reviewMode = 'full') {
   if (trusted) REVIEW_JOBS.forEach((job, index) => { jobResults[job] = reviewExpectations[index]; });
   return {
     mode,
+    pipelineMode: 'full',
     reviewMode,
     jobResults,
   };
@@ -39,7 +40,7 @@ test('workflow defines the always-running Cloud Verification Gate and keeps pull
   assert.doesNotMatch(workflow, /pull_request_target/);
   assert.match(workflow, /cloud_verification_gate:\s*\r?\n\s+name: Cloud Verification Gate/);
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
-  assert.match(gate, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(gate, /if: \$\{\{ always\(\) && needs\.review_scope\.outputs\.pipeline_mode == 'full' \}\}/);
   for (const job of REQUIRED_JOBS) assert.match(gate, new RegExp(`\\s+- ${job}\\r?$`, 'm'));
   assert.doesNotMatch(gate, /merge_cloud_reports|deploy_cloud_reports|cloud-test-report-/);
   assert.match(gate, /Non-authoritative fork conclusion/);
@@ -47,7 +48,7 @@ test('workflow defines the always-running Cloud Verification Gate and keeps pull
   assert.match(gate, /validate-cloud-verification-gate\.cjs/);
 });
 
-test('workflow classifies review scope and gates all reviewers behind successful E2E', () => {
+test('workflow runs reviewers before tests and lets tests run after failed review', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /review_scope:\s*\r?\n\s+name: PR Review Scope/);
   assert.match(workflow, /node scripts\/ci\/classify-pr-review-scope\.cjs/);
@@ -62,12 +63,10 @@ test('workflow classifies review scope and gates all reviewers behind successful
 
   const prAgent = workflow.slice(workflow.indexOf('  pr_agent_review:'), workflow.indexOf('  codex_review:'));
   const codex = workflow.slice(workflow.indexOf('  codex_review:'), workflow.indexOf('  ai_code_review:'));
-  const third = workflow.slice(workflow.indexOf('  ai_code_review:'), workflow.indexOf('  cloud_verification_gate:'));
+  const third = workflow.slice(workflow.indexOf('  ai_code_review:'), workflow.indexOf('  focused_e2e_gate:'));
   for (const block of [prAgent, codex, third]) {
-    for (const job of ['e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci']) {
-      assert.match(block, new RegExp(`needs\\.${job}\\.result == 'success'`));
-    }
     assert.match(block, /needs\.review_scope\.result == 'success'/);
+    assert.doesNotMatch(block, /needs\.e2e_/);
   }
   assert.match(prAgent, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
   assert.match(prAgent, /\["\/review -i"\]/);
@@ -79,6 +78,20 @@ test('workflow classifies review scope and gates all reviewers behind successful
   assert.match(third, /OPENAI_API_MODEL: "gpt-4\.1-mini"/);
   assert.match(third, /ENABLE_LINTERS: "false"/);
   assert.doesNotMatch(third, /outputs\.review_status/);
+
+  for (const jobName of [
+    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
+    'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
+  ]) {
+    const start = workflow.indexOf(`  ${jobName}:`);
+    const nextJob = workflow.slice(start + 3).match(/^  [a-z0-9_]+:\s*$/m);
+    const next = nextJob ? start + 3 + nextJob.index : -1;
+    const block = workflow.slice(start, next < 0 ? workflow.length : next);
+    assert.match(block, /pr_agent_review/);
+    assert.match(block, /codex_review/);
+    assert.match(block, /ai_code_review/);
+    assert.match(block, /if: \$\{\{ always\(\)/);
+  }
 
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
   assert.match(gate, /REVIEW_MODE: \$\{\{ needs\.review_scope\.outputs\.mode \}\}/);
@@ -97,6 +110,13 @@ test('trusted gate accepts the reviewer matrix for each review mode', () => {
       errors: [],
     });
   }
+});
+
+test('trusted full gate rejects focused pipeline mode', () => {
+  const { validateCloudVerificationGate } = require(validatorPath);
+  const input = validInput();
+  input.pipelineMode = 'focused-e2e';
+  assert.equal(validateCloudVerificationGate(input).conclusion, 'failure');
 });
 
 test('trusted gate fails closed for missing and non-success foundation or E2E results', () => {

@@ -2,6 +2,21 @@ const fs = require('node:fs');
 const { execFileSync } = require('node:child_process');
 
 const INCREMENTAL_LINE_LIMIT = 250;
+const FOCUSED_E2E_LABEL = 'ci:focused-e2e';
+const FORCE_FULL_REVIEW_LABEL = 'ci:full-review';
+const FUNCTIONAL_SHARDS = [
+  'gallery-search-visual',
+  'cover-providers',
+  'metadata-mutations',
+  'playback-utilities',
+];
+const PHASE7_TARGETS = ['phase7-auth', 'phase7-admin'];
+const PERFORMANCE_SHARDS = [
+  'synthetic-large-library',
+  'utility-problematic-files',
+  'playback-media',
+  'scan-library',
+];
 
 function normalizePath(filePath) {
   return String(filePath || '').replaceAll('\\', '/').replace(/^\.\//, '');
@@ -43,7 +58,14 @@ function requireValue(value, name) {
   return String(value).trim();
 }
 
-function classifyReviewScope({ action, baseSha, lastReviewedSha, headSha, numstat }) {
+function classifyReviewScope({
+  action,
+  baseSha,
+  lastReviewedSha,
+  headSha,
+  numstat,
+  forceFullReview = false,
+}) {
   const eventAction = requireValue(action, 'action');
   const prBaseSha = requireValue(baseSha, 'baseSha');
   const prHeadSha = requireValue(headSha, 'headSha');
@@ -58,13 +80,14 @@ function classifyReviewScope({ action, baseSha, lastReviewedSha, headSha, numsta
   );
   const hasBinaryFunctionalChange = functionalFiles.some((entry) => entry.binary);
 
-  let mode = 'full';
-  if (hasSuccessfulBaseline) {
-    mode = functionalChange
+  let mode = 'none';
+  if (functionalChange) {
+    mode = hasSuccessfulBaseline
+      && !forceFullReview
       && !hasBinaryFunctionalChange
-      && functionalLines <= INCREMENTAL_LINE_LIMIT
+      && functionalLines < INCREMENTAL_LINE_LIMIT
       ? 'incremental'
-      : functionalChange ? 'full' : 'none';
+      : 'full';
   }
 
   return {
@@ -74,6 +97,55 @@ function classifyReviewScope({ action, baseSha, lastReviewedSha, headSha, numsta
     functionalChange,
     functionalLines,
     hasBinaryFunctionalChange,
+  };
+}
+
+function normalizeLabels(labels) {
+  if (!Array.isArray(labels)) throw new Error('labels must be an array');
+  return [...new Set(labels.map((label) => String(label || '').trim()).filter(Boolean))];
+}
+
+function classifyPipelineLabels(labels) {
+  const normalized = normalizeLabels(labels);
+  const labelSet = new Set(normalized);
+  const focused = labelSet.has(FOCUSED_E2E_LABEL);
+  const focusedFunctionalShards = FUNCTIONAL_SHARDS.filter((shard) => (
+    labelSet.has(`ci:e2e:${shard}`)
+  ));
+  const focusedPhase7Targets = PHASE7_TARGETS.filter((target) => (
+    labelSet.has(`ci:e2e:${target}`)
+  ));
+  const focusedPerformanceShards = PERFORMANCE_SHARDS.filter((shard) => (
+    labelSet.has(`ci:e2e-performance:${shard}`)
+  ));
+
+  if (focused) {
+    const targetPrefixes = ['ci:e2e:', 'ci:e2e-performance:'];
+    const supportedTargetLabels = new Set([
+      ...FUNCTIONAL_SHARDS.map((shard) => `ci:e2e:${shard}`),
+      ...PHASE7_TARGETS.map((target) => `ci:e2e:${target}`),
+      ...PERFORMANCE_SHARDS.map((shard) => `ci:e2e-performance:${shard}`),
+    ]);
+    const unsupported = normalized.find((label) => (
+      targetPrefixes.some((prefix) => label.startsWith(prefix))
+      && !supportedTargetLabels.has(label)
+    ));
+    if (unsupported) throw new Error(`Unsupported focused E2E target label: ${unsupported}`);
+    if (
+      focusedFunctionalShards.length
+      + focusedPhase7Targets.length
+      + focusedPerformanceShards.length === 0
+    ) {
+      throw new Error(`${FOCUSED_E2E_LABEL} requires at least one supported target label`);
+    }
+  }
+
+  return {
+    pipelineMode: focused ? 'focused-e2e' : 'full',
+    forceFullReview: !focused && labelSet.has(FORCE_FULL_REVIEW_LABEL),
+    focusedFunctionalShards: focused ? focusedFunctionalShards : [],
+    focusedPhase7Targets: focused ? focusedPhase7Targets : [],
+    focusedPerformanceShards: focused ? focusedPerformanceShards : [],
   };
 }
 
@@ -105,13 +177,35 @@ function runCli(env = process.env) {
       lastReviewedSha = '';
     }
   }
+  let labels;
+  try {
+    labels = JSON.parse(String(env.PR_LABELS_JSON || '[]'));
+  } catch (error) {
+    throw new Error(`PR_LABELS_JSON must be valid JSON: ${error.message}`);
+  }
+  const pipeline = classifyPipelineLabels(labels);
   const diffBase = action === 'synchronize' && lastReviewedSha ? lastReviewedSha : baseSha;
   const numstat = execFileSync(
     'git',
     ['diff', '--numstat', '--no-renames', diffBase, headSha],
     { encoding: 'utf8' },
   );
-  const result = classifyReviewScope({ action, baseSha, lastReviewedSha, headSha, numstat });
+  const review = classifyReviewScope({
+    action,
+    baseSha,
+    lastReviewedSha,
+    headSha,
+    numstat,
+    forceFullReview: pipeline.forceFullReview,
+  });
+  if (pipeline.pipelineMode === 'focused-e2e') review.mode = 'none';
+  const functionalShards = pipeline.pipelineMode === 'full'
+    ? FUNCTIONAL_SHARDS
+    : pipeline.focusedFunctionalShards;
+  const performanceShards = pipeline.pipelineMode === 'full'
+    ? PERFORMANCE_SHARDS
+    : pipeline.focusedPerformanceShards;
+  const result = { ...review, ...pipeline };
   const outputPath = requireValue(env.GITHUB_OUTPUT, 'GITHUB_OUTPUT');
   const output = [
     `mode=${result.mode}`,
@@ -120,6 +214,19 @@ function runCli(env = process.env) {
     `functional_change=${String(result.functionalChange)}`,
     `functional_lines=${result.functionalLines}`,
     `binary_functional_change=${String(result.hasBinaryFunctionalChange)}`,
+    `pipeline_mode=${pipeline.pipelineMode}`,
+    `functional_shards_json=${JSON.stringify(functionalShards)}`,
+    `performance_shards_json=${JSON.stringify(performanceShards)}`,
+    `run_functional=${String(functionalShards.length > 0)}`,
+    `run_performance=${String(performanceShards.length > 0)}`,
+    `run_phase7_auth=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth'))}`,
+    `run_phase7_admin=${String(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-admin'))}`,
+    `selected_families_json=${JSON.stringify([
+      ...(functionalShards.length ? ['e2e_functional'] : []),
+      ...(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-auth') ? ['e2e_phase7_auth'] : []),
+      ...(pipeline.pipelineMode === 'full' || pipeline.focusedPhase7Targets.includes('phase7-admin') ? ['e2e_phase7_admin'] : []),
+      ...(performanceShards.length ? ['e2e_performance_ci'] : []),
+    ])}`,
   ].join('\n');
   fs.appendFileSync(outputPath, `${output}\n`, 'utf8');
   process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -129,7 +236,13 @@ function runCli(env = process.env) {
 if (require.main === module) runCli();
 
 module.exports = {
+  FOCUSED_E2E_LABEL,
+  FORCE_FULL_REVIEW_LABEL,
+  FUNCTIONAL_SHARDS,
   INCREMENTAL_LINE_LIMIT,
+  PERFORMANCE_SHARDS,
+  PHASE7_TARGETS,
+  classifyPipelineLabels,
   isDocumentationPath,
   parseNumstat,
   classifyReviewScope,

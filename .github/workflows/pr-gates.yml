@@ -7,6 +7,8 @@ on:
       - synchronize
       - reopened
       - ready_for_review
+      - labeled
+      - unlabeled
 
 permissions:
   contents: read
@@ -21,6 +23,12 @@ concurrency:
 jobs:
   test_js:
     name: JavaScript Tests (Portable)
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -78,6 +86,12 @@ jobs:
 
   test_components:
     name: Component Tests (Pinned Chrome)
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -126,7 +140,12 @@ jobs:
 
   test_node_windows:
     name: JavaScript Tests (Windows Contract)
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -215,7 +234,12 @@ jobs:
 
   test_python:
     name: Python Tests
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -325,6 +349,12 @@ jobs:
 
   e2e_production_parity:
     name: "E2E: Production Parity"
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -349,12 +379,11 @@ jobs:
   e2e_phase7_auth:
     name: "E2E: Phase 7 Auth Lifecycle"
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -435,12 +464,11 @@ jobs:
   e2e_phase7_admin:
     name: "E2E: Phase 7 Admin Management"
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -519,45 +547,20 @@ jobs:
           retention-days: 7
 
   e2e_functional:
-    name: "E2E: ${{ matrix.displayName }}"
+    name: "E2E: ${{ matrix.shard }}"
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        include:
-          - shard: gallery-search-visual
-            displayName: Gallery, Search & Visual
-            expectedCases: 36
-            portBase: 5200
-            outputDir: functional-output-gallery-search-visual
-            blobName: functional-blob-gallery-search-visual
-          - shard: cover-providers
-            displayName: Cover Providers
-            expectedCases: 18
-            portBase: 5300
-            outputDir: functional-output-cover-providers
-            blobName: functional-blob-cover-providers
-          - shard: metadata-mutations
-            displayName: Metadata Mutations
-            expectedCases: 13
-            portBase: 5400
-            outputDir: functional-output-metadata-mutations
-            blobName: functional-blob-metadata-mutations
-          - shard: playback-utilities
-            displayName: Playback & Utilities
-            expectedCases: 30
-            portBase: 5500
-            outputDir: functional-output-playback-utilities
-            blobName: functional-blob-playback-utilities
+        shard: ${{ fromJSON(needs.review_scope.outputs.functional_shards_json) }}
     steps:
       - name: Checkout pull request
         uses: actions/checkout@v5
@@ -592,6 +595,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+
+      - name: Resolve functional shard configuration
+        id: shard
+        run: node scripts/ci/resolve-ci-shard.cjs functional ${{ matrix.shard }}
 
       - name: Set up pinned functional Chrome for Testing
         id: setup_functional_chrome
@@ -643,7 +650,7 @@ jobs:
           if (-not (Test-Path -LiteralPath ".\scripts\ci\load-fixture-profile.py" -PathType Leaf)) {
             throw "scripts/ci/load-fixture-profile.py is required."
           }
-          $env:PLAYWRIGHT_PROVIDER_PORT = ([int]"${{ matrix.portBase }}" + 2).ToString()
+          $env:PLAYWRIGHT_PROVIDER_PORT = ([int]"${{ steps.shard.outputs.port_base }}" + 2).ToString()
           .\scripts\ci\bootstrap-windows-postgres.ps1 `
             -Mode Provision `
             -ExpectedMajorVersion 17 `
@@ -668,8 +675,8 @@ jobs:
         run: |
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
-          $env:ALBUM_HAVEN_FUNCTIONAL_PORT_BASE = "${{ matrix.portBase }}"
-          $env:ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT = Join-Path "${{ runner.temp }}" "${{ matrix.outputDir }}"
+          $env:ALBUM_HAVEN_FUNCTIONAL_PORT_BASE = "${{ steps.shard.outputs.port_base }}"
+          $env:ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT = Join-Path "${{ runner.temp }}" "${{ steps.shard.outputs.output_dir }}"
           $env:ALBUM_HAVEN_FUNCTIONAL_BLOB_ROOT = Join-Path "${{ runner.temp }}" "functional-blobs-${{ matrix.shard }}"
           node scripts/ci/validate-functional-shards.cjs --run-shard=${{ matrix.shard }}
 
@@ -700,7 +707,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.blobName }}-${{ github.run_attempt }}
+          name: ${{ steps.shard.outputs.blob_name }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}\functional-blobs-${{ matrix.shard }}
           if-no-files-found: error
           retention-days: 14
@@ -710,116 +717,30 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: functional-debug-${{ matrix.shard }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\${{ matrix.outputDir }}
+          path: ${{ runner.temp }}\${{ steps.shard.outputs.output_dir }}
           if-no-files-found: error
           retention-days: 7
 
   e2e_performance_ci:
     name: "E2E Performance: ${{ matrix.shard }}"
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        include:
-          - shard: synthetic-large-library
-            fixtureProfile: synthetic-large-library
-            fixtureDownloadProfile: synthetic-large-library
-            fixtureMode: preloaded-release
-            harness: managed-app
-            basePort: 4173
-            targets: idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused
-            target1: idle-memory
-            target2: all-artists
-            target3: artist-family
-            target4: search-all-artists
-            target5: utility-rules
-            target6: selected-artist
-            target7: search-browse
-            target8: root-album-browse
-            target9: app-open-all-artists
-            target10: rules-focused
-          - shard: utility-problematic-files
-            fixtureProfile: utility-problematic-files
-            fixtureDownloadProfile: utility-problematic-files
-            fixtureMode: preloaded-release
-            harness: managed-app
-            basePort: 4253
-            targets: utility-problematic-files,problematic-files-focused
-            target1: utility-problematic-files
-            target2: problematic-files-focused
-            target3: none
-            target4: none
-            target5: none
-            target6: none
-            target7: none
-            target8: none
-            target9: none
-            target10: none
-          - shard: playback-media
-            fixtureProfile: playback-media
-            fixtureDownloadProfile: synthetic-large-library
-            fixtureMode: generated-isolated
-            harness: managed-app
-            basePort: 4213
-            targets: playback-start,gapless-playback
-            target1: playback-start
-            target2: gapless-playback
-            target3: none
-            target4: none
-            target5: none
-            target6: none
-            target7: none
-            target8: none
-            target9: none
-            target10: none
-          - shard: scan-library
-            fixtureProfile: scan-library
-            fixtureDownloadProfile: synthetic-large-library
-            fixtureMode: generated-isolated
-            harness: scan
-            basePort: 4293
-            targets: scan-cold,scan-cached,scan-add-album,scan-metadata,scan-page
-            target1: scan-cold
-            target2: scan-cached
-            target3: scan-add-album
-            target4: scan-metadata
-            target5: scan-page
-            target6: none
-            target7: none
-            target8: none
-            target9: none
-            target10: none
+        shard: ${{ fromJSON(needs.review_scope.outputs.performance_shards_json) }}
     steps:
       - name: Checkout pull request
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Initialize performance shard result evidence
-        if: ${{ always() }}
-        run: |
-          foreach ($target in "${{ matrix.targets }}".Split(',')) {
-            $targetRoot = Join-Path "test-results\playwright-performance-targets" $target
-            New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
-            @{
-              target = $target
-              shard = "${{ matrix.shard }}"
-              fixtureProfile = "${{ matrix.fixtureProfile }}"
-              fixtureMode = "${{ matrix.fixtureMode }}"
-              blocking = $false
-              runAttempt = "${{ github.run_attempt }}"
-              conclusion = "initialized"
-            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $targetRoot "ci-job.json") -Encoding utf8
-          }
 
       - name: Checkout trusted fixture downloader
         uses: actions/checkout@v5
@@ -828,20 +749,41 @@ jobs:
           path: .trusted-ci
           persist-credentials: false
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Resolve performance shard configuration
+        id: shard
+        run: node scripts/ci/resolve-ci-shard.cjs performance ${{ matrix.shard }}
+
       - name: Fetch immutable performance fixture
         env:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
             -Release fixtures-v1.0.21 `
-            -Profile ${{ matrix.fixtureDownloadProfile }} `
+            -Profile ${{ steps.shard.outputs.fixture_download_profile }} `
             -ManifestSha256 094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
+      - name: Initialize performance shard result evidence
+        if: ${{ always() }}
+        run: |
+          foreach ($target in "${{ steps.shard.outputs.targets }}".Split(',')) {
+            $targetRoot = Join-Path "test-results\playwright-performance-targets" $target
+            New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null
+            @{
+              target = $target
+              shard = "${{ matrix.shard }}"
+              fixtureProfile = "${{ steps.shard.outputs.fixture_profile }}"
+              fixtureMode = "${{ steps.shard.outputs.fixture_mode }}"
+              blocking = $false
+              runAttempt = "${{ github.run_attempt }}"
+              conclusion = "initialized"
+            } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $targetRoot "ci-job.json") -Encoding utf8
+          }
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -868,7 +810,7 @@ jobs:
         run: node scripts/ci/validate-performance-matrix.cjs --list
 
       - name: Prepare generated performance profile
-        if: ${{ matrix.fixtureMode == 'generated-isolated' }}
+        if: ${{ steps.shard.outputs.fixture_mode == 'generated-isolated' }}
         run: |
           $releasedRoot = [IO.Path]::GetFullPath($env:ALBUM_HAVEN_FIXTURE_ROOT)
           $approvedCoverRoot = Join-Path $releasedRoot "media\covers\approved"
@@ -879,7 +821,7 @@ jobs:
             -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_FIXTURE_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_MEDIA_ROOT= " | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "ALBUM_HAVEN_FIXTURE_PROFILE=${{ matrix.fixtureProfile }}" | Out-File `
+          "ALBUM_HAVEN_FIXTURE_PROFILE=${{ steps.shard.outputs.fixture_profile }}" | Out-File `
             -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Run sequential isolated performance shard
@@ -889,281 +831,281 @@ jobs:
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
           .\scripts\ci\run-performance-shard.ps1 `
-            -Targets "${{ matrix.targets }}" `
-            -FixtureProfile "${{ matrix.fixtureProfile }}" `
-            -FixtureMode "${{ matrix.fixtureMode }}" `
-            -BasePort "${{ matrix.basePort }}" `
+            -Targets "${{ steps.shard.outputs.targets }}" `
+            -FixtureProfile "${{ steps.shard.outputs.fixture_profile }}" `
+            -FixtureMode "${{ steps.shard.outputs.fixture_mode }}" `
+            -BasePort "${{ steps.shard.outputs.base_port }}" `
             -DatabaseSuffixBase "p_${{ github.run_id }}_${{ github.run_attempt }}_${{ strategy.job-index }}" `
             -ShardName "${{ matrix.shard }}" `
             -Browser chrome `
             -PerformanceContract ci
 
-      - name: Upload performance foundation 1 foundation-versions-performance-${{ matrix.target1 }}
-        if: ${{ always() && matrix.target1 != 'none' }}
+      - name: Upload performance foundation 1 foundation-versions-performance-${{ steps.shard.outputs.target1 }}
+        if: ${{ always() && steps.shard.outputs.target1 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target1 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target1 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target1 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target1 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 1 performance-result-${{ matrix.target1 }}
-        if: ${{ always() && matrix.target1 != 'none' }}
+      - name: Upload performance result 1 performance-result-${{ steps.shard.outputs.target1 }}
+        if: ${{ always() && steps.shard.outputs.target1 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target1 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target1 }}
+          name: performance-result-${{ steps.shard.outputs.target1 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target1 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 1 performance-diagnostics-${{ matrix.target1 }}
-        if: ${{ failure() && !cancelled() && matrix.target1 != 'none' }}
+      - name: Upload performance diagnostics 1 performance-diagnostics-${{ steps.shard.outputs.target1 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target1 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target1 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target1 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target1 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target1 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 2 foundation-versions-performance-${{ matrix.target2 }}
-        if: ${{ always() && matrix.target2 != 'none' }}
+      - name: Upload performance foundation 2 foundation-versions-performance-${{ steps.shard.outputs.target2 }}
+        if: ${{ always() && steps.shard.outputs.target2 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target2 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target2 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target2 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target2 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 2 performance-result-${{ matrix.target2 }}
-        if: ${{ always() && matrix.target2 != 'none' }}
+      - name: Upload performance result 2 performance-result-${{ steps.shard.outputs.target2 }}
+        if: ${{ always() && steps.shard.outputs.target2 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target2 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target2 }}
+          name: performance-result-${{ steps.shard.outputs.target2 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target2 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 2 performance-diagnostics-${{ matrix.target2 }}
-        if: ${{ failure() && !cancelled() && matrix.target2 != 'none' }}
+      - name: Upload performance diagnostics 2 performance-diagnostics-${{ steps.shard.outputs.target2 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target2 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target2 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target2 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target2 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target2 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 3 foundation-versions-performance-${{ matrix.target3 }}
-        if: ${{ always() && matrix.target3 != 'none' }}
+      - name: Upload performance foundation 3 foundation-versions-performance-${{ steps.shard.outputs.target3 }}
+        if: ${{ always() && steps.shard.outputs.target3 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target3 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target3 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target3 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target3 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 3 performance-result-${{ matrix.target3 }}
-        if: ${{ always() && matrix.target3 != 'none' }}
+      - name: Upload performance result 3 performance-result-${{ steps.shard.outputs.target3 }}
+        if: ${{ always() && steps.shard.outputs.target3 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target3 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target3 }}
+          name: performance-result-${{ steps.shard.outputs.target3 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target3 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 3 performance-diagnostics-${{ matrix.target3 }}
-        if: ${{ failure() && !cancelled() && matrix.target3 != 'none' }}
+      - name: Upload performance diagnostics 3 performance-diagnostics-${{ steps.shard.outputs.target3 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target3 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target3 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target3 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target3 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target3 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 4 foundation-versions-performance-${{ matrix.target4 }}
-        if: ${{ always() && matrix.target4 != 'none' }}
+      - name: Upload performance foundation 4 foundation-versions-performance-${{ steps.shard.outputs.target4 }}
+        if: ${{ always() && steps.shard.outputs.target4 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target4 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target4 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target4 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target4 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 4 performance-result-${{ matrix.target4 }}
-        if: ${{ always() && matrix.target4 != 'none' }}
+      - name: Upload performance result 4 performance-result-${{ steps.shard.outputs.target4 }}
+        if: ${{ always() && steps.shard.outputs.target4 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target4 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target4 }}
+          name: performance-result-${{ steps.shard.outputs.target4 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target4 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 4 performance-diagnostics-${{ matrix.target4 }}
-        if: ${{ failure() && !cancelled() && matrix.target4 != 'none' }}
+      - name: Upload performance diagnostics 4 performance-diagnostics-${{ steps.shard.outputs.target4 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target4 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target4 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target4 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target4 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target4 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 5 foundation-versions-performance-${{ matrix.target5 }}
-        if: ${{ always() && matrix.target5 != 'none' }}
+      - name: Upload performance foundation 5 foundation-versions-performance-${{ steps.shard.outputs.target5 }}
+        if: ${{ always() && steps.shard.outputs.target5 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target5 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target5 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target5 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target5 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 5 performance-result-${{ matrix.target5 }}
-        if: ${{ always() && matrix.target5 != 'none' }}
+      - name: Upload performance result 5 performance-result-${{ steps.shard.outputs.target5 }}
+        if: ${{ always() && steps.shard.outputs.target5 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target5 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target5 }}
+          name: performance-result-${{ steps.shard.outputs.target5 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target5 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 5 performance-diagnostics-${{ matrix.target5 }}
-        if: ${{ failure() && !cancelled() && matrix.target5 != 'none' }}
+      - name: Upload performance diagnostics 5 performance-diagnostics-${{ steps.shard.outputs.target5 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target5 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target5 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target5 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target5 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target5 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 6 foundation-versions-performance-${{ matrix.target6 }}
-        if: ${{ always() && matrix.target6 != 'none' }}
+      - name: Upload performance foundation 6 foundation-versions-performance-${{ steps.shard.outputs.target6 }}
+        if: ${{ always() && steps.shard.outputs.target6 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target6 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target6 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target6 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target6 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 6 performance-result-${{ matrix.target6 }}
-        if: ${{ always() && matrix.target6 != 'none' }}
+      - name: Upload performance result 6 performance-result-${{ steps.shard.outputs.target6 }}
+        if: ${{ always() && steps.shard.outputs.target6 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target6 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target6 }}
+          name: performance-result-${{ steps.shard.outputs.target6 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target6 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 6 performance-diagnostics-${{ matrix.target6 }}
-        if: ${{ failure() && !cancelled() && matrix.target6 != 'none' }}
+      - name: Upload performance diagnostics 6 performance-diagnostics-${{ steps.shard.outputs.target6 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target6 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target6 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target6 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target6 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target6 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 7 foundation-versions-performance-${{ matrix.target7 }}
-        if: ${{ always() && matrix.target7 != 'none' }}
+      - name: Upload performance foundation 7 foundation-versions-performance-${{ steps.shard.outputs.target7 }}
+        if: ${{ always() && steps.shard.outputs.target7 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target7 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target7 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target7 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target7 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 7 performance-result-${{ matrix.target7 }}
-        if: ${{ always() && matrix.target7 != 'none' }}
+      - name: Upload performance result 7 performance-result-${{ steps.shard.outputs.target7 }}
+        if: ${{ always() && steps.shard.outputs.target7 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target7 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target7 }}
+          name: performance-result-${{ steps.shard.outputs.target7 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target7 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 7 performance-diagnostics-${{ matrix.target7 }}
-        if: ${{ failure() && !cancelled() && matrix.target7 != 'none' }}
+      - name: Upload performance diagnostics 7 performance-diagnostics-${{ steps.shard.outputs.target7 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target7 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target7 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target7 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target7 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target7 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 8 foundation-versions-performance-${{ matrix.target8 }}
-        if: ${{ always() && matrix.target8 != 'none' }}
+      - name: Upload performance foundation 8 foundation-versions-performance-${{ steps.shard.outputs.target8 }}
+        if: ${{ always() && steps.shard.outputs.target8 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target8 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target8 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target8 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target8 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 8 performance-result-${{ matrix.target8 }}
-        if: ${{ always() && matrix.target8 != 'none' }}
+      - name: Upload performance result 8 performance-result-${{ steps.shard.outputs.target8 }}
+        if: ${{ always() && steps.shard.outputs.target8 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target8 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target8 }}
+          name: performance-result-${{ steps.shard.outputs.target8 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target8 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 8 performance-diagnostics-${{ matrix.target8 }}
-        if: ${{ failure() && !cancelled() && matrix.target8 != 'none' }}
+      - name: Upload performance diagnostics 8 performance-diagnostics-${{ steps.shard.outputs.target8 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target8 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target8 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target8 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target8 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target8 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 9 foundation-versions-performance-${{ matrix.target9 }}
-        if: ${{ always() && matrix.target9 != 'none' }}
+      - name: Upload performance foundation 9 foundation-versions-performance-${{ steps.shard.outputs.target9 }}
+        if: ${{ always() && steps.shard.outputs.target9 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target9 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target9 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target9 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target9 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 9 performance-result-${{ matrix.target9 }}
-        if: ${{ always() && matrix.target9 != 'none' }}
+      - name: Upload performance result 9 performance-result-${{ steps.shard.outputs.target9 }}
+        if: ${{ always() && steps.shard.outputs.target9 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target9 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target9 }}
+          name: performance-result-${{ steps.shard.outputs.target9 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target9 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 9 performance-diagnostics-${{ matrix.target9 }}
-        if: ${{ failure() && !cancelled() && matrix.target9 != 'none' }}
+      - name: Upload performance diagnostics 9 performance-diagnostics-${{ steps.shard.outputs.target9 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target9 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target9 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target9 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target9 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target9 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
 
-      - name: Upload performance foundation 10 foundation-versions-performance-${{ matrix.target10 }}
-        if: ${{ always() && matrix.target10 != 'none' }}
+      - name: Upload performance foundation 10 foundation-versions-performance-${{ steps.shard.outputs.target10 }}
+        if: ${{ always() && steps.shard.outputs.target10 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: foundation-versions-performance-${{ matrix.target10 }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ matrix.target10 }}.json
+          name: foundation-versions-performance-${{ steps.shard.outputs.target10 }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\album-haven-performance-foundations\foundation-version-manifest-performance-${{ steps.shard.outputs.target10 }}.json
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance result 10 performance-result-${{ matrix.target10 }}
-        if: ${{ always() && matrix.target10 != 'none' }}
+      - name: Upload performance result 10 performance-result-${{ steps.shard.outputs.target10 }}
+        if: ${{ always() && steps.shard.outputs.target10 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-result-${{ matrix.target10 }}-${{ github.run_attempt }}
-          path: test-results/playwright-performance-targets/${{ matrix.target10 }}
+          name: performance-result-${{ steps.shard.outputs.target10 }}-${{ github.run_attempt }}
+          path: test-results/playwright-performance-targets/${{ steps.shard.outputs.target10 }}
           if-no-files-found: error
           retention-days: 14
-      - name: Upload performance diagnostics 10 performance-diagnostics-${{ matrix.target10 }}
-        if: ${{ failure() && !cancelled() && matrix.target10 != 'none' }}
+      - name: Upload performance diagnostics 10 performance-diagnostics-${{ steps.shard.outputs.target10 }}
+        if: ${{ failure() && !cancelled() && steps.shard.outputs.target10 != 'none' }}
         uses: actions/upload-artifact@v4
         with:
-          name: performance-diagnostics-${{ matrix.target10 }}-${{ github.run_attempt }}
+          name: performance-diagnostics-${{ steps.shard.outputs.target10 }}-${{ github.run_attempt }}
           path: |
-            test-results/playwright-performance-targets/${{ matrix.target10 }}
+            test-results/playwright-performance-targets/${{ steps.shard.outputs.target10 }}
             test-results/playwright-artifacts
           if-no-files-found: error
           retention-days: 7
@@ -1178,11 +1120,19 @@ jobs:
       issues: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
+      pipeline_mode: ${{ steps.classify.outputs.pipeline_mode }}
       base_sha: ${{ steps.classify.outputs.base_sha }}
       head_sha: ${{ steps.classify.outputs.head_sha }}
       functional_change: ${{ steps.classify.outputs.functional_change }}
       functional_lines: ${{ steps.classify.outputs.functional_lines }}
       binary_functional_change: ${{ steps.classify.outputs.binary_functional_change }}
+      functional_shards_json: ${{ steps.classify.outputs.functional_shards_json }}
+      performance_shards_json: ${{ steps.classify.outputs.performance_shards_json }}
+      run_functional: ${{ steps.classify.outputs.run_functional }}
+      run_performance: ${{ steps.classify.outputs.run_performance }}
+      run_phase7_auth: ${{ steps.classify.outputs.run_phase7_auth }}
+      run_phase7_admin: ${{ steps.classify.outputs.run_phase7_admin }}
+      selected_families_json: ${{ steps.classify.outputs.selected_families_json }}
     steps:
       - name: Find last successfully reviewed head
         id: baseline
@@ -1241,22 +1191,14 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_LAST_REVIEWED_SHA: ${{ steps.baseline.outputs.result }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: node scripts/ci/classify-pr-review-scope.cjs
 
   pr_agent_review:
     name: PR Agent Review
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - e2e_phase7_auth
-      - e2e_phase7_admin
-      - e2e_functional
-      - e2e_performance_ci
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode != 'none' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1308,17 +1250,8 @@ jobs:
   codex_review:
     name: Codex PR Review
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - e2e_phase7_auth
-      - e2e_phase7_admin
-      - e2e_functional
-      - e2e_performance_ci
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode != 'none' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -1386,19 +1319,10 @@ jobs:
   ai_code_review:
     name: AI Code Review // VERY POWERFULL
     needs:
-      - test_js
-      - test_components
-      - test_node_windows
-      - test_python
-      - e2e_production_parity
-      - e2e_phase7_auth
-      - e2e_phase7_admin
-      - e2e_functional
-      - e2e_performance_ci
       - review_scope
-    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.mode == 'full' && needs.test_js.result == 'success' && needs.test_components.result == 'success' && needs.test_node_windows.result == 'success' && needs.test_python.result == 'success' && needs.e2e_production_parity.result == 'success' && needs.e2e_phase7_auth.result == 'success' && needs.e2e_phase7_admin.result == 'success' && needs.e2e_functional.result == 'success' && needs.e2e_performance_ci.result == 'success' }}
+    if: ${{ always() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode == 'full' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
       issues: write
@@ -1428,6 +1352,93 @@ jobs:
           OPENAI_API_MODEL: "gpt-4.1-mini"
           ENABLE_LINTERS: "false"
 
+  focused_e2e_gate:
+    name: Focused E2E Verification
+    needs:
+      - review_scope
+      - pr_agent_review
+      - codex_review
+      - ai_code_review
+      - test_js
+      - test_components
+      - test_node_windows
+      - test_python
+      - e2e_production_parity
+      - e2e_phase7_auth
+      - e2e_phase7_admin
+      - e2e_functional
+      - e2e_performance_ci
+    if: ${{ always() && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'focused-e2e' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout focused pull request
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Validate focused E2E conclusion
+        shell: pwsh
+        env:
+          SELECTED_FAMILIES_JSON: ${{ needs.review_scope.outputs.selected_families_json }}
+          REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
+          PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
+          CODEX_RESULT: ${{ needs.codex_review.result }}
+          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
+          TEST_JS_RESULT: ${{ needs.test_js.result }}
+          TEST_COMPONENTS_RESULT: ${{ needs.test_components.result }}
+          WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
+          PYTHON_RESULT: ${{ needs.test_python.result }}
+          PRODUCTION_PARITY_RESULT: ${{ needs.e2e_production_parity.result }}
+          PHASE7_AUTH_RESULT: ${{ needs.e2e_phase7_auth.result }}
+          PHASE7_ADMIN_RESULT: ${{ needs.e2e_phase7_admin.result }}
+          FUNCTIONAL_RESULT: ${{ needs.e2e_functional.result }}
+          PERFORMANCE_RESULT: ${{ needs.e2e_performance_ci.result }}
+        run: |
+          $input = @{
+            selectedFamilies = @($env:SELECTED_FAMILIES_JSON | ConvertFrom-Json)
+            jobResults = @{
+              review_scope = $env:REVIEW_SCOPE_RESULT
+              pr_agent_review = $env:PR_AGENT_RESULT
+              codex_review = $env:CODEX_RESULT
+              ai_code_review = $env:AI_CODE_REVIEW_RESULT
+              test_js = $env:TEST_JS_RESULT
+              test_components = $env:TEST_COMPONENTS_RESULT
+              test_node_windows = $env:WINDOWS_RESULT
+              test_python = $env:PYTHON_RESULT
+              e2e_production_parity = $env:PRODUCTION_PARITY_RESULT
+              e2e_phase7_auth = $env:PHASE7_AUTH_RESULT
+              e2e_phase7_admin = $env:PHASE7_ADMIN_RESULT
+              e2e_functional = $env:FUNCTIONAL_RESULT
+              e2e_performance_ci = $env:PERFORMANCE_RESULT
+            }
+          }
+          $inputPath = Join-Path "${{ runner.temp }}" "focused-e2e-gate-input.json"
+          $input | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $inputPath -Encoding utf8
+          node scripts/ci/validate-focused-e2e-gate.cjs $inputPath
+          "## Focused E2E Verification`nSelected hosted E2E targets passed. This run is non-authoritative and is being promoted to the full review-first pipeline." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Promote successful focused verification to full review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const current = context.payload.pull_request.labels.map((label) => label.name);
+            const retained = current.filter((label) => (
+              label !== 'ci:focused-e2e'
+              && !label.startsWith('ci:e2e:')
+              && !label.startsWith('ci:e2e-performance:')
+              && label !== 'ci:full-review'
+            ));
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: [...retained, 'ci:full-review'],
+            });
+
   cloud_verification_gate:
     name: Cloud Verification Gate
     needs:
@@ -1444,7 +1455,7 @@ jobs:
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() }}
+    if: ${{ always() && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1470,6 +1481,7 @@ jobs:
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
           AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
+          PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
         run: |
           test "$TEST_JS_RESULT" = success
           test "$TEST_COMPONENTS_RESULT" = success
@@ -1511,9 +1523,11 @@ jobs:
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
           AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
+          PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
         run: |
           $input = @{
             mode = "trusted"
+            pipelineMode = $env:PIPELINE_MODE
             reviewMode = $env:REVIEW_MODE
             jobResults = @{
               test_js = $env:TEST_JS_RESULT

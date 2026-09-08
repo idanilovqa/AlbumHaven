@@ -32,6 +32,27 @@ not need the private repository to build or use Album Haven.
 - Fix the complete CI failure set, verify each fix with its focused local tests,
   then push and rerun all required CI suites. Repeat until CI is fully green.
 
+## Review-first CI execution
+
+- In the authoritative pull-request pipeline, classify review scope first, run
+  applicable hosted reviews before tests, and start every applicable test and
+  E2E job after the reviewers reach a terminal result even when review failed.
+  Let the entire pipeline finish before addressing the combined review and test
+  failure inventory.
+- Review only functional or E2E-relevant changes. Documentation-only changes
+  skip hosted review. On a synchronize event with a valid successfully reviewed
+  baseline, fewer than 250 changed functional lines uses incremental review;
+  250 or more lines, a binary functional change, an unavailable baseline, or
+  `ci:full-review` uses whole-PR review.
+- For an E2E repair push, apply `ci:focused-e2e` and one or more supported
+  `ci:e2e:*` or `ci:e2e-performance:*` target labels. That non-authoritative run
+  skips reviews and unrelated suites and runs only the selected hosted E2E jobs.
+  After they pass, CI removes the focused labels, applies `ci:full-review`, and
+  automatically starts the authoritative full review-first pipeline.
+- Only a successful full pipeline may record review coverage, authorize merge,
+  or authorize publication. Focused verification never weakens or replaces an
+  existing E2E acceptance contract.
+
 ## Post-Migration Wave 2+ feature workflow
 
 Every Wave 2 or later product feature must move through this sequence:

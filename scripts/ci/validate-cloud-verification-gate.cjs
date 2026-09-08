@@ -54,6 +54,13 @@ function validateTrusted(input) {
 }
 
 function validateCloudVerificationGate(input) {
+  if (input?.pipelineMode !== 'full') {
+    return {
+      authoritative: input?.mode === 'trusted',
+      conclusion: 'failure',
+      errors: ['Cloud Verification Gate requires full pipeline mode'],
+    };
+  }
   if (!input || !['trusted', 'fork'].includes(input.mode)) {
     return { authoritative: false, conclusion: 'failure', errors: ['invalid gate mode'] };
   }

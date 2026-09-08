@@ -4,6 +4,7 @@ const test = require('node:test');
 
 const classifierPath = path.resolve(__dirname, '..', '..', 'scripts', 'ci', 'classify-pr-review-scope.cjs');
 const {
+  classifyPipelineLabels,
   classifyReviewScope,
   isUsableBaseline,
   isDocumentationPath,
@@ -55,8 +56,11 @@ test('documentation-only synchronize range skips reviews after a successful base
   });
 });
 
-test('a synchronize event without a successful review baseline forces a whole-PR review', () => {
-  for (const numstat of ['4\t1\tdocs/review.md\n', '1\t0\tmusic_app/change.py\n']) {
+test('a synchronize event without a successful review baseline reviews functional changes but skips documentation-only changes', () => {
+  for (const [numstat, expectedMode] of [
+    ['4\t1\tdocs/review.md\n', 'none'],
+    ['1\t0\tmusic_app/change.py\n', 'full'],
+  ]) {
     const result = classifyReviewScope({
       action: 'synchronize',
       baseSha: 'base',
@@ -64,12 +68,12 @@ test('a synchronize event without a successful review baseline forces a whole-PR
       headSha: 'head',
       numstat,
     });
-    assert.equal(result.mode, 'full');
-    assert.equal(result.baseSha, 'base');
+    assert.equal(result.mode, expectedMode);
+    assert.equal(result.baseSha, expectedMode === 'full' ? 'base' : 'base');
   }
 });
 
-for (const [lines, expectedMode] of [[249, 'incremental'], [250, 'incremental'], [251, 'full']]) {
+for (const [lines, expectedMode] of [[249, 'incremental'], [250, 'full'], [251, 'full']]) {
   test(`${lines} functional lines select ${expectedMode} mode on synchronize`, () => {
     const result = classifyReviewScope({
       action: 'synchronize',
@@ -121,4 +125,61 @@ test('mixed documentation and functional changes count only functional lines', (
   });
   assert.equal(result.mode, 'incremental');
   assert.equal(result.functionalLines, 15);
+});
+
+test('full-review label forces a whole-PR review only when functional changes exist', () => {
+  assert.equal(classifyReviewScope({
+    action: 'synchronize',
+    baseSha: 'base',
+    lastReviewedSha: 'reviewed',
+    headSha: 'head',
+    numstat: '1\t0\tmusic_app/change.py\n',
+    forceFullReview: true,
+  }).mode, 'full');
+  assert.equal(classifyReviewScope({
+    action: 'synchronize',
+    baseSha: 'base',
+    lastReviewedSha: 'reviewed',
+    headSha: 'head',
+    numstat: '1\t0\tdocs/release.md\n',
+    forceFullReview: true,
+  }).mode, 'none');
+});
+
+test('focused E2E labels select only named functional, Phase 7, and performance shards', () => {
+  assert.deepEqual(classifyPipelineLabels([
+    'ci:focused-e2e',
+    'ci:e2e:gallery-search-visual',
+    'ci:e2e:phase7-auth',
+    'ci:e2e-performance:playback-media',
+    'unrelated-label',
+  ]), {
+    pipelineMode: 'focused-e2e',
+    forceFullReview: false,
+    focusedFunctionalShards: ['gallery-search-visual'],
+    focusedPhase7Targets: ['phase7-auth'],
+    focusedPerformanceShards: ['playback-media'],
+  });
+});
+
+test('focused E2E mode requires a supported target and rejects misspelled target labels', () => {
+  assert.throws(
+    () => classifyPipelineLabels(['ci:focused-e2e']),
+    /at least one supported target label/,
+  );
+  assert.throws(
+    () => classifyPipelineLabels(['ci:focused-e2e', 'ci:e2e:playbak-utilities']),
+    /Unsupported focused E2E target label/,
+  );
+});
+
+test('full mode is the default and accepts the explicit full-review label', () => {
+  assert.deepEqual(classifyPipelineLabels([]), {
+    pipelineMode: 'full',
+    forceFullReview: false,
+    focusedFunctionalShards: [],
+    focusedPhase7Targets: [],
+    focusedPerformanceShards: [],
+  });
+  assert.equal(classifyPipelineLabels(['ci:full-review']).forceFullReview, true);
 });

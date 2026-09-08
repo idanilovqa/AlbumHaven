@@ -31,21 +31,21 @@
 - Consumes: `{ action, baseSha, lastReviewedSha, headSha, numstat, labels }`.
 - Produces: the existing review outputs plus `pipelineMode`, `focusedFunctionalShards`, `focusedPhase7Targets`, and `focusedPerformanceShards`.
 
-- [ ] **Step 1: Add failing classifier tests**
+- [x] **Step 1: Add failing classifier tests**
 
 Add exact cases for 249 lines -> `incremental`, 250 lines -> `full`, docs-only -> `none`, `ci:full-review` plus functional change -> `full`, focused mode target parsing, invalid/absent focused targets -> thrown policy error, and unknown target labels -> thrown policy error.
 
-- [ ] **Step 2: Run the classifier test and observe RED**
+- [x] **Step 2: Run the classifier test and observe RED**
 
 Run: `node --test tests/js/pr-review-scope.test.js`
 
 Expected: failures for the 250-line boundary and missing pipeline-label outputs.
 
-- [ ] **Step 3: Implement label-aware classification**
+- [x] **Step 3: Implement label-aware classification**
 
 Add constants for the exact supported labels and normalize `labels` to a string set. Change the incremental condition to `functionalLines < INCREMENTAL_LINE_LIMIT`. In focused mode validate and return selected shard arrays while forcing review mode `none`. In full mode preserve docs-only `none` and let `ci:full-review` override incremental functional changes to `full`.
 
-- [ ] **Step 4: Run the classifier test and observe GREEN**
+- [x] **Step 4: Run the classifier test and observe GREEN**
 
 Run: `node --test tests/js/pr-review-scope.test.js`
 
@@ -63,21 +63,21 @@ Expected: all classifier cases pass.
 - Consumes: full-mode job conclusions or `{ selectedTargets, targetResults }` for focused mode.
 - Produces: `{ authoritative, conclusion, errors }`, with `authoritative: false` for every focused result.
 
-- [ ] **Step 1: Add failing validator tests**
+- [x] **Step 1: Add failing validator tests**
 
 Require the full validator to reject `pipelineMode !== 'full'`. Require the focused validator to reject no targets, unselected jobs that ran, selected jobs that skipped or failed, and unknown targets; accept only exactly selected successful jobs.
 
-- [ ] **Step 2: Run validator tests and observe RED**
+- [x] **Step 2: Run validator tests and observe RED**
 
 Run: `node --test tests/js/cloud-verification-gate.test.js tests/js/focused-e2e-gate.test.js`
 
 Expected: failures because pipeline-mode enforcement and the focused validator do not exist.
 
-- [ ] **Step 3: Implement both policies**
+- [x] **Step 3: Implement both policies**
 
 Keep the full required-job and review-mode matrix intact, add the `pipelineMode: 'full'` requirement, and implement a pure focused validator with the supported target set exported for tests.
 
-- [ ] **Step 4: Run validator tests and observe GREEN**
+- [x] **Step 4: Run validator tests and observe GREEN**
 
 Run: `node --test tests/js/cloud-verification-gate.test.js tests/js/focused-e2e-gate.test.js`
 
@@ -94,37 +94,37 @@ Expected: all validator cases pass.
 - Consumes: review-scope outputs and pull-request labels.
 - Produces: full review-first jobs, target-selected focused E2E jobs, `Focused E2E Verification`, and the authoritative `Cloud Verification Gate`.
 
-- [ ] **Step 1: Add failing workflow structure assertions**
+- [x] **Step 1: Add failing workflow structure assertions**
 
 Assert review jobs depend only on scope, every test family depends on terminal reviewer results, every E2E condition contains `always()`, focused mode selects only matching matrix rows, the full gate is full-mode-only, and the focused gate never writes the reviewed-head marker.
 
-- [ ] **Step 2: Run workflow tests and observe RED**
+- [x] **Step 2: Run workflow tests and observe RED**
 
 Run: `node --test tests/js/cloud-verification-gate.test.js tests/js/focused-e2e-gate.test.js`
 
 Expected: failures showing the current tests-before-review dependency direction.
 
-- [ ] **Step 3: Publish pipeline outputs from `review_scope`**
+- [x] **Step 3: Publish pipeline outputs from `review_scope`**
 
 Pass `toJson(github.event.pull_request.labels.*.name)` to the classifier and expose pipeline mode plus JSON target arrays as job outputs. Add `labeled` and `unlabeled` pull-request event types.
 
-- [ ] **Step 4: Move reviewers before tests**
+- [x] **Step 4: Move reviewers before tests**
 
 Remove all test dependencies and result requirements from the three reviewer jobs. Retain same-repository, non-draft, successful-scope, mode, and credential conditions. Increase the third whole-review timeout enough to finish the already observed large-PR review without changing its review scope.
 
-- [ ] **Step 5: Make test execution independent of review success**
+- [x] **Step 5: Make test execution independent of review success**
 
 Add `review_scope`, `pr_agent_review`, `codex_review`, and `ai_code_review` as terminal dependencies of every foundation and E2E family. Use `always()` and pipeline-mode conditions so full-mode jobs run after review even when review failed, while focused mode runs only selected E2E targets.
 
-- [ ] **Step 6: Add focused verification and automatic promotion**
+- [x] **Step 6: Add focused verification and automatic promotion**
 
 Validate selected results, then use `actions/github-script` with `issues: write` to remove `ci:focused-e2e` and all target labels and apply `ci:full-review`. Do not post or update the reviewed-head marker. Leave labels unchanged when any selected target fails.
 
-- [ ] **Step 7: Keep full verification authoritative**
+- [x] **Step 7: Keep full verification authoritative**
 
 Run Cloud Verification Gate only for full mode, validate every required job and review conclusion after all jobs finish, then and only then record the successfully reviewed head.
 
-- [ ] **Step 8: Run workflow-focused tests**
+- [x] **Step 8: Run workflow-focused tests**
 
 Run: `node --test tests/js/pr-review-scope.test.js tests/js/cloud-verification-gate.test.js tests/js/focused-e2e-gate.test.js`
 
@@ -142,15 +142,15 @@ Expected: all workflow and policy tests pass.
 - Consumes: the implemented full/focused workflow contract.
 - Produces: standing instructions for future chats and release runs.
 
-- [ ] **Step 1: Add the public repository rule**
+- [x] **Step 1: Add the public repository rule**
 
 State the exact review-first order, strict 250-line boundary, docs-only skip, focused labels, automatic full promotion, complete inventory rule, and authoritative-full requirement.
 
-- [ ] **Step 2: Reconcile private owner guidance**
+- [x] **Step 2: Reconcile private owner guidance**
 
 Replace the obsolete tests-before-review description and record the same focused/full sequence without weakening Rules 64-68 or the full-suite failure batching rule.
 
-- [ ] **Step 3: Verify prose and focused contracts**
+- [x] **Step 3: Verify prose and focused contracts**
 
 Run: `git diff --check`
 

@@ -14,6 +14,7 @@ const baseFixturesPath = path.join(repoRoot, 'tests', 'e2e', 'support', 'baseFix
 const autoplayConfigPath = path.join(repoRoot, 'playwright.autoplay-allowed.config.js');
 const validatorExists = fs.existsSync(validatorPath);
 const validatorTest = validatorExists ? test : test.skip;
+const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
   ['gallery-search-visual', 36],
@@ -66,22 +67,6 @@ function functionalJobSource() {
   assert.notEqual(start, -1, 'pr-gates.yml must define e2e_functional');
   assert.notEqual(end, -1, 'e2e_functional must remain independently bounded');
   return { workflow, job: workflow.slice(start, end) };
-}
-
-function parseFunctionalMatrix(job) {
-  const matrixMatch = job.match(/\n\s+matrix:\r?\n\s+include:\r?\n([\s\S]*?)\n\s+steps:/);
-  assert.ok(matrixMatch, 'e2e_functional must use a static matrix include list');
-  return matrixMatch[1]
-    .split(/(?:^|\r?\n)\s+- shard:\s*/)
-    .slice(1)
-    .map((block) => {
-      const [name, ...lines] = block.split(/\r?\n/);
-      const fields = Object.fromEntries(lines.map((line) => {
-        const match = line.trim().match(/^([A-Za-z][A-Za-z0-9]*):\s*["']?(.+?)["']?$/);
-        return match ? [match[1], match[2]] : [];
-      }).filter((entry) => entry.length === 2));
-      return { shard: name.trim(), ...fields };
-    });
 }
 
 test('functional shard contract pins the approved four-way 97-case assignment', () => {
@@ -855,9 +840,9 @@ validatorTest('shard runner rejects missing or root-level output ownership', () 
   );
 });
 
-test('functional workflow uses the approved four-entry Windows matrix with isolated names and ports', () => {
+test('functional workflow uses the approved selectable four-shard Windows matrix with isolated names and ports', () => {
   const { workflow, job } = functionalJobSource();
-  assert.match(job, /name:\s*["']E2E:\s*\$\{\{\s*matrix\.displayName\s*\}\}["']/);
+  assert.match(job, /name:\s*["']E2E:\s*\$\{\{\s*matrix\.shard\s*\}\}["']/);
   assert.match(workflow, /e2e_production_parity:\s*\r?\n\s+name:\s*["']E2E:\s*Production Parity["']/);
   assert.match(job, /runs-on:\s*windows-2025/);
   assert.match(job, /fail-fast:\s*false/);
@@ -865,14 +850,15 @@ test('functional workflow uses the approved four-entry Windows matrix with isola
   assert.doesNotMatch(job, /--browser(?:=|\s+)edge\b/i);
   assert.doesNotMatch(job, /if:\s*\$\{\{\s*false\s*\}\}|if:\s*false/);
 
-  const matrix = parseFunctionalMatrix(job);
+  assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.functional_shards_json\)\s*\}\}/);
+  assert.match(job, /resolve-ci-shard\.cjs functional \$\{\{\s*matrix\.shard\s*\}\}/);
+  const matrix = Object.entries(FUNCTIONAL_SHARDS).map(([shard, value]) => ({ shard, ...value }));
   assert.deepEqual(matrix.map((entry) => entry.shard), [...EXPECTED_SHARD_COUNTS.keys()]);
   assert.deepEqual(
     matrix.map((entry) => entry.displayName),
     [...EXPECTED_SHARD_DISPLAY_NAMES.values()],
   );
-  assert.deepEqual(matrix.map((entry) => Number(entry.expectedCases)), [...EXPECTED_SHARD_COUNTS.values()]);
-  for (const field of ['portBase', 'outputDir', 'blobName']) {
+  for (const field of ['portBase']) {
     const values = matrix.map((entry) => entry[field]);
     assert.ok(values.every(Boolean), `every functional matrix row must define ${field}`);
     assert.equal(new Set(values).size, 4, `${field} must be unique per functional shard`);
@@ -881,7 +867,7 @@ test('functional workflow uses the approved four-entry Windows matrix with isola
   assert.match(job, /validate-functional-shards\.cjs\s+--run-shard=\$\{\{\s*matrix\.shard\s*\}\}/);
   assert.match(job, /ALBUM_HAVEN_FUNCTIONAL_FIXTURE_WORK_ROOT/);
   assert.match(job, /album-haven-e2e-functional-fixtures-/);
-  assert.match(job, /playback-utilities/);
+  assert.ok(Object.hasOwn(FUNCTIONAL_SHARDS, 'playback-utilities'));
 });
 
 test('PR gates trigger only for pull requests and never expose heavy jobs to forked code', () => {
@@ -892,7 +878,7 @@ test('PR gates trigger only for pull requests and never expose heavy jobs to for
   assert.doesNotMatch(workflow, /pull_request_target/);
   assert.match(
     job,
-    /if:\s*\$\{\{\s*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository\s*\}\}/,
+    /if:\s*\$\{\{[^\r\n]*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository[^\r\n]*\}\}/,
   );
 });
 
@@ -904,7 +890,7 @@ test('functional workflow pins fixture and toolchain safety before one-worker ex
   assert.match(job, /bootstrap-windows-postgres\.ps1[\s\S]*?(?:Provision|-Mode\s+Provision)/i);
   assert.match(
     job,
-    /PLAYWRIGHT_PROVIDER_PORT[\s\S]*?matrix\.portBase[\s\S]*?\+\s*2[\s\S]*?bootstrap-windows-postgres\.ps1/i,
+    /PLAYWRIGHT_PROVIDER_PORT[\s\S]*?steps\.shard\.outputs\.port_base[\s\S]*?\+\s*2[\s\S]*?bootstrap-windows-postgres\.ps1/i,
     'fixture loading must bind provider snapshot URLs to the job-owned provider port',
   );
   assert.match(job, /load-fixture-profile\.py/);

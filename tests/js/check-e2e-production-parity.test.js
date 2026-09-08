@@ -96,9 +96,10 @@ contractTest('package and PR gates expose a blocking static production-parity ch
   );
   assert.match(workflow, /^  e2e_production_parity:\r?$/m);
   assert.match(workflow, /run: npm run check:e2e-production-parity/);
-  assert.match(workflow, /needs\.e2e_production_parity\.result == 'success'/);
+  assert.match(workflow, /^\s+- e2e_production_parity\r?$/m);
+  assert.match(workflow, /PRODUCTION_PARITY_RESULT: \$\{\{ needs\.e2e_production_parity\.result \}\}/);
   const functionalJob = workflowJobSource(workflow, 'e2e_functional', 'e2e_performance_ci');
-  const performanceJob = workflowJobSource(workflow, 'e2e_performance_ci', 'pr_agent_review');
+  const performanceJob = workflowJobSource(workflow, 'e2e_performance_ci', 'review_scope');
   for (const job of [functionalJob, performanceJob]) {
     assert.doesNotMatch(job, /if: \$\{\{ false \}\}/);
     assert.match(
@@ -135,7 +136,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
   const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
-  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'cloud_verification_gate');
+  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'focused_e2e_gate');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
     'Require OpenAI credential for PR Agent review',
@@ -226,17 +227,18 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(aiCodeReviewAction, /OPENAI_API_MODEL: "gpt-4\.1-mini"/);
 });
 
-contractTest('hosted review jobs require successful functional and performance E2E guards', () => {
+contractTest('hosted review jobs run after scope and before E2E without test dependencies', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
   const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
+  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'focused_e2e_gate');
 
-  for (const reviewJob of [prAgentJob, codexJob]) {
+  for (const reviewJob of [prAgentJob, codexJob, aiCodeReviewJob]) {
     const condition = reviewJob.match(/^    if: .*$/m)?.[0] || '';
-    assert.match(reviewJob, /needs:[\s\S]*?- e2e_functional[\s\S]*?- e2e_performance_ci/);
+    assert.match(reviewJob, /needs:\s*\r?\n\s+- review_scope/);
+    assert.doesNotMatch(reviewJob, /needs:[\s\S]*?- e2e_/);
     assert.match(condition, /if: \$\{\{ always\(\)/);
-    assert.match(condition, /needs\.e2e_functional\.result == 'success'/);
-    assert.match(condition, /needs\.e2e_performance_ci\.result == 'success'/);
+    assert.match(condition, /needs\.review_scope\.result == 'success'/);
   }
 });
 

@@ -140,6 +140,10 @@ def test_member_roster_revalidates_owner_and_returns_bounded_operational_summary
     assert "(credential.account_id is not null) as has_credential" in sql
     assert "message_category = 'account_invitation'" in sql
     assert "invitation_delivery_status" in sql
+    assert "account.id = authority.owner_account_id" in sql
+    assert "from library.library_memberships scoped_membership" in sql
+    assert "scoped_membership.library_id = authority.library_id" in sql
+    assert "scoped_membership.account_id = account.id" in sql
     assert connection.operations[0][1] == (9, 7, NOW, NOW)
 
 

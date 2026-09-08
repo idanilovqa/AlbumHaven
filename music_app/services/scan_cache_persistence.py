@@ -2145,9 +2145,15 @@ def _remap_targeted_album_identity_rows(
         existing_title = str(existing.get("album_title") or "").strip()
         if not generated_title or generated_title.casefold() != existing_title.casefold():
             continue
+        generated_artist_key = str(album_row.get("artist_key") or "").strip()
         existing_key = str(existing.get("album_key") or "").strip()
         existing_artist_key = str(existing.get("artist_key") or "").strip()
-        if existing_key and existing_artist_key:
+        if (
+            generated_artist_key
+            and existing_artist_key
+            and generated_artist_key.casefold() == existing_artist_key.casefold()
+            and existing_key
+        ):
             candidates_by_generated_key.setdefault(generated_key, set()).add(
                 (existing_key, existing_artist_key, existing_title)
             )

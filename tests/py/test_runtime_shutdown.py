@@ -89,6 +89,43 @@ def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation():
     ]
 
 
+def test_targeted_reconciliation_admission_bounds_outstanding_work():
+    from music_app import _BoundedExecutorAdmission
+
+    class PendingFuture:
+        def __init__(self) -> None:
+            self.callbacks = []
+
+        def add_done_callback(self, callback) -> None:
+            self.callbacks.append(callback)
+
+        def complete(self) -> None:
+            for callback in tuple(self.callbacks):
+                callback(self)
+
+    class Executor:
+        def __init__(self) -> None:
+            self.futures = []
+
+        def submit(self, _function, *_args):
+            future = PendingFuture()
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, **_kwargs) -> None:
+            return None
+
+    executor = Executor()
+    admission = _BoundedExecutorAdmission(executor, max_outstanding=2)
+
+    assert admission.submit(lambda: None) is executor.futures[0]
+    assert admission.submit(lambda: None) is executor.futures[1]
+    assert admission.submit(lambda: None) is None
+
+    executor.futures[0].complete()
+    assert admission.submit(lambda: None) is executor.futures[2]
+
+
 def test_create_daemon_executor_uses_daemon_worker_threads():
     executor = runtime_shutdown.create_daemon_executor(
         max_workers=1,

@@ -249,18 +249,18 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
 
     path = "C:/Music/DDT/Studio Records/02.flac"
     album_rows = [{
-        "artist_key": "ddt",
-        "album_key": "ddt::studio records",
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": "yuri shevchuk / ddt::studio records",
         "title": "Studio Records",
         "release_year": 1990,
     }]
     featured_rows = [{
-        "album_key": "ddt::studio records",
-        "artist_key": "ddt",
+        "album_key": "yuri shevchuk / ddt::studio records",
+        "artist_key": "yuri shevchuk / ddt",
         "featured_kind": "owner",
     }]
     track_rows = [{
-        "album_key": "ddt::studio records",
+        "album_key": "yuri shevchuk / ddt::studio records",
         "track_key": path,
     }]
 
@@ -270,7 +270,7 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
         track_rows=track_rows,
         existing_memberships=[{
             "private_path": path,
-            "album_key": "yuri shevchuk / ddt::studio records",
+            "album_key": "yuri shevchuk / ddt::studio records::canonical",
             "album_title": "Studio Records",
             "artist_key": "yuri shevchuk / ddt",
         }],
@@ -278,13 +278,53 @@ def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
 
     assert album_rows[0] == {
         "artist_key": "yuri shevchuk / ddt",
-        "album_key": "yuri shevchuk / ddt::studio records",
+        "album_key": "yuri shevchuk / ddt::studio records::canonical",
         "title": "Studio Records",
         "release_year": 1990,
     }
-    assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records"
+    assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
     assert featured_rows[0]["artist_key"] == "yuri shevchuk / ddt"
-    assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records"
+    assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
+
+
+def test_targeted_album_rows_accept_an_external_album_artist_correction():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/New Artist/Studio Records/02.flac"
+    album_rows = [{
+        "artist_key": "new artist",
+        "album_key": "new artist::studio records",
+        "title": "Studio Records",
+    }]
+    featured_rows = [{
+        "album_key": "new artist::studio records",
+        "artist_key": "new artist",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{
+        "album_key": "new artist::studio records",
+        "track_key": path,
+    }]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "old artist::studio records",
+            "album_title": "Studio Records",
+            "artist_key": "old artist",
+        }],
+    )
+
+    assert album_rows[0]["artist_key"] == "new artist"
+    assert album_rows[0]["album_key"] == "new artist::studio records"
+    assert featured_rows[0]["artist_key"] == "new artist"
+    assert featured_rows[0]["album_key"] == "new artist::studio records"
+    assert track_rows[0]["album_key"] == "new artist::studio records"
 
 
 def test_scan_album_upsert_preserves_structural_release_year_authority():

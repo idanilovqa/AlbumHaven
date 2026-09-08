@@ -9,6 +9,28 @@ from types import SimpleNamespace
 from typing import AsyncIterator
 
 
+class _BoundedExecutorAdmission:
+    """Bound queued and running work submitted to an owned executor."""
+
+    def __init__(self, executor, *, max_outstanding: int) -> None:
+        self._executor = executor
+        self._slots = threading.BoundedSemaphore(max(1, int(max_outstanding)))
+
+    def submit(self, function, *args):
+        if not self._slots.acquire(blocking=False):
+            return None
+        try:
+            future = self._executor.submit(function, *args)
+        except BaseException:
+            self._slots.release()
+            raise
+        future.add_done_callback(lambda _completed: self._slots.release())
+        return future
+
+    def shutdown(self, **kwargs) -> None:
+        self._executor.shutdown(**kwargs)
+
+
 def _stop_library_watch_runtime(
     *,
     watch_service,
@@ -287,9 +309,12 @@ def create_asgi_app():
         lastfm_started = True
         try:
             start_lastfm_retry_worker(runtime)
-            targeted_executor = create_daemon_executor(
-                max_workers=1,
-                thread_name_prefix="albumhaven-targeted-reconciliation",
+            targeted_executor = _BoundedExecutorAdmission(
+                create_daemon_executor(
+                    max_workers=1,
+                    thread_name_prefix="albumhaven-targeted-reconciliation",
+                ),
+                max_outstanding=256,
             )
             targeted_reconciler = TargetedLibraryReconciler(
                 runtime.config,
@@ -331,6 +356,15 @@ def create_asgi_app():
         def submit_targeted_reconciliation(request) -> None:
             affected_root_ids = targeted_request_root_ids(request)
             future = targeted_executor.submit(reconcile_targeted_request, request)
+            if future is None:
+                runtime.logger.error(
+                    "Targeted library reconciliation backlog is full."
+                )
+                for root_id in affected_root_ids:
+                    persist_library_watch_problem(
+                        CoordinatorProblem("overflow", root_id)
+                    )
+                return
 
             def report_reconciliation_failure(completed) -> None:
                 try:

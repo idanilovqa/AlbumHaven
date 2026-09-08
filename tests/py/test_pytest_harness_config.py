@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -288,3 +289,29 @@ def test_owned_cleanup_tolerates_a_windows_style_lock(tmp_path, monkeypatch):
         expected_owner=(444444, "acde1234"),
     )
     assert locked_root.is_dir()
+
+
+def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
+    tmp_path, monkeypatch
+):
+    owned_root = tmp_path / "pytest-444444-acde1234"
+    calls = []
+
+    def remove(path, *, expected_owner):
+        calls.append((path, expected_owner))
+        return len(calls) > 1
+
+    config = SimpleNamespace(
+        _album_haven_generated_basetemp=True,
+        _album_haven_generated_basetemp_token="acde1234",
+        _tmp_path_factory=SimpleNamespace(_basetemp=owned_root),
+    )
+    monkeypatch.setattr(pytest_harness, "_remove_owned_generated_pytest_root", remove)
+
+    pytest_harness.pytest_sessionfinish(SimpleNamespace(config=config), 0)
+    pytest_harness.pytest_unconfigure(config)
+
+    assert calls == [
+        (owned_root, (os.getpid(), "acde1234")),
+        (owned_root, (os.getpid(), "acde1234")),
+    ]

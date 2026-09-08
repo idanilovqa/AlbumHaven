@@ -433,9 +433,19 @@ jobs:
         env:
           PLAYWRIGHT_BROWSER: chrome
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_auth_chrome.outputs.chrome-path }}
+          FOCUSED_STAGE: ${{ needs.review_scope.outputs.focused_stage }}
+          FOCUSED_EXACT_CASES_JSON: ${{ needs.review_scope.outputs.focused_exact_cases_json }}
         run: |
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          if ($env:FOCUSED_STAGE -eq "exact") {
+            $caseIds = @($env:FOCUSED_EXACT_CASES_JSON | ConvertFrom-Json)
+            if ($caseIds.Count -gt 0) {
+              $casePattern = ($caseIds | ForEach-Object { [regex]::Escape([string]$_) }) -join "|"
+              npm run test:e2e:phase7:auth -- --grep $casePattern
+              exit $LASTEXITCODE
+            }
+          }
           npm run test:e2e:phase7:auth
 
       - name: Teardown isolated PostgreSQL
@@ -518,9 +528,19 @@ jobs:
         env:
           PLAYWRIGHT_BROWSER: chrome
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_phase7_admin_chrome.outputs.chrome-path }}
+          FOCUSED_STAGE: ${{ needs.review_scope.outputs.focused_stage }}
+          FOCUSED_EXACT_CASES_JSON: ${{ needs.review_scope.outputs.focused_exact_cases_json }}
         run: |
           $env:PGPASSWORD = $null
           $env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"
+          if ($env:FOCUSED_STAGE -eq "exact") {
+            $caseIds = @($env:FOCUSED_EXACT_CASES_JSON | ConvertFrom-Json)
+            if ($caseIds.Count -gt 0) {
+              $casePattern = ($caseIds | ForEach-Object { [regex]::Escape([string]$_) }) -join "|"
+              npm run test:e2e:phase7:admin -- --grep $casePattern
+              exit $LASTEXITCODE
+            }
+          }
           npm run test:e2e:phase7:admin
 
       - name: Teardown isolated PostgreSQL
@@ -1488,7 +1508,7 @@ jobs:
       - pr_agent_review
       - codex_review
       - ai_code_review
-    if: ${{ always() && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

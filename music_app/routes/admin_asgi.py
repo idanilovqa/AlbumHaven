@@ -768,7 +768,7 @@ async def _deliver_pending_welcome(app, outbox_id: int) -> None:
     try:
         delivery = getattr(app.state, "welcome_delivery", None)
         if callable(delivery):
-            result = delivery(outbox_id)
+            result = await run_in_threadpool(delivery, outbox_id)
             if isawaitable(result):
                 await result
             return
@@ -799,7 +799,7 @@ async def _deliver_pending_invitation(app, delivery) -> None:
     try:
         callback = getattr(app.state, "invitation_delivery", None)
         if callable(callback):
-            result = callback(delivery)
+            result = await run_in_threadpool(callback, delivery)
             if isawaitable(result):
                 await result
             return
@@ -835,7 +835,7 @@ async def _deliver_pending_password_reset(app, delivery) -> None:
     try:
         runner = getattr(app.state, "password_reset_delivery", None)
         if callable(runner):
-            result = runner(delivery)
+            result = await run_in_threadpool(runner, delivery)
             if isawaitable(result):
                 await result
             return

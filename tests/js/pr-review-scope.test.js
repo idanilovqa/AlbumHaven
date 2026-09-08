@@ -227,6 +227,20 @@ test('an exact performance target selects its owning shard without expanding the
   assert.deepEqual(result.focusedPerformanceShards, ['scan-library']);
 });
 
+test('a Phase 7 target accepts exact FTC cases without a functional area', () => {
+  const request = parseFocusedE2eRequest(
+    '<!-- album-haven-focused-e2e:{"exactCases":["FTC-PERMISSIONS-009"]} -->',
+  );
+  const result = classifyPipelineLabels(
+    ['ci:focused-e2e', 'ci:e2e:phase7-admin'],
+    request,
+  );
+  assert.equal(result.focusedStage, 'exact');
+  assert.deepEqual(result.focusedExactCases, ['FTC-PERMISSIONS-009']);
+  assert.deepEqual(result.focusedAreas, []);
+  assert.deepEqual(result.focusedPhase7Targets, ['phase7-admin']);
+});
+
 test('focused E2E mode requires a supported target and rejects misspelled target labels', () => {
   assert.throws(
     () => classifyPipelineLabels(['ci:focused-e2e']),

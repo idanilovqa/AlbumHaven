@@ -253,6 +253,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
 
 
+@pytest.hookimpl(trylast=True)
+def pytest_unconfigure(config: pytest.Config) -> None:
+    if not getattr(config, "_album_haven_generated_basetemp", False):
+        return
+    base_temp = config._tmp_path_factory._basetemp
+    token = getattr(config, "_album_haven_generated_basetemp_token", None)
+    if base_temp is None or not isinstance(token, str):
+        return
+    _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+
+
 def _request_url(value: object) -> str:
     return str(getattr(value, "full_url", value) or "").strip()
 

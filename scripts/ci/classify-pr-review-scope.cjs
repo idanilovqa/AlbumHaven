@@ -221,9 +221,18 @@ function classifyPipelineLabels(
       && !supportedTargetLabels.has(label)
     ));
     if (unsupported) throw new Error(`Unsupported focused E2E target label: ${unsupported}`);
-    const functionalMarkerSelection = request.exactCases.length + request.areas.length > 0;
+    const functionalMarkerSelection = request.areas.length > 0;
     if (functionalMarkerSelection && (!request.exactCases.length || !request.areas.length)) {
       throw new Error(`${FOCUSED_E2E_LABEL} marker requires both exact cases and related areas`);
+    }
+    if (
+      request.exactCases.length
+      && !request.areas.length
+      && !focusedPhase7Targets.length
+    ) {
+      throw new Error(
+        `${FOCUSED_E2E_LABEL} exact cases require related areas or a Phase 7 target label`,
+      );
     }
     if (
       focusedFunctionalShards.length
@@ -300,7 +309,7 @@ function runCli(env = process.env) {
   });
   if (pipeline.pipelineMode === 'focused-e2e') review.mode = 'none';
   let focusedSelection = { shards: [], selectedCases: [] };
-  if (pipeline.pipelineMode === 'focused-e2e' && (pipeline.focusedExactCases.length || pipeline.focusedAreas.length)) {
+  if (pipeline.pipelineMode === 'focused-e2e' && pipeline.focusedAreas.length) {
     const { selectFunctionalCases } = require('./validate-functional-shards.cjs');
     const contract = JSON.parse(fs.readFileSync(require('node:path').join(__dirname, '..', '..', 'tests', 'ci', 'functional-shards.json'), 'utf8'));
     focusedSelection = selectFunctionalCases(contract, pipeline.focusedStage === 'exact'

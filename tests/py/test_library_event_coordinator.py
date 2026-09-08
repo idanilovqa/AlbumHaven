@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Event, Thread
 
 import pytest
 
@@ -612,3 +613,50 @@ def test_stop_flushes_pending_work_and_rejects_new_events(tmp_path: Path):
     assert coordinator.accept(
         _event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/02.flac")
     ) is False
+
+
+def test_concurrent_flushes_preserve_delete_then_recreation_order(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    deleted_emit_started = Event()
+    release_deleted_emit = Event()
+    second_flush_finished = Event()
+    emitted = []
+
+    def emit_request(request):
+        if request.deleted_paths:
+            deleted_emit_started.set()
+            assert release_deleted_emit.wait(timeout=3.0)
+        emitted.append(request)
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emit_request,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    path = tmp_path / "Artist/Album/01.flac"
+    coordinator.accept(_event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/01.flac"))
+    first_flush = Thread(target=coordinator.flush, daemon=True)
+    first_flush.start()
+    assert deleted_emit_started.wait(timeout=3.0)
+
+    coordinator.accept(_event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac"))
+
+    def flush_recreation():
+        coordinator.flush()
+        second_flush_finished.set()
+
+    second_flush = Thread(target=flush_recreation, daemon=True)
+    second_flush.start()
+    try:
+        assert not second_flush_finished.wait(timeout=0.2)
+    finally:
+        release_deleted_emit.set()
+        first_flush.join(timeout=3.0)
+        second_flush.join(timeout=3.0)
+
+    assert not first_flush.is_alive()
+    assert not second_flush.is_alive()
+    assert [request.deleted_paths for request in emitted] == [frozenset({path}), frozenset()]
+    assert [request.paths for request in emitted] == [frozenset(), frozenset({path})]

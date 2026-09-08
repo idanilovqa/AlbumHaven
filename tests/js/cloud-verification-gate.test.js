@@ -40,7 +40,7 @@ test('workflow defines the always-running Cloud Verification Gate for pull-reque
   assert.doesNotMatch(workflow, /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m);
   assert.match(workflow, /cloud_verification_gate:\s*\r?\n\s+name: Cloud Verification Gate/);
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
-  assert.match(gate, /if: \$\{\{ always\(\) && needs\.review_scope\.outputs\.pipeline_mode == 'full' \}\}/);
+  assert.match(gate, /if: \$\{\{ always\(\) \}\}/);
   for (const job of REQUIRED_JOBS) assert.match(gate, new RegExp(`\\s+- ${job}\\r?$`, 'm'));
   assert.doesNotMatch(gate, /merge_cloud_reports|deploy_cloud_reports|cloud-test-report-/);
   assert.match(gate, /Non-authoritative fork conclusion/);
@@ -74,10 +74,10 @@ test('workflow runs reviewers before tests and lets tests run after failed revie
   assert.match(codex, /BASE_SHA: \$\{\{ needs\.review_scope\.outputs\.base_sha \}\}/);
   assert.match(codex, /HEAD_SHA: \$\{\{ needs\.review_scope\.outputs\.head_sha \}\}/);
   assert.match(third, /needs\.review_scope\.outputs\.mode == 'full'/);
-  assert.match(third, /zxcloli666\/AI-Code-Review@e4c07fe82e4c70a3cf152773423f608a88e9497d/);
-  assert.match(third, /OPENAI_API_MODEL: "gpt-4\.1-mini"/);
-  assert.match(third, /ENABLE_LINTERS: "false"/);
-  assert.doesNotMatch(third, /outputs\.review_status/);
+  assert.match(third, /uses: openai\/codex-action@v1/);
+  assert.match(third, /prompt-file: \.github\/codex\/prompts\/deep-review\.md/);
+  assert.match(third, /output-file: ai-code-review-output\.md/);
+  assert.doesNotMatch(third, /zxcloli666\/AI-Code-Review/);
 
   for (const jobName of [
     'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
@@ -98,6 +98,21 @@ test('workflow runs reviewers before tests and lets tests run after failed revie
   assert.match(gate, /AI_CODE_REVIEW_RESULT: \$\{\{ needs\.ai_code_review\.result \}\}/);
   assert.match(gate, /reviewMode = \$env:REVIEW_MODE/);
   assert.match(gate, /Record successfully reviewed head/);
+});
+
+test('Phase 7 focused exact runs grep requested FTC cases and related runs expand to the suite', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const jobName of ['e2e_phase7_auth', 'e2e_phase7_admin']) {
+    const start = workflow.indexOf(`  ${jobName}:`);
+    const nextJob = workflow.slice(start + 3).match(/^  [a-z0-9_]+:\s*$/m);
+    const next = nextJob ? start + 3 + nextJob.index : workflow.length;
+    const block = workflow.slice(start, next);
+    assert.match(block, /FOCUSED_STAGE: \$\{\{ needs\.review_scope\.outputs\.focused_stage \}\}/);
+    assert.match(block, /FOCUSED_EXACT_CASES_JSON: \$\{\{ needs\.review_scope\.outputs\.focused_exact_cases_json \}\}/);
+    assert.match(block, /if \(\$env:FOCUSED_STAGE -eq "exact"\)/);
+    assert.match(block, /\[regex\]::Escape/);
+    assert.match(block, /--grep/);
+  }
 });
 
 test('trusted gate accepts the reviewer matrix for each review mode', () => {

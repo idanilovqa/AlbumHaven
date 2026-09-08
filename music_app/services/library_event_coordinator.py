@@ -81,6 +81,7 @@ class LibraryEventCoordinator:
         self._timer_factory = timer_factory or Timer
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
         self._lock = Lock()
+        self._flush_lock = Lock()
         self._timer: Timer | None = None
         self._pending_started_at: float | None = None
         self._stopped = False
@@ -199,19 +200,20 @@ class LibraryEventCoordinator:
         timer.start()
 
     def flush(self) -> None:
-        with self._lock:
-            pending = list(self._pending.values())
-            self._pending.clear()
-            timer = self._timer
-            self._timer = None
-            self._pending_started_at = None
-        if timer is not None:
-            timer.cancel()
-        for group in sorted(
-            pending,
-            key=lambda item: (item.root_id, str(item.directory).casefold()),
-        ):
-            self._emit_group(group)
+        with self._flush_lock:
+            with self._lock:
+                pending = list(self._pending.values())
+                self._pending.clear()
+                timer = self._timer
+                self._timer = None
+                self._pending_started_at = None
+            if timer is not None:
+                timer.cancel()
+            for group in sorted(
+                pending,
+                key=lambda item: (item.root_id, str(item.directory).casefold()),
+            ):
+                self._emit_group(group)
 
     def _emit_group(self, group: _PendingGroup) -> None:
         ready: set[Path] = set()

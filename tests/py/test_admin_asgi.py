@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from threading import Event, Thread
 
 from fastapi import FastAPI
 import pytest
@@ -380,3 +381,52 @@ def test_send_invitation_route_maps_failures_without_leaking_details(
     assert json.loads(body) == {"detail": expected_detail}
     assert b"private" not in body
     assert deliveries == []
+
+
+@pytest.mark.parametrize(
+    ("state_attribute", "helper_name", "argument"),
+    [
+        ("welcome_delivery", "_deliver_pending_welcome", 51),
+        ("invitation_delivery", "_deliver_pending_invitation", DELIVERY),
+        ("password_reset_delivery", "_deliver_pending_password_reset", DELIVERY),
+    ],
+)
+def test_sync_delivery_callbacks_do_not_block_the_event_loop(
+    state_attribute, helper_name, argument
+):
+    from music_app.routes import admin_asgi
+
+    app = FastAPI()
+    callback_started = Event()
+    heartbeat_ran = Event()
+    release_callback = Event()
+    observed = {}
+
+    def callback(_argument):
+        callback_started.set()
+        assert release_callback.wait(timeout=3.0)
+
+    setattr(app.state, state_attribute, callback)
+
+    def observe_heartbeat_then_release():
+        assert callback_started.wait(timeout=3.0)
+        observed["heartbeat_before_release"] = heartbeat_ran.wait(timeout=0.5)
+        release_callback.set()
+
+    controller = Thread(target=observe_heartbeat_then_release, daemon=True)
+    controller.start()
+
+    async def exercise():
+        delivery_task = asyncio.create_task(getattr(admin_asgi, helper_name)(app, argument))
+        await asyncio.sleep(0)
+        heartbeat_ran.set()
+        await delivery_task
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release_callback.set()
+        controller.join(timeout=3.0)
+
+    assert not controller.is_alive()
+    assert observed == {"heartbeat_before_release": True}

@@ -88,6 +88,7 @@ test('workflow keeps focused verification non-authoritative and leaves promotion
   assert.doesNotMatch(focusedGate, /album-haven-reviewed-head/);
 
   const fullGate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
-  assert.match(fullGate, /needs\.review_scope\.outputs\.pipeline_mode == 'full'/);
+  assert.match(fullGate, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(fullGate, /PIPELINE_MODE: \$\{\{ needs\.review_scope\.outputs\.pipeline_mode \}\}/);
   assert.match(fullGate, /album-haven-reviewed-head/);
 });

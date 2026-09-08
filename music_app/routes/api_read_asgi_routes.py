@@ -333,9 +333,10 @@ async def status(request: Request) -> JSONResponse:
             payload["scan_in_progress"] = True
             payload["scan_phase"] = "discovering"
             payload["scan_mode"] = "background"
-        payload["watcher_health"] = _project_library_watch_health_for_request(
-            request
-        )
+    payload["watcher_health"] = await run_in_threadpool(
+        _project_library_watch_health_for_request,
+        request,
+    )
     return JSONResponse(payload)
 
 

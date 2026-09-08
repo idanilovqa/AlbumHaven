@@ -26,6 +26,12 @@
   Files navigation so its active album remains visible after the sidebar opens.
 - Kept the required hosted AI review gate compatible with its pinned action's
   Chat Completions request contract and the available per-minute token budget.
+- Serialized watcher flush publication so rapid delete-and-recreate events keep
+  their observed order, and moved watcher-health reads and synchronous mail
+  delivery callbacks off the ASGI event loop.
+- Made focused Phase 7 CI select exact FTC cases before expanding to the related
+  suite, kept the authoritative cloud gate fail-closed when classification
+  fails, and finalized generated pytest temp cleanup after plugin shutdown.
 
 ## 0.9.42 - 2026-08-30
 

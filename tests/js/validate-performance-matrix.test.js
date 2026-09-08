@@ -16,8 +16,8 @@ const runnerModule = require('../../scripts/run-performance-playwright.cjs');
 const validator = require('../../scripts/ci/validate-performance-matrix.cjs');
 const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest.cjs');
 
-const FIXTURE_RELEASE = 'fixtures-v1.0.21';
-const FIXTURE_MANIFEST_SHA256 = '094b8412fcf7e738e8ced3e54ccbe0d537319c82b7f24008e3c7ffb032087b0f';
+const FIXTURE_RELEASE = 'fixtures-v1.0.22';
+const FIXTURE_MANIFEST_SHA256 = 'f9f357744464acec5b6bfa2f3b7dc69476d1c6df497ab3318399756cd5b9aa75';
 const EXPECTED_SHARDS = [
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },

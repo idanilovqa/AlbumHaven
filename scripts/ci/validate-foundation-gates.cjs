@@ -116,7 +116,7 @@ function validateWorkflowContract(workflow) {
   const errors = [];
   if (!/^on:\r?\n\s+pull_request:/m.test(workflow)
     || /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m.test(workflow)) {
-    errors.push('foundation workflow must remain pull_request-only');
+    errors.push('foundation workflow must remain pull-request-only');
   }
   requirePatterns(workflow, [
     [/ExpectedMajorVersion\s+17/, 'PostgreSQL 17'],
@@ -132,7 +132,7 @@ function validateWorkflowContract(workflow) {
     phase7Auth: jobSource(workflow, 'e2e_phase7_auth', 'e2e_phase7_admin'),
     phase7Admin: jobSource(workflow, 'e2e_phase7_admin', 'e2e_functional'),
     functional: jobSource(workflow, 'e2e_functional', 'e2e_performance_ci'),
-    performance: jobSource(workflow, 'e2e_performance_ci', 'pr_agent_review'),
+    performance: jobSource(workflow, 'e2e_performance_ci', 'review_scope'),
   };
   if (!jobs.functional) errors.push('foundation workflow must preserve the functional job');
   if (!jobs.performance) errors.push('foundation workflow must preserve the performance job');
@@ -226,9 +226,9 @@ function validateWorkflowContract(workflow) {
     if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
       errors.push(`${name} job must be limited to a same-repository pull request`);
     }
-    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review', 'ai_code_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
-        errors.push(`${name} job is missing foundation dependency ${dependency}`);
+        errors.push(`${name} job is missing review dependency ${dependency}`);
       }
     }
     requirePatterns(source, [
@@ -245,9 +245,9 @@ function validateWorkflowContract(workflow) {
 
   for (const source of [jobs.functional, jobs.performance]) {
     if (!source) continue;
-    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review', 'ai_code_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
-        errors.push(`heavy browser job is missing foundation dependency ${dependency}`);
+        errors.push(`heavy browser job is missing review dependency ${dependency}`);
       }
     }
   }

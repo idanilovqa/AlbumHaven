@@ -120,7 +120,7 @@ function normalizeLabels(labels) {
 
 function parseFocusedE2eRequest(body) {
   const matches = [...String(body || '').matchAll(FOCUSED_REQUEST_PATTERN)];
-  if (!matches.length) return { exactCases: [], areas: [] };
+  if (!matches.length) return { exactCases: [], areas: [], promotion: null };
   if (matches.length !== 1) throw new Error('Focused E2E request must contain exactly one marker');
   const match = matches[0];
   if (match[1].length > 4096) throw new Error('Focused E2E request exceeds 4096 characters');
@@ -138,15 +138,47 @@ function parseFocusedE2eRequest(body) {
   if (unsupported) throw new Error(`Unsupported focused E2E area: ${unsupported}`);
   const invalidCase = exactCases.find((caseId) => !/^FTC-[A-Z0-9-]+$/.test(caseId));
   if (invalidCase) throw new Error(`Focused E2E case must be an exact FTC ID: ${invalidCase}`);
-  return { exactCases, areas };
+  let promotion = null;
+  if (parsed.promotion != null) {
+    if (!parsed.promotion || typeof parsed.promotion !== 'object' || Array.isArray(parsed.promotion)) {
+      throw new Error('Focused E2E promotion must be an object');
+    }
+    const stage = String(parsed.promotion.stage || '').trim();
+    const headSha = String(parsed.promotion.headSha || '').trim().toLowerCase();
+    if (!['related', 'full'].includes(stage)) {
+      throw new Error('Focused E2E promotion stage must be related or full');
+    }
+    if (!/^[0-9a-f]{40}$/.test(headSha)) {
+      throw new Error('Focused E2E promotion head must be a 40-character Git SHA');
+    }
+    promotion = { stage, headSha };
+  }
+  return { exactCases, areas, promotion };
 }
 
-function classifyPipelineLabels(labels, request = { exactCases: [], areas: [] }) {
+function classifyPipelineLabels(
+  labels,
+  request = { exactCases: [], areas: [], promotion: null },
+  action = '',
+  headSha = '',
+) {
   const normalized = normalizeLabels(labels);
   const labelSet = new Set(normalized);
-  const focused = labelSet.has(FOCUSED_E2E_LABEL);
+  const promotion = request.promotion || null;
+  const promotionMatchesHead = Boolean(
+    promotion && promotion.headSha === String(headSha || '').trim().toLowerCase(),
+  );
+  const unreadyFullPromotion = labelSet.has(FORCE_FULL_REVIEW_LABEL)
+    && promotion?.stage === 'full'
+    && (!promotionMatchesHead || action !== 'synchronize');
+  const focused = labelSet.has(FOCUSED_E2E_LABEL) || unreadyFullPromotion;
   const focusedStage = focused
-    ? labelSet.has(FOCUSED_RELATED_LABEL) ? 'related' : 'exact'
+    ? labelSet.has(FOCUSED_RELATED_LABEL)
+      && promotion?.stage === 'related'
+      && promotionMatchesHead
+      && action === 'labeled'
+      ? 'related'
+      : 'exact'
     : 'full';
   const focusedFunctionalShards = FUNCTIONAL_SHARDS.filter((shard) => (
     labelSet.has(`ci:e2e:${shard}`)
@@ -231,7 +263,7 @@ function runCli(env = process.env) {
     throw new Error(`PR_LABELS_JSON must be valid JSON: ${error.message}`);
   }
   const focusedRequest = parseFocusedE2eRequest(env.PR_BODY || '');
-  const pipeline = classifyPipelineLabels(labels, focusedRequest);
+  const pipeline = classifyPipelineLabels(labels, focusedRequest, action, headSha);
   const diffBase = action === 'synchronize' && lastReviewedSha ? lastReviewedSha : baseSha;
   const numstat = execFileSync(
     'git',

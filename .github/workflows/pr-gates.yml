@@ -1388,8 +1388,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
     steps:
       - name: Checkout focused pull request
         uses: actions/checkout@v5
@@ -1436,44 +1434,7 @@ jobs:
           $inputPath = Join-Path "${{ runner.temp }}" "focused-e2e-gate-input.json"
           $input | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $inputPath -Encoding utf8
           node scripts/ci/validate-focused-e2e-gate.cjs $inputPath
-          "## Focused E2E Verification`n$env:FOCUSED_STAGE hosted E2E selection passed. This run is non-authoritative; the workflow is promoting it to the next verification stage." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-
-      - name: Promote successful focused verification
-        uses: actions/github-script@v7
-        env:
-          FOCUSED_STAGE: ${{ needs.review_scope.outputs.focused_stage }}
-        with:
-          script: |
-            const current = context.payload.pull_request.labels.map((label) => label.name);
-            if (process.env.FOCUSED_STAGE === 'exact') {
-              await github.rest.issues.setLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                labels: [...new Set([...current, 'ci:focused-related'])],
-              });
-              return;
-            }
-            const retained = current.filter((label) => (
-              label !== 'ci:focused-e2e'
-              && label !== 'ci:focused-related'
-              && !label.startsWith('ci:e2e:')
-              && !label.startsWith('ci:e2e-performance:')
-              && label !== 'ci:full-review'
-            ));
-            await github.rest.issues.setLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              labels: [...retained, 'ci:full-review'],
-            });
-            const marker = /\n?<!--\s*album-haven-focused-e2e:{[\s\S]*?}\s*-->/i;
-            await github.rest.pulls.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              body: String(context.payload.pull_request.body || '').replace(marker, '').trim(),
-            });
+          "## Focused E2E Verification`n$env:FOCUSED_STAGE hosted E2E selection passed. This run is non-authoritative. An authenticated release operator must verify this run belongs to the current PR head before advancing the next stage through a pull-request label event." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
   cloud_verification_gate:
     name: Cloud Verification Gate

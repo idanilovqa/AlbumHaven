@@ -4,7 +4,7 @@
 
 ## Goal
 
-Replace shard-sized focused E2E feedback with an automated three-stage repair ladder:
+Replace shard-sized focused E2E feedback with an operator-orchestrated three-stage repair ladder:
 
 1. run only the exact failing or changed case;
 2. run every E2E case carrying a selected functional-area tag, regardless of shard placement;
@@ -36,15 +36,15 @@ The existing `ci:focused-e2e` label remains the opt-in repair-mode switch. A hid
 <!-- album-haven-focused-e2e:{"exactCases":["FTC-UTIL-PROBLEMS-007"],"areas":["problematic-files"]} -->
 ```
 
-The marker accepts one or more stable FTC ID prefixes and one or more supported area names. It is parsed as untrusted input, size-bounded, normalized, and validated against the checked-in functional contract before any test command is constructed. A second label, `ci:focused-related`, is workflow-owned and identifies stage 2. Humans and agents set only the marker plus `ci:focused-e2e`; CI owns stage transitions.
+The marker accepts one or more stable FTC ID prefixes and one or more supported area names. It is parsed as untrusted input, size-bounded, normalized, and validated against the checked-in functional contract before any test command is constructed. Promotion adds a validated `{stage, headSha}` object to bind the next stage to one exact commit. A second label, `ci:focused-related`, identifies stage 2. The authenticated release operator owns stage transitions after validating the completed run against the current PR head.
 
 ## Pipeline State Machine
 
 When `ci:focused-e2e` is present and `ci:focused-related` is absent, review scope emits `focused_stage=exact`, the owning functional shards only, and exact case selectors. The shard runner passes only those exact titles to Playwright. Every unselected suite, reviewer, performance job, Phase 7 job, and foundation job skips.
 
-After an exact-stage success, the focused gate retains `ci:focused-e2e`, adds `ci:focused-related`, and leaves the PR marker intact. That label event starts a new run. Review scope emits `focused_stage=related`, resolves all cases carrying any selected area tag across every owning shard, and runs only those cases.
+After an exact-stage success, the release operator verifies that the successful run's head SHA is still current, writes `promotion.stage=related` plus that SHA into the marker, retains `ci:focused-e2e`, then clears and reapplies `ci:focused-related`. Clearing first guarantees a real authenticated label event even when an older related label survived a new push. Review scope selects related only when the promotion SHA matches the event head; otherwise it selects exact. Related selection resolves all cases carrying any selected area tag across every owning shard and runs only those cases.
 
-After a related-stage success, the focused gate removes both focused labels, removes the hidden marker, applies `ci:full-review`, and thereby starts the complete review-first pipeline. Any focused failure leaves the marker and stage labels unchanged so the next repair push reruns the failed stage. Exact or related success remains non-authoritative.
+After a related-stage success, the release operator performs the same head check and creates a local empty promotion commit, whose tree is identical to the verified related-stage head. Before pushing it, the operator writes `promotion.stage=full` plus the promotion commit SHA into the marker, removes both focused labels, and applies `ci:full-review`. Label events against the old remote head fail safe to exact selection because their head does not match. Pushing the prepared commit then emits the native `synchronize` payload required by every reviewer and starts the complete review-first pipeline. CI deliberately does not self-dispatch or mutate these labels: `GITHUB_TOKEN` mutations do not trigger a new workflow, while dispatch events lack the pull-request payload required by the review actions. Any focused failure leaves the marker and stage labels unchanged. Promotion evidence that does not match the event head always falls back to exact selection. Exact or related success remains non-authoritative.
 
 ## Review And Release Invariants
 
@@ -62,4 +62,4 @@ The selector parser never evaluates PR-body content and never interpolates raw s
 
 ## Verification
 
-Unit tests cover marker parsing, size limits, exact and area resolution, multi-shard area selection, invalid and ambiguous selectors, stage classification, gate transitions, and full-pipeline promotion. Workflow contract tests prove only selected cases are passed to the shard runner and that review/foundation/Phase 7/performance jobs skip in focused mode. The current repair proves the ladder with `FTC-UTIL-PROBLEMS-007`: exact local E2E first, exact hosted E2E second, tagged related cases third, then the complete review-first pipeline.
+Unit tests cover marker parsing, size limits, exact and area resolution, multi-shard area selection, invalid and ambiguous selectors, stage classification, new-head reset behavior, and gate validation. Workflow contract tests prove only selected cases are passed to the shard runner, review/foundation/Phase 7/performance jobs skip in focused mode, and focused CI cannot mutate or dispatch the next stage. The current repair proves the ladder with `FTC-UTIL-PROBLEMS-007`: exact local E2E first, exact hosted E2E second, tagged related cases third, then the complete review-first pipeline.

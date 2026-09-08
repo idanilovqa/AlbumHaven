@@ -20,6 +20,13 @@ test('focused E2E request parses exact cases and supported product areas', () =>
   assert.deepEqual(parseFocusedE2eRequest(body), {
     exactCases: ['FTC-UTIL-PROBLEMS-007'],
     areas: ['problematic-files'],
+    promotion: null,
+  });
+  assert.deepEqual(parseFocusedE2eRequest(
+    '<!-- album-haven-focused-e2e:{"exactCases":["FTC-X"],"areas":["playback"],"promotion":{"stage":"related","headSha":"1111111111111111111111111111111111111111"}} -->',
+  ).promotion, {
+    stage: 'related',
+    headSha: '1111111111111111111111111111111111111111',
   });
   assert.throws(
     () => parseFocusedE2eRequest('<!-- album-haven-focused-e2e:{"exactCases":[],"areas":["unknown"]} -->'),
@@ -31,6 +38,10 @@ test('focused E2E request parses exact cases and supported product areas', () =>
   );
   const oversized = `<!-- album-haven-focused-e2e:{"exactCases":["FTC-X"],"areas":["${'x'.repeat(4097)}"]} -->`;
   assert.throws(() => parseFocusedE2eRequest(oversized), /exceeds 4096/i);
+  assert.throws(
+    () => parseFocusedE2eRequest('<!-- album-haven-focused-e2e:{"exactCases":["FTC-X"],"areas":["playback"],"promotion":{"stage":"related","headSha":"stale"}} -->'),
+    /promotion head/i,
+  );
 });
 
 test('successful baseline must exist and be an ancestor of the current head', () => {
@@ -198,17 +209,51 @@ test('focused E2E mode requires a supported target and rejects misspelled target
   );
 });
 
-test('focused E2E marker selects exact then related stages without runner labels', () => {
+test('focused E2E promotion is bound to the current head and resets safely on a new head', () => {
   const request = {
     exactCases: ['FTC-UTIL-PROBLEMS-007'],
     areas: ['problematic-files'],
+    promotion: {
+      stage: 'related',
+      headSha: '1111111111111111111111111111111111111111',
+    },
   };
   const exact = classifyPipelineLabels(['ci:focused-e2e'], request);
   assert.equal(exact.focusedStage, 'exact');
   assert.deepEqual(exact.focusedExactCases, request.exactCases);
-  const related = classifyPipelineLabels(['ci:focused-e2e', 'ci:focused-related'], request);
+  const related = classifyPipelineLabels(
+    ['ci:focused-e2e', 'ci:focused-related'],
+    request,
+    'labeled',
+    request.promotion.headSha,
+  );
   assert.equal(related.focusedStage, 'related');
   assert.deepEqual(related.focusedAreas, request.areas);
+
+  const newHead = classifyPipelineLabels(
+    ['ci:focused-e2e', 'ci:focused-related'],
+    request,
+    'synchronize',
+    '2222222222222222222222222222222222222222',
+  );
+  assert.equal(newHead.focusedStage, 'exact');
+  assert.deepEqual(newHead.focusedExactCases, request.exactCases);
+
+  const fullRequest = {
+    ...request,
+    promotion: { stage: 'full', headSha: request.promotion.headSha },
+  };
+  assert.equal(classifyPipelineLabels(
+    ['ci:full-review'], fullRequest, 'labeled', request.promotion.headSha,
+  ).pipelineMode, 'focused-e2e');
+  assert.equal(classifyPipelineLabels(
+    ['ci:full-review'], fullRequest, 'synchronize', request.promotion.headSha,
+  ).pipelineMode, 'full');
+  const racedFull = classifyPipelineLabels(
+    ['ci:full-review'], fullRequest, 'synchronize', '2222222222222222222222222222222222222222',
+  );
+  assert.equal(racedFull.pipelineMode, 'focused-e2e');
+  assert.equal(racedFull.focusedStage, 'exact');
 });
 
 test('full mode is the default and accepts the explicit full-review label', () => {

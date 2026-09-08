@@ -917,12 +917,11 @@ test('functional workflow uses the approved selectable four-shard Windows matrix
   assert.ok(Object.hasOwn(FUNCTIONAL_SHARDS, 'playback-utilities'));
 });
 
-test('PR gates trigger only for pull requests and never expose heavy jobs to forked code', () => {
+test('PR gates remain pull-request-only and never expose heavy jobs to forked code', () => {
   const { workflow, job } = functionalJobSource();
   const triggerSource = workflow.slice(0, workflow.indexOf('\njobs:'));
   assert.match(triggerSource, /^on:\r?\n\s+pull_request:/m);
-  assert.doesNotMatch(triggerSource, /^\s+(?:push|schedule|workflow_dispatch):/m);
-  assert.doesNotMatch(workflow, /pull_request_target/);
+  assert.doesNotMatch(triggerSource, /^\s+(?:push|schedule|workflow_dispatch|pull_request_target):/m);
   assert.match(
     job,
     /if:\s*\$\{\{[^\r\n]*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository[^\r\n]*\}\}/,

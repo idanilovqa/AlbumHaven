@@ -114,7 +114,7 @@ test('validator compares real Playwright discovery with all approved identities'
   assert.match(validator.validateDiscoveredCases(contract, discovered.slice(1)).join('\n'), /undiscovered owned performance case/);
 });
 
-test('profile runners remain PR-only same-repository Windows Chrome jobs capped at four', () => {
+test('profile runners remain same-repository PR-context Windows Chrome jobs capped at four', () => {
   const job = performanceJobSource();
   assert.match(workflow, /^on:\r?\n\s+pull_request:/m);
   assert.doesNotMatch(workflow, /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m);

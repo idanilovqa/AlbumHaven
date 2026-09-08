@@ -47,9 +47,17 @@ not need the private repository to build or use Album Haven.
 - For an E2E repair, reproduce the exact failing test locally before pushing.
   Put its exact FTC ID and approved `@area:<name>` selectors in the bounded
   `album-haven-focused-e2e` PR-body marker, then apply `ci:focused-e2e`. CI runs
-  exactly those cases first, promotes a green run to the cross-shard related-area
-  tests, and promotes a green related run to the authoritative full review-first
-  pipeline. Runner or shard membership never defines focused scope.
+  exactly those cases first. After each green focused run, the release operator
+  must bind the next stage and exact head SHA in the PR marker. To start related
+  tests, clear and reapply `ci:focused-related` so an already-present label still
+  emits a real pull-request event. To start full CI, create a no-tree-change
+  promotion commit locally, bind the marker's `full` promotion to that commit
+  SHA, replace focused labels with `ci:full-review`, then push the promotion
+  commit so reviewers receive a native `synchronize` payload. CI falls back to
+  exact selection whenever promotion evidence does not match the event head.
+  Never use `workflow_dispatch`: review actions require the native pull-request
+  payload, and `GITHUB_TOKEN` label writes do not trigger another workflow.
+  Runner or shard membership never defines focused scope.
 - Only a successful full pipeline may record review coverage, authorize merge,
   or authorize publication. Focused verification never weakens or replaces an
   existing E2E acceptance contract.

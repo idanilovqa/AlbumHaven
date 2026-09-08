@@ -205,7 +205,9 @@ function validateWorkflowContract(workflow, contract, runnerModule, testDataMatr
     if (!diagnosticsPattern.test(job)) errors.push(`performance diagnostics artifact slot ${slot} is missing`);
     if (!foundationPattern.test(job)) errors.push(`performance foundation artifact slot ${slot} is missing`);
   }
-  if (/^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m.test(workflow)) errors.push('PR gates workflow must remain pull-request-only');
+  if (/^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m.test(workflow)) {
+    errors.push('PR gates workflow must remain pull-request-only');
+  }
   return errors;
 }
 

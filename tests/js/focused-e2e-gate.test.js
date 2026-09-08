@@ -73,7 +73,7 @@ test('focused gate fails closed for absent targets, failed targets, and unselect
   }).conclusion, 'failure');
 });
 
-test('workflow keeps focused verification non-authoritative and promotes only a green focused run', () => {
+test('workflow keeps focused verification non-authoritative and leaves promotion to an authenticated operator', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /focused_e2e_gate:\s*\r?\n\s+name: Focused E2E Verification/);
   const focusedGate = workflow.slice(
@@ -81,9 +81,10 @@ test('workflow keeps focused verification non-authoritative and promotes only a 
     workflow.indexOf('  cloud_verification_gate:'),
   );
   assert.match(focusedGate, /validate-focused-e2e-gate\.cjs/);
-  assert.match(focusedGate, /ci:focused-e2e/);
-  assert.match(focusedGate, /ci:full-review/);
-  assert.match(focusedGate, /issues:\s+write/);
+  assert.match(focusedGate, /authenticated release operator/);
+  assert.doesNotMatch(focusedGate, /issues:\s+write/);
+  assert.doesNotMatch(focusedGate, /pull-requests:\s+write/);
+  assert.doesNotMatch(focusedGate, /setLabels|pulls\.update|createWorkflowDispatch/);
   assert.doesNotMatch(focusedGate, /album-haven-reviewed-head/);
 
   const fullGate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));

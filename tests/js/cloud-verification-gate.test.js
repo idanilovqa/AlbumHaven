@@ -34,10 +34,10 @@ function validInput(mode = 'trusted', reviewMode = 'full') {
   };
 }
 
-test('workflow defines the always-running Cloud Verification Gate and keeps pull_request-only execution', () => {
+test('workflow defines the always-running Cloud Verification Gate for pull-request runs', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   assert.match(workflow, /^on:\s*\r?\n\s+pull_request:\s*$/m);
-  assert.doesNotMatch(workflow, /pull_request_target/);
+  assert.doesNotMatch(workflow, /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m);
   assert.match(workflow, /cloud_verification_gate:\s*\r?\n\s+name: Cloud Verification Gate/);
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
   assert.match(gate, /if: \$\{\{ always\(\) && needs\.review_scope\.outputs\.pipeline_mode == 'full' \}\}/);

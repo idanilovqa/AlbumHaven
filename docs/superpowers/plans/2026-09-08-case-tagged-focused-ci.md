@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Automate exact-case, tagged-related, and full review-first CI stages for E2E repair pushes.
+**Goal:** Make exact-case, tagged-related, and full review-first CI stages repeatable and safe for E2E repair pushes.
 
-**Architecture:** Parse a bounded hidden PR-body marker into validated exact FTC IDs and product-area tags. Extend functional Playwright discovery and the shard contract so selectors resolve independently of shard placement, then let the focused gate advance labels from exact to related to authoritative full mode.
+**Architecture:** Parse a bounded hidden PR-body marker into validated exact FTC IDs and product-area tags. Extend functional Playwright discovery and the shard contract so selectors resolve independently of shard placement. The focused gate validates one non-authoritative stage; an authenticated release operator verifies the current head and advances labels through native pull-request events.
 
 **Tech Stack:** GitHub Actions, Node.js 22, Playwright, CommonJS CI validators, GitHub REST API.
 
@@ -56,7 +56,7 @@
 - [ ] **Step 5: Run list validation and focused validator tests and require GREEN:** `node scripts/ci/validate-functional-shards.cjs --list` followed by the Task 2 test command.
 - [ ] **Step 6: Commit** with `test: tag functional E2E by product area`.
 
-### Task 3: Workflow State Machine And Gate Promotion
+### Task 3: Workflow State Machine And Safe Operator Promotion
 
 **Files:**
 - Modify: `.github/workflows/pr-gates.yml`
@@ -67,14 +67,14 @@
 
 **Interfaces:**
 - Consumes: focused stage, selected case JSON, selected area JSON, owning shards, and job conclusions.
-- Produces: exact-stage label transition, related-stage full promotion, marker cleanup, and unchanged authoritative full gate behavior.
+- Produces: exact and related gate evidence, operator-owned transition rules, and unchanged authoritative full gate behavior.
 
-- [ ] **Step 1: Add failing workflow and gate tests** for exact command routing, exact-to-related transition, related-to-full promotion, no promotion on failure, marker cleanup, and review/test ordering invariants.
+- [ ] **Step 1: Add failing workflow and gate tests** for exact command routing, non-authoritative gate evidence, no CI-owned mutation or dispatch, new-head reset behavior, and review/test ordering invariants.
 - [ ] **Step 2: Run the focused workflow tests to verify RED:** `node --test --test-concurrency=1 tests/js/focused-e2e-gate.test.js tests/js/cloud-verification-gate.test.js tests/js/check-e2e-production-parity.test.js`.
 - [ ] **Step 3: Wire selector outputs into the functional matrix** and pass JSON selectors to `validate-functional-shards.cjs` without raw shell interpolation.
-- [ ] **Step 4: Implement the two focused-gate transitions** with idempotent GitHub label/body updates and no reviewed-head marker.
+- [ ] **Step 4: Keep focused CI read-only after validation** and require an authenticated operator to verify the current head before each native pull-request label transition.
 - [ ] **Step 5: Rerun the Task 3 tests plus YAML parsing and `git diff --check`; require GREEN.**
-- [ ] **Step 6: Commit** with `ci: automate exact related and full E2E stages`.
+- [ ] **Step 6: Commit** with `ci: require pull-request focused promotion`.
 
 ### Task 4: Repository Rules And Operator Documentation
 
@@ -111,7 +111,7 @@
 - [ ] **Step 1: Run focused local CI-contract tests and confirm all repositories contain only intended committed work.**
 - [ ] **Step 2: Commit remaining app changes and push the branch.**
 - [ ] **Step 3: Set the PR marker and exact-stage label state** for `FTC-UTIL-PROBLEMS-007` plus `problematic-files` and `tag-edit`.
-- [ ] **Step 4: Require exact hosted GREEN, then tagged-related GREEN, then allow automatic full promotion.**
+- [ ] **Step 4: Require exact hosted GREEN, bind the marker to that head and clear/reapply the related label, then require tagged-related GREEN; create an empty promotion commit, bind full promotion to its SHA, set full-review state, and push it for the reviewer-compatible synchronize run.**
 - [ ] **Step 5: Let every full review and test job finish; collect the complete combined failure inventory before fixing anything.**
 - [ ] **Step 6: Address every genuine review and test finding, use focused local verification for each fix, and repeat the staged hosted ladder until the authoritative full pipeline is green.**
 - [ ] **Step 7: Close the three remaining Phase 7 checkboxes with factual review/merge/publication evidence, commit, and push internal documentation.**

@@ -203,7 +203,10 @@ test('foundation validator enforces the approved portable and Windows gate contr
   );
 
   const triggerDrift = workflow.replace(/^on:\r?\n\s+pull_request:/m, 'on:\n  push:\n  pull_request:');
-  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull_request-only/i);
+  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull-request-only/i);
+
+  const dispatchDrift = workflow.replace(/^on:\r?\n/m, 'on:\n  workflow_dispatch:\n');
+  assert.match(validator.validateWorkflowContract(dispatchDrift).join('\n'), /pull-request-only/i);
 
   const unguardedWindows = workflow.replace(
     /if:\s*\$\{\{[^\n]*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository[^\n]*\}\}/,

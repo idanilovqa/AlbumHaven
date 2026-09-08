@@ -37,11 +37,18 @@ Run one exact case. The command resolves its owning shard automatically:
 npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
 ```
 
-During release repair work, run the failing exact case locally before hosted
-verification. Hosted focused CI then runs the exact FTC ID, the selected native
-`@area:<name>` groups across every owning shard, and finally the complete
-review-first pipeline. Do not substitute a complete local shard for the exact
-local reproduction, and do not treat a shard as a product area.
+During release repair work, reproduce and verify the failing exact case locally,
+then run the complete review-first CI pipeline. Use focused hosted runs only for
+an unusually difficult or CI-specific failure that needs repeated hosted
+feedback; after that focused run passes, return to the complete pipeline.
+Preserve native `@area:<name>` tags for diagnosis and reporting. Do not substitute
+a complete local shard for exact local reproduction, or treat a shard as a
+product area.
+
+GitHub may withhold downloadable job logs until the job finishes. For live case
+progress, use the signed-in Actions job page. An unchanged test-execution step
+alone does not prove a hang. Preserve the full failure inventory before fixing
+failures or rerunning jobs.
 
 Run one complete shard:
 

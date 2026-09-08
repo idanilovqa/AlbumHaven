@@ -450,20 +450,21 @@ validatorTest('shard runner reuses one prepared fixture across three metadata wa
     const checkpointCalls = calls.filter((call) => call.executable === 'fixture-python');
     const playwrightCalls = calls.filter((call) => call.args[0].endsWith('run-playwright.cjs'));
     const mediaCalls = calls.filter((call) => call.args[0].endsWith('restore-functional-media.cjs'));
-    const mutationCount = shard.invocations.flatMap((invocation) => invocation.cases).length;
-    assert.equal(checkpointCalls.length, mutationCount + 2);
+    const invocationCount = 12;
+    assert.equal(shard.invocations.flatMap((invocation) => invocation.cases).length, 13);
+    assert.equal(checkpointCalls.length, invocationCount + 2);
     assert.deepEqual(
       checkpointCalls.map((call) => call.args.find((arg) => arg.startsWith('--mode='))),
-      ['--mode=capture', ...Array(mutationCount).fill('--mode=restore'), '--mode=verify'],
+      ['--mode=capture', ...Array(invocationCount).fill('--mode=restore'), '--mode=verify'],
     );
     assert.ok(checkpointCalls.every((call) => (
       call.args[0].endsWith(path.join('scripts', 'ci', 'functional-fixture-checkpoint.py'))
       && call.args.some((arg) => arg.includes('album_haven_ci_f_123'))
     )));
-    assert.equal(playwrightCalls.length, mutationCount, 'a failed invocation must not hide later cases');
+    assert.equal(playwrightCalls.length, invocationCount, 'a failed invocation must not hide later cases');
     assert.deepEqual(
       mediaCalls.map((call) => call.args[1]),
-      [...Array(mutationCount).fill('--mode=restore'), '--mode=verify'],
+      [...Array(invocationCount).fill('--mode=restore'), '--mode=verify'],
     );
     assert.ok(mediaCalls.every((call) => (
       call.args.includes(`--source-media-root=${path.join(sourceFixtureRoot, 'media')}`)
@@ -594,6 +595,14 @@ validatorTest('metadata shard uses one fixture setup with three effect-compatibl
 
   assert.equal(waves.length, 3);
   assert.deepEqual(waves.map((wave) => wave.wave), [1, 2, 3]);
+  const sharedReaders = waves[0].invocations.find((invocation) => (
+    invocation.baselineMode === 'shared-setup'
+  ));
+  assert.ok(sharedReaders, 'unsaved editor interactions must share the prepared fixture');
+  assert.deepEqual(sharedReaders.cases.map((ownedCase) => ownedCase.case), [
+    'FTC-TAGS-022 derives Start at from filename then deterministic editor position',
+    'FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pending',
+  ]);
   for (const wave of waves) {
     const cases = wave.invocations.flatMap((invocation) => invocation.cases);
     const rows = cases.map((ownedCase) => matrixByCase.get(ownedCase.case));
@@ -730,6 +739,14 @@ validatorTest('gallery startup projections share one early app process before is
   assert.equal(isolatedFirstWave.length, 4);
   assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
   assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
+  const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
+  assert.equal(sharedReaderNames.length, 20);
+  for (const caseName of [
+    'FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover',
+    'FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes',
+  ]) {
+    assert.ok(sharedReaderNames.includes(caseName), `${caseName} must share the prepared gallery fixture`);
+  }
   assert.deepEqual(
     waves[0].invocations[0].cases.map((ownedCase) => ownedCase.case),
     [

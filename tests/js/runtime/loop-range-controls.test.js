@@ -646,6 +646,25 @@ test('saved-loop Play hover preserves its surface and uses only a subtle one-pix
   assert.match(interactionRule, /outline-offset:\s*1px/);
 });
 
+test('saved-loop green controls use a thin subdued hover outline below pressed intensity', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const genericHoverRule = css.match(
+    /:root :is\(button,[^{]+:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
+  )?.[0] || '';
+  const loopHoverRule = css.match(
+    /:root :is\(\.utility-loop-pitch-control button, \.utility-loop-repeat, \.utility-loop-speed-step, \.utility-loop-speed-value\):hover:not\(:disabled\)\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+
+  assert.match(genericHoverRule, /:not\(\.utility-loop-control button\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-repeat\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-step\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-value\)/);
+  assert.match(loopHoverRule, /outline:\s*1px solid rgba\(110,\s*231,\s*183,\s*0\.18\)/);
+  assert.match(loopHoverRule, /outline-offset:\s*1px/);
+});
+
 test('expanded loop edit controls overlay the waveform without reserving their two-button width', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',

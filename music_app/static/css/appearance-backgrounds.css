@@ -140,7 +140,7 @@ html .cover-lookup-drawer {
 :root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
 .shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
 .shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
@@ -165,6 +165,10 @@ html .cover-lookup-drawer {
   background: linear-gradient(135deg, #0fa66f, #1f995c);
   border-color: #7cbaa4;
   outline: 1px solid color-mix(in srgb, var(--appearance-interaction-outline, var(--appearance-accent, #72baff)) 46%, transparent);
+  outline-offset: 1px;
+}
+:root :is(.utility-loop-pitch-control button, .utility-loop-repeat, .utility-loop-speed-step, .utility-loop-speed-value):hover:not(:disabled) {
+  outline: 1px solid rgba(110, 231, 183, 0.18);
   outline-offset: 1px;
 }
 :root[data-appearance-palette] .gallery-options-floating-button {

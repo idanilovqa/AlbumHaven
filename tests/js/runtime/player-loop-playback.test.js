@@ -248,6 +248,52 @@ function loadHelper(overrides = {}) {
   return { context, audio, timeline, playButton };
 }
 
+test('never-played player hides its timestamp until a track is available', () => {
+  const playerMarkup = fs.readFileSync(
+    path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'),
+    'utf8',
+  );
+  assert.match(playerMarkup, /<div class="player-time" id="player-time" hidden>0:00 \/ 0:00<\/div>/);
+  const timelineWrap = new FakeElement();
+  const timeline = new FakeElement({ tagName: 'INPUT', type: 'range', parentElement: timelineWrap });
+  const time = new FakeElement({ hidden: false });
+  const play = new FakeElement({ tagName: 'BUTTON' });
+  const player = new FakeElement();
+  const state = {
+    player: {
+      current: null,
+      loopActive: false,
+      loopStart: 0,
+      loopEnd: 30,
+      saveBusy: false,
+      waveform: { renderToken: 0 },
+    },
+    utility: {},
+  };
+  const { context } = loadHelper({
+    state,
+    timeline,
+    playButton: play,
+    player,
+    getPlayerPlaybackSnapshot: () => ({
+      currentTime: 0, duration: 0, paused: true, ended: false, src: '',
+    }),
+    getPlayerElements: () => ({ player, timeline, time, play }),
+  });
+
+  context.updatePlayerUi();
+  assert.equal(time.hidden, true);
+  assert.equal(timelineWrap.classList.contains('is-idle'), true);
+
+  state.player.current = { src: '/track?path=song.flac', title: 'Song' };
+  context.getPlayerPlaybackSnapshot = () => ({
+    currentTime: 3, duration: 60, paused: true, ended: false, src: '/track?path=song.flac',
+  });
+  context.updatePlayerUi();
+  assert.equal(time.hidden, false);
+  assert.equal(time.textContent, '3 / 60');
+});
+
 test('visible play control and global Space dispatch pause and resume through the streaming engine', async () => {
   const calls = [];
   const snapshot = {

@@ -76,6 +76,7 @@ function updatePlayerUi() {
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
+    els.time.hidden = !hasTrack;
     els.time.textContent = state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : lockedByAnotherTab

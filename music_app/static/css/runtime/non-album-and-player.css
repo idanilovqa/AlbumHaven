@@ -1154,7 +1154,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .utility-loop-entry {
   display: grid;
   gap: 7px;
-  padding: 11px 0;
+  padding: 11px 0 15px;
   border-top: 1px solid rgba(148, 163, 184, 0.2);
 }
 .utility-loop-entry:first-child {

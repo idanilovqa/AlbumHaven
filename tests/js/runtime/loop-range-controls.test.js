@@ -751,6 +751,18 @@ test('persistent and saved-loop players share one relational Play control cluste
   assert.doesNotMatch(css, /\.player-loop-actions\s*\{/s);
 });
 
+test('saved-loop rows leave breathing room below the overhanging Play control', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
+  ), 'utf8');
+  const entryRule = css.match(/\.utility-loop-entry\s*\{([^}]*)\}/s)?.[1] || '';
+  const firstEntryRule = css.match(/\.utility-loop-entry:first-child\s*\{([^}]*)\}/s)?.[1] || '';
+
+  assert.match(entryRule, /padding:\s*11px\s+0\s+15px/);
+  assert.match(firstEntryRule, /padding-top:\s*0/);
+  assert.doesNotMatch(firstEntryRule, /padding-bottom:\s*0/);
+});
+
 test('active-away scissors keeps the idle one-button geometry with subdued styling', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',

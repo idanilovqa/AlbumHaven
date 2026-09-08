@@ -161,6 +161,12 @@ html .cover-lookup-drawer {
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
 }
+:root .utility-loop-play:is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  background: linear-gradient(135deg, #0fa66f, #1f995c);
+  border-color: #7cbaa4;
+  outline: 1px solid color-mix(in srgb, var(--appearance-interaction-outline, var(--appearance-accent, #72baff)) 46%, transparent);
+  outline-offset: 1px;
+}
 :root[data-appearance-palette] .gallery-options-floating-button {
   background: var(--appearance-control);
   color: var(--appearance-ink);

@@ -624,6 +624,28 @@ test('opaque Play surfaces retain pointer ownership at the loop-control edge', (
   assert.match(mountRule, /z-index:\s*4/);
 });
 
+test('saved-loop Play hover preserves its surface and uses only a subtle one-pixel outline', () => {
+  const playerCss = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
+  ), 'utf8');
+  const appearanceCss = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const playRule = playerCss.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
+  const interactionRule = appearanceCss.match(
+    /:root \.utility-loop-play:is\(:hover,\s*:active,\s*:focus-visible\)[^{]*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const restingSurface = playRule.match(/background:\s*([^;]+);/)?.[1]?.trim() || '';
+  const interactionSurface = interactionRule.match(/background:\s*([^;]+);/)?.[1]?.trim() || '';
+  const restingBorder = playRule.match(/border-color:\s*([^;]+);/)?.[1]?.trim() || '';
+  const interactionBorder = interactionRule.match(/border-color:\s*([^;]+);/)?.[1]?.trim() || '';
+
+  assert.equal(interactionSurface, restingSurface);
+  assert.equal(interactionBorder, restingBorder);
+  assert.match(interactionRule, /outline:\s*1px solid color-mix\([^;]+transparent\)/);
+  assert.match(interactionRule, /outline-offset:\s*1px/);
+});
+
 test('expanded loop edit controls overlay the waveform without reserving their two-button width', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',

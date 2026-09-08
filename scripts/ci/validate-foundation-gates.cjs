@@ -234,7 +234,7 @@ function validateWorkflowContract(workflow) {
     if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
       errors.push(`${name} job must be limited to a same-repository pull request`);
     }
-    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review', 'ai_code_review']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
         errors.push(`${name} job is missing review dependency ${dependency}`);
       }
@@ -253,7 +253,7 @@ function validateWorkflowContract(workflow) {
 
   for (const source of [jobs.functional, jobs.performance]) {
     if (!source) continue;
-    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review', 'ai_code_review']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
         errors.push(`heavy browser job is missing review dependency ${dependency}`);
       }

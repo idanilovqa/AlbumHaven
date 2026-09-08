@@ -135,8 +135,7 @@ contractTest('portable JavaScript gate forwards the setup-python executable to p
 contractTest('hosted review gates fail closed without credentials and run their review actions when configured', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
-  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'focused_e2e_gate');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
     'Require OpenAI credential for PR Agent review',
@@ -166,12 +165,6 @@ contractTest('hosted review gates fail closed without credentials and run their 
     'Post Codex feedback',
   );
   const codexComment = workflowStepSource(codexJob, 'Post Codex feedback');
-  const aiCodeReviewAction = workflowStepSource(aiCodeReviewJob, 'Run AI Code Review');
-
-  assert.match(aiCodeReviewAction, /uses: openai\/codex-action@v1/);
-  assert.match(aiCodeReviewAction, /prompt-file: \.github\/codex\/prompts\/deep-review\.md/);
-  assert.match(aiCodeReviewAction, /output-file: ai-code-review-output\.md/);
-  assert.doesNotMatch(aiCodeReviewJob, /zxcloli666\/AI-Code-Review/);
 
   assert.doesNotMatch(prAgentJob, /^    env:\r?\n\s+PR_AGENT_OPENAI_API_KEY:/m);
   assert.match(prAgentCredentialGuard, /PR_AGENT_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
@@ -225,23 +218,18 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.doesNotMatch(workflow, /needs\.codex_review\.outputs|steps\.run_codex\.outputs/);
   assert.doesNotMatch(codexJob, /[Ss]kip.*(?:credential|key)|if:.*CODEX_OPENAI_API_KEY/);
 
-  assert.match(aiCodeReviewAction, /permission-profile: ":read-only"/);
-  assert.match(aiCodeReviewAction, /run: test -s ai-code-review-output\.md/);
-  assert.match(aiCodeReviewAction, /name: ai-code-review-output/);
-  assert.match(aiCodeReviewAction, /fs\.readFileSync\('ai-code-review-output\.md', 'utf8'\)\.trim\(\)/);
 });
 
 contractTest('hosted review jobs run after scope and before E2E without test dependencies', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
   const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review', 'ai_code_review');
-  const aiCodeReviewJob = workflowJobSource(workflow, 'ai_code_review', 'focused_e2e_gate');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
 
-  for (const reviewJob of [prAgentJob, codexJob, aiCodeReviewJob]) {
+  for (const reviewJob of [prAgentJob, codexJob]) {
     const condition = reviewJob.match(/^    if: .*$/m)?.[0] || '';
     assert.match(reviewJob, /needs:\s*\r?\n\s+- review_scope/);
     assert.doesNotMatch(reviewJob, /needs:[\s\S]*?- e2e_/);
-    assert.match(condition, /if: \$\{\{ always\(\)/);
+    assert.match(condition, /if: \$\{\{ !cancelled\(\)/);
     assert.match(condition, /needs\.review_scope\.result == 'success'/);
   }
 });

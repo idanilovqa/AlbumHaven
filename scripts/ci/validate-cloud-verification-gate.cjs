@@ -4,16 +4,16 @@ const path = require('node:path');
 const REQUIRED_JOBS = [
   'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
   'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
-  'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review', 'ai_code_review',
+  'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review',
 ];
-const REVIEW_JOBS = new Set(['pr_agent_review', 'codex_review', 'ai_code_review']);
+const REVIEW_JOBS = new Set(['pr_agent_review', 'codex_review']);
 const PORTABLE_FORK_JOBS = new Set([
   'test_js', 'test_components', 'e2e_production_parity', 'review_scope', 'review_prerequisites',
 ]);
 const REVIEW_EXPECTATIONS = {
-  none: { pr_agent_review: 'skipped', codex_review: 'skipped', ai_code_review: 'skipped' },
-  incremental: { pr_agent_review: 'success', codex_review: 'success', ai_code_review: 'skipped' },
-  full: { pr_agent_review: 'success', codex_review: 'success', ai_code_review: 'success' },
+  none: { pr_agent_review: 'skipped', codex_review: 'skipped' },
+  incremental: { pr_agent_review: 'success', codex_review: 'success' },
+  full: { pr_agent_review: 'success', codex_review: 'success' },
 };
 
 function validateReviewPrerequisites(input) {

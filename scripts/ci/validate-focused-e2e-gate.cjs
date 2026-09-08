@@ -11,7 +11,6 @@ const REQUIRED_SCOPE_JOB = 'review_scope';
 const FOCUSED_SKIPPED_JOBS = [
   'pr_agent_review',
   'codex_review',
-  'ai_code_review',
   'test_js',
   'test_components',
   'test_node_windows',

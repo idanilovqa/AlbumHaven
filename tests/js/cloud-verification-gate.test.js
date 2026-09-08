@@ -10,17 +10,17 @@ const validatorPath = path.join(root, 'scripts', 'ci', 'validate-cloud-verificat
 const REQUIRED_JOBS = [
   'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
   'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
-  'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review', 'ai_code_review',
+  'review_scope', 'review_prerequisites', 'pr_agent_review', 'codex_review',
 ];
 
-const REVIEW_JOBS = ['pr_agent_review', 'codex_review', 'ai_code_review'];
+const REVIEW_JOBS = ['pr_agent_review', 'codex_review'];
 
 function validInput(mode = 'trusted', reviewMode = 'full') {
   const trusted = mode === 'trusted';
   const reviewExpectations = {
-    none: ['skipped', 'skipped', 'skipped'],
-    incremental: ['success', 'success', 'skipped'],
-    full: ['success', 'success', 'success'],
+    none: ['skipped', 'skipped'],
+    incremental: ['success', 'success'],
+    full: ['success', 'success'],
   }[reviewMode];
   const jobResults = Object.fromEntries(REQUIRED_JOBS.map((job) => [job, trusted ? 'success' : (
     ['test_js', 'test_components', 'e2e_production_parity', 'review_scope', 'review_prerequisites'].includes(job) ? 'success' : 'skipped'
@@ -62,13 +62,14 @@ test('workflow holds every test family behind successful review prerequisites', 
   assert.match(workflow, /commentUpdatedAt <= completedAt/);
 
   const prAgent = workflow.slice(workflow.indexOf('  pr_agent_review:'), workflow.indexOf('  codex_review:'));
-  const codex = workflow.slice(workflow.indexOf('  codex_review:'), workflow.indexOf('  ai_code_review:'));
-  const third = workflow.slice(workflow.indexOf('  ai_code_review:'), workflow.indexOf('  review_prerequisites:'));
-  for (const block of [prAgent, codex, third]) {
+  const codex = workflow.slice(workflow.indexOf('  codex_review:'), workflow.indexOf('  review_prerequisites:'));
+  assert.doesNotMatch(workflow, /ai_code_review|AI_CODE_REVIEW|deep-review\.md/);
+  assert.equal((workflow.match(/uses: openai\/codex-action@v1/g) || []).length, 1);
+  for (const block of [prAgent, codex]) {
     assert.match(block, /needs\.review_scope\.result == 'success'/);
     assert.doesNotMatch(block, /needs\.(?:e2e_|review_prerequisites)/);
     assert.match(block, /if: \$\{\{ !cancelled\(\)/);
-    assert.equal((block.match(/^      - (?:review_scope|pr_agent_review|codex_review|ai_code_review)$/gm) || []).length, 1);
+    assert.equal((block.match(/^      - (?:review_scope|pr_agent_review|codex_review)$/gm) || []).length, 1);
   }
   assert.match(prAgent, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
   assert.match(prAgent, /\["\/review -i"\]/);
@@ -76,12 +77,6 @@ test('workflow holds every test family behind successful review prerequisites', 
   assert.match(codex, /BASE_SHA: \$\{\{ needs\.review_scope\.outputs\.base_sha \}\}/);
   assert.match(codex, /HEAD_SHA: \$\{\{ needs\.review_scope\.outputs\.head_sha \}\}/);
   assert.match(codex, /validate-codex-review-verdict\.cjs codex-output\.md/);
-  assert.match(third, /needs\.review_scope\.outputs\.mode == 'full'/);
-  assert.match(third, /uses: openai\/codex-action@v1/);
-  assert.match(third, /prompt-file: \.github\/codex\/prompts\/deep-review\.md/);
-  assert.match(third, /output-file: ai-code-review-output\.md/);
-  assert.match(third, /validate-codex-review-verdict\.cjs ai-code-review-output\.md/);
-  assert.doesNotMatch(third, /zxcloli666\/AI-Code-Review/);
 
   for (const jobName of [
     'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
@@ -93,14 +88,12 @@ test('workflow holds every test family behind successful review prerequisites', 
     const block = workflow.slice(start, next < 0 ? workflow.length : next);
     assert.match(block, /pr_agent_review/);
     assert.match(block, /codex_review/);
-    assert.match(block, /ai_code_review/);
     assert.match(block, /^      - review_prerequisites\r?$/m);
     assert.match(block, /if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/);
   }
 
   const gate = workflow.slice(workflow.indexOf('  cloud_verification_gate:'));
   assert.match(gate, /REVIEW_MODE: \$\{\{ needs\.review_scope\.outputs\.mode \}\}/);
-  assert.match(gate, /AI_CODE_REVIEW_RESULT: \$\{\{ needs\.ai_code_review\.result \}\}/);
   assert.match(gate, /reviewMode = \$env:REVIEW_MODE/);
   assert.match(gate, /Record successfully reviewed head/);
 });

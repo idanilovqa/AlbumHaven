@@ -36,7 +36,7 @@ not need the private repository to build or use Album Haven.
 ## Review-first CI execution
 
 - In the authoritative pull-request pipeline, classify review scope first and
-  run applicable hosted reviews independently. Start test and E2E jobs only
+  run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
   after every applicable reviewer succeeds. A failed, cancelled, missing, or
   unexpectedly skipped review holds tests; intentional skips are checked against
   the exact review scope and pull-request context. Collect all applicable review

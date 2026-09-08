@@ -1,8 +1,9 @@
 # Review-First Focused CI Design
 
 > Superseded for focused selection and promotion by
-> `2026-09-08-case-tagged-focused-ci-design.md`; the review-first ordering and
-> complete failure-inventory rules below remain active.
+> `2026-09-08-case-tagged-focused-ci-design.md`. Current reviewer selection,
+> ordering, and failure-inventory rules are defined in
+> [the contributor guidance](../../../AGENTS.md#review-first-ci-execution).
 
 ## Goal
 

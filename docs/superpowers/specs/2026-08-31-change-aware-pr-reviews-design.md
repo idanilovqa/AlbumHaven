@@ -1,5 +1,8 @@
 # Change-Aware PR Reviews Design
 
+> Historical design. Current reviewer selection, ordering, and required results
+> are defined in [the contributor guidance](../../../AGENTS.md#review-first-ci-execution).
+
 ## Goal
 
 Run hosted PR reviewers only after the trusted CI and E2E gates pass. Skip repeated review work for documentation-only pushes, limit supported reviewers to changes since the last successful review, and add AI Code Review // VERY POWERFULL as the third whole-PR reviewer.

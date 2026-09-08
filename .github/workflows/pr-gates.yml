@@ -28,7 +28,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -92,7 +91,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: windows-2025
     timeout-minutes: 30
@@ -147,7 +145,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
@@ -242,7 +239,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
@@ -358,7 +354,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -388,7 +383,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
@@ -484,7 +478,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
@@ -580,7 +573,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 90
@@ -766,7 +758,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     strategy:
@@ -1367,84 +1358,12 @@ jobs:
       - name: Enforce Codex review verdict
         run: node scripts/ci/validate-codex-review-verdict.cjs codex-output.md
 
-  ai_code_review:
-    name: AI Code Review // VERY POWERFULL
-    needs:
-      - review_scope
-    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode == 'full' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    steps:
-      - name: Require OpenAI credential for AI Code Review
-        shell: bash
-        env:
-          AI_CODE_REVIEW_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          if [[ -z "${AI_CODE_REVIEW_OPENAI_API_KEY:-}" ]]; then
-            echo "::error::AI Code Review requires the OPENAI_API_KEY Actions secret. Publishing is blocked until the credential is configured."
-            exit 1
-          fi
-
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Run AI Code Review
-        id: run_ai_code_review
-        uses: openai/codex-action@v1
-        env:
-          BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          permission-profile: ":read-only"
-          prompt-file: .github/codex/prompts/deep-review.md
-          output-file: ai-code-review-output.md
-
-      - name: Require AI Code Review output file
-        shell: bash
-        run: test -s ai-code-review-output.md
-
-      - name: Upload AI Code Review output
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-code-review-output
-          path: ai-code-review-output.md
-          if-no-files-found: error
-
-      - name: Post AI Code Review feedback
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const fs = require('node:fs');
-            const body = fs.readFileSync('ai-code-review-output.md', 'utf8').trim();
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body,
-            });
-
-      - name: Enforce AI Code Review verdict
-        run: node scripts/ci/validate-codex-review-verdict.cjs ai-code-review-output.md
-
   review_prerequisites:
     name: Review Prerequisites
     needs:
       - review_scope
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1465,7 +1384,6 @@ jobs:
           REVIEW_SCOPE_RESULT: ${{ needs.review_scope.result }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
-          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
         run: |
           $reviewPrerequisitesInput = @{
             mode = $env:REVIEW_CONTEXT
@@ -1476,7 +1394,6 @@ jobs:
               review_scope = $env:REVIEW_SCOPE_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
-              ai_code_review = $env:AI_CODE_REVIEW_RESULT
             }
           }
           $inputPath = Join-Path "${{ runner.temp }}" "review-prerequisites-input.json"
@@ -1490,7 +1407,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
       - test_js
       - test_components
       - test_node_windows
@@ -1519,7 +1435,6 @@ jobs:
           REVIEW_PREREQUISITES_RESULT: ${{ needs.review_prerequisites.result }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
-          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
           TEST_JS_RESULT: ${{ needs.test_js.result }}
           TEST_COMPONENTS_RESULT: ${{ needs.test_components.result }}
           WINDOWS_RESULT: ${{ needs.test_node_windows.result }}
@@ -1538,7 +1453,6 @@ jobs:
               review_prerequisites = $env:REVIEW_PREREQUISITES_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
-              ai_code_review = $env:AI_CODE_REVIEW_RESULT
               test_js = $env:TEST_JS_RESULT
               test_components = $env:TEST_COMPONENTS_RESULT
               test_node_windows = $env:WINDOWS_RESULT
@@ -1571,7 +1485,6 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-      - ai_code_review
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1598,7 +1511,6 @@ jobs:
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
-          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
           PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
@@ -1608,7 +1520,7 @@ jobs:
           test "$REVIEW_SCOPE_RESULT" = success
           test "$REVIEW_PREREQUISITES_RESULT" = success
           case "$REVIEW_MODE" in none|incremental|full) ;; *) exit 1 ;; esac
-          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT" "$AI_CODE_REVIEW_RESULT"; do
+          for result in "$WINDOWS_RESULT" "$PYTHON_RESULT" "$PHASE7_AUTH_RESULT" "$PHASE7_ADMIN_RESULT" "$FUNCTIONAL_RESULT" "$PERFORMANCE_RESULT" "$PR_AGENT_RESULT" "$CODEX_RESULT"; do
             test "$result" = skipped
           done
           {
@@ -1643,7 +1555,6 @@ jobs:
           REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
           PR_AGENT_RESULT: ${{ needs.pr_agent_review.result }}
           CODEX_RESULT: ${{ needs.codex_review.result }}
-          AI_CODE_REVIEW_RESULT: ${{ needs.ai_code_review.result }}
           PIPELINE_MODE: ${{ needs.review_scope.outputs.pipeline_mode }}
           IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
@@ -1666,7 +1577,6 @@ jobs:
               review_prerequisites = $env:REVIEW_PREREQUISITES_RESULT
               pr_agent_review = $env:PR_AGENT_RESULT
               codex_review = $env:CODEX_RESULT
-              ai_code_review = $env:AI_CODE_REVIEW_RESULT
             }
           }
           $inputPath = Join-Path "${{ runner.temp }}" "cloud-verification-gate-input.json"

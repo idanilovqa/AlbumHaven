@@ -45,8 +45,8 @@ Preserve native `@area:<name>` tags for diagnosis and reporting. Do not substitu
 a complete local shard for exact local reproduction, or treat a shard as a
 product area.
 
-The pipeline runs applicable reviewers independently and holds test jobs until
-all required reviews succeed. Intentional review skips must match the classified
+The pipeline runs PR Agent Review and Codex PR Review independently and holds
+test jobs until both applicable reviews succeed. Intentional review skips must match the classified
 scope and pull-request context. Collect all review results before fixing their
 findings; once reviews pass, collect the complete test failure inventory. If a
 validated review finding requires a new commit, preserve its evidence and cancel

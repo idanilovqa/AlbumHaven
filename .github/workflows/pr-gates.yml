@@ -1265,12 +1265,24 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Prepare private PR Agent usage capture
+        shell: bash
+        run: |
+          install -d -m 700 .tmp/private-review-usage
+          install -m 600 /dev/null .tmp/private-review-usage/pr-agent.jsonl
+          install -m 600 /dev/null .tmp/private-review-usage/pr-agent.jsonl.status.json
+
       - name: PR Agent action step
         id: pr_agent
         uses: the-pr-agent/pr-agent@7267ae1f7b855e7d4a3a34918d9b6c5683db3c12
         env:
           OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHONPATH: /github/workspace/scripts/ci/review-usage-python:/app
+          ALBUM_HAVEN_REVIEW_USAGE_FILE: /github/workspace/.tmp/private-review-usage/pr-agent.jsonl
+          config.log_level: "INFO"
+          config.output_run_details: "false"
+          config.output_run_cost: "false"
           github_action_config.auto_review: "${{ github.event.action != 'synchronize' }}"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "false"
@@ -1280,6 +1292,25 @@ jobs:
           github_action_config.push_trigger_ignore_merge_commits: "false"
           github_action_config.push_commands: ${{ needs.review_scope.outputs.mode == 'incremental' && '["/review -i"]' || '["/review"]' }}
           github_action_config.enable_output: "true"
+
+      - name: Encrypt private PR Agent usage
+        if: ${{ always() && steps.pr_agent.outcome != '' && steps.pr_agent.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.pr_agent.outcome }}
+        run: node scripts/ci/seal-review-usage.cjs --reviewer pr-agent --input .tmp/private-review-usage/pr-agent.jsonl --public-key .github/review-usage-public-key.pem --output .tmp/private-review-usage/pr-agent.enc.json
+
+      - name: Retain encrypted PR Agent usage
+        if: ${{ always() && steps.pr_agent.outcome != '' && steps.pr_agent.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-usage-pr-agent-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/private-review-usage/pr-agent.enc.json
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Require PR Agent review output
         env:
@@ -1328,6 +1359,33 @@ jobs:
           permission-profile: ":read-only"
           prompt-file: .github/codex/prompts/review.md
           output-file: codex-output.md
+          codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Collect private Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_CODEX_HOME: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/ci/collect-codex-review-usage.cjs --codex-home "$REVIEW_USAGE_CODEX_HOME" --output .tmp/private-review-usage/codex.json
+
+      - name: Encrypt private Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.run_codex.outcome }}
+        run: node scripts/ci/seal-review-usage.cjs --reviewer codex --input .tmp/private-review-usage/codex.json --public-key .github/review-usage-public-key.pem --output .tmp/private-review-usage/codex.enc.json
+
+      - name: Retain encrypted Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-usage-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/private-review-usage/codex.enc.json
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Require Codex review output file
         shell: bash

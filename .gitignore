@@ -22,6 +22,11 @@ Thumbs.db
 library_cache.json
 .localappdata/
 
+# Private review usage exports; the recipient public key is intentionally tracked.
+*.private.json
+*.private.md
+private-key.pem
+
 # Legacy local-only fixture path left behind after camel-case rename
 tests/e2e/fixtures/real-cover-pool/
 

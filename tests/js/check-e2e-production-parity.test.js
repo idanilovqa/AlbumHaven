@@ -234,15 +234,38 @@ contractTest('hosted review jobs run after scope and before E2E without test dep
   }
 });
 
-test('PR Agent review-output guard accepts only a nonempty JSON object', () => {
+test('PR Agent review-output guard accepts the flat clear-finding schema without gating review metadata', () => {
   const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
-
-  assert.deepEqual(parseReviewOutput('{"review":{"key_issues_to_review":[]}}'), {
-    review: { key_issues_to_review: [] },
-  });
-  for (const invalid of [undefined, '', ' ', 'null', '[]', '"review"', '{}', '{broken']) {
-    assert.throws(() => parseReviewOutput(invalid));
+  for (const security of [undefined, 'No', ' none\n', 'FALSE', false]) {
+    const review = {
+      key_issues_to_review: [], security_concerns: security,
+      'estimated_effort_to_review_[1-5]': 5, score: 20, relevant_tests: 'No',
+    };
+    const raw = JSON.stringify(review);
+    assert.deepEqual(parseReviewOutput(raw), JSON.parse(raw));
   }
+});
+
+test('PR Agent review-output guard rejects actionable key issues and security concerns', () => {
+  const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
+  const finding = { relevant_file: 'music_app/routes/auth_asgi.py', issue_header: 'Cookie Invalidation',
+    issue_content: 'An invalid link clears an existing transaction.', start_line: 645, end_line: 655 };
+  for (const review of [
+    { key_issues_to_review: [finding], security_concerns: 'No', score: 100 },
+    { key_issues_to_review: [], security_concerns: 'Cross-site state invalidation: an active flow can be cancelled.' },
+    { key_issues_to_review: [], security_concerns: 'No exposed secrets, but SQL injection remains.' },
+  ]) assert.throws(() => parseReviewOutput(JSON.stringify(review)), /issues|security/i);
+});
+
+test('PR Agent review-output guard rejects missing findings and malformed or unknown schemas', () => {
+  const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
+  for (const invalid of [undefined, '', ' ', 'null', '[]', '"review"', '{}', '{broken',
+    JSON.stringify({ review: { key_issues_to_review: [] } }),
+    JSON.stringify({ 'estimated_effort_to_review_[1-5]': 2 }),
+    ...[null, false, 'No', {}, 0].map(value => JSON.stringify({ key_issues_to_review: value })),
+    ...[null, '', true, 0, [], {}].map(value => JSON.stringify({ key_issues_to_review: [], security_concerns: value })),
+    JSON.stringify({ key_issues_to_review: [], security_findings: ['unrecognized finding schema'] }),
+  ]) assert.throws(() => parseReviewOutput(invalid));
 });
 
 test('PR Agent review-output guard CLI fails closed for missing output', () => {
@@ -259,9 +282,15 @@ test('PR Agent review-output guard CLI fails closed for missing output', () => {
   const valid = childProcess.spawnSync(process.execPath, [PR_AGENT_OUTPUT_GUARD_PATH], {
     cwd: path.dirname(PR_AGENT_OUTPUT_GUARD_PATH),
     encoding: 'utf8',
-    env: { ...process.env, PR_AGENT_REVIEW_OUTPUT: '{"review":{"estimated_effort_to_review_[1-5]":2}}' },
+    env: { ...process.env, PR_AGENT_REVIEW_OUTPUT: '{"key_issues_to_review":[],"security_concerns":"No","estimated_effort_to_review_[1-5]":2}' },
   });
   assert.equal(valid.status, 0, valid.stderr);
+  const findings = childProcess.spawnSync(process.execPath, [PR_AGENT_OUTPUT_GUARD_PATH], {
+    encoding: 'utf8', env: { ...process.env,
+      PR_AGENT_REVIEW_OUTPUT: '{"key_issues_to_review":[{"issue_content":"Must block downstream tests"}],"security_concerns":"No"}' },
+  });
+  assert.equal(findings.status, 1);
+  assert.match(findings.stderr, /::error::PR Agent.*issues/i);
 });
 
 contractTest('allows isolated pre-start setup, generated media, and annotated read-only measurement', () => {

@@ -810,18 +810,30 @@ async def accept_invitation_get(request: Request) -> Response:
                 )
             except Exception:
                 issued = None
+        preserve_transaction = False
+        if issued is None:
+            existing_transaction = request.cookies.get(INVITATION_COOKIE)
+            if existing_transaction:
+                try:
+                    preserve_transaction = await run_in_threadpool(
+                        _invitation_lifecycle(request).validate_transaction,
+                        existing_transaction,
+                    )
+                except Exception:
+                    return _generic_invitation_unavailable()
         response = RedirectResponse(
             "/accept-invitation",
             status_code=303,
             headers=INVITATION_HEADERS,
         )
-        response.delete_cookie(
-            INVITATION_COOKIE,
-            path="/",
-            secure=secure,
-            httponly=True,
-            samesite="strict",
-        )
+        if not preserve_transaction:
+            response.delete_cookie(
+                INVITATION_COOKIE,
+                path="/",
+                secure=secure,
+                httponly=True,
+                samesite="strict",
+            )
         if issued is not None:
             response.set_cookie(
                 INVITATION_COOKIE,

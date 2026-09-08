@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from typing import Any
 
+from music_app.services.library_event_coordinator import _stat_signature
 from music_app.services.library_indexing import enrich_library_file_entry
 from music_app.services.library_roots import get_library_roots
 from music_app.services.metadata import read_metadata_for_file
@@ -37,6 +38,10 @@ class TargetedLibraryReconciler:
         ) = None,
         after_commit: Callable[[TargetedReconciliationResult], object] | None = None,
         reservation_acquirer: Callable[[set[str]], object] | None = None,
+        stat_path: Callable[[Path], object] | None = None,
+        wait: Callable[[float], object] | None = None,
+        max_stable_attempts: int = 4,
+        stable_sample_interval: float = 0.1,
     ) -> None:
         self._config = config
         self._repository = repository
@@ -47,6 +52,14 @@ class TargetedLibraryReconciler:
         self._exception_overrides_provider = exception_overrides_provider
         self._after_commit = after_commit
         self._reservation_acquirer = reservation_acquirer
+        self._stop_event = Event()
+        self._stat_path = stat_path or Path.stat
+        self._wait = wait or self._stop_event.wait
+        self._max_stable_attempts = max(2, int(max_stable_attempts))
+        self._stable_sample_interval = max(0.0, float(stable_sample_interval))
+
+    def stop(self) -> None:
+        self._stop_event.set()
 
     def replace_roots(self, roots: Iterable[dict[str, object]]) -> None:
         with self._roots_lock:
@@ -58,6 +71,8 @@ class TargetedLibraryReconciler:
         *,
         root_healthy: bool = True,
     ) -> TargetedReconciliationResult:
+        if self._stop_event.is_set():
+            return TargetedReconciliationResult(0, (), "cancelled")
         root_id = str(getattr(request, "root_id", "") or "").strip()
         with self._roots_lock:
             root_definitions = self._roots
@@ -185,6 +200,9 @@ class TargetedLibraryReconciler:
                 structural_tag_edit_resource_keys(None, reservation_paths)
             )
         try:
+            disposition = self._stable_targets_disposition(active_by_path)
+            if disposition != "ready":
+                return TargetedReconciliationResult(0, (), disposition)
             exception_overrides = (
                 dict(self._exception_overrides_provider() or {})
                 if self._exception_overrides_provider is not None
@@ -195,6 +213,8 @@ class TargetedLibraryReconciler:
                 active_by_path.values(),
                 key=lambda item: str(item[0]).casefold(),
             ):
+                if self._stop_event.is_set():
+                    return TargetedReconciliationResult(0, (), "cancelled")
                 entry = self._metadata_reader(path)
                 enriched = enrich_library_file_entry(
                     entry,
@@ -207,6 +227,8 @@ class TargetedLibraryReconciler:
                 )
                 active_entries[str(path)] = enriched
 
+            if self._stop_event.is_set():
+                return TargetedReconciliationResult(0, (), "cancelled")
             persisted = self._repository.persist_targeted_inventory_mutation(
                 root_id=root_id,
                 active_file_entries=active_entries,
@@ -233,6 +255,29 @@ class TargetedLibraryReconciler:
             release = getattr(reservation, "release", None)
             if callable(release):
                 release()
+
+    def _stable_targets_disposition(self, paths: Iterable[str]) -> str:
+        targets = tuple(sorted((Path(path) for path in paths), key=lambda path: str(path).casefold()))
+        if not targets:
+            return "cancelled" if self._stop_event.is_set() else "ready"
+        previous: dict[Path, tuple[int, int]] = {}
+        for attempt in range(self._max_stable_attempts):
+            current: dict[Path, tuple[int, int]] = {}
+            for path in targets:
+                if self._stop_event.is_set():
+                    return "cancelled"
+                try:
+                    current[path] = _stat_signature(self._stat_path(path))
+                except OSError:
+                    # Never turn a failed expansion read into a partial album
+                    # rebuild or a destructive move/deletion publication.
+                    continue
+            if len(current) == len(targets) and current == previous:
+                return "ready"
+            previous = current
+            if attempt + 1 < self._max_stable_attempts:
+                self._wait(self._stable_sample_interval)
+        return "cancelled" if self._stop_event.is_set() else "stable_write_unavailable"
 
     def _root_by_id(
         self,

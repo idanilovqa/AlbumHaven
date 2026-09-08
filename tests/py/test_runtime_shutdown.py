@@ -60,7 +60,9 @@ def test_runtime_shutdown_tests_do_not_use_flask_fixtures_or_app_context():
     assert not [pattern for pattern in forbidden if pattern in source]
 
 
-def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation():
+@pytest.mark.parametrize("failing_stage", [None, "watcher", "coordinator", "reconciler"])
+def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation(failing_stage):
+    from contextlib import nullcontext
     from music_app import _stop_library_watch_runtime
 
     calls: list[object] = []
@@ -71,20 +73,25 @@ def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation():
 
         def stop(self) -> None:
             calls.append(self.name)
+            if self.name == failing_stage:
+                raise RuntimeError(f"{self.name} failed")
 
     class Executor:
         def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
             calls.append(("executor", wait, cancel_futures))
 
-    _stop_library_watch_runtime(
-        watch_service=Stoppable("watcher"),
-        event_coordinator=Stoppable("coordinator"),
-        targeted_executor=Executor(),
-    )
+    with pytest.raises(RuntimeError, match=f"{failing_stage} failed") if failing_stage else nullcontext():
+        _stop_library_watch_runtime(
+            watch_service=Stoppable("watcher"),
+            event_coordinator=Stoppable("coordinator"),
+            targeted_reconciler=Stoppable("reconciler"),
+            targeted_executor=Executor(),
+        )
 
     assert calls == [
         "watcher",
         "coordinator",
+        "reconciler",
         ("executor", False, True),
     ]
 

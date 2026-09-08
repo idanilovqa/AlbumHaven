@@ -759,3 +759,240 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert library_state["inventory_mutation_revision"] == 4
     assert library_state["targeted_inventory_album_keys"] == ("artist::album",)
     assert invalidated == ["problems", "rules", "postgres"]
+
+
+@pytest.fixture
+def changing_media_stat(monkeypatch):
+    original_stat = Path.stat
+    samples = {}
+    changing_paths = set()
+
+    def stat_path(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path not in changing_paths:
+            return result
+        samples[path] = samples.get(path, 0) + 1
+        signature = SimpleNamespace(**{
+            name: getattr(result, name) for name in dir(result) if name.startswith("st_")
+        })
+        signature.st_size += samples[path]
+        signature.st_mtime_ns += samples[path]
+        return signature
+
+    monkeypatch.setattr(Path, "stat", stat_path)
+    return changing_paths, samples
+
+
+def test_targeted_reconciler_does_not_reintroduce_coordinator_rejected_sibling(
+    tmp_path, changing_media_stat,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    album.mkdir(parents=True)
+    ready, changing = album / "01.flac", album / "02.flac"
+    ready.write_bytes(b"ready")
+    changing.write_bytes(b"still being copied")
+    changing_media_stat[0].add(changing)
+    parsed, results, requests, problems = [], [], [], []
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository,
+        root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=lambda path: parsed.append(path) or {"path": str(path)},
+    )
+
+    def reconcile(request):
+        requests.append(request)
+        results.append(reconciler.reconcile(request))
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=reconcile, emit_problem=problems.append,
+        wait=lambda _seconds: None, max_stable_attempts=2,
+    )
+    try:
+        coordinator.accept(LibraryEvent(LibraryEventKind.MODIFIED, "main", ready))
+        coordinator.accept(LibraryEvent(LibraryEventKind.MODIFIED, "main", changing))
+        coordinator.flush()
+    finally:
+        coordinator.stop()
+
+    assert requests[0].paths == frozenset({ready})
+    assert problems[0].code == "stable_write_unavailable"
+    assert parsed == []
+    assert repository.calls == []
+    assert results[0].health == "stable_write_unavailable"
+    assert results[0].revision == 0
+
+
+@pytest.mark.parametrize("cross_root", [False, True], ids=["same-root", "cross-root"])
+def test_targeted_reconciler_rejects_unstable_directory_move_without_partial_deletion(
+    tmp_path, changing_media_stat, cross_root,
+):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    source_root = tmp_path / "Music"
+    destination_root = tmp_path / "Hoard" if cross_root else source_root
+    destination_root_id = "hoard" if cross_root else "main"
+    source = source_root / "Artist" / "Old Album"
+    destination = destination_root / "Artist" / "New Album"
+    disc = destination / "Disc 1"
+    disc.mkdir(parents=True)
+    ready, changing = destination / "01.flac", disc / "02.flac"
+    ready.write_bytes(b"ready")
+    changing.write_bytes(b"still being copied")
+    changing_media_stat[0].add(changing)
+    parsed = []
+    repository = RecordingRepository()
+    roots = [{"id": "main", "path": source_root}]
+    if cross_root:
+        roots.append({"id": "hoard", "path": destination_root})
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=roots,
+        metadata_reader=lambda path: parsed.append(path) or {"path": str(path)},
+    )
+    move = SimpleNamespace(
+        source=source, destination=destination, source_root_id="main",
+        destination_root_id=destination_root_id, is_directory=True,
+    )
+
+    result = reconciler.reconcile(_request(moves=(move,)))
+
+    assert parsed == []
+    assert repository.calls == []
+    assert result.health == "stable_write_unavailable"
+    assert result.revision == 0
+
+
+def test_targeted_reconciler_samples_expanded_targets_in_shared_rounds_under_reservation(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    album = root / "Artist" / "Album"
+    album.mkdir(parents=True)
+    tracks = tuple(album / f"{number:02}.flac" for number in range(1, 9))
+    for track in tracks:
+        track.write_bytes(b"media")
+    samples, waits, parsed = [], [], []
+    reservation_held = False
+    repository = RecordingRepository()
+
+    class Reservation:
+        def release(self):
+            nonlocal reservation_held
+            reservation_held = False
+
+    def acquire(_keys):
+        nonlocal reservation_held
+        reservation_held = True
+        return Reservation()
+
+    def stat_path(path):
+        assert reservation_held
+        assert parsed == []
+        samples.append(path)
+        return (5, 10)
+
+    def read(path):
+        assert reservation_held
+        assert len(samples) == 2 * len(tracks)
+        parsed.append(path)
+        return {"path": str(path)}
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=read, reservation_acquirer=acquire,
+        stat_path=stat_path, wait=waits.append,
+    )
+
+    result = reconciler.reconcile(_request(paths=tracks))
+
+    assert result.health == "healthy"
+    assert samples == [*tracks, *tracks]
+    assert len(waits) == 1
+    assert set(parsed) == set(tracks)
+    assert len(repository.calls) == 1
+    assert not reservation_held
+
+
+@pytest.mark.parametrize("failure", [PermissionError, FileNotFoundError])
+def test_targeted_reconciler_sampling_failure_preserves_pending_deletions(tmp_path, failure):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    track = root / "Artist" / "Album" / "01.flac"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"media")
+    repository = RecordingRepository()
+    parsed, waits = [], []
+
+    def stat_path(_path):
+        raise failure("unavailable during sampling")
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=lambda path: parsed.append(path) or {},
+        stat_path=stat_path, wait=waits.append, max_stable_attempts=3,
+    )
+
+    result = reconciler.reconcile(_request(paths=(track,), deleted_paths=(track.parent / "old.flac",)))
+
+    assert result.health == "stable_write_unavailable"
+    assert result.revision == 0
+    assert parsed == []
+    assert repository.calls == []
+    assert len(waits) == 2
+
+
+def test_targeted_reconciler_stop_cancels_sampling_without_publication(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    track = root / "Artist" / "Album" / "01.flac"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"media")
+    repository = RecordingRepository()
+    samples, parsed, releases = [], [], []
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=[{"id": "main", "path": root}],
+        metadata_reader=lambda path: parsed.append(path) or {},
+        stat_path=lambda path: samples.append(path) or (5, 10),
+        wait=lambda _seconds: reconciler.stop(),
+        reservation_acquirer=lambda _keys: SimpleNamespace(release=lambda: releases.append(True)),
+    )
+
+    result = reconciler.reconcile(_request(paths=(track,)))
+
+    assert result.health == "cancelled"
+    assert samples == [track]
+    assert parsed == []
+    assert repository.calls == []
+    assert releases == [True]
+    assert reconciler.reconcile(_request(paths=(track,))).health == "cancelled"
+    assert samples == [track]
+
+
+def test_targeted_reconciler_deletion_only_does_not_sample_media(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    repository = RecordingRepository()
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}},
+        repository=repository, root_definitions=[{"id": "main", "path": root}],
+        stat_path=lambda _path: pytest.fail("deletions must not sample missing files"),
+        wait=lambda _seconds: pytest.fail("deletions must not wait for stable writes"),
+    )
+
+    result = reconciler.reconcile(_request(deleted_paths=(root / "missing.flac",)))
+
+    assert result.health == "healthy"
+    assert repository.calls[0]["deleted_paths"] == (str(root / "missing.flac"),)

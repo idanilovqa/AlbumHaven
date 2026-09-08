@@ -46,6 +46,9 @@
 - Preserved an existing valid password-reset transaction when an unrelated or
   replayed reset link fails, while keeping invalid-link pages and stale-cookie
   cleanup intact.
+- Preserved valid invitation transactions when an invitation link is revisited.
+- Bounded retained watcher paths and moves within directory groups, and checked
+  expanded album tracks for stable writes before parsing or publishing a mutation.
 - Applied gallery categories and search constraints to missing albums, preserved
   whole-album missing-state classification, and corrected sidebar artist counts
   when an artist has both active and missing albums.

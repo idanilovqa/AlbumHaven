@@ -339,10 +339,12 @@ def test_reconciliation_admission_overflow_blocks_destructive_work_until_manual_
     assert service.root_allows_destructive_reconciliation("main-root") is True
 
 
+@pytest.mark.parametrize("reconciliation_health", ["stable_write_unavailable", "healthy", "cancelled", None])
 def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher_health(
-    monkeypatch,
+    monkeypatch, reconciliation_health,
 ):
     import music_app
+    from types import SimpleNamespace
     from music_app import create_asgi_app
     from music_app.services import (
         lastfm_retry,
@@ -429,9 +431,14 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
             if request.root_id == "failed-root":
                 raise RuntimeError("database temporarily unavailable")
             reconciled.append((request.root_id, root_healthy))
+            if request.root_id == "sampling-source":
+                return SimpleNamespace(health=reconciliation_health)
             return root_healthy
 
         def replace_roots(self, _roots):
+            return None
+
+        def stop(self):
             return None
 
     class ScanCacheRepository:
@@ -559,6 +566,22 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
                     ),
                 )
             )
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="sampling-source",
+                    moves=(library_event_coordinator.TargetedMove(
+                        source=Path("C:/Sampling Source/01.flac"),
+                        destination=Path("C:/Sampling Destination/01.flac"),
+                        source_root_id="sampling-source",
+                        destination_root_id="sampling-destination",
+                    ),),
+                )
+            )
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="sampling-destination",
+                )
+            )
 
     asyncio.run(exercise_problem_callback())
 
@@ -566,7 +589,16 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
     assert reconciled == [
         ("main-root", False),
         ("healthy-source", False),
+        ("sampling-source", True),
+        ("sampling-destination", reconciliation_health != "stable_write_unavailable"),
     ]
+    assert {
+        item.root_id for item in recorded
+        if item.root_id.startswith("sampling-") and item.code == "stable_write_unavailable"
+    } == (
+        {"sampling-source", "sampling-destination"}
+        if reconciliation_health == "stable_write_unavailable" else set()
+    )
     assert any(
         item.root_id == "failed-root" and item.code == "reconciliation_failed"
         for item in recorded

@@ -142,6 +142,8 @@ def test_cross_root_replacement_move_clears_destination_group_deletion(
     emitted = []
     coordinator = LibraryEventCoordinator(
         emit_request=emitted.append,
+        max_pending_groups=1,
+        max_pending_entries=2,
         stat_path=lambda _path: (100, 10),
         wait=lambda _seconds: None,
     )
@@ -362,6 +364,149 @@ def test_bounded_groups_emit_overflow_before_dropping_new_work(tmp_path: Path):
     ) is False
 
     assert [event.kind for event in health] == [LibraryEventKind.OVERFLOW]
+
+
+@pytest.mark.parametrize("kind", ["created", "deleted", "moved"])
+def test_default_entry_budget_bounds_a_burst_inside_one_group(tmp_path: Path, kind):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    health = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=lambda _request: None,
+        emit_health_event=health.append,
+    )
+    accepted = []
+    for index in range(5_000):
+        accepted.append(coordinator.accept(_event(
+            LibraryEventKind(kind),
+            tmp_path,
+            f"Artist/Album/{index:05}.flac",
+            destination=f"Artist/Album/renamed-{index:05}.flac" if kind == "moved" else None,
+        )))
+
+    assert not all(accepted), "a single directory bypassed the bounded event queue"
+    assert all(event.kind is LibraryEventKind.OVERFLOW for event in health)
+    assert len(health) == accepted.count(False)
+    assert coordinator._pending_entry_count <= 4_096
+    coordinator.stop()
+    assert coordinator._pending_entry_count == 0
+
+
+def test_entry_budget_counts_coalesced_changes_and_releases_flushed_work(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        max_pending_entries=3,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    deleted = _event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/01.flac")
+    second = _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/02.flac")
+    replacement = _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/01.flac")
+    move = _event(
+        LibraryEventKind.MOVED, tmp_path, "Artist/Album/02.flac",
+        destination="Artist/Album/renamed.flac",
+    )
+    for event in (deleted, second, deleted, replacement, move, move):
+        assert coordinator.accept(event) is True
+    assert coordinator.accept(_event(
+        LibraryEventKind.CREATED, tmp_path, "Artist/Album/03.flac"
+    )) is True
+    assert coordinator.accept(_event(
+        LibraryEventKind.CREATED, tmp_path, "Artist/Album/04.flac"
+    )) is False
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].paths == frozenset({replacement.path, tmp_path / "Artist/Album/03.flac"})
+    assert emitted[0].deleted_paths == emitted[0].deleted_subtrees == frozenset()
+    assert [(item.source, item.destination) for item in emitted[0].moves] == [
+        (move.path, move.destination)
+    ]
+    assert coordinator._pending_entry_count == 0
+    for index in range(3):
+        assert coordinator.accept(_event(
+            LibraryEventKind.CREATED, tmp_path, f"Artist/Another/{index}.flac"
+        )) is True
+    assert coordinator.accept(_event(
+        LibraryEventKind.CREATED, tmp_path, "Artist/Another/overflow.flac"
+    )) is False
+    coordinator.stop()
+    assert coordinator._pending_entry_count == 0
+
+
+@pytest.mark.parametrize("cross_root_move", [False, True])
+@pytest.mark.parametrize("limit", ["entries", "groups"])
+def test_overflow_does_not_partially_preserve_children_in_deleted_ancestors(
+    tmp_path: Path, cross_root_move, limit,
+):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    emitted = []
+    health = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        emit_health_event=health.append,
+        max_pending_entries=2 if limit == "entries" else 10,
+        max_pending_groups=1 if limit == "groups" else 10,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    deleted = tmp_path / "Artist/Album"
+    assert coordinator.accept(LibraryEvent(
+        LibraryEventKind.DELETED, "destination-root", deleted, is_directory=True,
+    )) is True
+    child = deleted / "01.flac"
+    event = (
+        LibraryEvent(
+            LibraryEventKind.MOVED, "source-root", tmp_path / "Source/01.flac",
+            destination=child, destination_root_id="destination-root",
+        ) if cross_root_move else
+        LibraryEvent(LibraryEventKind.CREATED, "destination-root", child)
+    )
+    assert coordinator.accept(event) is False
+    assert {item.root_id for item in health} == (
+        {"source-root", "destination-root"} if cross_root_move else {"destination-root"}
+    )
+    assert all(item.kind is LibraryEventKind.OVERFLOW for item in health)
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].deleted_subtrees == frozenset({deleted})
+    assert emitted[0].paths == frozenset()
+    assert emitted[0].moves == ()
+    assert coordinator._pending_entry_count == 0
+
+
+def test_group_overflow_keeps_deleted_destination_of_rejected_replacement(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        max_pending_groups=1,
+        stat_path=lambda _path: (100, 10),
+        wait=lambda _seconds: None,
+    )
+    deleted = _event(LibraryEventKind.DELETED, tmp_path, "Artist/Album/01.flac")
+    active = _event(LibraryEventKind.CREATED, tmp_path, "Artist/Album/02.flac")
+    assert coordinator.accept(deleted) is True
+    assert coordinator.accept(active) is True
+    assert coordinator.accept(_event(
+        LibraryEventKind.MOVED, tmp_path, "Source/replacement.tmp",
+        destination="Artist/Album/01.flac",
+    )) is False
+    coordinator.flush()
+
+    assert len(emitted) == 1
+    assert emitted[0].deleted_paths == emitted[0].deleted_subtrees == frozenset({deleted.path})
+    assert emitted[0].paths == frozenset({active.path})
 
 
 def test_cross_root_move_overflow_marks_every_affected_root_unhealthy(tmp_path: Path):

@@ -788,6 +788,7 @@ def test_invalid_or_duplicate_invitation_query_redirects_clean_and_clears_stale_
 ):
     app, _, _ = _app(auth_asgi)
     lifecycle = FakeInvitationLifecycle()
+    lifecycle.valid = False
     app.state.invitation_lifecycle_service = lifecycle
 
     status, headers, body = _request(
@@ -842,6 +843,7 @@ def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
 
     app, _, _ = _app(auth_asgi)
     lifecycle = FailingInvitationLifecycle()
+    lifecycle.valid = False
     app.state.invitation_lifecycle_service = lifecycle
 
     status, headers, body = _request(
@@ -863,6 +865,119 @@ def test_invitation_exchange_failure_redirects_clean_and_clears_stale_cookie(
         INVITATION_RAW not in key and INVITATION_RAW not in value
         for key, value in headers
     )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("failure", ["replay", "unrelated", "invalid", "duplicate", "exchange_error"])
+def test_failed_invitation_link_preserves_valid_transaction_and_clean_completion(
+    auth_asgi, with_private_boundary, failure
+):
+    class OneUseInvitationLifecycle(FakeInvitationLifecycle):
+        def __init__(self):
+            super().__init__()
+            self.validations = []
+
+        def exchange_invitation_token(self, raw, *, request_ref):
+            if not self.exchanges:
+                return super().exchange_invitation_token(raw, request_ref=request_ref)
+            self.exchanges.append((raw, request_ref))
+            if failure == "exchange_error":
+                raise RuntimeError(f"private exchange detail {raw}")
+            return None
+
+        def validate_transaction(self, raw):
+            self.validations.append(raw)
+            return super().validate_transaction(raw)
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = OneUseInvitationLifecycle()
+    app.state.invitation_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    initial_query = "purpose=account-invitation&token=" + INVITATION_RAW
+    status, headers, _ = _request(app, "GET", path="/accept-invitation", query=initial_query)
+    assert status == 303
+    cookies = SimpleCookie()
+    for value in _set_cookies(headers):
+        cookies.load(value)
+    assert cookies[INVITATION_COOKIE].value == INVITATION_TRANSACTION
+    browser_cookie = f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"
+    failed_query = {
+        "replay": initial_query,
+        "unrelated": "purpose=account-invitation&token=" + NEXT_INVITATION_RAW,
+        "invalid": "purpose=wrong-purpose&token=" + NEXT_INVITATION_RAW,
+        "duplicate": initial_query + "&token=" + NEXT_INVITATION_RAW,
+        "exchange_error": initial_query,
+    }[failure]
+
+    status, headers, body = _request(
+        app, "GET", path="/accept-invitation", query=failed_query,
+        headers={"cookie": browser_cookie},
+    )
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/accept-invitation"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert not any(value.startswith(INVITATION_COOKIE + "=") for value in _set_cookies(headers))
+    assert lifecycle.validations == [INVITATION_TRANSACTION]
+    assert len(lifecycle.exchanges) == (1 if failure in {"invalid", "duplicate"} else 2)
+    assert lifecycle.completions == []
+
+    status, _, body = _request(
+        app, "GET", path="/accept-invitation", headers={"cookie": browser_cookie},
+    )
+    csrf = issue_invitation_csrf(INVITATION_TRANSACTION, app.state.auth_policy_config)
+    assert status == 200 and f'value="{csrf}"'.encode() in body
+    assert INVITATION_TRANSACTION.encode() not in body
+    status, headers, _ = _request(
+        app, "POST", path="/accept-invitation",
+        headers={"cookie": browser_cookie, "origin": "https://music.test"},
+        form={"new_password": "Phase Seven Recipient Passphrase 2026!",
+              "confirm_password": "Phase Seven Recipient Passphrase 2026!", "csrf_token": csrf},
+    )
+    assert status == 200
+    assert len(lifecycle.completions) == 1
+    assert lifecycle.completions[0][0] == INVITATION_TRANSACTION
+    assert any(
+        value.startswith(INVITATION_COOKIE + "=") and "Max-Age=0" in value
+        for value in _set_cookies(headers)
+    )
+
+
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("invalid_query", [False, True])
+def test_failed_invitation_link_validation_unavailable_does_not_mutate_transaction(
+    auth_asgi, with_private_boundary, invalid_query
+):
+    class UnavailableValidation(FakeInvitationLifecycle):
+        def exchange_invitation_token(self, raw, *, request_ref):
+            self.exchanges.append((raw, request_ref))
+            return None
+
+        def validate_transaction(self, raw):
+            raise RuntimeError(f"private validation detail {raw}")
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = UnavailableValidation()
+    app.state.invitation_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    query = "purpose=wrong-purpose&token=" if invalid_query else "purpose=account-invitation&token="
+    status, headers, body = _request(
+        app, "GET", path="/accept-invitation", query=query + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"},
+    )
+    assert status == 503
+    assert body == b"Invitation is temporarily unavailable."
+    assert not _set_cookies(headers)
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert INVITATION_RAW.encode() not in body and INVITATION_TRANSACTION.encode() not in body
+    assert lifecycle.completions == []
 
 
 def test_clean_invitation_page_uses_transaction_bound_csrf_and_same_origin_referrer(auth_asgi):

@@ -36,6 +36,7 @@ def _stop_library_watch_runtime(
     watch_service,
     event_coordinator,
     targeted_executor,
+    targeted_reconciler=None,
 ) -> None:
     try:
         if watch_service is not None:
@@ -45,8 +46,12 @@ def _stop_library_watch_runtime(
             if event_coordinator is not None:
                 event_coordinator.stop()
         finally:
-            if targeted_executor is not None:
-                targeted_executor.shutdown(wait=False, cancel_futures=True)
+            try:
+                if targeted_reconciler is not None:
+                    targeted_reconciler.stop()
+            finally:
+                if targeted_executor is not None:
+                    targeted_executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _recover_library_watch_after_manual_scan(
@@ -279,6 +284,7 @@ def create_asgi_app():
                         watch_service=runtime.library_watch_service,
                         event_coordinator=runtime.library_event_coordinator,
                         targeted_executor=targeted_executor,
+                        targeted_reconciler=targeted_reconciler,
                     ),
                 ),
                 (
@@ -348,10 +354,15 @@ def create_asgi_app():
                 .root_allows_destructive_reconciliation(root_id)
                 for root_id in targeted_request_root_ids(request)
             )
-            targeted_reconciler.reconcile(
+            result = targeted_reconciler.reconcile(
                 request,
                 root_healthy=root_healthy,
             )
+            if getattr(result, "health", None) == "stable_write_unavailable":
+                for root_id in targeted_request_root_ids(request):
+                    persist_library_watch_problem(
+                        CoordinatorProblem("stable_write_unavailable", root_id)
+                    )
 
         def submit_targeted_reconciliation(request) -> None:
             affected_root_ids = targeted_request_root_ids(request)

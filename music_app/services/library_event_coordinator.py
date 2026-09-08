@@ -44,8 +44,51 @@ class _PendingGroup:
     deleted_subtrees: set[Path] = field(default_factory=set)
     moves: dict[tuple[Path, Path], TargetedMove] = field(default_factory=dict)
 
+    @property
+    def entry_count(self) -> int:
+        return (
+            len(self.active_paths) + len(self.deleted_paths)
+            + len(self.deleted_subtrees) + len(self.moves)
+        )
+
+
+@dataclass(slots=True)
+class _PendingGroupUpdate:
+    """Plan only changed entries so rejected events leave pending work intact."""
+
+    group: _PendingGroup
+    path_updates: dict[str, dict[Path, bool]] = field(default_factory=dict)
+    moves: dict[tuple[Path, Path], TargetedMove] = field(default_factory=dict)
+
+    def set_path(self, collection: str, path: Path, present: bool) -> None:
+        self.path_updates.setdefault(collection, {})[path] = present
+
+    @property
+    def entry_delta(self) -> int:
+        return sum(
+            int(present) - int(path in getattr(self.group, collection))
+            for collection, paths in self.path_updates.items()
+            for path, present in paths.items()
+        ) + sum(key not in self.group.moves for key in self.moves)
+
+    def apply(self) -> None:
+        for collection, paths in self.path_updates.items():
+            target = getattr(self.group, collection)
+            for path, present in paths.items():
+                if present:
+                    target.add(path)
+                else:
+                    target.discard(path)
+        self.group.moves.update(self.moves)
+
 
 class LibraryEventCoordinator:
+    """Bound pending groups and retained entries, including coalesced moves.
+
+    Each active path, deleted path, deleted subtree, and move counts as one
+    entry. A file-typed deletion retained in both deletion sets counts twice.
+    """
+
     def __init__(
         self,
         *,
@@ -55,6 +98,7 @@ class LibraryEventCoordinator:
         stat_path: Callable[[Path], object] | None = None,
         wait: Callable[[float], None] | None = None,
         max_pending_groups: int = 256,
+        max_pending_entries: int = 4096,
         max_stable_attempts: int = 4,
         stable_sample_interval: float = 0.1,
         debounce_seconds: float = 0.5,
@@ -70,6 +114,7 @@ class LibraryEventCoordinator:
         self._stat_path = stat_path or Path.stat
         self._wait = wait or self._stop_event.wait
         self._max_pending_groups = max(1, int(max_pending_groups))
+        self._max_pending_entries = max(1, int(max_pending_entries))
         self._max_stable_attempts = max(2, int(max_stable_attempts))
         self._stable_sample_interval = max(0.0, float(stable_sample_interval))
         self._debounce_seconds = max(0.0, float(debounce_seconds))
@@ -81,6 +126,7 @@ class LibraryEventCoordinator:
         self._clock = clock or monotonic
         self._timer_factory = timer_factory or Timer
         self._pending: dict[tuple[str, Path], _PendingGroup] = {}
+        self._pending_entry_count = 0
         self._lock = Lock()
         self._flush_lock = Lock()
         self._timer: Timer | None = None
@@ -92,43 +138,52 @@ class LibraryEventCoordinator:
         if event.kind in {LibraryEventKind.ROOT_UNAVAILABLE, LibraryEventKind.OVERFLOW}:
             self._emit_health_event(event)
             return True
-        group_key = (event.root_id, event.path.parent)
         overflow_events: tuple[LibraryEvent, ...] = ()
         with self._lock:
             if self._stopped:
                 return False
+            updates: dict[tuple[str, Path], _PendingGroupUpdate] = {}
             if event.kind is LibraryEventKind.MOVED and event.destination is not None:
                 self._clear_superseded_deletions(
                     event.destination_root_id or event.root_id,
                     event.destination,
+                    updates,
                 )
             elif event.kind is not LibraryEventKind.DELETED:
-                self._clear_superseded_deletions(event.root_id, event.path)
-            group = self._pending.get(group_key)
-            if group is None:
-                if len(self._pending) >= self._max_pending_groups:
-                    affected_roots = {event.root_id: event.path.parent}
-                    if (
-                        event.kind is LibraryEventKind.MOVED
-                        and event.destination is not None
-                    ):
-                        affected_roots[
-                            event.destination_root_id or event.root_id
-                        ] = event.destination.parent
-                    overflow_events = tuple(
-                        LibraryEvent(
-                            LibraryEventKind.OVERFLOW,
-                            root_id,
-                            path,
-                            observed_at=event.observed_at,
-                        )
-                        for root_id, path in affected_roots.items()
+                self._clear_superseded_deletions(event.root_id, event.path, updates)
+            self._coalesce(
+                self._group_update(updates, event.root_id, event.path.parent), event,
+            )
+            entry_delta = sum(update.entry_delta for update in updates.values())
+            group_delta = sum(
+                int(update.group.entry_count + update.entry_delta > 0)
+                - int(update.group.entry_count > 0)
+                for update in updates.values()
+            )
+            if (
+                len(self._pending) + group_delta > self._max_pending_groups
+                or self._pending_entry_count + entry_delta > self._max_pending_entries
+            ):
+                affected_roots = {event.root_id: event.path.parent}
+                if event.kind is LibraryEventKind.MOVED and event.destination is not None:
+                    affected_roots[
+                        event.destination_root_id or event.root_id
+                    ] = event.destination.parent
+                overflow_events = tuple(
+                    LibraryEvent(
+                        LibraryEventKind.OVERFLOW, root_id, path,
+                        observed_at=event.observed_at,
                     )
-                else:
-                    group = _PendingGroup(event.root_id, event.path.parent)
-                    self._pending[group_key] = group
-            if not overflow_events:
-                self._coalesce(group, event)
+                    for root_id, path in affected_roots.items()
+                )
+            else:
+                for group_key, update in updates.items():
+                    update.apply()
+                    if update.group.entry_count:
+                        self._pending[group_key] = update.group
+                    else:
+                        self._pending.pop(group_key, None)
+                self._pending_entry_count += entry_delta
                 if self._auto_schedule:
                     self._schedule_flush_locked()
                 return True
@@ -136,40 +191,45 @@ class LibraryEventCoordinator:
             self._emit_health_event(overflow_event)
         return False
 
-    def _clear_superseded_deletions(self, root_id: str, live_path: Path) -> None:
-        for group_key, group in tuple(self._pending.items()):
+    def _group_update(self, updates, root_id: str, directory: Path) -> _PendingGroupUpdate:
+        group_key = (root_id, directory)
+        if group_key not in updates:
+            group = self._pending.get(group_key)
+            updates[group_key] = _PendingGroupUpdate(
+                group if group is not None else _PendingGroup(root_id, directory)
+            )
+        return updates[group_key]
+
+    def _clear_superseded_deletions(self, root_id: str, live_path: Path, updates) -> None:
+        for group in self._pending.values():
             if group.root_id != root_id:
                 continue
             if live_path in group.deleted_paths or live_path in group.deleted_subtrees:
-                group.deleted_subtrees.discard(live_path)
-                group.deleted_paths.discard(live_path)
-            if any(subtree in live_path.parents for subtree in group.deleted_subtrees):
-                group.active_paths.add(live_path)
-            if not (
-                group.active_paths
-                or group.deleted_paths
-                or group.deleted_subtrees
-                or group.moves
-            ):
-                self._pending.pop(group_key, None)
+                update = self._group_update(updates, root_id, group.directory)
+                update.set_path("deleted_subtrees", live_path, False)
+                update.set_path("deleted_paths", live_path, False)
+            if any(parent in group.deleted_subtrees for parent in live_path.parents):
+                self._group_update(updates, root_id, group.directory).set_path(
+                    "active_paths", live_path, True,
+                )
 
-    def _coalesce(self, group: _PendingGroup, event: LibraryEvent) -> None:
+    def _coalesce(self, update: _PendingGroupUpdate, event: LibraryEvent) -> None:
         if event.kind is LibraryEventKind.DELETED:
-            group.active_paths.discard(event.path)
+            update.set_path("active_paths", event.path, False)
             if event.is_directory:
-                group.deleted_subtrees.add(event.path)
+                update.set_path("deleted_subtrees", event.path, True)
             else:
-                group.deleted_paths.add(event.path)
+                update.set_path("deleted_paths", event.path, True)
                 # Windows watchdog can emit FileDeletedEvent for a directory
                 # because the path no longer exists when it is classified.
                 # Treat the path as a possible subtree as well. The persistence
                 # predicate uses a separator boundary, so ordinary file paths
                 # cannot stale similarly prefixed siblings.
-                group.deleted_subtrees.add(event.path)
+                update.set_path("deleted_subtrees", event.path, True)
             return
         if event.kind is LibraryEventKind.MOVED and event.destination is not None:
-            group.active_paths.discard(event.path)
-            group.deleted_paths.discard(event.path)
+            update.set_path("active_paths", event.path, False)
+            update.set_path("deleted_paths", event.path, False)
             move = TargetedMove(
                 event.path,
                 event.destination,
@@ -177,11 +237,11 @@ class LibraryEventCoordinator:
                 event.destination_root_id or event.root_id,
                 event.is_directory,
             )
-            group.moves[(move.source, move.destination)] = move
+            update.moves[(move.source, move.destination)] = move
             return
-        group.deleted_paths.discard(event.path)
-        group.deleted_subtrees.discard(event.path)
-        group.active_paths.add(event.path)
+        update.set_path("deleted_paths", event.path, False)
+        update.set_path("deleted_subtrees", event.path, False)
+        update.set_path("active_paths", event.path, True)
 
     def _schedule_flush_locked(self) -> None:
         if self._stopped or self._scheduled_flush_running:
@@ -228,6 +288,7 @@ class LibraryEventCoordinator:
             with self._lock:
                 pending = list(self._pending.values())
                 self._pending.clear()
+                self._pending_entry_count = 0
                 timer = self._timer
                 self._timer = None
                 self._pending_started_at = None
@@ -320,6 +381,7 @@ class LibraryEventCoordinator:
             self._stopped = True
             self._stop_event.set()
             self._pending.clear()
+            self._pending_entry_count = 0
             timer = self._timer
             self._timer = None
             self._pending_started_at = None

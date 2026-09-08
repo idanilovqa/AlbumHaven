@@ -411,6 +411,8 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 :root .global-player .player-collapse-button:focus-visible,
 :root .global-player .compact-player-expand:hover,
 :root .global-player .compact-player-expand:focus-visible { border: 0; background: transparent; color: var(--appearance-play, #4ade80); box-shadow: none; opacity: 1; }
+:root .global-player .player-collapse-button:hover,
+:root .global-player .player-collapse-button:focus-visible { outline: none; }
 .player-collapse-button[hidden], .compact-player-expand[hidden] { display: none; }
 .compact-player-shell { position: absolute; inset: 10px 12px; display: flex; align-items: center; gap: 9px; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 220ms ease, visibility 0s linear 220ms; }
 .compact-player-shell[hidden] { display: none; }

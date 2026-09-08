@@ -421,6 +421,7 @@ test('compact markup and layout expose only approved transport controls and rese
   assert.match(css, /width:\s*var\(--compact-docked-width/);
   assert.match(css, /\.global-player:not\(\.is-compact\)\s*\{[^}]*padding-left:\s*28px/);
   assert.match(css, /:root \.global-player \.player-collapse-button,\s*:root \.global-player \.compact-player-expand\s*\{[^}]*border:\s*0[^}]*background:\s*transparent[^}]*box-shadow:\s*none/s);
+  assert.match(css, /:root \.global-player \.player-collapse-button:hover,\s*:root \.global-player \.player-collapse-button:focus-visible\s*\{[^}]*outline:\s*none/s);
   assert.match(css, /\.player-collapse-button\s*\{[^}]*left:\s*-28px[^}]*top:\s*0[^}]*height:\s*var\(--player-controls-size\)[^}]*transform:\s*none/s);
   assert.match(css, /\.global-player\.is-docked-compact \.compact-player-expand\s*\{[^}]*left:\s*-30px[^}]*top:\s*50%[^}]*translateY\(-50%\)/s);
   assert.match(css, /:root \.global-player\.is-docked-compact \.compact-player-expand\.button\.ui-button\s*\{[^}]*position:\s*relative[^}]*left:\s*auto[^}]*top:\s*auto[^}]*border:\s*0[^}]*border-radius:\s*0[^}]*background:\s*transparent[^}]*box-shadow:\s*none[^}]*transform:\s*none/s);

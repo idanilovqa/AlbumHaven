@@ -794,6 +794,83 @@ test('problematic-file render preserves the selected album viewport across a lat
   assert.equal(rendered.list.scrollTop, 182);
 });
 
+test('problematic-file render preserves owned mutation scroll geometry across a late rerender', () => {
+  const selectedAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+  };
+  let currentScrollTop = 1335;
+  let retainedNode = {
+    matches(selector) {
+      return selector === '[data-problematic-scroll-retainer]';
+    },
+  };
+  const originalRetainedNode = retainedNode;
+  const list = {
+    get innerHTML() {
+      return '';
+    },
+    set innerHTML(_value) {
+      retainedNode = null;
+      currentScrollTop = 1248;
+    },
+    get scrollTop() {
+      return currentScrollTop;
+    },
+    set scrollTop(value) {
+      currentScrollTop = Number(value);
+    },
+    querySelector(selector) {
+      return retainedNode?.matches(selector) ? retainedNode : null;
+    },
+    appendChild(node) {
+      retainedNode = node;
+      return node;
+    },
+  };
+  const elements = {
+    overlay: {},
+    list,
+    detail: {
+      innerHTML: '',
+      removeAttribute() {},
+    },
+    count: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+    problemFilterButton: { disabled: false, hidden: false },
+    tabs: [],
+  };
+  const context = {
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        focusedTrackPath: '',
+        loading: false,
+        problematicFiles: [selectedAlbum],
+        searchQuery: '',
+        selectedProblematicKey: selectedAlbum.key,
+        selectedProblemFilters: [],
+      },
+    },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return [selectedAlbum]; },
+    renderProblemFilterControls() {},
+    getSelectedProblematicAlbumFrom() { return selectedAlbum; },
+    buildProblematicAlbumListItem() { return '<button>Album Previous</button>'; },
+    initializeRepairSelections() {},
+    buildProblematicAlbumDetail() { return '<h2>Album Previous</h2>'; },
+    async loadProblematicAlbumDetail() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  context.renderProblematicFiles();
+
+  assert.equal(retainedNode, originalRetainedNode, 'the owned scroll geometry must survive list replacement');
+  assert.equal(list.scrollTop, 1335, 'the late render must restore the mutation-owned scroll position');
+});
+
 test('empty log history visibly explains session-only storage and keeps export explicit', () => {
   const elements = {
     overlay: {},

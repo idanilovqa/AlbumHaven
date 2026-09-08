@@ -4,7 +4,11 @@
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
+    const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
     els.list.innerHTML = html;
+    if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
+      els.list.appendChild(retainedScrollGeometry);
+    }
     if (Number.isFinite(priorListScrollTop) && priorListScrollTop > 0) {
       els.list.scrollTop = priorListScrollTop;
     }

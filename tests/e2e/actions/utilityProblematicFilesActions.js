@@ -782,21 +782,10 @@ export class UtilityProblematicFilesActions {
   }
 
   async waitForMutationRemovalAndPreviousSelection(expected, options = {}) {
-    await this.utilityProblematicFilesTab.waitForPageCondition((value) => {
-      const list = document.querySelector(value.listSelector);
-      if (!list || typeof list.querySelectorAll !== 'function') return false;
-      const items = Array.from(list.querySelectorAll(value.itemSelector));
-      const removed = items.find((item) => item.getAttribute('data-problematic-album-key') === value.removedKey);
-      const active = list.querySelector(value.activeSelector);
-      return !removed
-        && active?.getAttribute('data-problematic-album-key') === value.previousKey
-        && Math.abs(Number(list.scrollTop || 0) - Number(value.scrollTop || 0)) <= 1;
-    }, { timeout: options.timeout || 90000 }, {
-      ...expected,
-      listSelector: this.utilityProblematicFilesTab.sidebarListSelector,
-      itemSelector: this.utilityProblematicFilesTab.listItemSelector,
-      activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
-    });
+    await this.utilityProblematicFilesTab.waitForMutationRemovalAndPreviousSelection(
+      expected,
+      options,
+    );
     const result = await this.readActiveListItem();
     await this.mutationObservation?.dispose();
     this.mutationObservation = null;

@@ -4924,48 +4924,19 @@ test('Problematic Files readiness uses one POM-owned condition over the real ren
 test('Problematic Files mutation completion ignores matching identities outside its sidebar list', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/utilityProblematicFilesActions.js')).href;
   const { UtilityProblematicFilesActions } = await import(moduleUrl);
-  const originalDocument = global.document;
-  try {
-    const removed = { getAttribute: () => 'album-removed' };
-    const survivor = { getAttribute: () => 'album-previous' };
-    const list = {
-      scrollTop: 237,
-      querySelectorAll(selector) {
-        assert.equal(selector, '[data-problematic-album-key]');
-        return [survivor];
-      },
-      querySelector(selector) {
-        assert.equal(selector, '[data-problematic-album-key].is-active');
-        return survivor;
-      },
-    };
-    global.document = {
-      querySelector(selector) {
-        if (selector === '#utility-problematic-list') return list;
-        if (selector === '[data-problematic-album-key].is-active') return survivor;
-        return null;
-      },
-      querySelectorAll(selector) {
-        assert.equal(selector, '[data-problematic-album-key]');
-        return [removed, survivor];
-      },
-    };
     let disposed = false;
+    let delegated = null;
     const activeListItem = {
       async getAttribute() { return 'album-previous'; },
     };
     const actions = new UtilityProblematicFilesActions({
-      sidebarListSelector: '#utility-problematic-list',
-      listItemSelector: '[data-problematic-album-key]',
-      activeListItemSelector: '[data-problematic-album-key].is-active',
       activeListItem,
       titleForListItem(item) {
         assert.equal(item, activeListItem);
         return { async textContent() { return 'Album Previous'; } };
       },
-      async waitForPageCondition(callback, options, argument) {
-        assert.equal(options.timeout, 4321);
-        assert.equal(callback(argument), true);
+      async waitForMutationRemovalAndPreviousSelection(expected, options) {
+        delegated = { expected, options };
       },
     });
     actions.mutationObservation = {
@@ -4980,10 +4951,23 @@ test('Problematic Files mutation completion ignores matching identities outside 
       key: 'album-previous',
       title: 'Album Previous',
     });
+    assert.deepEqual(delegated, {
+      expected: {
+        removedKey: 'album-removed',
+        previousKey: 'album-previous',
+        scrollTop: 237,
+      },
+      options: { timeout: 4321 },
+    });
     assert.equal(disposed, true);
-  } finally {
-    global.document = originalDocument;
-  }
+
+  const pom = read('tests/e2e/poms/utilityProblematicFilesTab.js');
+  const helper = pom
+    .split('async waitForMutationRemovalAndPreviousSelection', 2)[1]
+    .split('\n  get ', 1)[0];
+  assert.match(helper, /const list = document\.querySelector\(value\.listSelector\)/);
+  assert.match(helper, /list\.querySelectorAll\(value\.itemSelector\)/);
+  assert.match(helper, /list\.querySelector\(value\.activeSelector\)/);
 });
 
 test('Settings measurement prepares the real button action and observes the modal in one POM condition', async () => {

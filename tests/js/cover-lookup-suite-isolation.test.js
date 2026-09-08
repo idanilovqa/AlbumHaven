@@ -90,7 +90,7 @@ test('functional Playwright scenarios have no success dependencies', () => {
   assert.doesNotMatch(config, /\bdependencies\s*:/);
   assert.match(
     config,
-    /const isolatedFunctionalTitles = \/FTC-COVERS-011\|FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details\$\//,
+    /const isolatedFunctionalTitles = \/FTC-COVERS-011\|FTC-NON-ALBUM-013 keeps a strongly inferred blank-Album track in Other and Album Details\//,
   );
   assert.match(config, /grepInvert: isolatedFunctionalTitles/);
   assert.ok(functionalIgnoreSource, 'functional project defines testIgnore');

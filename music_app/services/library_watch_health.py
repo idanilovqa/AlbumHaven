@@ -26,6 +26,7 @@ _HEALTH_EVENT_KINDS = {
     LibraryEventKind.ROOT_UNAVAILABLE,
 }
 _HEALTH_PROBLEM_STATES = {
+    "overflow",
     "reconciliation_failed",
     "stable_write_unavailable",
 }

@@ -35,7 +35,15 @@ test('performance shard resolver preserves the existing fixture and target mappi
 test('CLI writes scalar and ten-slot target outputs for GitHub Actions', () => {
   const { runCli } = require(resolverPath);
   const writes = [];
-  const result = runCli(['performance', 'utility-problematic-files'], (text) => writes.push(text));
+  const githubOutput = process.env.GITHUB_OUTPUT;
+  delete process.env.GITHUB_OUTPUT;
+  let result;
+  try {
+    result = runCli(['performance', 'utility-problematic-files'], (text) => writes.push(text));
+  } finally {
+    if (githubOutput === undefined) delete process.env.GITHUB_OUTPUT;
+    else process.env.GITHUB_OUTPUT = githubOutput;
+  }
   assert.equal(result.targets.length, 2);
   const output = writes.join('');
   assert.match(output, /fixture_profile=utility-problematic-files/);

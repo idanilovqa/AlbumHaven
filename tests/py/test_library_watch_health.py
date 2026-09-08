@@ -314,9 +314,35 @@ def test_reconciliation_failure_persists_path_free_warning_until_manual_full_sca
     assert service.root_allows_destructive_reconciliation("main-root") is True
 
 
+def test_reconciliation_admission_overflow_blocks_destructive_work_until_manual_full_scan():
+    from music_app.services.library_event_coordinator import CoordinatorProblem
+
+    module = _health_module()
+    connection = _HealthConnection()
+    service = module.LibraryWatchHealthService(
+        module.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _database_url: connection,
+        )
+    )
+
+    assert service.record_problem(CoordinatorProblem("overflow", "main-root")) is True
+    [problem] = service.load_problems()
+    assert problem.root_id == "main-root"
+    assert problem.state == "overflow"
+    assert service.root_allows_destructive_reconciliation("main-root") is False
+
+    assert service.clear_after_scan(
+        scan_mode="manual_full_rescan",
+        observed_root_ids={"main-root"},
+    ) == 1
+    assert service.root_allows_destructive_reconciliation("main-root") is True
+
+
 def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher_health(
     monkeypatch,
 ):
+    import music_app
     from music_app import create_asgi_app
     from music_app.services import (
         lastfm_retry,
@@ -362,6 +388,8 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
 
     class InlineExecutor:
         def submit(self, function, *args):
+            if args[0].root_id == "overflow-source":
+                return None
             try:
                 return CompletedFuture(result=function(*args))
             except Exception as exc:
@@ -467,6 +495,11 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         "create_daemon_executor",
         lambda **_kwargs: InlineExecutor(),
     )
+    monkeypatch.setattr(
+        music_app,
+        "_BoundedExecutorAdmission",
+        lambda executor, **_kwargs: executor,
+    )
 
     app = create_asgi_app()
     problem = library_event_coordinator.CoordinatorProblem(
@@ -513,6 +546,19 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
                     ),
                 )
             )
+            callbacks["emit_request"](
+                library_event_coordinator.TargetedReconciliationRequest(
+                    root_id="overflow-source",
+                    moves=(
+                        library_event_coordinator.TargetedMove(
+                            source=Path("C:/Overflow/replacement.tmp"),
+                            destination=Path("C:/Overflow Destination/01.flac"),
+                            source_root_id="overflow-source",
+                            destination_root_id="overflow-destination-root",
+                        ),
+                    ),
+                )
+            )
 
     asyncio.run(exercise_problem_callback())
 
@@ -530,6 +576,11 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         and item.code == "reconciliation_failed"
         for item in recorded
     )
+    assert {
+        item.root_id
+        for item in recorded
+        if item.code == "overflow"
+    } == {"overflow-source", "overflow-destination-root"}
 
 
 def test_manual_recovery_does_not_clear_health_detected_after_scan_started():

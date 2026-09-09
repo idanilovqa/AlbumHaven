@@ -812,7 +812,9 @@ def test_flush_batches_mixed_dispositions_and_deduplicates_failed_destination_he
     }
     assert {path for request in emitted for path in request.paths} == {ready, transient}
     assert {path for request in emitted for path in request.deleted_paths} == {missing}
-    assert {path for request in emitted for path in request.deleted_subtrees} == {destination.parent}
+    # Failed live descendants block the overlapping parent deletion instead of
+    # publishing a partial mutation that would stale those unverified files.
+    assert not any(request.deleted_subtrees for request in emitted)
     assert not any(request.moves for request in emitted)
     assert [(problem.code, problem.root_id) for problem in problems] == [
         ("stable_write_unavailable", root_id)

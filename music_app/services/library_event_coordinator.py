@@ -27,6 +27,7 @@ class TargetedReconciliationRequest:
     deleted_paths: frozenset[Path] = frozenset()
     deleted_subtrees: frozenset[Path] = frozenset()
     moves: tuple[TargetedMove, ...] = ()
+    preserved_subtrees: frozenset[Path] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,13 +296,24 @@ class LibraryEventCoordinator:
             if timer is not None:
                 timer.cancel()
             dispositions = self._stable_dispositions(pending)
+            live_targets: dict[str, dict[Path, bool]] = {}
+            for group in pending:
+                for path in group.active_paths:
+                    if dispositions.get(path) != "deleted":
+                        live_targets.setdefault(group.root_id, {}).setdefault(path, False)
+                for move in group.moves.values():
+                    if dispositions.get(move.destination) != "deleted":
+                        targets = live_targets.setdefault(move.destination_root_id, {})
+                        targets[move.destination] = targets.get(move.destination, False) or move.is_directory
             for group in sorted(
                 pending,
                 key=lambda item: (item.root_id, str(item.directory).casefold()),
             ):
-                self._emit_group(group, dispositions)
+                self._emit_group(group, dispositions, live_targets.get(group.root_id, {}))
 
-    def _emit_group(self, group: _PendingGroup, dispositions: dict[Path, str]) -> None:
+    def _emit_group(
+        self, group: _PendingGroup, dispositions: dict[Path, str], live_targets: dict[Path, bool],
+    ) -> None:
         if self._stop_event.is_set():
             return
         ready: set[Path] = set()
@@ -331,6 +343,32 @@ class LibraryEventCoordinator:
                     deleted_subtrees.add(move.source)
                 else:
                     deleted.add(move.source)
+        # A later move/recreation can make an earlier move's source live again.
+        # Include that final live scope in every overlapping destructive request,
+        # so persistence's same-mutation active-path exclusion protects it.
+        destructive = {(path, False) for path in deleted}
+        destructive.update((path, True) for path in deleted_subtrees)
+        destructive.update((move.source, move.is_directory) for move in ready_moves)
+        preserved_subtrees: set[Path] = set()
+        for path, is_directory in live_targets.items():
+            if self._stop_event.is_set():
+                return
+            for deleted_path, is_subtree in destructive:
+                if path == deleted_path or is_subtree and deleted_path in path.parents:
+                    overlap = path
+                    preserve_subtree = is_directory
+                elif is_directory and path in deleted_path.parents:
+                    # Expand only the intersection, never the entire live ancestor.
+                    overlap = deleted_path
+                    preserve_subtree = True
+                else:
+                    continue
+                if dispositions.get(path) != "ready":
+                    return
+                if preserve_subtree:
+                    preserved_subtrees.add(overlap)
+                else:
+                    ready.add(overlap)
         if self._stop_event.is_set() or (
             not ready and not deleted and not deleted_subtrees and not ready_moves
         ):
@@ -342,6 +380,7 @@ class LibraryEventCoordinator:
                 deleted_paths=frozenset(deleted),
                 deleted_subtrees=frozenset(deleted_subtrees),
                 moves=tuple(ready_moves),
+                preserved_subtrees=frozenset(preserved_subtrees),
             )
         )
 

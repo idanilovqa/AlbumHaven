@@ -57,6 +57,9 @@
   expanded album tracks for stable writes before parsing or publishing a mutation.
 - Shared watcher stability sampling intervals across pending files and moves,
   preventing a delay per file during large batches.
+- Preserved live tracks when files or directories move away and back within a
+  watcher debounce window, regardless of folder publication order. Directory
+  enumeration failures now stop mutation publication.
 - Applied gallery categories and search constraints to missing albums, preserved
   whole-album missing-state classification, and corrected sidebar artist counts
   when an artist has both active and missing albums.

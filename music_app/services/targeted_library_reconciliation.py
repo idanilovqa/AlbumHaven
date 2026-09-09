@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from threading import Event, Lock
 from typing import Any
@@ -96,6 +97,9 @@ class TargetedLibraryReconciler:
         deleted_subtrees = tuple(
             Path(path) for path in getattr(request, "deleted_subtrees", ())
         )
+        preserved_subtrees = tuple(
+            Path(path) for path in getattr(request, "preserved_subtrees", ())
+        )
         moves = tuple(getattr(request, "moves", ()) or ())
         if not root_healthy and (deleted_paths or deleted_subtrees or moves):
             return TargetedReconciliationResult(0, (), "root_unhealthy")
@@ -111,6 +115,19 @@ class TargetedLibraryReconciler:
             return TargetedReconciliationResult(0, (), "invalid_path")
         if not all(self._belongs_to_root(path, primary_root) for path in deleted_subtrees):
             return TargetedReconciliationResult(0, (), "invalid_path")
+        if not all(self._belongs_to_root(path, primary_root) for path in preserved_subtrees):
+            return TargetedReconciliationResult(0, (), "invalid_path")
+        for preserved_path in preserved_subtrees:
+            # An overlap can be a single file inside a moved directory. Enumerate
+            # the actual surviving media so missing children remain deletable.
+            if preserved_path.is_file() and is_supported_media(preserved_path):
+                active_targets.append((preserved_path, primary_root))
+            else:
+                active_targets.extend(
+                    (path, primary_root)
+                    for path in self._supported_media_descendants(preserved_path)
+                    if self._belongs_to_root(path, primary_root)
+                )
 
         normalized_moves: list[dict[str, object]] = []
         for move in moves:
@@ -152,6 +169,8 @@ class TargetedLibraryReconciler:
                 }
             )
 
+        if self._stop_event.is_set():
+            return TargetedReconciliationResult(0, (), "cancelled")
         if not active_targets and not deleted_paths and not deleted_subtrees and not normalized_moves:
             return TargetedReconciliationResult(0, ())
 
@@ -332,11 +351,22 @@ class TargetedLibraryReconciler:
         }
         if not supported or not directory.is_dir():
             return ()
-        return tuple(
-            path
-            for path in directory.rglob("*")
-            if path.is_file() and path.suffix.casefold() in supported
-        )
+        paths: list[Path] = []
+        pending = [directory]
+        while pending:
+            if self._stop_event.is_set():
+                return ()
+            # pathlib.rglob suppresses PermissionError and can make an unreadable
+            # subtree appear empty. Publication requires complete enumeration.
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if self._stop_event.is_set():
+                        return ()
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                    elif Path(entry.name).suffix.casefold() in supported and entry.is_file():
+                        paths.append(Path(entry.path))
+        return tuple(paths)
 
     @staticmethod
     def _album_directory(path: Path, root: dict[str, object]) -> Path:

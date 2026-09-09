@@ -173,6 +173,34 @@ for (const otherInvalid of [null, 'surface.start', 'controls.fill']) {
     if (otherInvalid) assert.equal(state.inputValues['player_style_' + otherInvalid], '#BADHEX');
   });
 }
+for (const replacement of ['theme', 'history']) for (const otherError of [null, 'main_surface_color']) {
+  test(`complete player ${replacement} replaces invalid background and retains ${otherError || 'no unrelated error'}`, async () => {
+    const style = api.playerThemes[1].style;
+    const { instance, host, editor } = await mounted('mount', preference({
+      revision: 7, player_style_override: api.playerThemes[0].style, player_recent_sets: [style],
+      interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } },
+      selection_accent: { enabled: true, color: '#34CA78' },
+    }));
+    editor.listeners.get('input')({ target: {
+      value: '#BADHEX', getAttribute: key => key === 'data-player-hex' ? 'background' : null,
+      hasAttribute: () => false,
+    } });
+    if (otherError) instance.controller.setColor(otherError, '#ALSONO');
+    assert.ok(instance.controller.getState().errors.player_background);
+    instance.mountSeekbar(host);
+    const attribute = replacement === 'theme' ? 'data-player-theme' : 'data-player-set-index';
+    const button = { hasAttribute: key => key === attribute, getAttribute: key => key === attribute ? (replacement === 'theme' ? api.playerThemes[1].id : '0') : null };
+    editor.listeners.get('click')({ target: { closest: () => button } });
+    const state = instance.controller.getState();
+    assert.deepEqual(state.draft.player_style_override, style);
+    assert.equal(state.errors.player_background, undefined);
+    assert.equal(state.inputValues.player_background, state.effective.player.background);
+    assert.deepEqual(Object.keys(state.errors), otherError ? [otherError] : []);
+    assert.equal(state.canSave, !otherError);
+    if (otherError) assert.equal(state.inputValues[otherError], '#ALSONO');
+  });
+}
+
 for (const field of ['fill', 'edge']) for (const replacement of ['theme', 'history']) {
   test(`complete player ${replacement} replaces invalid waveform ${field}`, async () => {
     const style = api.playerThemes[0].style;

@@ -21,11 +21,15 @@ async function mount(page, method, options = {}) {
     .global-player { height: 80px; } .player-play { border: 1px solid; }
     .player-loop-handle::after { content: ''; display: block; height: 10px; }
   </style></head><body><script id="appearance-bootstrap" type="application/json">${JSON.stringify(saved)}</script>
-    <main id="editor"></main>${options.sharedFooter ? '<footer id="utility-modal-footer"></footer>' : ''}<section class="global-player"><button class="player-play">Play</button><span class="player-loop-handle"></span></section>
+    ${options.utilityShell ? '<div id="utility-modal" class="utility-modal" data-active-tab="appearance"><div class="utility-modal-dialog"><header class="utility-modal-header">Appearance</header><div class="utility-modal-body"><aside class="utility-sidebar"><button class="utility-list-item">Album page</button></aside><main id="editor" class="utility-detail"></main></div></div></div>' : '<main id="editor"></main>'}${options.sharedFooter ? '<footer id="utility-modal-footer"></footer>' : ''}<section class="global-player"><button class="player-play">Play</button><span class="player-loop-handle"></span></section>
   </body></html>` }));
   await page.route('**/account/appearance', route => route.fulfill({ json: { ...saved, csrf_token: 'owned-component-token' } }));
   await page.goto(appearanceUrl);
-  for (const file of ['button-component.css', 'appearance-backgrounds.css']) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+  const cssFiles = options.utilityShell ? [
+    'runtime/base-layout.css', 'runtime/utilities.css', 'runtime/non-album-and-player.css',
+    'runtime/shell-persistent-player.css', 'navigation-tree.css', 'appearance-backgrounds.css', 'button-component.css',
+  ] : ['button-component.css', 'appearance-backgrounds.css'];
+  for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
   for (const file of ['button-component.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
@@ -44,6 +48,46 @@ async function mount(page, method, options = {}) {
     }
     instance[method](document.getElementById('editor'), { getSeekbarMode: () => 'waveform' });
   }, method);
+}
+
+for (const width of [900, 901, 1024, 1280]) {
+  test(`Album page workspace fits the production Utilities shell at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mount(page, 'mountAlbumPage', { utilityShell: true });
+    const detail = page.locator('#editor');
+    const workspace = page.locator('.appearance-album-page__workspace');
+    const controls = page.locator('.appearance-album-page__controls');
+    const preview = page.locator('.appearance-album-page__preview');
+    const geometry = await detail.evaluate((element) => ({ client: element.clientWidth, scroll: element.scrollWidth }));
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+    const [detailBox, workspaceBox, controlsBox, previewBox] = await Promise.all([detail, workspace, controls, preview].map(item => item.boundingBox()));
+    for (const box of [detailBox, workspaceBox, controlsBox, previewBox]) expect(box).not.toBeNull();
+    for (const box of [controlsBox, previewBox]) {
+      expect(box.x).toBeGreaterThanOrEqual(workspaceBox.x - 1);
+      expect(box.x + box.width).toBeLessThanOrEqual(detailBox.x + detailBox.width + 1);
+    }
+    if (width === 900 || width === 1280) expect(previewBox.x).toBeGreaterThan(controlsBox.x);
+    else expect(previewBox.y).toBeGreaterThanOrEqual(controlsBox.y + controlsBox.height);
+  });
+}
+
+for (const palette of [null, 'steelblue']) {
+  test(`Selection swatches retain their own colors during hover and press with palette ${palette}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await mount(page, 'mountSelectionAccent', { saved: { palette_id: palette } });
+    for (const selector of ['[data-aggregate-accent-color]', '[data-interaction-color="button_hover_background"]', '[data-item-outline-color]']) {
+      const swatch = page.locator(selector).first();
+      const hex = await swatch.getAttribute(selector === '[data-aggregate-accent-color]' ? 'data-aggregate-accent-color' : 'data-color');
+      const rgb = `rgb(${hex.slice(1).match(/../g).map(part => parseInt(part, 16)).join(', ')})`;
+      await swatch.hover();
+      await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 });
+      await expect(swatch).toHaveCSS('outline-width', '2px');
+      await page.mouse.down();
+      try { await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 }); }
+      finally { await page.mouse.up(); }
+      await expect(swatch).toHaveAttribute('aria-pressed', 'true');
+    }
+  });
 }
 
 test('every palette paints a valid player gradient, control border, and loop handle', async ({ page }) => {

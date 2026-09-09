@@ -584,6 +584,7 @@ function renderFocusedAlbumWithGeometry({
   let layoutReady = initialLayoutReady;
   let listInnerHTML = '';
   const scheduledAnimationFrames = [];
+  const inputListeners = new Map();
   const list = {
     get innerHTML() {
       return listInnerHTML;
@@ -642,6 +643,14 @@ function renderFocusedAlbumWithGeometry({
         : null;
     },
   };
+  for (const container of [list, detail]) {
+    const listeners = new Map();
+    inputListeners.set(container, listeners);
+    container.addEventListener = (type, listener) => {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(listener);
+    };
+  }
   const elements = {
     overlay: {},
     list,
@@ -702,6 +711,12 @@ function renderFocusedAlbumWithGeometry({
   return {
     context,
     detail,
+    input(containerName, type, properties = {}) {
+      const container = containerName === 'list' ? list : detail;
+      for (const listener of inputListeners.get(container).get(type) || []) {
+        listener({ type, target: container, ...properties });
+      }
+    },
     flushAnimationFrame({ makeLayoutReady = true } = {}) {
       if (makeLayoutReady) layoutReady = true;
       scheduledAnimationFrames.shift()?.();
@@ -709,6 +724,50 @@ function renderFocusedAlbumWithGeometry({
     list,
     scrollCalls,
   };
+}
+
+for (const [container, type, properties] of [
+  ['list', 'wheel', { deltaY: 50 }], ['detail', 'wheel', { deltaY: -50 }],
+  ['detail', 'touchmove', {}], ['detail', 'pointerdown', { button: 0 }],
+  ['detail', 'keydown', { key: 'PageDown' }], ['list', 'keydown', { key: 'Home' }],
+]) {
+  test(`focused problematic navigation yields to user ${container} ${type} across queued layout and rerenders`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input(container, type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+    rendered.list.scrollTop = 180; rendered.detail.scrollTop = 250;
+    const attempts = rendered.scrollCalls.length;
+    rendered.flushAnimationFrame();
+    rendered.context.renderProblematicFiles();
+    assert.equal(rendered.scrollCalls.length, attempts, 'old request must not pull either viewport back');
+    assert.equal(rendered.list.scrollTop, 180);
+    assert.equal(rendered.detail.scrollTop, 250);
+    rendered.context.state.utility.focusedTrackPath = requested;
+    rendered.context.renderProblematicFiles();
+    assert.ok(rendered.scrollCalls.length > attempts, 'a later explicit navigation owns a new request');
+  });
+}
+
+for (const [type, properties] of [
+  ['scroll', {}], ['pointerdown', { button: 0, target: { closest: () => null } }],
+  ['keydown', { key: 'PageDown', target: { closest: () => ({ tagName: 'INPUT' }) } }],
+  ['keydown', { key: ' ', target: { closest: () => ({ tagName: 'BUTTON' }) } }],
+  ['keydown', { key: 'Tab' }], ['wheel', { deltaY: 0, deltaX: 0 }],
+]) {
+  test(`focused problematic navigation retains deferred ownership for non-scroll input ${type} ${properties.key || ''}`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input('detail', type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, requested);
+    rendered.flushAnimationFrame();
+    assert.equal(rendered.detail.scrollTop, 20);
+    assert.equal(rendered.list.scrollTop, 20);
+  });
 }
 
 function assertNearestAlbumScrollCall(scrollCalls) {

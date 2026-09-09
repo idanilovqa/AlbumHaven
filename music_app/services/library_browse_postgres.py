@@ -586,6 +586,8 @@ class PostgresLibraryBrowseRepository:
                     if not hydrate_query_primary_albums and not selected_artist_name_matches_query
                     else ""
                 ),
+                alias_to_canonical=alias_to_canonical,
+                canonical_to_aliases=canonical_to_aliases,
             )
             if _artist_display_dedupe_key(str(album.get("album_artist") or ""))
             in selected_artist_keys
@@ -1166,6 +1168,8 @@ class PostgresLibraryBrowseRepository:
                         self._load_missing_album_rows(connection=connection),
                         view_state=view_state,
                         query=query,
+                        alias_to_canonical=alias_to_canonical,
+                        canonical_to_aliases=canonical_to_aliases,
                     ),
                     alias_to_canonical=alias_to_canonical,
                 )
@@ -1269,6 +1273,8 @@ class PostgresLibraryBrowseRepository:
                 self._load_missing_album_rows(connection=connection),
                 view_state=view_state,
                 query=query,
+                alias_to_canonical=alias_to_canonical,
+                canonical_to_aliases=canonical_to_aliases,
             ),
             alias_to_canonical=alias_to_canonical,
         )
@@ -2774,6 +2780,8 @@ def _missing_album_projection_payloads(
     *,
     view_state: Mapping[str, object] | None = None,
     query: str = "",
+    alias_to_canonical: Mapping[str, object] | None = None,
+    canonical_to_aliases: Mapping[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Classify complete stale inventories before applying browse visibility."""
 
@@ -2805,12 +2813,22 @@ def _missing_album_projection_payloads(
         ):
             continue
         if query_pattern is not None:
-            search_fields = [
-                first.get("album_title"),
+            artist_fields = [
                 first.get("artist_name"),
                 metadata.get("album_artist"),
                 *artists,
                 *(first.get("album_featured_artist_names") or []),
+            ]
+            search_fields = [
+                first.get("album_title"),
+                *artist_fields,
+                *(
+                    name
+                    for artist in artist_fields
+                    for name in _expanded_artist_names(
+                        artist, alias_to_canonical or {}, canonical_to_aliases or {},
+                    )
+                ),
                 *(row.get("track_title") for row in album_rows),
             ]
             for row in album_rows:

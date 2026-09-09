@@ -2,6 +2,20 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Bounded breached-password network work through worker cleanup, refreshed
+  invitation lifetimes after lock waits, and cleared dismissed reauthentication
+  passwords from the administrator roster.
+- Kept missing albums searchable by canonical and alias artist names, preserved
+  alias-folder loose tracks, and respected filesystem case when identifying
+  successfully observed library roots.
+- Corrected intermediate-width appearance layouts, retained swatch colors during
+  interaction, cleared superseded background errors, and respected user scrolling
+  after focused-track navigation. Restored Album Details appearance fixtures.
+- Covered queued playback cancellation and search classification, corrected
+  Windows scheduled-backup path quoting, and aligned focused-CI documentation
+  with the default local-verification-to-complete-pipeline process.
+- Checked that both local E2E ports can bind before fixture startup, avoiding
+  Windows-reserved port ranges even when no process is listening.
 - Revalidated the administrator's live session during account creation, checked
   pre-authentication token expiry after row locks, and rejected oversized body
   chunks before copying them into the JSON buffer.

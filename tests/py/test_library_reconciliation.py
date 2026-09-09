@@ -730,6 +730,47 @@ def test_scan_records_only_successfully_observed_root_ids(monkeypatch, tmp_path:
     assert publication_state["observed_library_root_ids"] == {"available-root"}
 
 
+@pytest.mark.parametrize("case_sensitive", [True, False], ids=["posix-distinct-roots", "windows-equivalent-path"])
+def test_scan_observed_roots_preserve_filesystem_case_identity(monkeypatch, case_sensitive):
+    import ntpath
+    import posixpath
+    from pathlib import PurePosixPath
+    from music_app.services import state
+
+    class ObservedPath(PurePosixPath):
+        def resolve(self, strict=False):
+            return self
+
+        def exists(self):
+            return str(self) == "/media/Music"
+
+    available = ObservedPath("/media/Music")
+    unavailable = ObservedPath("/media/music")
+    roots = [
+        {"id": "available-root", "path": str(available if case_sensitive else unavailable), "category": "main_library_roots"},
+    ]
+    if case_sensitive:
+        roots.append({"id": "offline-root", "path": str(unavailable), "category": "main_library_roots"})
+    publication_state = {}
+    monkeypatch.setattr(state, "Path", ObservedPath)
+    monkeypatch.setattr(state, "normcase", posixpath.normcase if case_sensitive else ntpath.normcase, raising=False)
+    monkeypatch.setattr(state, "iter_library_root_paths", lambda _config: [available, unavailable])
+    monkeypatch.setattr(state, "get_library_roots", lambda _config: roots)
+    monkeypatch.setattr(state, "load_exception_overrides", lambda _config: {})
+
+    def scan(_library_state, **kwargs):
+        assert kwargs["roots"] == [available]
+        assert publication_state["observed_library_root_ids"] == {"available-root"}, "an unavailable root must never authorize stale-file publication"
+        return {}, 42.0
+
+    monkeypatch.setattr(state, "scan_library_file_cache", scan)
+    assert state.scan_music_incremental(
+        config={"MUSIC_DIR": available, "SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": {".jpg"}},
+        logger=SimpleNamespace(), library_state={}, publication_state=publication_state,
+    ) == ({}, 42.0)
+    assert publication_state["observed_library_root_ids"] == {"available-root"}
+
+
 @pytest.mark.parametrize("failure_action", [
     "Library directory read failed",
     "Library directory entry inspection failed",

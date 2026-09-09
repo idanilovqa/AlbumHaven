@@ -104,7 +104,6 @@ class PostgresInvitationLifecycleService:
         digest = _digest(raw_invitation_token)
         if digest is None:
             return None
-        now = _aware_utc(self._clock())
         try:
             with self._operation() as connection:
                 candidates = connection.execute(
@@ -159,7 +158,7 @@ class PostgresInvitationLifecycleService:
                     return None
                 invitations = connection.execute(
                     """
-                    select invitation.id
+                    select invitation.id, invitation.expires_at
                     from app.account_invitation_tokens invitation
                     where invitation.id = %s
                       and invitation.account_id = %s
@@ -167,7 +166,6 @@ class PostgresInvitationLifecycleService:
                       and invitation.token_hash = %s
                       and invitation.consumed_at is null
                       and invitation.revoked_at is null
-                      and invitation.expires_at > %s
                     for update of invitation
                     """,
                     (
@@ -175,10 +173,13 @@ class PostgresInvitationLifecycleService:
                         account_id,
                         INVITATION_DB_PURPOSE,
                         digest,
-                        now,
                     ),
                 ).fetchall()
                 if len(invitations) != 1:
+                    return None
+                invitation = _row(invitations[0], ("id", "expires_at"))
+                now = _aware_utc(self._clock())
+                if _timestamp(invitation.get("expires_at")) <= now:
                     return None
                 issued = validated_issued_invitation_token(self._token_issuer)
                 expires_at = now + timedelta(
@@ -458,7 +459,16 @@ class PostgresInvitationLifecycleService:
             return None
         if len(rows) != 1:
             raise RuntimeError
-        return _row(rows[0], _CONTEXT_COLUMNS)
+        context = _row(rows[0], _CONTEXT_COLUMNS)
+        # Connection acquisition and the SELECT can outlive either lifetime.
+        # Recheck the returned expiry values before rendering or password work.
+        observed_at = _aware_utc(self._clock())
+        if (
+            _timestamp(context.get("invitation_expires_at")) <= observed_at
+            or _timestamp(context.get("transaction_expires_at")) <= observed_at
+        ):
+            return None
+        return context
 
     @contextmanager
     def _operation(self) -> Iterator[Any]:

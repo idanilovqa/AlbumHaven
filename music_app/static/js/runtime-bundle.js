@@ -7703,10 +7703,27 @@ function getVisibleNonAlbumTracks() {
     ...(Array.isArray(view.artist_groups) ? view.artist_groups : [])
       .flatMap((group) => [group.artist, group.artist_display]),
   ].map(artistKey).filter(Boolean));
+  // Family filters carry the server's canonical/alias identities. Expand only
+  // the currently displayed family, since a retained root response can still
+  // contain filters for unrelated artists during navigation.
+  for (const filter of Array.isArray(view.artist_family_filters) ? view.artist_family_filters : []) {
+    const names = [filter?.display_name,
+      ...(Array.isArray(filter?.variation_names) ? filter.variation_names : [])]
+      .map(artistKey).filter(Boolean);
+    if (names.some((name) => artists.has(name))) names.forEach((name) => artists.add(name));
+  }
+  // Folder matching uses the search punctuation/word rules rather than exact
+  // artist identity (for example, "Family_Alias" and "Family Alias").
+  const folderKey = (value) => artistKey(value)
+    .replace(/ß/g, 'ss').replace(/ς/g, 'σ')
+    .replace(/['’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    .split(/\s+/).map((word) => word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)
+    .join(' ');
+  const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
   return tracks.filter((track) => (
     artists.has(artistKey(track.album_artist || track.artist))
     || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
-      .some((part) => artists.has(artistKey(part)))
+      .some((part) => artistFolders.has(folderKey(part)))
   ));
 }
 
@@ -17526,6 +17543,7 @@ function mountAlertsAppearanceEditor(detail) {
 ﻿function renderProblematicFiles() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  bindProblematicFocusUserInput(els);
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
@@ -17682,6 +17700,34 @@ function mountAlertsAppearanceEditor(detail) {
     if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
       scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
     }
+  }
+}
+
+const problematicFocusInputContainers = new WeakSet();
+
+function bindProblematicFocusUserInput(els) {
+  for (const container of [els.list, els.detail]) {
+    if (!container?.addEventListener || problematicFocusInputContainers.has(container)) continue;
+    problematicFocusInputContainers.add(container);
+    const relinquish = () => {
+      if (state.utility.activeTab === 'problematic-files') state.utility.focusedTrackPath = '';
+    };
+    container.addEventListener('wheel', event => {
+      if (!event.ctrlKey && (event.deltaY || event.deltaX)) relinquish();
+    }, { passive: true });
+    container.addEventListener('touchmove', relinquish, { passive: true });
+    container.addEventListener('pointerdown', event => {
+      // Scrollbar/background input belongs to the scroller; an ordinary row
+      // click must retain deferred track navigation until its own action runs.
+      if (event.target === container && event.button === 0) relinquish();
+    });
+    container.addEventListener('keydown', event => {
+      if (event.defaultPrevented || event.altKey || event.metaKey
+        || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"]')) return;
+      if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
+      relinquish();
+    });
   }
 }
 

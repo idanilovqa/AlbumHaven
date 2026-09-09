@@ -277,6 +277,7 @@
       if (rosterRetryAccountId) setInvitationBusy(rosterRetryAccountId, false);
       rosterRetryAccountId = null;
       rosterRetry = null;
+      if (rosterReauthPassword) rosterReauthPassword.value = '';
       if (rosterReauthPanel) rosterReauthPanel.hidden = true;
     },
   );
@@ -294,6 +295,7 @@
           password,
         });
         if (!response.ok) throw new Error('Reauthentication failed.');
+        if (rosterReauthPassword) rosterReauthPassword.value = '';
         if (rosterReauthPanel) rosterReauthPanel.hidden = true;
         const retry = rosterRetry;
         rosterRetryAccountId = null;

@@ -92,6 +92,94 @@ def _overlap_after_account_lock(fixture, action, mutation, *, locked_account_id=
     return results, failures, mutation_error
 
 
+@pytest.mark.parametrize("locked_row", ["account", "invitation"])
+@pytest.mark.parametrize("invitation_expires", [False, True])
+def test_live_invitation_exchange_uses_time_after_final_lock(
+    auth_lock_inventory, locked_row, invitation_expires,
+):
+    from music_app.services.auth_invitation_lifecycle_postgres import PostgresInvitationLifecycleService
+    from music_app.services.auth_invitation_models import INVITATION_TRANSACTION_SECONDS
+
+    fixture = auth_lock_inventory
+    clock = [fixture.now]
+    token = issue_opaque_token()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        token_id = connection.execute("""insert into app.account_invitation_tokens
+            (account_id, token_hash, created_at, expires_at, request_ref)
+            values (%s, %s, %s, %s, 'exchange-clock-fixture') returning id""",
+            (fixture.target_id, token.digest, fixture.now,
+             fixture.now + timedelta(minutes=10) if invitation_expires
+             else fixture.now + timedelta(hours=24))).fetchone()["id"]
+
+    connected = Event()
+    backend, results, failures = [], [], []
+
+    def connect(_url):
+        connection = isolatedPostgres._connect(fixture.runtime_url)
+        connection.execute("set statement_timeout = '5s'")
+        connection.commit()
+        backend.append(connection.info.backend_pid)
+        connected.set()
+        return connection
+
+    def exchange():
+        try:
+            results.append(PostgresInvitationLifecycleService(
+                fixture.config, connect=connect, clock=lambda: clock[0],
+                breached_checker=lambda _password: False,
+                audit_repository=PostgresSecurityAuditRepository(),
+            ).exchange_invitation_token(token.raw, request_ref="exchange-clock-race"))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = None
+    try:
+        with isolatedPostgres._connect(fixture.setup_url) as locker:
+            if locked_row == "account":
+                locker.execute("select id from app.accounts where id = %s for update",
+                    (fixture.target_id,)).fetchone()
+            else:
+                locker.execute("select id from app.account_invitation_tokens where id = %s for update",
+                    (token_id,)).fetchone()
+            worker = Thread(target=exchange)
+            worker.start()
+            assert connected.wait(2), f"worker did not connect: {failures!r}"
+            with isolatedPostgres._connect(fixture.setup_url) as inspect:
+                blocked = False
+                deadline = monotonic() + 3
+                while monotonic() < deadline:
+                    blocked = inspect.execute("select %s = any(pg_blocking_pids(%s)) as blocked",
+                        (locker.info.backend_pid, backend[0])).fetchone()["blocked"]
+                    if blocked:
+                        break
+                    Event().wait(0.01)
+                assert blocked, f"exchange did not reach {locked_row} lock: {failures!r}"
+            clock[0] = fixture.now + timedelta(minutes=20)
+    finally:
+        if worker is not None:
+            worker.join(7)
+            assert not worker.is_alive(), "cannot clean database while exchange remains active"
+    assert failures == []
+    assert len(results) == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        stored = connection.execute("""select created_at, expires_at
+            from app.account_invitation_transactions where invitation_token_id = %s""",
+            (token_id,)).fetchall()
+    if invitation_expires:
+        assert results == [None]
+        assert stored == []
+    else:
+        assert results[0] is not None
+        expected_expiry = clock[0] + timedelta(seconds=INVITATION_TRANSACTION_SECONDS)
+        assert results[0].expires_at == expected_expiry
+        assert stored == [{"created_at": clock[0], "expires_at": expected_expiry}]
+        assert PostgresInvitationLifecycleService(
+            fixture.config, clock=lambda: clock[0],
+            breached_checker=lambda _password: False,
+            audit_repository=PostgresSecurityAuditRepository(),
+        ).validate_transaction(results[0].raw_token) is True
+
+
 def test_live_creation_rejects_session_revoked_while_waiting_for_owner_lock(auth_lock_inventory):
     from music_app.services.admin_account_creation import AdminAccountCreationService
     from music_app.services.admin_account_creation_postgres import PostgresAdminAccountRepository

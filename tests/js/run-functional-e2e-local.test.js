@@ -17,6 +17,29 @@ const windowsPowerShell = path.join(
   'powershell.exe',
 );
 const powerShellExecutable = process.platform === 'win32' ? windowsPowerShell : 'pwsh';
+const testPortPairHelpers = `
+function Open-TestListener([int]$Port) {
+  $socket = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+  $socket.Server.ExclusiveAddressUse = $true
+  try { $socket.Start(); return $socket } catch { $socket.Stop(); throw }
+}
+function Open-TestPair {
+  for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
+    $first = $second = $null
+    try {
+      $first = Open-TestListener 0
+      $base = $first.LocalEndpoint.Port
+      if ($base -gt 65533) { $first.Stop(); continue }
+      $second = Open-TestListener ($base + 2)
+      return @{ Base = $base; First = $first; Second = $second }
+    } catch {
+      if ($first) { $first.Stop() }
+      if ($second) { $second.Stop() }
+    }
+  }
+  throw 'Unable to establish the test-owned TCP pair.'
+}
+`;
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -157,12 +180,85 @@ test('port allocation rejects a candidate whose provider port alone is occupied'
   assert.ok(start >= 0 && end > start);
   const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
 $ErrorActionPreference = 'Stop'
-$script:requests = 0
-function Get-Random { param($Minimum, $Maximum) $script:requests += 1; return (41000 + (($script:requests - 1) * 1000)) }
-function Get-NetTCPConnection { param($State, $ErrorAction) [pscustomobject]@{ LocalPort = 41002 } }
-${source.slice(start, end)}
-Get-FreePortBase
+${testPortPairHelpers}
+$blocked = $available = $null
+try {
+  $blocked = Open-TestPair
+  $available = Open-TestPair
+  # Snapshot rejection must work even after these test sockets are released.
+  foreach ($pair in @($blocked, $available)) { $pair.First.Stop(); $pair.Second.Stop() }
+  $script:candidates = @($blocked.Base, $available.Base)
+  $script:requests = 0
+  function Get-Random {
+    param($Minimum, $Maximum)
+    $value = $script:candidates[[Math]::Min($script:requests, 1)]
+    $script:requests += 1
+    return $value
+  }
+  function Get-NetTCPConnection {
+    param($State, $ErrorAction)
+    [pscustomobject]@{ LocalPort = ($blocked.Base + 2) }
+  }
+  ${source.slice(start, end)}
+  $selected = Get-FreePortBase
+  @{ Selected = $selected; Expected = $available.Base; Requests = $script:requests } | ConvertTo-Json -Compress
+} finally {
+  foreach ($pair in @($blocked, $available)) {
+    if ($pair) { $pair.First.Stop(); $pair.Second.Stop() }
+  }
+}
 `], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout.trim(), '42000');
+  const observed = JSON.parse(result.stdout.trim());
+  assert.equal(observed.Selected, observed.Expected);
+  assert.equal(observed.Requests, 2, 'a provider-only listener must reject the first candidate');
+});
+
+test('port allocation bind-checks both ports despite an empty listener snapshot', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const start = source.indexOf('function Get-FreePortBase {');
+  const end = source.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start);
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+${testPortPairHelpers}
+$blocked = $available = $null
+$rebound = @()
+try {
+  $blocked = Open-TestPair
+  $available = Open-TestPair
+  # Leave only the first candidate's second port occupied by a real socket.
+  $blocked.First.Stop()
+  $available.First.Stop()
+  $available.Second.Stop()
+  $script:candidates = @($blocked.Base, $available.Base)
+  $script:requests = 0
+  function Get-Random {
+    param($Minimum, $Maximum)
+    $value = $script:candidates[[Math]::Min($script:requests, 1)]
+    $script:requests += 1
+    return $value
+  }
+  function Get-NetTCPConnection { param($State, $ErrorAction) return @() }
+  ${source.slice(start, end)}
+  $selected = Get-FreePortBase
+  if ($selected -eq $available.Base) {
+    # A rejected partial pair and both accepted probes must be released.
+    foreach ($port in @($blocked.Base, $available.Base, ($available.Base + 2))) {
+      $rebound += Open-TestListener $port
+    }
+  }
+  @{ Selected = $selected; Expected = $available.Base; Requests = $script:requests; Rebound = $rebound.Count } | ConvertTo-Json -Compress
+} finally {
+  foreach ($listener in $rebound) { $listener.Stop() }
+  foreach ($pair in @($blocked, $available)) {
+    if ($pair) { $pair.First.Stop(); $pair.Second.Stop() }
+  }
+}
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const observed = JSON.parse(result.stdout.trim());
+  assert.equal(observed.Selected, observed.Expected, 'an occupied provider port must reject the entire pair');
+  assert.equal(observed.Requests, 2);
+  assert.equal(observed.Rebound, 3, 'both accepted probes and the rejected partial probe must be disposed');
 });

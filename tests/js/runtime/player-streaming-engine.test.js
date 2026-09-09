@@ -2813,6 +2813,11 @@ test('playing replacement prepares a clean head and cuts over without clearing a
     type: 'drop-continuity', generation: firstContinuity.generation,
     streamId: firstContinuity.streamId,
   });
+  assert.deepEqual({ ...harness.portMessages('expect-continuity').at(-1) }, {
+    type: 'expect-continuity',
+    generation: firstContinuity.generation,
+    active: false,
+  }, 'cancelling a queued successor clears its matching-generation EOF expectation');
   assert.equal(harness.portMessages('configure').length, 1);
   acceptMetadata(harness, replacement);
   receivePcmAndAssertEnqueue(harness, {

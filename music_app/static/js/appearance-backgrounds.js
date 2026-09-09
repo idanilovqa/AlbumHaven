@@ -454,7 +454,7 @@
       promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style);
       if (!preserveColorErrors) {
         clearPlayerStyleErrors();
-        delete errors.player_fill; delete errors.player_edge;
+        delete errors.player_background; delete errors.player_fill; delete errors.player_edge;
       }
       else if (style.surface.mode === 'solid') delete errors['player_style_surface.end'];
       error = ''; syncInputs(true); notify();

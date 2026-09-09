@@ -4,7 +4,9 @@
 
 ## Goal
 
-Replace shard-sized focused E2E feedback with an operator-orchestrated three-stage repair ladder:
+Reproduce and verify failures with exact local tests, then push directly to the complete review-first CI pipeline. Hosted focused execution is an exception for failures that are unusually difficult to diagnose locally or depend on CI infrastructure. State the reason before using it, and return to full CI when the focused failure is fixed.
+
+For that exception, replace shard-sized feedback with an operator-orchestrated repair ladder:
 
 1. run only the exact failing or changed case;
 2. run every E2E case carrying a selected functional-area tag, regardless of shard placement;
@@ -32,7 +34,7 @@ Phase 7 cases also use stable FTC IDs in their titles. A selected
 `ci:e2e:phase7-auth` or `ci:e2e:phase7-admin` target may use `exactCases`
 without a functional-area selector: exact stage passes an escaped FTC-ID grep
 argument to that suite, while related stage expands to the complete selected
-Phase 7 suite. This keeps the same exact → related → full ladder for Phase 7
+Phase 7 suite. This supports the exceptional exact → related → full ladder for Phase 7
 without pretending its authentication fixtures belong to functional shards.
 
 ## PR Control Surface
@@ -76,7 +78,9 @@ After a related-stage success, the release operator performs the same head check
 ## Review And Release Invariants
 
 - Full-mode review runs before tests.
-- E2E still runs after review even if review fails, and the final inventory combines review and test findings.
+- Every applicable reviewer must succeed before tests start. A failed, cancelled, missing, or unexpectedly skipped review holds tests.
+- Collect every applicable review result before fixing findings. A validated finding requiring a new commit supersedes that head: preserve the evidence and stop its run before expensive tests start, verifying that its jobs have stopped. A terminal failed review already holds tests.
+- Once reviews pass, let every required test suite finish and collect the complete test failure inventory before fixing it. Verify fixes locally and push a replacement head to the complete review-first pipeline.
 - Diff-only review is permitted only below 250 functional changed lines; 250 or more uses full review.
 - Documentation-only changes skip review.
 - Focused stages skip review and unrelated suites.
@@ -94,7 +98,7 @@ selection, area resolution, multi-shard area selection, invalid and ambiguous
 selectors, stage classification, new-head reset behavior, and gate validation.
 Workflow contract tests prove only selected cases are passed to the owning job,
 unrelated review/foundation/E2E jobs skip in focused mode, and focused CI cannot
-mutate or dispatch the next stage. The Phase 7 release repair proves the ladder
+mutate or dispatch the next stage. The earlier Phase 7 hosted diagnosis exercised the exceptional ladder
 with `FTC-PERMISSIONS-009`: two exact local cases, the same two hosted cases, the
 complete eight-case related Admin suite, then the complete review-first
 pipeline.

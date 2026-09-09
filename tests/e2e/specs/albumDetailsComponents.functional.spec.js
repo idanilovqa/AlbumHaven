@@ -1,4 +1,12 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({ username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle }, use);
+  }, { auto: true }],
+});
 
 const MULTI_DISC_ALBUM = 'Ordinary Numeric Disc Control';
 const PLAYBACK_ALBUM = 'Featured Signal Collection';
@@ -149,6 +157,15 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
   test.setTimeout(240000);
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
+
+  await stepLogger.step('Enable persisted playing-row animation for this owned scenario', async () => {
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    if (await utilityAppearanceActions.utilityAppearanceTab.albumPlayingRowAnimationButton('enabled').getAttribute('aria-pressed') !== 'true') {
+      await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
+      await utilityAppearanceActions.save();
+    }
+    await settingsModalAppBarActions.closeSettings();
+  });
 
   await stepLogger.step('Open a track search match and keep its persistent accent through hover', async () => {
     await searchToolbarActions.search(PLAYBACK_TRACK, { submitWithEnter: true });

@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping
+from os.path import normcase
 from pathlib import Path
 
 from music_app.services.app_logging import log_app_event
@@ -576,7 +577,7 @@ def scan_music_incremental(
         )
     root_definitions = get_library_roots(cfg)
     available_paths = {
-        str(Path(root).resolve(strict=False)).casefold()
+        normcase(str(Path(root).resolve(strict=False)))
         for root in scan_roots
     }
     observed_roots = {
@@ -585,7 +586,7 @@ def scan_music_incremental(
         )
         for root in root_definitions
         if str(root.get("id") or "").strip()
-        and str(Path(str(root.get("path") or "")).resolve(strict=False)).casefold()
+        and normcase(str(Path(str(root.get("path") or "")).resolve(strict=False)))
         in available_paths
     }
     if publication_state is not None:

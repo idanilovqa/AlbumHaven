@@ -11554,6 +11554,39 @@ def test_missing_album_alias_uses_canonical_group_without_changing_credit(
 
 
 @pytest.mark.parametrize("all_artists", [False, True])
+@pytest.mark.parametrize("query", ["Canonical", "Other Alias"])
+def test_missing_album_search_matches_canonical_and_alias_artist_names(
+    monkeypatch, missing_album_browse_repository, all_artists, query,
+):
+    repository = missing_album_browse_repository
+    missing = _missing_browse_row(album_id=2, title="Missing", category="main_library", artist="Alias")
+    excluded = _missing_browse_row(album_id=3, title="Hidden", category="hoard", artist="Alias")
+    unrelated = _missing_browse_row(album_id=4, title="Unrelated", category="main_library", artist="Unrelated")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical", "Other Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias", "Other Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: "Canonical")
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing, excluded, unrelated])
+
+    payload = repository.build_search_payload(query_params={
+        "q": query, "all_artists": "1" if all_artists else "0", "category": ["main_library"],
+    })
+
+    assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 1)]
+    assert payload["album_count"] == 1
+    assert payload["artist_count"] == 1
+    albums = [album for group in payload["artist_groups"] for album in group["albums"]]
+    assert [album["key"] for album in albums] == ["missing-2"]
+    assert albums[0]["album_artist"] == "Alias"
+    assert albums[0]["artists"] == ["Alias"]
+    assert albums[0]["tracks"] == []
+    assert albums[0]["_file_entries"] == []
+    assert "file_private_path" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("all_artists", [False, True])
 @pytest.mark.parametrize("query", ["Needle Album", "Needle Track", "Needle File"])
 def test_general_search_retains_matching_missing_albums(
     monkeypatch, missing_album_browse_repository, all_artists, query,

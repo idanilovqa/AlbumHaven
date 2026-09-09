@@ -472,7 +472,9 @@ test('roster invitation rotation remains owned through reauthentication and rele
   await runtime.row.sendInvite.click();
   assert.equal(runtime.fetches.length, 1);
   assert.equal(runtime.reauth.panel.hidden, false);
+  runtime.reauth.password.value = 'discard this cancelled password';
   await runtime.reauth.cancel.click();
+  assert.equal(runtime.reauth.password.value, '');
   assert.equal(runtime.row.copyInvite.disabled, false);
   await runtime.row.sendInvite.click();
   assert.equal(runtime.fetches.length, 2);
@@ -535,6 +537,7 @@ test('admin roster invitation action performs one 409 reauthentication retry', a
     password: 'administrator private password',
   });
   assert.equal(runtime.reauth.panel.hidden, true);
+  assert.equal(runtime.reauth.password.value, '');
   assert.equal(
     runtime.clipboard.value,
     'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',

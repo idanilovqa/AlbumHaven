@@ -24,7 +24,9 @@ if ($existingTask -and -not $ReplaceExisting) {
 
 function Quote-Argument([string]$Value) {
     if ($Value.Contains('"')) { throw 'Task arguments cannot contain double quotes.' }
-    return '"' + $Value + '"'
+    # Native argv parsing consumes backslashes immediately before a quote.
+    # Preserve every trailing separator by doubling that final run.
+    return '"' + ($Value -replace '(\\+)$', '$1$1') + '"'
 }
 
 $arguments = @(

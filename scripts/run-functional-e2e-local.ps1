@@ -89,7 +89,22 @@ function Get-FreePortBase {
         $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {
             $_.LocalPort -in $ports
         })
-        if ($listeners.Count -eq 0) { return $candidate }
+        if ($listeners.Count -ne 0) { continue }
+        $portProbes = @()
+        try {
+            foreach ($port in $ports) {
+                $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+                $probe.Server.ExclusiveAddressUse = $true
+                $portProbes += $probe
+                $probe.Start()
+            }
+            return $candidate
+        } catch [System.Net.Sockets.SocketException] {
+            # An empty listener snapshot does not guarantee bindable ports.
+            continue
+        } finally {
+            foreach ($probe in $portProbes) { $probe.Stop() }
+        }
     }
     throw 'Unable to allocate an unused local E2E port base.'
 }

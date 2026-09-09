@@ -276,6 +276,29 @@ test('non-album artist scope retains folder matches and canonical album artists'
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
 });
 
+test('non-album artist scope expands only aliases of the displayed family', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Unknown', display_path: 'Rock/Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Family Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Family_Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Unrelated Alias/song.mp3' },
+  ];
+  context.state.view = {
+    selected_artist: 'Canonical', related_artists: ['Family'], non_album_tracks: tracks,
+    artist_family_filters: [
+      { display_name: 'Canonical', variation_names: ['Canonical', 'Alias'] },
+      { display_name: 'Family', variation_names: ['Family', 'Family Alias'] },
+      { display_name: 'Unrelated', variation_names: ['Unrelated', 'Unrelated Alias'] },
+    ],
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 3));
+  context.state.view.selected_artist = 'Another Artist';
+  context.state.view.related_artists = [];
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [],
+    'retained aliases must not authorize tracks after the displayed artist changes');
+});
+
 test('non-album modal uses compact three-column tables in exception order', () => {
   const { context } = loadHelper();
   const markup = context.buildNonAlbumTrackSectionsMarkup([

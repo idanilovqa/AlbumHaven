@@ -145,13 +145,13 @@ html .cover-lookup-drawer {
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
@@ -595,11 +595,15 @@ html .cover-lookup-drawer {
 .appearance-alert-preview__small-expanded { width: auto; max-width: 168px; }
 
 /* Album page choices and preview. */
+.appearance-album-page { container: appearance-album-page / inline-size; }
 .appearance-album-page__workspace {
   display: grid;
   grid-template-columns: minmax(250px, .78fr) minmax(410px, 1.4fr);
   gap: 14px;
   margin-top: 18px;
+}
+@container appearance-album-page (max-width: 673px) {
+  .appearance-album-page__workspace { grid-template-columns: minmax(0, 1fr); }
 }
 .appearance-album-page__controls {
   min-width: 0;

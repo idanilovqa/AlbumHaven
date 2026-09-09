@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const test = require('node:test');
+const vm = require('node:vm');
 const helperPath = path.resolve(__dirname, '../e2e/helpers/appearanceFixture.js');
 const load = () => import(pathToFileURL(helperPath).href);
 const env = { ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_fixture@127.0.0.1/album_haven_ci_fixture' };
@@ -89,6 +90,69 @@ test('appearance fixture retains assertion evidence and skips restoration when a
   }, async () => { throw original; }, {
     async captureSnapshot() { return { async restore() { assert.fail('unsafe restoration'); } }; },
   }), (error) => error instanceof AggregateError && error.errors[0] === original && error.errors[1] === cleanup);
+});
+
+function loadAlbumDetailsSpec(withRestoredAppearanceFixture) {
+  const fixtures = {}, cases = new Map();
+  const register = (title, _options, callback) => cases.set(title, callback);
+  register.setTimeout = () => {};
+  const context = { test: register, base: { extend(values) { Object.assign(fixtures, values); return register; } },
+    expect() {}, PERFORMANCE_AUTH_USERNAME: 'authenticated-fixture', withRestoredAppearanceFixture };
+  const filename = path.resolve(__dirname, '../e2e/specs/albumDetailsComponents.functional.spec.js');
+  const source = fs.readFileSync(filename, 'utf8').replace(/^import .*;\r?\n/gm, '');
+  vm.runInNewContext(source, context, { filename });
+  return { fixtures, cases };
+}
+
+for (const failure of [false, true]) {
+  test(`AlbumDetails owns full appearance restoration after ${failure ? 'failed' : 'successful'} scenario`, async () => {
+    const helper = await load();
+    const calls = [];
+    const initial = { revision: 14, player_recent_sets: [{ kept: true }], album_details_layout: 'stacked_bar', album_playing_row_animation: 'disabled' };
+    let stored = structuredClone(initial);
+    const original = new Error('original layout assertion');
+    const { fixtures } = loadAlbumDetailsSpec((args, use) => helper.withRestoredAppearanceFixture(args, use, {
+      async captureSnapshot(username) {
+        assert.equal(username, 'authenticated-fixture'); calls.push('snapshot');
+        const snapshot = structuredClone(stored);
+        return { async restore() { calls.push('restore'); stored = snapshot; } };
+      },
+    }));
+    assert.equal(fixtures.appearanceBaseline?.[1].auto, true, 'both scenarios need an automatic owned snapshot');
+    const execution = fixtures.appearanceBaseline[0]({
+      context: { async close() { calls.push('context'); } },
+      managedAppLifecycle: { async restart() { calls.push('drained'); } },
+    }, async () => {
+      calls.push('test'); stored = { revision: 25, album_details_layout: 'editorial_canvas', album_playing_row_animation: 'enabled' };
+      if (failure) throw original;
+    });
+    if (failure) await assert.rejects(execution, error => error === original);
+    else await execution;
+    assert.deepEqual(stored, initial);
+    assert.deepEqual(calls, ['snapshot', 'test', 'context', 'drained', 'restore']);
+  });
+}
+
+test('AlbumDetails playback establishes animation through Appearance before asserting motion', async () => {
+  const { cases } = loadAlbumDetailsSpec();
+  const callback = [...cases].find(([title]) => title.startsWith('FTC-ALBUM-DETAILS-020'))[1];
+  const calls = [], reachedScenario = new Error('the original playback scenario begins');
+  await assert.rejects(callback({
+    galleryActions: { async goto() {}, async waitForGalleryReady() {} },
+    settingsModalAppBarActions: { async openSettings() {}, async closeSettings() {} },
+    utilityTabBarActions: { async openTab() {} },
+    utilityAppearanceActions: {
+      async waitForReady() {}, async openSection() {},
+      utilityAppearanceTab: { albumPlayingRowAnimationButton: () => ({ async getAttribute() { return 'false'; } }) },
+      async setAlbumPlayingRowAnimation(enabled) { calls.push(['animation', enabled]); },
+      async save() { calls.push(['save']); },
+    },
+    stepLogger: { async step(name, body) {
+      if (name === 'Enable persisted playing-row animation for this owned scenario') await body();
+      else throw reachedScenario;
+    } },
+  }), error => error === reachedScenario);
+  assert.deepEqual(calls, [['animation', true], ['save']]);
 });
 
 test('appearanceControls owns an automatic complete-state fixture tied to its login identity', () => {

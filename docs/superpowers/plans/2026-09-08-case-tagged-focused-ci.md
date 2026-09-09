@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make exact-case, tagged-related, and full review-first CI stages repeatable and safe for E2E repair pushes.
+**Goal:** Make exceptional hosted exact-case and tagged-related diagnosis safe, while using exact local verification followed directly by complete review-first CI as the normal repair path.
 
 **Architecture:** Parse a bounded hidden PR-body marker into validated exact FTC IDs and product-area tags. Extend functional Playwright discovery and the shard contract so selectors resolve independently of shard placement. The focused gate validates one non-authoritative stage; an authenticated release operator verifies the current head and advances labels through native pull-request events.
 
@@ -10,6 +10,8 @@
 
 ## Global Constraints
 
+- Default to focused local verification followed directly by the complete native pull-request pipeline. Use hosted focused stages only for unusually difficult local reproduction or CI-specific failures, state the reason, and return to full CI once the focused failure is fixed.
+- Collect all applicable reviews first; failed reviews hold tests. After reviews pass, collect every required test result before fixing the test failure inventory.
 - Focused stages are non-authoritative and skip review plus unrelated suites.
 - Exact stage runs only explicitly selected FTC cases.
 - Related stage runs only cases carrying selected native `@area:<name>` Playwright tags.
@@ -91,7 +93,7 @@
 - Consumes: implemented marker, tags, and state transitions.
 - Produces: durable repo-wide instructions for future chats and accurate historical design records.
 
-- [ ] **Step 1: Update rules and docs** to require exact local, exact hosted, related tagged hosted, then full review-first CI.
+- [ ] **Step 1: Update rules and docs** to require exact local verification followed directly by full review-first CI, retaining the authenticated hosted ladder for exceptional diagnosis.
 - [ ] **Step 2: Search for obsolete shard-only focused instructions** and reconcile every active occurrence.
 - [ ] **Step 3: Run focused documentation/workflow contract tests and `git diff --check`; require GREEN.**
 - [ ] **Step 4: Commit app documentation** with `docs: require case-tagged focused CI`.
@@ -110,9 +112,9 @@
 
 - [ ] **Step 1: Run focused local CI-contract tests and confirm all repositories contain only intended committed work.**
 - [ ] **Step 2: Commit remaining app changes and push the branch.**
-- [ ] **Step 3: Set the PR marker and exact-stage label state** for `FTC-UTIL-PROBLEMS-007` plus `problematic-files` and `tag-edit`.
+- [ ] **Step 3: For an explicitly justified hosted diagnosis, set the PR marker and exact-stage label state** for `FTC-UTIL-PROBLEMS-007` plus `problematic-files` and `tag-edit`. Otherwise continue directly to the complete native pull-request pipeline.
 - [ ] **Step 4: Require exact hosted GREEN, bind the marker to that head and clear/reapply the related label, then require tagged-related GREEN; create an empty promotion commit, bind full promotion to its SHA, set full-review state, and push it for the reviewer-compatible synchronize run.**
-- [ ] **Step 5: Let every full review and test job finish; collect the complete combined failure inventory before fixing anything.**
-- [ ] **Step 6: Address every genuine review and test finding, use focused local verification for each fix, and repeat the staged hosted ladder until the authoritative full pipeline is green.**
-- [ ] **Step 7: Close the three remaining Phase 7 checkboxes with factual review/merge/publication evidence, commit, and push internal documentation.**
-- [ ] **Step 8: Merge PR #1, publish `v0.9.43`, synchronize app/internal/test-data local and remote branches, and verify all three worktrees are clean.**
+- [ ] **Step 5: Collect every applicable reviewer result first. If a validated finding requires another commit, preserve its evidence and stop the superseded run before expensive tests start; verify its jobs stopped. Failed reviews hold tests. Once reviews pass, let every required test job finish and collect the complete test failure inventory.**
+- [ ] **Step 6: Fix the complete applicable finding inventory, verify each fix locally, and push directly to a new complete native pull-request pipeline. Repeat until the authoritative full pipeline is green; focused hosted execution remains exceptional.**
+- [ ] **Step 7: After full CI succeeds, merge PR #1, publish `v0.9.43`, and synchronize the app checkout. Verify the existing test-data publication.**
+- [ ] **Step 8: Close the three remaining Phase 7 checkboxes with actual review/merge/publication evidence. Publish the approved internal closeout through the separate scratch index, preserving the owner's internal checkout. Verify remote publication and the exact closeout scope.**

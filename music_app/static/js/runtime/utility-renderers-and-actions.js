@@ -1,6 +1,7 @@
 ﻿function renderProblematicFiles() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  bindProblematicFocusUserInput(els);
 
   const priorListScrollTop = Number(els.list.scrollTop);
   const replaceListContents = (html) => {
@@ -157,6 +158,34 @@
     if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
       scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
     }
+  }
+}
+
+const problematicFocusInputContainers = new WeakSet();
+
+function bindProblematicFocusUserInput(els) {
+  for (const container of [els.list, els.detail]) {
+    if (!container?.addEventListener || problematicFocusInputContainers.has(container)) continue;
+    problematicFocusInputContainers.add(container);
+    const relinquish = () => {
+      if (state.utility.activeTab === 'problematic-files') state.utility.focusedTrackPath = '';
+    };
+    container.addEventListener('wheel', event => {
+      if (!event.ctrlKey && (event.deltaY || event.deltaX)) relinquish();
+    }, { passive: true });
+    container.addEventListener('touchmove', relinquish, { passive: true });
+    container.addEventListener('pointerdown', event => {
+      // Scrollbar/background input belongs to the scroller; an ordinary row
+      // click must retain deferred track navigation until its own action runs.
+      if (event.target === container && event.button === 0) relinquish();
+    });
+    container.addEventListener('keydown', event => {
+      if (event.defaultPrevented || event.altKey || event.metaKey
+        || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"]')) return;
+      if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
+      relinquish();
+    });
   }
 }
 

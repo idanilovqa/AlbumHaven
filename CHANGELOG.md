@@ -47,6 +47,10 @@
   replayed reset link fails, while keeping invalid-link pages and stale-cookie
   cleanup intact.
 - Preserved valid invitation transactions when an invitation link is revisited.
+- Redirected malformed reset links to a clean invalid page and moved synchronous
+  reset-delivery callbacks off the ASGI event loop.
+- Restored the browser history position when unsaved appearance changes cancel
+  Settings navigation.
 - Bounded retained watcher paths and moves within directory groups, and checked
   expanded album tracks for stable writes before parsing or publishing a mutation.
 - Applied gallery categories and search constraints to missing albums, preserved

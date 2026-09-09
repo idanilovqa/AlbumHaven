@@ -343,6 +343,32 @@ def test_invitation_redaction_clears_cached_query_views_on_the_same_request():
     assert request.state.account_invitation_link_token == raw
 
 
+@pytest.mark.parametrize("query, invalid_marker", [
+    ("invalid=1", True),
+    ("invalid=1&token=private-token", False),
+    ("invalid=1&invalid=1", False),
+    ("invalid=0", False),
+    ("purpose=password-reset&token=private-token", False),
+])
+def test_reset_redaction_retains_only_an_exact_invalid_marker(query, invalid_marker):
+    request = Request({
+        "type": "http", "http_version": "1.1", "method": "GET",
+        "scheme": "https", "path": "/reset-password", "raw_path": b"/reset-password",
+        "query_string": query.encode("ascii"),
+        "headers": [(b"host", b"music.test")],
+        "client": ("127.0.0.1", 50000), "server": ("music.test", 443),
+    })
+    assert request.url.query == query
+    assert request.query_params
+
+    _redact_lifecycle_link_query(request)
+
+    assert request.state.password_reset_link_invalid_marker is invalid_marker
+    assert request.scope["query_string"] == b""
+    assert request.url.query == ""
+    assert tuple(request.query_params.multi_items()) == ()
+
+
 def test_status_and_every_nonpublic_path_require_authentication():
     app, resolver = _app(CurrentActor.anonymous())
 

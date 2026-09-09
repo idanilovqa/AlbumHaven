@@ -48,11 +48,38 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   };
   const historyCalls = [];
   const location = new URL(initialPath, 'http://localhost:5000');
+  const historyEntries = [{ url: location.href, state: { galleryMarker: 'initial' } }];
+  let historyIndex = 0;
+  const galleryPops = [];
   const window = {
     document, location, URL, AbortController,
     history: {
-      pushState(state, title, url) { historyCalls.push(['push', String(url)]); location.href = new URL(url, location).href; },
-      replaceState(state, title, url) { historyCalls.push(['replace', String(url)]); location.href = new URL(url, location).href; },
+      get state() { return historyEntries[historyIndex].state; },
+      pushState(state, title, url) {
+        historyCalls.push(['push', String(url)]);
+        location.href = new URL(url, location).href;
+        historyEntries.splice(++historyIndex, Infinity, { url: location.href, state: structuredClone(state) });
+      },
+      replaceState(state, title, url) {
+        historyCalls.push(['replace', String(url)]);
+        location.href = new URL(url, location).href;
+        historyEntries[historyIndex] = { url: location.href, state: structuredClone(state) };
+      },
+      go(delta) {
+        historyCalls.push(['go', delta]);
+        const target = historyIndex + delta;
+        if (target < 0 || target >= historyEntries.length) return;
+        queueMicrotask(() => {
+          historyIndex = target;
+          location.href = historyEntries[target].url;
+          let stopped = false;
+          listeners.get('window:popstate')?.({
+            state: window.history.state,
+            stopImmediatePropagation() { stopped = true; },
+          });
+          if (!stopped) galleryPops.push(location.href);
+        });
+      },
     },
     addEventListener(name, fn) { listeners.set(`window:${name}`, fn); },
     removeEventListener() {}, scrollTo() {},
@@ -80,13 +107,18 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
       };
     }
   }
-  const context = vm.createContext({ window, fetch, DOMParser, URL, AbortController, console, setTimeout, clearTimeout });
+  const context = vm.createContext({ window, fetch, DOMParser, URL, AbortController, console, setTimeout, clearTimeout, buildUrl: (view) => view.url });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/navigation-tree.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context);
   const navigation = window.AlbumHavenSettingsNavigation.create({ document, window, fetch, DOMParser });
+  window.AlbumHavenSettingsNavigation.instance = navigation;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/browser-navigation-helpers.js'), 'utf8'), context);
+  historyCalls.length = 0;
   const respond = (html, url = 'http://localhost:5000/account', status = 200) => responses.push({ ok: status >= 200 && status < 300, status, url, redirected: false, headers: { get: () => 'text/html' }, text: async () => html });
-  return { navigation, respond, responses, requests, historyCalls, nav, outlet, host, shell, users, account, listeners, location, document };
+  return { navigation, respond, responses, requests, historyCalls, historyEntries, galleryPops, window, get historyIndex() { return historyIndex; }, pushLibraryView: context.pushBrowserViewState, nav, outlet, host, shell, users, account, listeners, location, document };
 }
+
+const settleNavigation = () => new Promise(resolve => setImmediate(resolve));
 
 test('content navigation preserves the shared sidebar and updates history only after success', async () => {
   const app = harness();
@@ -180,4 +212,149 @@ test('forward history restoration preserves the original library URL for the log
   assert.equal(app.location.href, 'http://localhost:5000/?artist=Navigation');
   assert.equal(app.host.hidden, true);
   assert.equal(app.shell.hidden, false);
+});
+
+for (const direction of ['back', 'forward']) {
+  test(`cancelled ${direction} from unsaved Appearance restores the library history entry`, async () => {
+    const app = harness({ library: true, initialPath: '/?artist=Initial' });
+    app.respond('Users', 'http://localhost:5000/admin/members');
+    await app.navigation.navigate('/admin/members');
+    await app.navigation.navigate('/');
+    app.pushLibraryView({ url: '/?artist=Current' }, { selected_artist: 'Current', gallery: { retained: true } });
+    if (direction === 'back') {
+      // Scan Page return restores a URL while preserving the existing snapshot.
+      app.window.history.replaceState(app.window.history.state, '', '/?artist=Current&return=scan');
+    }
+    if (direction === 'forward') {
+      app.window.history.go(-3);
+      await settleNavigation();
+    }
+    const originalUrl = app.location.href;
+    const originalIndex = app.historyIndex;
+    const originalState = structuredClone(app.window.history.state);
+    const originalEntries = structuredClone(app.historyEntries);
+    const requestCount = app.requests.length;
+    const galleryPopCount = app.galleryPops.length;
+    let prompts = 0;
+    app.window.AlbumHavenAppearance = { instance: { allowLeave() { prompts++; return false; } } };
+    const delta = direction === 'back' ? -2 : 1;
+
+    app.window.history.go(delta);
+    await settleNavigation();
+
+    assert.equal(app.location.href, originalUrl);
+    assert.equal(app.historyIndex, originalIndex);
+    assert.deepEqual(app.window.history.state, originalState);
+    assert.deepEqual(app.historyEntries, originalEntries);
+    assert.equal(app.host.hidden, true);
+    assert.equal(app.shell.hidden, false);
+    assert.equal(app.requests.length, requestCount);
+    assert.equal(app.galleryPops.length, galleryPopCount);
+    assert.equal(prompts, 1, 'restoring the old entry must not prompt again');
+
+    app.window.AlbumHavenAppearance.instance.allowLeave = () => true;
+    app.respond('Users after discard', 'http://localhost:5000/admin/members');
+    app.window.history.go(delta);
+    await settleNavigation();
+    assert.equal(app.location.pathname, '/admin/members');
+    assert.equal(app.outlet.childNodes[0].textContent, 'Users after discard');
+  });
+}
+
+test('cancelled gallery history navigation preserves the dirty Appearance screen and snapshot', async () => {
+  const app = harness({ library: true, initialPath: '/?artist=Initial' });
+  app.pushLibraryView({ url: '/?artist=Current' }, { selected_artist: 'Current' });
+  let prompts = 0;
+  app.window.AlbumHavenAppearance = { instance: { allowLeave() { prompts++; return false; } } };
+
+  app.window.history.go(-1);
+  await settleNavigation();
+
+  assert.equal(app.location.search, '?artist=Current');
+  assert.equal(app.historyIndex, 1);
+  assert.equal(app.window.history.state.selected_artist, 'Current');
+  assert.equal(app.host.hidden, true);
+  assert.equal(app.galleryPops.length, 0);
+  assert.equal(prompts, 1);
+});
+
+test('cancelled popstate aborts an older Settings fetch before restoring history', async () => {
+  const app = harness({ library: true, initialPath: '/?artist=Initial' });
+  app.respond('Users', 'http://localhost:5000/admin/members');
+  await app.navigation.navigate('/admin/members');
+  await app.navigation.navigate('/');
+  let resolvePending;
+  app.responses.push(() => new Promise(resolve => { resolvePending = resolve; }));
+  const pending = app.navigation.navigate('/account');
+  const signal = app.requests.at(-1).options.signal;
+  app.window.AlbumHavenAppearance = { instance: { allowLeave: () => false } };
+
+  app.window.history.go(-1);
+  await settleNavigation();
+  resolvePending({ ok: true, status: 200, url: 'http://localhost:5000/account', headers: { get: () => 'text/html' }, text: async () => 'Stale account' });
+
+  assert.equal(await pending, false);
+  assert.equal(signal.aborted, true);
+  assert.equal(app.location.search, '?artist=Initial');
+  assert.equal(app.historyIndex, 2);
+  assert.equal(app.host.hidden, true);
+  assert.equal(app.shell.hidden, false);
+  assert.equal(app.outlet.childNodes.length, 0);
+});
+
+test('failed Settings history fetch restores the original entry without overwriting its neighbor', async () => {
+  const app = harness({ library: true, initialPath: '/?artist=Initial' });
+  app.respond('Users', 'http://localhost:5000/admin/members');
+  await app.navigation.navigate('/admin/members');
+  await app.navigation.navigate('/');
+  const originalEntries = structuredClone(app.historyEntries);
+  app.responses.push(() => Promise.reject(new TypeError('Network failed')));
+
+  app.window.history.go(-1);
+  await settleNavigation();
+
+  assert.equal(app.historyIndex, 2);
+  assert.equal(app.location.search, '?artist=Initial');
+  assert.deepEqual(app.historyEntries, originalEntries);
+  assert.equal(app.host.hidden, true);
+  assert.equal(app.galleryPops.length, 0);
+});
+
+test('library history retains its existing fallback when Settings navigation is absent', () => {
+  const app = harness({ library: true, initialPath: '/' });
+  app.window.AlbumHavenSettingsNavigation.instance = null;
+  const snapshot = { selected_artist: 'Standalone' };
+  app.pushLibraryView({ url: '/?artist=Standalone' }, snapshot);
+  assert.equal(app.location.search, '?artist=Standalone');
+  assert.deepEqual(app.window.history.state, snapshot);
+});
+
+test('an untracked pop during rollback releases navigation after restoring the displayed snapshot', async () => {
+  const app = harness({ library: true, initialPath: '/?artist=Initial' });
+  app.respond('Users', 'http://localhost:5000/admin/members');
+  await app.navigation.navigate('/admin/members');
+  await app.navigation.navigate('/');
+  const displayedState = structuredClone(app.window.history.state);
+  const originalGo = app.window.history.go.bind(app.window.history);
+  const pendingRollbacks = [];
+  app.window.history.go = (delta) => {
+    if (delta > 0) pendingRollbacks.push(delta);
+    else originalGo(delta);
+  };
+  app.window.AlbumHavenAppearance = { instance: { allowLeave: () => false } };
+  app.window.history.go(-1);
+  await settleNavigation();
+  assert.deepEqual(pendingRollbacks, [1]);
+
+  app.historyEntries[0].state = { legacy: true };
+  originalGo(-1);
+  await settleNavigation();
+
+  assert.equal(app.location.search, '?artist=Initial');
+  assert.deepEqual(app.window.history.state, displayedState);
+  assert.equal(app.host.hidden, true);
+  app.window.AlbumHavenAppearance.instance.allowLeave = () => true;
+  app.respond('Account after rollback');
+  assert.equal(await app.navigation.navigate('/account'), true);
+  assert.equal(app.outlet.childNodes[0].textContent, 'Account after rollback');
 });

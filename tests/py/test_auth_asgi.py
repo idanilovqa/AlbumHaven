@@ -382,6 +382,77 @@ def test_forgot_password_submission_has_one_generic_response_and_background_deli
     )
 
 
+@pytest.mark.parametrize("returns_awaitable", [False, True])
+def test_public_reset_delivery_callback_allows_event_loop_progress(auth_asgi, returns_awaitable):
+    from threading import Event
+
+    app, _, _ = _app(auth_asgi)
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+    calls = []
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        entered, release, completed = Event(), Event(), Event()
+        heartbeat = asyncio.Event()
+        progress = []
+
+        async def finish_delivery():
+            assert asyncio.get_running_loop() is loop
+            calls.append("awaited")
+
+        def record_progress():
+            progress.append(entered.is_set() and not completed.is_set())
+            release.set()
+            heartbeat.set()
+
+        def callback(received):
+            calls.append(received)
+            entered.set()
+            loop.call_soon_threadsafe(record_progress)
+            try:
+                # Deadlock bound only: correctness depends on event order.
+                release.wait(timeout=1.0)
+            finally:
+                completed.set()
+            return finish_delivery() if returns_awaitable else None
+
+        app.state.password_reset_delivery = callback
+        task = asyncio.create_task(auth_asgi._deliver_password_reset(app, delivery))
+        try:
+            await asyncio.wait_for(heartbeat.wait(), timeout=5.0)
+            await asyncio.wait_for(task, timeout=5.0)
+            assert progress == [True]
+        finally:
+            release.set()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=5.0)
+
+    asyncio.run(exercise())
+    assert calls == ([delivery, "awaited"] if returns_awaitable else [delivery])
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_public_reset_delivery_awaits_async_callbacks_and_contains_failure(auth_asgi, failure):
+    app, _, _ = _app(auth_asgi)
+    calls = []
+    delivery = PasswordResetDelivery(81, 41, "member@example.test", "r" * 43)
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+
+        async def callback(received):
+            assert asyncio.get_running_loop() is loop
+            await asyncio.sleep(0)
+            calls.append(received)
+            if failure:
+                raise RuntimeError("private SMTP failure")
+
+        app.state.password_reset_delivery = callback
+        await auth_asgi._deliver_password_reset(app, delivery)
+
+    asyncio.run(exercise())
+    assert calls == [delivery]
+
+
 def test_public_recovery_padding_uses_one_minimum_duration_for_fast_paths(
     auth_asgi, monkeypatch
 ):
@@ -458,23 +529,75 @@ def test_reset_link_exchanges_to_httponly_clean_url_transaction(auth_asgi):
     assert lifecycle.exchanges[0][0] == CSRF
 
 
-def test_reset_link_rejects_duplicate_or_invalid_query_without_reflecting_token(auth_asgi):
-    app, _, _ = _app(auth_asgi)
-    lifecycle = FakeResetLifecycle()
-    app.state.password_reset_lifecycle_service = lifecycle
+@pytest.mark.parametrize("with_private_boundary", [False, True])
+@pytest.mark.parametrize("valid_transaction", [False, True], ids=["stale", "valid"])
+@pytest.mark.parametrize("query", [
+    "purpose=password-reset&token=" + CSRF + "&token=" + NEXT_CSRF,
+    "purpose=account-invitation&token=" + CSRF,
+    "token=" + CSRF,
+    "purpose=password-reset&token=",
+    "purpose=password-reset&token=" + CSRF + "&unexpected=1",
+    "invalid=1&unexpected=" + CSRF,
+], ids=["duplicate", "wrong-purpose", "missing-purpose", "empty-token", "extra-field", "invalid-with-extra"])
+def test_reset_link_scrubs_invalid_query_without_losing_valid_transaction(
+    auth_asgi, with_private_boundary, valid_transaction, query,
+):
+    validated = []
 
-    status, _, body = _request(
+    class RecordingLifecycle(FakeResetLifecycle):
+        def validate_transaction(self, raw):
+            validated.append(raw)
+            return super().validate_transaction(raw)
+
+    app, _, _ = _app(auth_asgi)
+    lifecycle = RecordingLifecycle()
+    lifecycle.valid = valid_transaction
+    app.state.password_reset_lifecycle_service = lifecycle
+    if with_private_boundary:
+        from music_app.services.private_route_boundary import install_private_route_boundary
+
+        install_private_route_boundary(app)
+    browser_cookie = f"__Host-album_haven_reset={RESET_TRANSACTION}"
+
+    status, headers, body = _request(
         app,
         "GET",
         path="/reset-password",
-        query=(
-            "purpose=password-reset&token=" + CSRF + "&token=" + NEXT_CSRF
-        ),
+        query=query,
+        headers={"cookie": browser_cookie},
     )
 
-    assert status == 400
+    assert status == 303 and body == b""
+    assert dict(headers)["location"] == "/reset-password?invalid=1"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert "no-store" in dict(headers)["cache-control"]
     assert CSRF.encode() not in body and NEXT_CSRF.encode() not in body
     assert lifecycle.exchanges == []
+    assert validated == [RESET_TRANSACTION]
+    if valid_transaction:
+        assert not _set_cookies(headers)
+    else:
+        assert any(
+            value.startswith("__Host-album_haven_reset=") and "Max-Age=0" in value
+            for value in _set_cookies(headers)
+        )
+
+    invalid_status, invalid_headers, invalid_body = _request(
+        app, "GET", path="/reset-password", query="invalid=1",
+        headers={"cookie": browser_cookie} if valid_transaction else {},
+    )
+    assert invalid_status == 400
+    assert invalid_body == b"This password reset link is invalid or expired."
+    assert "location" not in dict(invalid_headers)
+    assert not _set_cookies(invalid_headers)
+    assert validated == [RESET_TRANSACTION]
+    if valid_transaction:
+        clean_status, _, clean_body = _request(
+            app, "GET", path="/reset-password", headers={"cookie": browser_cookie},
+        )
+        assert clean_status == 200
+        csrf = issue_reset_csrf(RESET_TRANSACTION, app.state.auth_policy_config)
+        assert f'value="{csrf}"'.encode() in clean_body
 
 
 def test_expired_reset_link_redirects_to_a_clean_invalid_url(auth_asgi):

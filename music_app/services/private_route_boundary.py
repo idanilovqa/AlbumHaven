@@ -239,6 +239,8 @@ def _redact_lifecycle_link_query(request: Request) -> None:
         return
     query_params = QueryParams(raw_query.decode("latin-1"))
     pairs = list(query_params.multi_items())
+    if prefix == "password_reset_link":
+        request.state.password_reset_link_invalid_marker = pairs == [("invalid", "1")]
     setattr(
         request.state,
         f"{prefix}_query_valid",

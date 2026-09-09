@@ -575,7 +575,7 @@ async def _deliver_password_reset(app, delivery) -> None:
     try:
         callback = getattr(app.state, "password_reset_delivery", None)
         if callable(callback):
-            result = callback(delivery)
+            result = await run_in_threadpool(callback, delivery)
             if isawaitable(result):
                 await result
             return
@@ -613,12 +613,16 @@ async def get_reset_password(request: Request) -> Response:
     stored_valid = getattr(request.state, "password_reset_link_query_valid", None)
     query_pairs = list(request.query_params.multi_items())
     if stored_valid is not None:
+        query_present = True
         supplied_token = stored_token
         supplied_purpose = stored_purpose
         query_valid = stored_valid is True
+        invalid_marker = getattr(request.state, "password_reset_link_invalid_marker", False) is True
     else:
+        query_present = bool(query_pairs)
         supplied_token = request.query_params.get("token")
         supplied_purpose = request.query_params.get("purpose")
+        invalid_marker = query_pairs == [("invalid", "1")]
         query_valid = (
             not query_pairs
             or (
@@ -627,17 +631,17 @@ async def get_reset_password(request: Request) -> Response:
                 and sum(key == "token" for key, _value in query_pairs) == 1
             )
         )
-    if not query_valid:
+    if invalid_marker:
         return _generic_reset_invalid()
-    if supplied_token is not None or supplied_purpose is not None:
-        if supplied_purpose != "password-reset" or not supplied_token:
-            return _generic_reset_invalid()
+    if query_present:
+        issued = None
         try:
-            issued = await run_in_threadpool(
-                service.exchange_reset_token,
-                supplied_token,
-                request_ref=uuid4().hex,
-            )
+            if query_valid and supplied_purpose == "password-reset" and supplied_token:
+                issued = await run_in_threadpool(
+                    service.exchange_reset_token,
+                    supplied_token,
+                    request_ref=uuid4().hex,
+                )
             preserve_transaction = False
             if issued is None:
                 existing_transaction = request.cookies.get(_RESET_TRANSACTION_COOKIE)

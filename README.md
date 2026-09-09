@@ -24,6 +24,9 @@ Current release: `0.9.43`
 - Records album ratings and track preferences.
 - Provides utilities for reviewing library problems and correcting music tags
   and metadata.
+- Supports local accounts, administrator-managed invitations and library access,
+  password recovery, and security audit records.
+- Watches library files for changes and reports changes that need a manual rescan.
 
 ## Main goals
 
@@ -40,7 +43,7 @@ Current release: `0.9.43`
 The detailed roadmap is evolving, but the broad direction is:
 
 1. **Strengthen the foundation:** improve the web experience and search, then
-   add accounts, permissions, multi-library support, and clearer boundaries
+   add multi-library support and clearer boundaries
    between hosted metadata and private media.
 2. **Expand discovery and listening:** add richer album and artist pages,
    discography and release discovery, lists, favorites, listening history,

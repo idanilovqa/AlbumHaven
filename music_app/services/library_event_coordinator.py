@@ -294,13 +294,14 @@ class LibraryEventCoordinator:
                 self._pending_started_at = None
             if timer is not None:
                 timer.cancel()
+            dispositions = self._stable_dispositions(pending)
             for group in sorted(
                 pending,
                 key=lambda item: (item.root_id, str(item.directory).casefold()),
             ):
-                self._emit_group(group)
+                self._emit_group(group, dispositions)
 
-    def _emit_group(self, group: _PendingGroup) -> None:
+    def _emit_group(self, group: _PendingGroup, dispositions: dict[Path, str]) -> None:
         if self._stop_event.is_set():
             return
         ready: set[Path] = set()
@@ -309,7 +310,7 @@ class LibraryEventCoordinator:
         for path in sorted(group.active_paths, key=lambda value: str(value).casefold()):
             if self._stop_event.is_set():
                 return
-            disposition = self._stable_disposition(path, group.root_id)
+            disposition = dispositions[path]
             if disposition == "ready":
                 ready.add(path)
             elif disposition == "deleted":
@@ -322,11 +323,7 @@ class LibraryEventCoordinator:
         ):
             if self._stop_event.is_set():
                 return
-            disposition = self._stable_disposition(
-                move.destination,
-                move.destination_root_id,
-                related_root_ids=(move.source_root_id,),
-            )
+            disposition = dispositions[move.destination]
             if disposition == "ready":
                 ready_moves.append(move)
             elif disposition == "deleted":
@@ -334,7 +331,9 @@ class LibraryEventCoordinator:
                     deleted_subtrees.add(move.source)
                 else:
                     deleted.add(move.source)
-        if not ready and not deleted and not deleted_subtrees and not ready_moves:
+        if self._stop_event.is_set() or (
+            not ready and not deleted and not deleted_subtrees and not ready_moves
+        ):
             return
         self._emit_request(
             TargetedReconciliationRequest(
@@ -346,33 +345,51 @@ class LibraryEventCoordinator:
             )
         )
 
-    def _stable_disposition(
-        self,
-        path: Path,
-        root_id: str,
-        *,
-        related_root_ids: tuple[str, ...] = (),
-    ) -> str:
-        previous: tuple[int, int] | None = None
+    def _stable_dispositions(self, groups: list[_PendingGroup]) -> dict[Path, str]:
+        # One filesystem target can appear in several ancestor groups or moves.
+        # Sample it once per round while retaining every affected root.
+        target_roots: dict[Path, set[str]] = {}
+        for group in groups:
+            for path in group.active_paths:
+                target_roots.setdefault(path, set()).add(group.root_id)
+            for move in group.moves.values():
+                target_roots.setdefault(move.destination, set()).update(
+                    (move.source_root_id, move.destination_root_id)
+                )
+        previous: dict[Path, tuple[int, int] | None] = dict.fromkeys(
+            sorted(target_roots, key=lambda path: str(path).casefold())
+        )
+        dispositions: dict[Path, str] = {}
         for attempt in range(self._max_stable_attempts):
-            if self._stop_event.is_set():
-                return "cancelled"
-            try:
-                current = _stat_signature(self._stat_path(path))
-            except FileNotFoundError:
-                return "deleted"
-            except (OSError, PermissionError):
-                current = None
-            if current is not None and current == previous:
-                return "ready"
-            previous = current
+            for path in tuple(previous):
+                if self._stop_event.is_set():
+                    return {}
+                try:
+                    current = _stat_signature(self._stat_path(path))
+                except FileNotFoundError:
+                    dispositions[path] = "deleted"
+                    del previous[path]
+                    continue
+                except (OSError, PermissionError):
+                    current = None
+                if current is not None and current == previous[path]:
+                    dispositions[path] = "ready"
+                    del previous[path]
+                else:
+                    previous[path] = current
+            if not previous or self._stop_event.is_set():
+                break
             if attempt + 1 < self._max_stable_attempts:
                 self._wait(self._stable_sample_interval)
-        for affected_root_id in dict.fromkeys((root_id, *related_root_ids)):
+        failed_roots = {root_id for path in previous for root_id in target_roots[path]}
+        for affected_root_id in sorted(failed_roots):
+            if self._stop_event.is_set():
+                return {}
             self._emit_problem(
                 CoordinatorProblem("stable_write_unavailable", affected_root_id)
             )
-        return "problem"
+        dispositions.update((path, "problem") for path in previous)
+        return dispositions
 
     def stop(self) -> bool:
         with self._lock:

@@ -53,6 +53,8 @@
   Settings navigation.
 - Bounded retained watcher paths and moves within directory groups, and checked
   expanded album tracks for stable writes before parsing or publishing a mutation.
+- Shared watcher stability sampling intervals across pending files and moves,
+  preventing a delay per file during large batches.
 - Applied gallery categories and search constraints to missing albums, preserved
   whole-album missing-state classification, and corrected sidebar artist counts
   when an artist has both active and missing albums.

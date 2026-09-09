@@ -724,6 +724,125 @@ def test_auto_schedule_coalesces_events_while_one_scheduled_flush_is_running(
         raise worker_errors[0]
 
 
+@pytest.mark.parametrize("group_count", [1, 10])
+def test_flush_samples_all_groups_and_moves_with_one_shared_wait(tmp_path: Path, group_count):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    waits = []
+    samples = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append,
+        stat_path=lambda path: samples.append(path) or (100, 10),
+        wait=waits.append,
+    )
+    targets = set()
+    for index in range(1_000):
+        moving = bool(index % 2)
+        event = _event(
+            LibraryEventKind.MOVED if moving else LibraryEventKind.CREATED,
+            tmp_path, f"Artist/Album-{index % group_count}/{index}.flac",
+            destination=f"Destination/Album-{index % group_count}/{index}.flac" if moving else None,
+        )
+        assert coordinator.accept(event) is True
+        targets.add(event.destination if moving else event.path)
+    coordinator.flush()
+
+    assert len(waits) == 1, "stability waits must be shared across the entire flush"
+    assert waits == [0.1]
+    assert len(samples) == 2 * len(targets)
+    assert set(samples) == targets
+    assert len(emitted) == group_count
+    assert sum(len(request.paths) for request in emitted) == 500
+    assert sum(len(request.moves) for request in emitted) == 500
+
+
+def test_flush_batches_mixed_dispositions_and_deduplicates_failed_destination_health(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    ready = tmp_path / "Ready/01.flac"
+    transient = tmp_path / "Transient/01.flac"
+    missing = tmp_path / "Missing/01.flac"
+    destination = tmp_path / "Destination/Album/01.flac"
+    another_failed = tmp_path / "Destination/Album/02.flac"
+    outcomes = {
+        ready: ((100, 10), (100, 10)),
+        transient: ((100, 10), PermissionError("busy"), (100, 10), (100, 10)),
+        missing: ((100, 10), FileNotFoundError()),
+        destination: (PermissionError("busy"),),
+        another_failed: (PermissionError("busy"),),
+    }
+    samples = []
+    waits = []
+    emitted = []
+    problems = []
+
+    def stat_path(path):
+        samples.append(path)
+        values = outcomes[path]
+        value = values[min(samples.count(path) - 1, len(values) - 1)]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append, emit_problem=problems.append,
+        stat_path=stat_path, wait=waits.append,
+    )
+    for path in (ready, transient, missing):
+        coordinator.accept(LibraryEvent(LibraryEventKind.CREATED, "main-root", path))
+    coordinator.accept(LibraryEvent(
+        LibraryEventKind.DELETED, "destination-root", destination.parent, is_directory=True,
+    ))
+    coordinator.accept(LibraryEvent(
+        LibraryEventKind.CREATED, "destination-root", another_failed,
+    ))
+    for root_id in ("source-a", "source-b"):
+        coordinator.accept(LibraryEvent(
+            LibraryEventKind.MOVED, root_id, tmp_path / root_id / "01.flac",
+            destination=destination, destination_root_id="destination-root",
+        ))
+    coordinator.flush()
+
+    assert waits == [0.1] * 3
+    assert {path: samples.count(path) for path in outcomes} == {
+        ready: 2, transient: 4, missing: 2, destination: 4, another_failed: 4,
+    }
+    assert {path for request in emitted for path in request.paths} == {ready, transient}
+    assert {path for request in emitted for path in request.deleted_paths} == {missing}
+    assert {path for request in emitted for path in request.deleted_subtrees} == {destination.parent}
+    assert not any(request.moves for request in emitted)
+    assert [(problem.code, problem.root_id) for problem in problems] == [
+        ("stable_write_unavailable", root_id)
+        for root_id in ("destination-root", "source-a", "source-b")
+    ]
+
+
+def test_stop_during_shared_sampling_wait_suppresses_health_and_requests(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEventKind
+
+    emitted = []
+    problems = []
+    samples = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append, emit_problem=problems.append,
+        stat_path=lambda path: samples.append(path) or (100, 10),
+        wait=lambda _seconds: coordinator.stop(),
+    )
+    for index in range(2):
+        coordinator.accept(_event(
+            LibraryEventKind.CREATED, tmp_path, f"Artist/Album-{index}/01.flac",
+        ))
+    coordinator.flush()
+
+    assert len(samples) == 2
+    assert emitted == problems == []
+    assert coordinator._pending_entry_count == 0
+
+
 def test_stable_write_retries_transient_sharing_violation(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind

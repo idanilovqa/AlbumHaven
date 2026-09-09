@@ -26,7 +26,7 @@ Current release: `0.9.43`
   and metadata.
 - Supports local accounts, administrator-managed invitations and library access,
   password recovery, and security audit records.
-- Watches library files for changes and reports changes that need a manual rescan.
+- Watches library files on Windows and reports changes that need a manual rescan.
 
 ## Main goals
 
@@ -162,6 +162,10 @@ python app.py
 
 The application listens on the local address configured by the runtime. Album
 Haven does not upload your local music library by default.
+
+This release disables automatic filesystem watching on Linux and logs that mode
+at startup. After the initial import, use **Full Rescan** to update the library
+after adding, editing, moving, or deleting music files.
 
 For HTTPS testing from another device on your LAN, set these values in `.env`
 (replace the example IP with your server's LAN address):

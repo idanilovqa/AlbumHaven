@@ -519,6 +519,143 @@ def test_native_watcher_start_failure_records_health_and_cleans_partial_start(
         assert all(not emitter.is_alive() for emitter in scheduled)
 
 
+def _recording_watchdog_observer_factory(calls):
+    class Observer:
+        emitters = ()
+        ident = None
+
+        def __init__(self):
+            calls.append("construct")
+            self.alive = False
+
+        def schedule(self, _handler, root, *, recursive):
+            calls.append(("schedule", root, recursive))
+
+        def start(self):
+            calls.append("start")
+            self.alive = True
+
+        def is_alive(self):
+            return self.alive
+
+        def stop(self):
+            calls.append("stop")
+            self.alive = False
+
+        def join(self, timeout):
+            calls.append(("join", timeout))
+
+    return Observer
+
+
+@pytest.mark.parametrize("platform", ["linux", "linux2"])
+def test_linux_default_watcher_stays_idle_through_manual_recovery(
+    monkeypatch, tmp_path: Path, caplog, platform: str,
+):
+    import builtins
+    import logging
+    import sys
+
+    import watchdog.observers
+
+    from music_app import _recover_library_watch_after_manual_scan
+    from music_app.services.library_watch import (
+        LibraryEvent, LibraryEventKind, LibraryWatchService, WatchdogLibraryEventSource,
+    )
+
+    root = tmp_path / "private-music-root"
+    root.mkdir()
+    roots = [{"id": "main", "path": str(root)}]
+    calls = []
+    imports = []
+    events = []
+    health = _native_watch_health()
+    source = WatchdogLibraryEventSource(roots)
+    watcher = LibraryWatchService(source, events.append)
+    original_import = builtins.__import__
+
+    def record_import(name, *args, **kwargs):
+        if name == "watchdog" or name.startswith("watchdog."):
+            imports.append(name)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(watchdog.observers, "Observer", _recording_watchdog_observer_factory(calls))
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(builtins, "__import__", record_import)
+    caplog.set_level(logging.INFO)
+    try:
+        assert watcher.start()
+        assert calls == [], "Linux must not construct, schedule or start its native observer"
+        assert imports == [], "Linux opt-out must precede importing the native backend"
+        assert not watcher.is_alive
+        assert source._observer is None
+        assert events == []
+        assert health.root_allows_destructive_reconciliation("main")
+
+        health.record_event(LibraryEvent(LibraryEventKind.OVERFLOW, "main", root, observed_at=1.0))
+        assert not health.root_allows_destructive_reconciliation("main")
+        reconciler_roots = []
+        assert _recover_library_watch_after_manual_scan(
+            health_service=health,
+            targeted_reconciler=SimpleNamespace(replace_roots=reconciler_roots.append),
+            watch_service=watcher,
+            root_definitions=roots,
+            scan_mode="manual_full_rescan",
+            scan_started_at=None,
+            observed_root_ids={"main"},
+        ) == 1
+        assert reconciler_roots == [tuple(roots)]
+        assert health.root_allows_destructive_reconciliation("main")
+
+        assert watcher.replace_roots([{"id": "unavailable", "path": str(root / "absent")}])
+        assert watcher.stop()
+        assert not watcher.stop()
+        assert watcher.start()
+        assert calls == []
+        assert imports == []
+        assert events == [], "intentional Linux opt-out must not invent root-health failures"
+        assert not watcher.is_alive
+        assert "Full Rescan" in caplog.text
+        assert str(root) not in caplog.text
+    finally:
+        watcher.stop()
+        assert not source.is_alive
+
+
+@pytest.mark.parametrize(("platform", "injected"), [("win32", False), ("linux", True)])
+def test_windows_default_and_explicit_linux_watcher_sources_still_start(
+    monkeypatch, tmp_path: Path, platform: str, injected: bool,
+):
+    import sys
+
+    import watchdog.observers
+
+    from music_app.services.library_watch import LibraryWatchService, WatchdogLibraryEventSource
+
+    root = tmp_path / "music"
+    root.mkdir()
+    calls = []
+    events = []
+    observer_factory = _recording_watchdog_observer_factory(calls)
+    monkeypatch.setattr(watchdog.observers, "Observer", observer_factory)
+    monkeypatch.setattr(sys, "platform", platform)
+    source = WatchdogLibraryEventSource(
+        [{"id": "main", "path": str(root)}],
+        observer_factory=observer_factory if injected else None,
+    )
+    watcher = LibraryWatchService(source, events.append)
+    try:
+        assert watcher.start()
+        assert calls == ["construct", ("schedule", str(root.resolve()), True), "start"]
+        assert watcher.is_alive
+        assert events == []
+    finally:
+        watcher.stop()
+        assert not source.is_alive
+    assert calls[-1] == "stop"
+    assert events == []
+
+
 def test_periodic_reconciliation_worker_is_removed():
     from music_app.services import library_reconciliation
 

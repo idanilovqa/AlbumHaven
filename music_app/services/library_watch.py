@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+import logging
 from pathlib import Path
+import sys
 from threading import Event, Lock
 from typing import Protocol
 
@@ -251,6 +253,12 @@ class WatchdogLibraryEventSource:
     def start(self, publish: Callable[[LibraryEvent], None]) -> None:
         if self._observer is not None:
             raise RuntimeError("Library event source is already started")
+        if sys.platform.startswith("linux") and self._observer_factory is None:
+            logging.getLogger(__name__).info(
+                "Automatic library updates are disabled on Linux for this release. "
+                "Run Full Rescan after library changes."
+            )
+            return
         from time import monotonic
         from watchdog.events import FileSystemEventHandler
         from watchdog.observers import Observer

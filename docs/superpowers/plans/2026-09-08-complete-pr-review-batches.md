@@ -31,7 +31,7 @@ existing RSA/AES usage envelope and Node test runner.
   artifacts/logs. Public coverage metadata contains no usage/cost values.
 - Full suites run only in CI. Focused local Node/Python commands are serialized
   through the root's exclusive test slot; no parallel pytest processes.
-- Linux watcher scope is a separate pending decision, not part of this approval.
+- The owner excluded Linux native watching from this release on September 8, 2026. Preserve manual scans; no Linux watcher adapter is part of this release.
 
 ## Interfaces
 
@@ -202,8 +202,9 @@ current-head review and release suites remain the hosted publication gate.
   verify the actual PR manifest with no missing files/sections.
 - [ ] Commit the approved design, implementation and tests through the commit
   handoff; verify a clean index/worktree and current remote head before push.
-- [ ] Resolve the separate Linux native-watch release decision before claiming
-  that repair complete. Preserve the user's existing merge/release authorization.
+- [x] Record the owner's decision to exclude Linux native watching from this
+  release while retaining manual scans. Preserve the user's existing
+  merge/release authorization.
 - [ ] Launch the native PR review-first pipeline. Privately collect per-unit
   usage, collect all reviewer findings, hold tests for repairs, and require every
   complete current-head suite to pass before normal merge and publication.

@@ -115,6 +115,38 @@ test('gallery target classification rejects an attached DOM match without canoni
   );
 });
 
+test('canonical detached album above the viewport is found by reversing at the gallery boundary', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let scrollTop = 720;
+  const movements = [];
+  const target = { count: async () => Number(scrollTop <= 240) };
+  const actions = new GalleryActions({
+    async readAlbumTargetState() {
+      return settledSnapshot({ canonicalMatch: true, attachedMatch: scrollTop <= 240 });
+    },
+    sectionByArtistHeading() {
+      return { getByRole: () => ({ first: () => target }) };
+    },
+    async waitForGalleryScrollMovement(previous, direction) {
+      assert.equal(Math.sign(scrollTop - previous), direction);
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop, maxScrollTop: 720, clientHeight: 320 });
+  actions.scrollGalleryBy = async delta => {
+    movements.push(delta);
+    scrollTop = Math.max(0, Math.min(720, scrollTop + delta));
+  };
+  actions.readAlbumGalleryViewportState = async () => ({
+    attached: scrollTop <= 240, intersects: scrollTop <= 240,
+  });
+
+  await actions.waitForAlbumVisibleUnderHeading('Neal Morse', 'Joseph: Part One - The Dreamer', {
+    expectedQuery: 'Joseph', timeout: 1000, maxAttempts: 4,
+  });
+  assert.deepEqual(movements, [-240, -240]);
+  assert.equal(scrollTop, 240);
+});
+
 test('gallery target classification throws immediately for an idle canonical mismatch with observed state', async () => {
   const { classifyGalleryAlbumTargetState } = await import(galleryActionsUrl);
   const snapshot = settledSnapshot({

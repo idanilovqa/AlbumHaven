@@ -86,7 +86,13 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     }
   }
-  if (persist) persistCompactPlayerMode(window.localStorage, next);
+  if (persist) {
+    try {
+      persistCompactPlayerMode(window.localStorage, next);
+    } catch (_error) {
+      // Browser policy may deny access to the storage object itself.
+    }
+  }
   syncCompactPlayerUi();
   if (transferFocus) {
     const incoming = compact ? els.compact : els.expanded;

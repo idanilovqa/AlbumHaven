@@ -52,6 +52,11 @@ class Connection:
         self.operations.append((normalized, params))
         if "from app.bootstrap_owners" in normalized:
             return Cursor(({"actor_account_id": 7, "library_id": 23},))
+        if "from app.account_sessions" in normalized:
+            now = datetime.now(timezone.utc)
+            return Cursor(({"id": 11, "account_id": 7, "authenticated_at": now,
+                "idle_expires_at": now + timedelta(hours=1),
+                "absolute_expires_at": now + timedelta(hours=2), "revoked_at": None},))
         if "insert into app.accounts" in normalized:
             if self.conflict:
                 error = RuntimeError("duplicate")
@@ -70,6 +75,7 @@ class Connection:
 def _create(repository, *, invitation=None, invitation_expires_at=None, created_at=CREATED_AT):
     return repository.create_account(
         actor_account_id=7,
+        actor_session_id=11,
         library_id=23,
         username_display="Member.One",
         username_normalized="member.one",

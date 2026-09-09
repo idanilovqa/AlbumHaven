@@ -35,15 +35,19 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
   appBarActions,
   galleryActions,
   libraryFilesystemWatcherActions,
+  context,
+  managedAppLifecycle,
   page,
   searchToolbarActions,
   stepLogger,
   testArtifacts,
   trackModalActions,
 }) => {
+  test.skip(process.platform === 'linux', 'Native library watching is deferred on Linux; use manual Full Rescan.');
   test.setTimeout(240000);
   const latencySamples = [];
   let fixture;
+  let originalFailure;
   try {
     await stepLogger.step('Open the production gallery and record the current inventory revision', async () => {
       await galleryActions.goto('/?surface=albums');
@@ -54,7 +58,7 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
 
     await stepLogger.step('Copy a three-album burst into the watched root without starting a scan', async () => {
       const startedAt = Date.now();
-      fixture = await createWatchedAlbumFixture({ artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR });
+      fixture = await createWatchedAlbumFixture({ artist: ARTIST, album: TARGET_ALBUM, year: TARGET_YEAR, context, managedAppLifecycle });
       await fixture.createSiblingAlbum({
         album: EARLIER_ALBUM,
         year: 2001,
@@ -225,8 +229,11 @@ test('FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms mi
       await galleryActions.waitForGalleryReady();
       await expect(galleryActions.galleryPage.albumCard.cardByAlbumName(TARGET_ALBUM)).toHaveCount(0);
     });
+  } catch (error) {
+    originalFailure = error;
   } finally {
-    fixture?.cleanup();
     testArtifacts.queueJsonAttachment('watcher-latency-samples.json', latencySamples);
+    if (fixture) await fixture.cleanup({ context, managedAppLifecycle, originalFailure });
+    else if (originalFailure) throw originalFailure;
   }
 });

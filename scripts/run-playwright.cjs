@@ -1445,6 +1445,18 @@ function writeJsonAtomically(targetPath, value) {
   }
 }
 
+async function cleanupManagedWatcherFixture(childEnv, options = {}) {
+  const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
+  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
+  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
+    '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
+  ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error('Runner-owned watcher inventory cleanup failed; evidence retained.');
+  }
+}
+
 function createManagedIsolatedAppRestartController(options = {}) {
   const {
     childEnv,
@@ -1471,6 +1483,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
+  const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;
   const onCurrentChildChanged = options.onCurrentChildChanged || (() => {});
   const resolvedAppPort = Number(options.port || ports[0] || childEnv.PLAYWRIGHT_PORT || 4173);
   const resolvedProviderPort = Number(
@@ -1574,7 +1587,10 @@ function createManagedIsolatedAppRestartController(options = {}) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
     const operation = request.operation ?? 'restart';
-    if (!['restart', 'report-failure'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (!['restart', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
+      throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
+    }
     return { nonce, operation };
   };
 
@@ -1607,6 +1623,18 @@ function createManagedIsolatedAppRestartController(options = {}) {
           markCurrentChildStopIntentional(phase);
           await stopManagedIsolatedAppFn(childToStop, managedPorts);
           if (currentChild === childToStop) updateCurrentChild(null);
+        }
+
+        if (request.operation === 'watcher-cleanup') {
+          phase = 'fixture-cleanup';
+          try {
+            await cleanupWatchedInventoryFn(childEnv);
+          } catch (error) {
+            error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+            error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+              fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+            throw error;
+          }
         }
 
         phase = 'start-replacement';
@@ -3437,6 +3465,7 @@ module.exports = {
     assertManagedRealDataDatabaseEnv,
     buildIsolatedLibraryCleanupEnv,
     cleanupIsolatedLibraryDatabase,
+    cleanupManagedWatcherFixture,
     DEFAULT_FAKE_E2E_RUNTIME_DATABASE_URL,
     DEFAULT_FAKE_E2E_SETUP_DATABASE_URL,
     DEFAULT_PLAYWRIGHT_PYTHON,

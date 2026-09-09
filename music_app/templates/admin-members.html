@@ -54,7 +54,7 @@
             <span><strong>{{ member.username }}</strong><small>{{ member.contact_email }}</small></span>
           </div>
           <div class="member-access" role="cell" data-label="Role / access">
-            <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | list != listener_defaults | list %} · Customized{% endif %}{% endif %}</strong>
+            <strong>{% if member.is_bootstrap_owner %}Owner{% else %}Listener{% if member.capability_keys | sort != listener_defaults | sort %} · Customized{% endif %}{% endif %}</strong>
             <small>{% if member.is_bootstrap_owner %}Full access{% elif member.membership_role %}{{ member.capability_keys | length }} explicit capabilities{% else %}No current-library access{% endif %}</small>
           </div>
           <div role="cell" data-label="Status"><span class="status-dot {% if member.account_status == 'Disabled' %}is-disabled{% elif member.account_status == 'Pending invitation' %}is-pending{% endif %}"></span>{{ member.account_status }}</div>

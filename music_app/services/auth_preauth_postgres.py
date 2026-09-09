@@ -116,8 +116,20 @@ class PostgresPreAuthCsrfService:
             digest = hash_opaque_token(raw_token)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             return False
-        now = _aware_now(self._clock)
         with self._operation() as connection:
+            locked = _fetchall(
+                connection,
+                """
+                select id from app.auth_preflight_tokens
+                where purpose = %s and token_hash = %s
+                for update
+                """,
+                (purpose, digest),
+            )
+            if not locked:
+                return False
+            _single_returned_id(locked)
+            now = _aware_now(self._clock)
             rows = _fetchall(
                 connection,
                 """

@@ -26,6 +26,7 @@ from music_app.services.library import (
     safe_int,
 )
 from music_app.services.library_inventory_postgres import local_inventory_identity_key
+from music_app.services.library_roots import build_root_provenance_payload, summarize_root_provenance_payloads
 from music_app.services.metadata import normalize_exception_value
 from music_app.services.non_album_view_payloads import infer_blank_album_membership
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
@@ -355,17 +356,42 @@ class PostgresScanCacheAdapter:
                 # A deletion that leaves active members reconciles those members.
                 synchronized_featured_album_keys = sorted(files_by_album)
                 featured_artist_rows = []
+                aggregate_rows = []
                 for album_key, complete_cache in files_by_album.items():
                     complete_albums = self._build_albums(
                         _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
                     )
                     complete_artists, _, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
                     _execute_pipeline_batches(connection, _upsert_local_artist_sql(), complete_artists)
+                    member_names = _deduped_artist_names([
+                        name for album in complete_albums
+                        for name in (getattr(album, "artists", []) or [])
+                    ])
+                    artist_names = {row["artist_key"]: row["name"] for row in complete_artists}
+                    featured_names = _deduped_artist_names([
+                        artist_names[row["artist_key"]]
+                        for row in complete_featured
+                        if row["artist_key"] != owner_keys[album_key]
+                        and row["artist_key"] in artist_names
+                    ])
+                    aggregate_rows.append({
+                        "album_key": album_key,
+                        "metadata": _jsonb({
+                            "artists": member_names,
+                            "featured_artists": featured_names,
+                            "is_compilation": any(bool(getattr(album, "is_compilation", False)) for album in complete_albums),
+                            "root_provenance": summarize_root_provenance_payloads([
+                                build_root_provenance_payload(entry.get("library_root_id"), entry.get("library_root_category"))
+                                for entry in complete_cache.values()
+                            ]),
+                        }),
+                    })
                     for featured_row in complete_featured:
                         featured_row["album_key"] = album_key
                         if featured_row["featured_kind"] == "owner" and owner_keys[album_key]:
                             featured_row["artist_key"] = owner_keys[album_key]
                     featured_artist_rows.extend(complete_featured)
+                _execute_pipeline_batches(connection, _update_targeted_album_aggregate_sql(), aggregate_rows)
                 _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
@@ -5144,6 +5170,20 @@ def _upsert_local_album_sql(
               cover_path = {cover_path_update},
               last_seen_at = now(),
               metadata = {metadata_update};
+    """
+
+
+def _update_targeted_album_aggregate_sql() -> str:
+    return """
+        update library.local_albums as album
+        set metadata = album.metadata || %(metadata)s
+        from library.libraries as owned_library, app.bootstrap_owners as owner
+        where album.library_id = owned_library.id
+          and owned_library.owner_account_id = owner.account_id
+          and owned_library.name = 'Local Library'
+          and owned_library.library_kind = 'local'
+          and owner.owner_key = 'local-bootstrap-owner'
+          and album.album_key = %(album_key)s;
     """
 
 

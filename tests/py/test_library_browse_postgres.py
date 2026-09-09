@@ -11378,6 +11378,38 @@ def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=
     return row
 
 
+@pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
+def test_exact_artist_search_sidebar_includes_other_missing_matches(
+    monkeypatch, missing_album_browse_repository, outside_match,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
+    matching = _missing_browse_row(album_id=2, title="Lost Album", category="main_library", artist="Other Artist")
+    matching[{"album": "album_title", "track": "track_title", "artist": "artist_name"}[outside_match]] = "Broadcast Collaboration"
+    if outside_match == "artist":
+        matching["artist_sort_name"] = "Broadcast Collaboration"
+        matching["album_metadata"].update({
+            "album_artist": "Broadcast Collaboration", "artists": ["Broadcast Collaboration"],
+        })
+    excluded = _missing_browse_row(album_id=3, title="Broadcast Excluded", category="hoard", artist="Excluded Artist")
+    unrelated = _missing_browse_row(album_id=4, title="Unrelated", category="main_library", artist="Unrelated Artist")
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: "Broadcast")
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [matching, excluded, unrelated])
+    monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **_kwargs: {
+        "selected_artist": "Broadcast", "primary_artist_groups": [{"artist": "Broadcast", "albums": [{"key": "active"}]}],
+        "family_artist_groups": [], "search_context": {},
+    })
+
+    payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
+
+    expected_other = "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"
+    assert {row["artist"] for row in payload["artists_sidebar"]} == {"Broadcast", expected_other}
+    assert payload["artist_count"] == 2
+    assert payload["show_all_artists_sidebar_link"] is True
+    assert payload["selected_artist"] == "Broadcast"
+
+
 @pytest.mark.parametrize("category", ["main_library", "hoard", "new_arrivals"])
 def test_selected_artist_missing_albums_respect_category_with_active_albums(
     monkeypatch, missing_album_browse_repository, category,

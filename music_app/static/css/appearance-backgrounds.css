@@ -134,8 +134,10 @@ html .cover-lookup-drawer {
   --ink: var(--appearance-ink); --muted: var(--appearance-muted); --blue: var(--appearance-accent);
 }
 :root[data-appearance-palette] :is(.account-menu-item, .account-menu-icon, .utility-modal-title, .utility-tab, .utility-list-item, .track-modal-title, .gallery-options-menu, .status-context-menu, .album-card-context-menu, .recent-search-popover) { color: var(--appearance-ink); }
-:root[data-appearance-palette] :is(.account-menu-item:hover, .utility-list-item:hover, .app-bar .button:hover:not(:disabled), .app-bar .icon-button:hover:not(:disabled)) { background: var(--appearance-item-hover, var(--appearance-hover)); color: var(--appearance-ink); }
-:root[data-appearance-palette] :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); color: var(--appearance-ink); }
+:root[data-appearance-palette] :is(.account-menu-item:hover, .utility-list-item:hover, .app-bar .button:hover:not(:disabled), .app-bar .icon-button:hover:not(:disabled)) { color: var(--appearance-ink); }
+:root:is([data-appearance-palette], [data-appearance-item-hover]) :is(.account-menu-item, .utility-list-item):hover:where(:not(:disabled):not([aria-disabled='true'])) { background: var(--appearance-item-hover, var(--appearance-hover)); }
+:root[data-appearance-palette] :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { color: var(--appearance-ink); }
+:root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
 .shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
 .shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
@@ -143,18 +145,18 @@ html .cover-lookup-drawer {
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
 }
-:root[data-appearance-palette] :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root[data-appearance-palette] :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
 :root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 2px; }
-:root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
 :root :is(button, input, select, [role='button'], [data-actionable]):not(.global-player *):focus-visible {
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
   outline-offset: 2px;
@@ -180,13 +182,13 @@ html .cover-lookup-drawer {
   border-color: var(--appearance-line);
   color: var(--appearance-ink);
 }
+:root:is([data-appearance-palette], [data-appearance-item-hover]) .related-chip:hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
 :root[data-appearance-palette] .related-chip:hover {
-  background: var(--appearance-item-hover, var(--appearance-hover));
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
 }
+:root:is([data-appearance-palette], [data-appearance-item-selected]) .related-chip.active { background: var(--appearance-item-selected, var(--appearance-hover)); }
 :root[data-appearance-palette] .related-chip.active {
-  background: var(--appearance-item-selected, var(--appearance-hover));
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-accent) 30%, transparent);

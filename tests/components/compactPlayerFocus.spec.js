@@ -41,6 +41,30 @@ test('keyboard mode changes transfer focus to the active player controls', async
   await expect(collapse).toBeFocused();
 });
 
+test('denied storage access still completes keyboard mode changes and UI synchronization', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.evaluate(() => {
+    window.modeSyncCount = 0;
+    syncCompactPlayerUi = () => { window.modeSyncCount += 1; };
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() { throw new DOMException('Storage denied', 'SecurityError'); },
+    });
+  });
+  const collapse = page.getByRole('button', { name: 'Collapse', exact: true });
+  const expand = page.getByRole('button', { name: 'Expand', exact: true });
+  await collapse.focus();
+  await collapse.press('Enter');
+  await expect(expand).toBeFocused();
+  await expect(page.locator('.player-shell')).toHaveAttribute('aria-hidden', 'true');
+  await expand.press('Enter');
+  await expect(collapse).toBeFocused();
+  await expect(page.locator('.compact-player-shell')).toHaveAttribute('aria-hidden', 'true');
+  expect(await page.evaluate(() => window.modeSyncCount)).toBe(2);
+  expect(errors).toEqual([]);
+});
+
 test('responsive expansion moves focus to playback when Collapse is hidden', async ({ page }) => {
   await page.getByRole('button', { name: 'Collapse', exact: true }).click();
   await page.getByRole('button', { name: 'Expand', exact: true }).focus();

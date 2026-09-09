@@ -730,9 +730,15 @@ def test_scan_records_only_successfully_observed_root_ids(monkeypatch, tmp_path:
     assert publication_state["observed_library_root_ids"] == {"available-root"}
 
 
+@pytest.mark.parametrize("failure_action", [
+    "Library directory read failed",
+    "Library directory entry inspection failed",
+    "Library candidate file stat failed",
+])
 def test_scan_does_not_publish_missing_inventory_for_root_with_traversal_error(
     monkeypatch,
     tmp_path: Path,
+    failure_action,
 ):
     from music_app.services import state
 
@@ -752,7 +758,7 @@ def test_scan_does_not_publish_missing_inventory_for_root_with_traversal_error(
 
     def fake_scan(_library_state, **kwargs):
         kwargs["record_file_error"](
-            "Library directory read failed",
+            failure_action,
             path=unreadable / "restricted-child",
             error=PermissionError("access denied"),
         )

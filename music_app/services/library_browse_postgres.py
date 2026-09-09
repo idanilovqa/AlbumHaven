@@ -1160,6 +1160,15 @@ class PostgresLibraryBrowseRepository:
                     canonical_search_rows,
                     query=query,
                 )
+                _merge_missing_albums_into_artist_groups(
+                    sidebar_artist_groups,
+                    _missing_album_projection_payloads(
+                        self._load_missing_album_rows(connection=connection),
+                        view_state=view_state,
+                        query=query,
+                    ),
+                    alias_to_canonical=alias_to_canonical,
+                )
                 if len(exact_artist_scope) == 1:
                     exact_artist_key = local_inventory_identity_key(exact_artist_match)
                     selected_artist_preview_rows = [

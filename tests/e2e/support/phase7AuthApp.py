@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 from typing import Any, Callable
+from time import monotonic
 
 from isolatedLibraryApp import configure_isolated_environment
 from isolatedPostgres import (
@@ -29,6 +30,7 @@ from phase7PlaybackFixture import (
 
 
 OWNER_PASSWORD = "Phase Seven Owner Passphrase 2026!"
+CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS = 10
 
 
 class CaptureState:
@@ -109,7 +111,50 @@ class _SMTPHandler(socketserver.StreamRequestHandler):
         self.wfile.flush()
 
 
-class _SMTPServer(socketserver.ThreadingTCPServer):
+class _CaptureRequestDrain:
+    """Count accepted work before scheduling, including daemon request threads."""
+
+    def __init__(self, *args, **kwargs):
+        self._requests = threading.Condition()
+        self._pending_requests = 0
+        self._closing = False
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        with self._requests:
+            admitted = not self._closing
+            if admitted:
+                self._pending_requests += 1
+        if not admitted:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._finish_request()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._finish_request()
+
+    def _finish_request(self):
+        with self._requests:
+            self._pending_requests -= 1
+            self._requests.notify_all()
+
+    def begin_shutdown(self):
+        with self._requests:
+            self._closing = True
+
+    def drain_requests(self, timeout):
+        with self._requests:
+            return self._requests.wait_for(lambda: self._pending_requests == 0, timeout=max(0, timeout))
+
+
+class _SMTPServer(_CaptureRequestDrain, socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
@@ -175,7 +220,7 @@ class _ControlHandler(BaseHTTPRequestHandler):
         return
 
 
-class _ControlServer(ThreadingHTTPServer):
+class _ControlServer(_CaptureRequestDrain, ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address: tuple[str, int], state: CaptureState):
@@ -492,12 +537,18 @@ def main() -> None:
         raise
     finally:
         application_shutdown_proven = True
+        capture_cleanup_failures: list[Exception] = []
+        capture_deadline = monotonic() + CAPTURE_HANDLER_DRAIN_TIMEOUT_SECONDS
+        for server in created_servers:
+            try:
+                server.begin_shutdown()
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
         for server, thread in reversed(application_servers):
             server.should_exit = True
             thread.join(timeout=10)
             if thread.is_alive():
                 application_shutdown_proven = False
-        capture_cleanup_failures: list[Exception] = []
         for server in reversed(created_servers):
             if server in started_servers:
                 try:
@@ -506,6 +557,12 @@ def main() -> None:
                     capture_cleanup_failures.append(exc)
             try:
                 server.server_close()
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
+        for server in created_servers:
+            try:
+                if not server.drain_requests(capture_deadline - monotonic()):
+                    raise TimeoutError("Capture request handlers did not stop within the shutdown budget.")
             except Exception as exc:
                 capture_cleanup_failures.append(exc)
         if capture_cleanup_failures:

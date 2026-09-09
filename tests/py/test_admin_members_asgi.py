@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 import json
@@ -216,6 +217,30 @@ async def _get_async(app, path, session):
 def _get(app, path):
     session = issue_opaque_token(random_bytes=lambda count: bytes(range(count))).raw
     return asyncio.run(_get_async(app, path, session))
+
+
+@pytest.mark.parametrize("path", ["/admin/members", "/admin/accounts/41"])
+@pytest.mark.parametrize("change", ["same", "removed", "added"])
+def test_listener_customization_badge_compares_capabilities_without_order(monkeypatch, path, change):
+    from music_app.routes import admin_asgi
+
+    defaults = tuple(sorted(admin_asgi._LISTENER_DEFAULTS))
+    # Iteration order is not part of a capability set's meaning.
+    monkeypatch.setattr(admin_asgi, "_LISTENER_DEFAULTS", tuple(reversed(defaults)))
+    capabilities = defaults
+    if change == "removed":
+        capabilities = defaults[:-1]
+    elif change == "added":
+        capabilities = defaults + ("library.inventory.manage",)
+    app, service = _app()
+    roster = service.load_roster()
+    member = replace(roster.members[1], capability_keys=capabilities)
+    service.load_roster = lambda **_kwargs: replace(roster, members=(member,))
+
+    status, _headers, body = _get(app, path)
+
+    assert status == 200
+    assert ("Customized" in body) is (change != "same")
 
 
 async def _json_request_async(app, method, path, session, payload):

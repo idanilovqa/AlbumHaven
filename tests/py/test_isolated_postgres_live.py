@@ -5324,16 +5324,16 @@ def test_live_removed_member_retains_account_access_and_scoped_admin_recovery(mo
                 """,
                 (unrelated_id, library_id + 100_000, now),
             )
-        target = PostgresAdminAccountRepository(config).create_account(
-            actor_account_id=owner_id, library_id=library_id,
+        sessions = PostgresAuthSessionService(config, clock=lambda: now)
+        actor_session = sessions.issue_session(owner_id)
+        target = PostgresAdminAccountRepository(config, clock=lambda: now).create_account(
+            actor_account_id=owner_id, actor_session_id=actor_session.session_id, library_id=library_id,
             username_display="Restorable", username_normalized="restorable",
             contact_email="restorable@example.test",
             contact_email_normalized="restorable@example.test",
             capability_keys=("library.browse.read",), invitation=None,
             invitation_expires_at=None, created_at=now, request_ref="member-created",
         )
-        sessions = PostgresAuthSessionService(config, clock=lambda: now)
-        actor_session = sessions.issue_session(owner_id)
         session = sessions.issue_session(target.account_id)
         resolver = PostgresCurrentActorResolver(config, session_service=sessions)
         members = PostgresAdminMembersService(config, clock=lambda: now)

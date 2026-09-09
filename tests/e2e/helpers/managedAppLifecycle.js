@@ -142,6 +142,7 @@ export function createManagedAppLifecycle(options = {}) {
   const requestPath = path.join(controlDirectory, REQUEST_FILE);
   const ackPath = path.join(controlDirectory, ACK_FILE);
   let activeRestart = null;
+  let activeOperation = null;
   let activeFailureReport = null;
   let failureAcknowledgment = null;
 
@@ -153,7 +154,7 @@ export function createManagedAppLifecycle(options = {}) {
     }
 
     removeFileIfPresent(ackPath);
-    writeJsonAtomically(requestPath, { nonce, ...(operation === 'report-failure' ? { operation } : {}) });
+    writeJsonAtomically(requestPath, { nonce, ...(operation !== 'restart' ? { operation } : {}) });
     const deadline = now() + timeoutMs;
 
     while (now() <= deadline) {
@@ -181,6 +182,20 @@ export function createManagedAppLifecycle(options = {}) {
     throw new Error(`Timed out waiting for managed app restart ${nonce}.`);
   }
 
+  function scheduleRestart(operation) {
+    if (activeRestart && activeOperation === operation) return activeRestart;
+    const previous = activeRestart;
+    const pending = (async () => {
+      if (previous) await previous;
+      return performRestart(operation);
+    })().finally(() => {
+      if (activeRestart === pending) { activeRestart = null; activeOperation = null; }
+    });
+    activeRestart = pending;
+    activeOperation = operation;
+    return pending;
+  }
+
   return {
     reportFailure() {
       if (!activeFailureReport) {
@@ -201,12 +216,10 @@ export function createManagedAppLifecycle(options = {}) {
       return activeFailureReport;
     },
     restart() {
-      if (!activeRestart) {
-        activeRestart = performRestart().finally(() => {
-          activeRestart = null;
-        });
-      }
-      return activeRestart;
+      return scheduleRestart('restart');
+    },
+    cleanupWatcherFixture() {
+      return scheduleRestart('watcher-cleanup');
     },
   };
 }

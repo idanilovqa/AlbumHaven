@@ -72,6 +72,9 @@ test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without c
     expect(summary.title).toContain(ALBUM);
     expect(`${summary.title} ${summary.subtitle}`).toContain(DISPLAY_ARTIST);
     expect(`${summary.title} ${summary.subtitle}`).toContain(YEAR);
+    const identitySegments = [summary.title, summary.subtitle]
+      .flatMap(text => text.split('•')).map(text => text.trim());
+    expect(identitySegments).toContain(DISPLAY_ARTIST);
     await trackModalActions.close();
   });
 });

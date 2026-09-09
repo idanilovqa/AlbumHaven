@@ -82,6 +82,7 @@ class AdminAccountCreationService:
         now = self._clock().astimezone(timezone.utc)
         result = self._repository.create_account(
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             library_id=library_id,
             username_display=username_display,
             username_normalized=username_normalized,
@@ -108,6 +109,9 @@ def _authorized_library(actor: object) -> int:
         or not actor.is_authenticated
         or not actor.is_bootstrap_owner
         or actor.account_id is None
+        or isinstance(actor.session_id, bool)
+        or not isinstance(actor.session_id, int)
+        or actor.session_id < 1
         or actor.current_library_id is None
         or not any(
             item.library_id == actor.current_library_id

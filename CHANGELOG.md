@@ -2,6 +2,20 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Revalidated the administrator's live session during account creation, checked
+  pre-authentication token expiry after row locks, and rejected oversized body
+  chunks before copying them into the JSON buffer.
+- Preserved later navigation and unrelated album dialogs when missing-album
+  removal completes, recovered virtualized albums above the viewport, and kept
+  player mode changes working when browser storage access is denied.
+- Compared listener capabilities independently of ordering, applied independent
+  interaction colors without a palette, and kept invalid waveform drafts visible
+  through validation guidance when switching seekbar modes.
+- Drained fixture control requests before database cleanup and retained the
+  unsaved-appearance confirmation when closing Utilities with its close button.
+- Retained complete album credits and root provenance across targeted scans,
+  included matching missing albums in exact-artist search, and treated failed
+  file-stat observations as incomplete scans instead of missing-file evidence.
 - Retained watcher restart intent after failed root replacement, preserved
   directory identity during reconciliation, and refreshed old album credits
   when retagged tracks move to another album.

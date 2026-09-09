@@ -171,3 +171,115 @@ test('unmount restores the shared footer theme before another editor takes owner
   expect(result.hidden).toBe(true);
   expect(result.content).toBe('');
 });
+for (const palette of [null, 'steelblue']) {
+  test(`saved independent interactions reach live consumers with palette ${palette}`, async ({ page }) => {
+    await mount(page, 'mountSelectionAccent', { saved: { palette_id: palette } });
+    for (const file of ['runtime/base-layout.css', 'runtime/utilities.css', 'runtime/account-menu.css', 'runtime/cover-lookup-drawer-and-related.css', 'button-component.css', 'appearance-backgrounds.css']) {
+      await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
+    }
+    await page.evaluate(() => {
+      const host = document.createElement('section'); host.id = 'live-consumers';
+      host.innerHTML = '<button class="utility-list-item" id="utility-hover">List row</button><button class="utility-list-item is-active" id="utility-selected">Selected row</button><a class="account-menu-item" href="#" id="menu-link">Menu link</a><button class="account-menu-item" id="menu-button">Menu button</button><a class="related-chip" href="#" id="related-hover">Related artist</a><a class="related-chip active" href="#" id="related-selected">Selected related artist</a><button class="related-toggle" id="related-toggle">Related artists</button><button class="button" id="legacy-action">Legacy action</button><button class="button ui-button" id="shared-action">Shared action</button><button class="button ui-button ui-button--quiet" id="quiet-action">Cancel</button><input type="checkbox" id="native-check"><input type="radio" id="native-radio">';
+      document.body.prepend(host);
+    });
+    const hoverColors = [
+      ['utility-hover', 'rgb(255, 17, 34)'], ['menu-link', 'rgb(255, 17, 34)'],
+      ['menu-button', 'rgb(255, 17, 34)'], ['related-hover', 'rgb(255, 17, 34)'],
+      ['related-toggle', 'rgb(51, 68, 255)'], ['legacy-action', 'rgb(51, 68, 255)'],
+      ['shared-action', 'rgb(51, 68, 255)'],
+    ];
+    for (const [id, color] of hoverColors) {
+      await page.locator('#' + id).hover();
+      await expect.soft(page.locator('#' + id), id).toHaveCSS('background-color', color, { timeout: 800 });
+    }
+    for (const id of ['utility-selected', 'related-selected']) {
+      await expect.soft(page.locator('#' + id), id).toHaveCSS('background-color', 'rgb(34, 255, 51)', { timeout: 800 });
+      await page.locator('#' + id).hover();
+      await expect.soft(page.locator('#' + id), id + ' while hovered').toHaveCSS('background-color', 'rgb(34, 255, 51)', { timeout: 800 });
+    }
+    for (const id of ['legacy-action', 'shared-action', 'native-check', 'native-radio']) {
+      await page.locator('#' + id).hover();
+      await page.mouse.down();
+      try { await expect.soft(page.locator('#' + id), id).toHaveCSS(id.startsWith('native-') ? 'accent-color' : 'background-color', 'rgb(255, 85, 170)', { timeout: 800 }); }
+      finally { await page.mouse.up(); }
+    }
+    await page.locator('#quiet-action').hover();
+    await expect(page.locator('#quiet-action')).not.toHaveCSS('background-color', 'rgb(51, 68, 255)');
+    await page.evaluate(() => {
+      const api = window.AlbumHavenAppearance;
+      const saved = api.instance.controller.getState().saved;
+      api.applyTheme({ ...saved, palette_id: null, interaction_overrides: { ...saved.interaction_overrides, item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null } }, document.documentElement);
+    });
+    await page.locator('#utility-hover').hover();
+    await expect(page.locator('#utility-hover')).toHaveCSS('background-color', 'rgba(96, 165, 250, 0.1)');
+    await expect(page.locator('#utility-selected')).toHaveCSS('background-color', 'rgba(96, 165, 250, 0.1)');
+    await page.locator('#menu-link').hover();
+    await expect(page.locator('#menu-link')).toHaveCSS('background-color', 'rgb(23, 45, 67)');
+    await page.locator('#legacy-action').hover();
+    await expect(page.locator('#legacy-action')).not.toHaveCSS('background-color', 'rgb(51, 68, 255)');
+  });
+}
+
+for (const field of ['fill', 'edge', 'handles.color']) {
+  test(`Default seekbar exposes retained ${field} validation and a correction route`, async ({ page }) => {
+    await mount(page, 'mountSeekbar');
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/bootstrap-utility-event-handlers.js') });
+    await page.evaluate(() => {
+      window.state = { utility: {}, coverLookup: {}, player: { appearance: { seekbarMode: 'waveform' } } };
+      window.normalizePlayerAppearance = value => value;
+      window.persistPlayerAppearance = () => {};
+      window.updateWaveformAppearance = () => {};
+      window.renderUtilityModalContent = () => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => state.player.appearance.seekbarMode });
+      document.addEventListener('click', event => {
+        if (event.target.closest('[data-appearance-seekbar-mode]')) void handleUtilityBootstrapClick(event);
+      });
+    });
+    if (field === 'handles.color') await page.locator('[data-player-tab-group="waveform"][data-player-tab="handles"]').click();
+    const selector = field === 'handles.color' ? '[data-player-style-hex="handles.color"]' : `[data-player-hex="${field}"]`;
+    await page.locator(selector).fill('#BADHEX');
+    await page.locator('[data-appearance-seekbar-mode="default"]').check();
+    await expect(page.locator(selector)).toHaveCount(0);
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
+    const explanation = page.locator('[data-background-other-errors]');
+    await expect(explanation).toBeVisible();
+    await expect(explanation).toContainText(/Waveform seekbar/);
+    await page.locator('[data-appearance-seekbar-mode="waveform"]').check();
+    if (field === 'handles.color') await page.locator('[data-player-tab-group="waveform"][data-player-tab="handles"]').click();
+    await expect(page.locator(selector)).toHaveValue('#BADHEX');
+    await expect(page.locator(selector)).toHaveAttribute('aria-invalid', 'true');
+    await page.locator(selector).fill('#345678');
+    await expect(page.locator('[data-background-save]')).toBeEnabled();
+    await page.locator('[data-background-cancel]').click();
+    await expect(page.locator('[data-background-save]')).toBeDisabled();
+  });
+}
+
+test('actual Utilities close-button MouseEvent keeps the dirty editor until discard is accepted', async ({ page }) => {
+  await mount(page, 'mountSeekbar');
+  await page.evaluate(() => {
+    window.state = { utility: {}, ui: {} };
+    const overlay = document.createElement('section'); overlay.id = 'utility-modal';
+    const close = document.createElement('button'); close.textContent = 'Close Utilities'; close.className = 'button ui-button'; close.setAttribute('data-close-utility-modal', '1');
+    document.body.append(overlay); overlay.append(close, document.getElementById('editor'));
+    window.getUtilityModalElements = () => ({ overlay, close });
+    window.bindOverlayPointerOrigin = () => {};
+    window.overlayClickStartedOnOverlay = (_overlay, event) => event.target === overlay;
+    window.promptCount = 0;
+    window.showAppConfirmDialog = () => { window.promptCount += 1; return new Promise(resolve => { window.resolveAppearanceLeave = resolve; }); };
+  });
+  for (const file of ['utility-loaders-and-cover-lookup.js', 'track-modal-and-gallery.js', 'appearance-backgrounds-bridge.js']) {
+    await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime', file) });
+  }
+  await page.evaluate(() => { resumeDeferredUtilityViewRequest = () => {}; attachUtilityModalEvents(); });
+  await page.locator('[data-player-hex="fill"]').fill('#BADHEX');
+  await page.getByRole('button', { name: 'Close Utilities', exact: true }).click();
+  await expect(page.locator('#utility-modal')).toBeVisible();
+  expect(await page.evaluate(() => window.promptCount)).toBe(1);
+  await page.evaluate(() => window.resolveAppearanceLeave(false));
+  await expect(page.locator('[data-player-hex="fill"]')).toHaveValue('#BADHEX');
+  await page.getByRole('button', { name: 'Close Utilities', exact: true }).click();
+  expect(await page.evaluate(() => window.promptCount)).toBe(2);
+  await page.evaluate(() => window.resolveAppearanceLeave(true));
+  await expect(page.locator('#utility-modal')).toBeHidden();
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
+});

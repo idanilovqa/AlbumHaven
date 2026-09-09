@@ -2998,6 +2998,72 @@ test(`confirmed removal fences old view responses and restarts the latest ${queu
 });
 }
 
+for (const queued of [false, true]) {
+  test(`removal conflict preserves the latest ${queued ? 'queued' : 'active'} navigation`, async () => {
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    let resolveRemoval;
+    const refreshes = [];
+    let aborts = 0;
+    const context = loadHelper([album], {
+      state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }] },
+        ui: { viewStateRevision: 4, activeViewRequestId: 8, activeViewRequestUrl: '/view-data?artist=Later',
+          activeViewRequestPush: true, activeViewRequestController: { abort() { aborts += 1; } } }, busy: true },
+      showAppConfirmDialog: async () => true,
+      fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+      buildUrl: view => `/?artist=${view.selected_artist}`,
+      loadProblematicFiles: async () => {}, showToast() {},
+    });
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-refresh-and-status.js'), 'utf8'), context);
+    context.fetchAndRender = async (url, push, options) => {
+      assert.equal(context.state.view.artist_groups[0].albums[0], album, 'conflict must retain the card');
+      refreshes.push({ url, push, options });
+      context.state.view.selected_artist = 'Later';
+    };
+    const removing = context.confirmMissingAlbumRemoval(album);
+    await new Promise(resolve => setImmediate(resolve));
+    if (queued) context.state.ui.pendingViewRequest = { url: '/?artist=Latest', push: true, options: { preserveScroll: false } };
+    resolveRemoval({ ok: false, status: 409, json: async () => ({}) });
+    assert.equal(await removing, false);
+    assert.equal(refreshes.length, 1);
+    assert.equal(refreshes[0].url, queued ? '/?artist=Latest' : '/view-data?artist=Later');
+    assert.equal(refreshes[0].push, true);
+    assert.equal(refreshes[0].options.preserveScroll, !queued);
+    assert.equal(refreshes[0].options.restartIfSameUrl, true);
+    assert.equal(context.requestOwnsCurrentViewState(8, 4), false);
+    assert.equal(aborts, 1);
+  });
+}
+
+for (const destination of ['original', 'other', 'closed']) {
+  test(`successful delayed removal respects ${destination} modal ownership`, async () => {
+    const album = { key: 'missing', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const other = { key: 'other' };
+    let current = album;
+    let resolveRemoval;
+    let closed = 0;
+    const overlay = { hidden: false };
+    const context = loadHelper([album], {
+      showAppConfirmDialog: async () => true,
+      fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+      getCurrentTrackModalAlbum: () => current,
+      getTrackModalElements: () => ({ overlay }),
+      closeTrackModal() { closed += 1; current = null; overlay.hidden = true; },
+      applyMissingAlbumRemovalToView() {}, loadProblematicFiles: async () => {}, showToast() {},
+    });
+    const removing = context.confirmMissingAlbumRemoval(album);
+    await new Promise(resolve => setImmediate(resolve));
+    if (destination === 'other') current = other;
+    if (destination === 'closed') { current = null; overlay.hidden = true; }
+    resolveRemoval({ ok: true, status: 200, json: async () => ({}) });
+    assert.equal(await removing, true);
+    assert.equal(closed, destination === 'original' ? 1 : 0);
+    if (destination === 'other') {
+      assert.equal(current, other);
+      assert.equal(overlay.hidden, false);
+    }
+  });
+}
+
 test('missing album conflict keeps the card and refreshes both server-owned surfaces', async () => {
   const album = {
     key: 'transatlantic::smpte - the roine stolt mixes',
@@ -3115,6 +3181,8 @@ test('successful missing album confirmation closes details and refreshes Problem
   };
   const calls = { applied: [], closed: 0, problematicRefreshes: [] };
   const context = loadHelper([album], {
+    getCurrentTrackModalAlbum: () => album,
+    getTrackModalElements: () => ({ overlay: { hidden: false } }),
     async showAppConfirmDialog() { return true; },
     async fetch() {
       return {

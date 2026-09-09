@@ -33,7 +33,8 @@ class DestructiveConfirmationRequired(ValueError):
 
 def lock_current_actor_session(connection: Any, *, actor_account_id: int,
                                actor_session_id: object,
-                               clock: Callable[[], datetime]) -> datetime:
+                               clock: Callable[[], datetime],
+                               require_recent_auth: bool = True) -> datetime:
     """Revalidate the admitted session after its account authority lock."""
     try:
         session_id = _positive_id(actor_session_id)
@@ -58,7 +59,8 @@ def lock_current_actor_session(connection: Any, *, actor_account_id: int,
             or _aware_utc(row.get("absolute_expires_at")) <= now):
         raise RecentAuthenticationRequired("Recent authentication is required.")
     authenticated = _aware_utc(row.get("authenticated_at"))
-    if authenticated > now + _FUTURE_SKEW or now - authenticated > _RECENT_AUTH_WINDOW:
+    if (authenticated > now + _FUTURE_SKEW
+            or (require_recent_auth and now - authenticated > _RECENT_AUTH_WINDOW)):
         raise RecentAuthenticationRequired("Recent authentication is required.")
     return now
 

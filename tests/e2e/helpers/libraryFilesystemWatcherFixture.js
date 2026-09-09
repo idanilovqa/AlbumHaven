@@ -36,10 +36,30 @@ function assertOwnedPath(mediaRoot, candidate) {
   const resolved = path.resolve(candidate);
   const ownedRoot = path.resolve(mediaRoot, 'cases', 'watcher-reconciliation');
   const relative = path.relative(ownedRoot, resolved);
-  if (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`Watcher fixture path escaped its owned directory: ${resolved}`);
   }
   return resolved;
+}
+
+export async function cleanupWatchedAlbumFixture({
+  mediaRoot, ownedRoot, context, managedAppLifecycle, originalFailure,
+}) {
+  const expectedRoot = path.resolve(mediaRoot, 'cases', 'watcher-reconciliation');
+  if (path.resolve(ownedRoot) !== expectedRoot) throw new Error('Watcher cleanup requires its exact owned directory.');
+  try {
+    await context.close();
+    if (fs.existsSync(expectedRoot)) fs.rmSync(expectedRoot, { recursive: true });
+    // The runner drains the old watcher, removes exactly its owned inventory,
+    // then starts a replacement that cannot hydrate the deleted fixture rows.
+    await managedAppLifecycle.cleanupWatcherFixture();
+  } catch (cleanupFailure) {
+    const failures = [...(originalFailure ? [originalFailure] : []), cleanupFailure];
+    try { await managedAppLifecycle.reportFailure(); } catch (reportFailure) { failures.push(reportFailure); }
+    if (failures.length > 1) throw new AggregateError(failures, 'Watcher scenario and fixture cleanup failed.');
+    throw cleanupFailure;
+  }
+  if (originalFailure) throw originalFailure;
 }
 
 function firstPlayableMp3(mediaRoot) {
@@ -61,7 +81,20 @@ async function retag(trackPath, { artist, album, year, title, trackNumber }) {
   ], { encoding: 'utf8', windowsHide: true });
 }
 
-export async function createWatchedAlbumFixture({
+export async function createWatchedAlbumFixture(options = {}) {
+  const mediaRoot = resolveWritableFixtureMediaRoot(process.env);
+  const ownedRoot = assertOwnedPath(mediaRoot, path.join(mediaRoot, 'cases', 'watcher-reconciliation'));
+  try {
+    return await buildWatchedAlbumFixture(options);
+  } catch (originalFailure) {
+    await cleanupWatchedAlbumFixture({
+      mediaRoot, ownedRoot, context: options.context,
+      managedAppLifecycle: options.managedAppLifecycle, originalFailure,
+    });
+  }
+}
+
+async function buildWatchedAlbumFixture({
   artist = 'Watcher Reconciliation Artist',
   album = 'Watcher Reconciliation Album',
   year = 2004,
@@ -117,8 +150,8 @@ export async function createWatchedAlbumFixture({
     deleteAlbum() {
       fs.rmSync(albumDirectory, { recursive: true });
     },
-    cleanup() {
-      if (fs.existsSync(ownedRoot)) fs.rmSync(ownedRoot, { recursive: true });
+    cleanup(options) {
+      return cleanupWatchedAlbumFixture({ mediaRoot, ownedRoot, ...options });
     },
   };
 }

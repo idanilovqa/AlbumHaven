@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from music_app.services.admin_account_creation import CreatedAccount
+from music_app.services.admin_member_mutation_postgres import lock_current_actor_session
 from music_app.services.auth_invitation_models import InvitationDelivery
 from music_app.services.auth_tokens import IssuedOpaqueToken
 
@@ -33,6 +34,7 @@ class PostgresAdminAccountRepository:
         config: Mapping[str, object] | None,
         *,
         connect: Callable[[str], Any] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(
@@ -41,11 +43,13 @@ class PostgresAdminAccountRepository:
         if not self._database_url:
             raise RuntimeError("Database configuration is required for account creation.")
         self._connect = connect or _connect
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def create_account(
         self,
         *,
         actor_account_id: int,
+        actor_session_id: object,
         library_id: int,
         username_display: str,
         username_normalized: str,
@@ -93,6 +97,11 @@ class PostgresAdminAccountRepository:
                         raise PermissionError(
                             "Administrator account creation is not permitted."
                         )
+                    lock_current_actor_session(
+                        connection, actor_account_id=actor_account_id,
+                        actor_session_id=actor_session_id, clock=self._clock,
+                        require_recent_auth=False,
+                    )
                     account_id = _returned_id(
                         connection.execute(
                             """

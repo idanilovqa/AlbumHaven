@@ -120,6 +120,28 @@ def test_confirm_removal_returns_domain_conflict_when_any_file_reappeared():
     assert connection.events == ["begin", "rollback"]
 
 
+def test_confirm_removal_rolls_back_when_unindexed_file_reappears(tmp_path):
+    from music_app.services.missing_album_removal_postgres import MissingAlbumReappeared
+
+    root = tmp_path / "healthy-library"
+    root.mkdir()
+    track = root / "returned.flac"
+    track.write_bytes(b"returned before watcher reconciliation")
+    connection = Connection({
+        "album_found": True, "active_file_count": 0,
+        "removed_album_key": ALBUM_KEY, "removed_album_count": 1,
+        "inventory_mutation_revision": 18, "root_private_paths": [str(root)],
+        "stale_private_paths": [str(track)],
+        "unresolved_root_count": 0, "unhealthy_root_count": 0,
+    })
+
+    with pytest.raises(MissingAlbumReappeared):
+        _service(connection).confirm_removal(ALBUM_KEY)
+
+    assert connection.events == ["begin", "rollback"]
+    assert track.read_bytes() == b"returned before watcher reconciliation"
+
+
 def test_confirm_removal_preserves_album_when_owning_root_is_unavailable(tmp_path):
     from music_app.services.missing_album_removal_postgres import (
         MissingAlbumRootUnavailable,

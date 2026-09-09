@@ -3591,6 +3591,94 @@ test('managed isolated restart request stops the old child and acknowledges only
   }
 });
 
+test('managed watcher cleanup derives its only path from runner media ownership', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-derived-'));
+  const calls = [];
+  try {
+    fs.mkdirSync(path.join(ownedRoot, 'media'));
+    const environment = { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot };
+    await _private.cleanupManagedWatcherFixture(environment, { runCommandFn(command, args, options) {
+      calls.push({ command, args, options });
+      return { status: 0, signal: null };
+    } });
+    assert.deepEqual(calls[0].args, ['-m', 'tests.e2e.support.watcherFixture', '--owned-root', path.join(ownedRoot, 'media', 'cases', 'watcher-reconciliation')]);
+    assert.equal(calls[0].options.env, environment);
+    assert.ok(calls[0].options.timeout > 0);
+    await assert.rejects(_private.cleanupManagedWatcherFixture(environment, { runCommandFn() {
+      return { status: 1, stderr: 'private database/path detail must not enter the error' };
+    } }), (error) => error.message === 'Runner-owned watcher inventory cleanup failed; evidence retained.');
+  } finally { fs.rmSync(ownedRoot, { recursive: true, force: true }); }
+});
+
+test('managed watcher cleanup rejects a request-supplied path before stopping or touching inventory', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-request-'));
+  let controller;
+  try {
+    controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot }, ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5564), ports: [4320, 4322], autoStart: false,
+      async stopManagedIsolatedAppFn() { assert.fail('invalid request must not stop the app'); },
+      async cleanupWatchedInventoryFn() { assert.fail('must not accept client-selected inventory'); },
+      async startManagedIsolatedAppFn() { assert.fail('must not restart for an invalid operation'); },
+    });
+    fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({
+      nonce: 'untrusted-path', operation: 'watcher-cleanup', ownedRoot: path.join(ownedRoot, 'outside'),
+    }));
+    await assert.rejects(controller.processPendingRequest(), /fixed runner-owned operation/);
+    assert.equal(controller.getCurrentChild().pid, 5564);
+  } finally { await controller?.close(); fs.rmSync(ownedRoot, { recursive: true, force: true }); }
+});
+
+for (const cleanupFails of [false, true]) {
+  test(`managed watcher cleanup runs between stopped writers and replacement hydration (failure=${cleanupFails})`, async () => {
+    const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-watcher-controller-'));
+    const events = [];
+    const cachedRows = ['owned fixture row'];
+    let releaseStop;
+    const stopped = new Promise((resolve) => { releaseStop = resolve; });
+    let controller;
+    try {
+      controller = _private.createManagedIsolatedAppRestartController({
+        childEnv: { ALBUM_HAVEN_E2E_TEMP_ROOT: ownedRoot }, ownedIsolatedTempRoot: ownedRoot,
+        initialChild: createFakeChildProcess(5562), ports: [4320, 4322], autoStart: false,
+        async stopManagedIsolatedAppFn() { events.push('stop'); await stopped; events.push('drained'); },
+        async cleanupWatchedInventoryFn(environment) {
+          assert.equal(environment.ALBUM_HAVEN_E2E_TEMP_ROOT, ownedRoot);
+          events.push('cleanup');
+          if (cleanupFails) throw new Error('scoped inventory cleanup failed');
+          cachedRows.length = 0;
+        },
+        async startManagedIsolatedAppFn(_environment, options) {
+          events.push('hydrate');
+          assert.deepEqual(cachedRows, [], 'replacement must never hydrate pre-cleanup fixture rows');
+          const replacement = createFakeChildProcess(5563);
+          options.onSpawnFn(replacement);
+          return replacement;
+        },
+      });
+      fs.writeFileSync(path.join(controller.controlDirectory, 'restart-request.json'), JSON.stringify({ nonce: 'watcher-cleanup-1', operation: 'watcher-cleanup' }));
+      const result = controller.processPendingRequest().catch((error) => error);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(events, ['stop']);
+      assert.equal(fs.existsSync(path.join(controller.controlDirectory, 'restart-ack.json')), false);
+      releaseStop();
+      const outcome = await result;
+      assert.deepEqual(events, cleanupFails ? ['stop', 'drained', 'cleanup'] : ['stop', 'drained', 'cleanup', 'hydrate']);
+      const ack = JSON.parse(fs.readFileSync(path.join(controller.controlDirectory, 'restart-ack.json'), 'utf8'));
+      assert.equal(ack.status, cleanupFails ? 'failed' : 'ready');
+      if (cleanupFails) {
+        assert.equal(outcome.exitCode, 2);
+        assert.equal(controller.getFailure(), outcome);
+        assert.deepEqual(cachedRows, ['owned fixture row']);
+      } else assert.equal(outcome, true);
+    } finally {
+      releaseStop?.();
+      await controller?.close();
+      fs.rmSync(ownedRoot, { recursive: true, force: true });
+    }
+  });
+}
+
 test('managed isolated restart failure is fail-closed and retains the spawned child for final cleanup', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-failure-'));
   const oldChild = createFakeChildProcess(5664);

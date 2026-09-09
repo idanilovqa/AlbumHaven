@@ -832,6 +832,7 @@ export class GalleryActions {
       if (classification.reason === 'canonical match awaiting virtual attachment') {
         await this.scrollToAlbumUnderHeading(artistName, albumName, {
           ...options,
+          waitAtBoundary: true,
           timeout: Math.max(1, deadline - Date.now()),
         });
         return;

@@ -171,6 +171,24 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   }
 });
 
+test('watcher cleanup emits only its fixed operation and waits for ready acknowledgment', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory), createNonce: () => 'watcher-cleanup-2',
+      pollIntervalMs: 1, timeoutMs: 100,
+      async sleep() {
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
+          { nonce: 'watcher-cleanup-2', operation: 'watcher-cleanup' });
+        fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
+      },
+    });
+    assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
+    assert.deepEqual(await lifecycle.cleanupWatcherFixture(), { nonce: 'watcher-cleanup-2', status: 'ready' });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('restart reports a clear timeout when no matching ready acknowledgment arrives', async () => {
   const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
   const { root, controlDirectory } = createOwnedDirectories();

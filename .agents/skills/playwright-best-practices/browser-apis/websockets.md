@@ -109,35 +109,35 @@ test("displays incoming chat message", async ({ page }) => {
 
 ### Mock WebSocket with Route Handler
 
-```typescript
-test("mock websocket entirely", async ({ page, context }) => {
-  // Intercept the WebSocket upgrade
-  await context.route("**/ws/**", async (route) => {
-    // For WebSocket routes, we can't fulfill directly
-    // Instead, use page.evaluate to mock the client-side
-  });
+Use Playwright's WebSocket routing before navigation. The browser keeps its native
+WebSocket object, including normal `open`, `message`, and `close` listeners.
 
-  // Alternative: Mock at application level
-  await page.addInitScript(() => {
-    const OriginalWebSocket = window.WebSocket;
-    (window as any).WebSocket = function (url: string) {
-      const ws = {
-        readyState: 1,
-        send: (data: string) => {
-          console.log("WS Send:", data);
-        },
-        close: () => {},
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      };
-      setTimeout(() => ws.onopen?.(), 100);
-      return ws;
-    };
+```typescript
+test("mock websocket entirely", async ({ page }) => {
+  let connection: import("@playwright/test").WebSocketRoute | undefined;
+  await page.routeWebSocket("**/ws/chat", socket => {
+    connection = socket;
+    socket.onMessage(message => {
+      const payload = JSON.parse(String(message));
+      socket.send(JSON.stringify({ type: "message", from: "You", content: payload.content }));
+    });
   });
 
   await page.goto("/chat");
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  expect(connection).toBeDefined();
+  connection!.send(JSON.stringify({ type: "message", from: "Alice", content: "Hello there!" }));
+  await expect(page.getByText("Alice: Hello there!")).toBeVisible();
+
+  await page.getByLabel("Message").fill("Hello Alice!");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("You: Hello Alice!")).toBeVisible();
 });
 ```
+
+The route is a mock server because it does not call `connectToServer()`. See the
+[WebSocketRoute API](https://playwright.dev/docs/api/class-websocketroute).
+This is isolated frontend coverage; it does not verify backend WebSocket delivery.
 
 ### WebSocket Mock Fixture
 

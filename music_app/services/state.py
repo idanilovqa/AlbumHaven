@@ -606,6 +606,7 @@ def scan_music_incremental(
         if action in {
             "Library directory read failed",
             "Library directory entry inspection failed",
+            "Library candidate file stat failed",
         }:
             failed_path = Path(str(fields.get("path") or "")).resolve(strict=False)
             for root_id, root_path in observed_roots.items():

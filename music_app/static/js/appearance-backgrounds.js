@@ -222,8 +222,13 @@
       'item-action-pressed': interactions.button_pressed,
     };
     for (const [token, color] of Object.entries(interactionTokens)) {
-      if (color) style.setProperty('--appearance-' + token, color);
-      else style.removeProperty('--appearance-' + token);
+      if (color) {
+        style.setProperty('--appearance-' + token, color);
+        rootElement.setAttribute?.('data-appearance-' + token, '');
+      } else {
+        style.removeProperty('--appearance-' + token);
+        rootElement.removeAttribute?.('data-appearance-' + token);
+      }
     }
     if (preference.interaction_overrides) style.setProperty('--appearance-interaction-outline', resolveInteractionOutline(preference, effective));
     else style.removeProperty('--appearance-interaction-outline');
@@ -1069,7 +1074,14 @@
         const historyHost = find('[data-player-set-history]');
         if (historyHost) historyHost.innerHTML = state.playerRecentSets.map((set, index) => `<button type="button" class="player-history-set" data-player-set-index="${index}" aria-label="Restore ${index === 0 ? 'latest set' : `previous set ${index + 1}`}"><span class="player-history-preview" style="--history-surface-start:${set.surface.start};--history-surface-end:${set.surface.end};--history-surface-angle:${set.surface.angle}deg;--history-wave-fill:${set.waveform.fill};--history-wave-edge:${set.waveform.edge}"><i></i></span><span class="player-history-copy"><strong>${index === 0 ? 'Latest set' : `Previous set ${index + 1}`}</strong><small>${set.waveform.fill} · ${set.waveform.edge}</small></span><span class="player-history-restore" aria-hidden="true">↶</span></button>`).join('') || '<p class="background-help">Your applied sets will appear here after Save.</p>';
         const recovery = find('[data-waveform-recovery-status]'); if (recovery) { recovery.hidden = !recoveryMessage; recovery.textContent = recoveryMessage; }
-        const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_background && !state.errors.main_surface_color && !state.errors.panel_background_color; otherErrors.textContent = 'Fix the color errors in Backgrounds before saving.';
+        const otherErrors = find('[data-background-other-errors]');
+        const backgroundErrors = state.errors.player_background || state.errors.main_surface_color || state.errors.panel_background_color;
+        const hiddenWaveformErrors = !waveformSelected && (state.errors.player_fill || state.errors.player_edge || state.errors['player_style_handles.color']);
+        otherErrors.hidden = !backgroundErrors && !hiddenWaveformErrors;
+        otherErrors.textContent = [
+          backgroundErrors ? 'Fix the color errors in Backgrounds before saving.' : '',
+          hiddenWaveformErrors ? 'Select Waveform seekbar above to correct its color errors before saving. Your entered values are retained.' : '',
+        ].filter(Boolean).join(' ');
         const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         footerFind('[data-background-reset]').disabled = disabled;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;

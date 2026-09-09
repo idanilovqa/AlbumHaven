@@ -20196,7 +20196,7 @@ async function disconnectLastfmIntegration() {
 }
 
 function closeUtilityModal(skipAppearanceGuard = false) {
-  if (!skipAppearanceGuard && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
@@ -24688,13 +24688,30 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     } catch (_error) {
       payload = {};
     }
+    const pendingRefreshRequest = state.ui?.pendingViewRequest || (
+      state.busy && state.ui?.activeViewRequestUrl
+        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+        : null
+    );
     if (response.status === 409) {
       if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
         const refreshOptions = typeof album?.constructor === 'function'
           ? new album.constructor()
           : {};
         refreshOptions.preserveScroll = true;
-        await fetchAndRender(buildUrl(state.view), false, refreshOptions);
+        if (pendingRefreshRequest) {
+          Object.assign(refreshOptions, pendingRefreshRequest.options, {
+            preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
+            interruptCurrent: true,
+            restartIfSameUrl: true,
+          });
+          if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+        }
+        await fetchAndRender(
+          pendingRefreshRequest?.url || buildUrl(state.view),
+          Boolean(pendingRefreshRequest?.push),
+          refreshOptions,
+        );
       }
       if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
       const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
@@ -24719,14 +24736,16 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
     }
-    const refreshRequest = state.ui?.pendingViewRequest || (
-      state.busy && state.ui?.activeViewRequestUrl
-        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
-        : { url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false }
-    );
+    const refreshRequest = pendingRefreshRequest || {
+      url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false,
+    };
     if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
     applyMissingAlbumRemovalToView(albumKey, payload);
-    if (typeof closeTrackModal === 'function') closeTrackModal();
+    const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+    const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+    if (modal?.overlay && !modal.overlay.hidden
+      && getTrackModalAlbumRequestKey(currentAlbum) === albumKey
+      && typeof closeTrackModal === 'function') closeTrackModal();
     if (refreshRequest.url && typeof fetchAndRender === 'function') {
       await fetchAndRender(refreshRequest.url, Boolean(refreshRequest.push), {
         ...refreshRequest.options,
@@ -30675,7 +30694,13 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
       els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
     }
   }
-  if (persist) persistCompactPlayerMode(window.localStorage, next);
+  if (persist) {
+    try {
+      persistCompactPlayerMode(window.localStorage, next);
+    } catch (_error) {
+      // Browser policy may deny access to the storage object itself.
+    }
+  }
   syncCompactPlayerUi();
   if (transferFocus) {
     const incoming = compact ? els.compact : els.expanded;

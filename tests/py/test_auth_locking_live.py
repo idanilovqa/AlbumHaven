@@ -92,6 +92,96 @@ def _overlap_after_account_lock(fixture, action, mutation, *, locked_account_id=
     return results, failures, mutation_error
 
 
+def test_live_creation_rejects_session_revoked_while_waiting_for_owner_lock(auth_lock_inventory):
+    from music_app.services.admin_account_creation import AdminAccountCreationService
+    from music_app.services.admin_account_creation_postgres import PostgresAdminAccountRepository
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+    fixture = auth_lock_inventory
+    session = PostgresAuthSessionService(fixture.config).issue_session(fixture.owner_id)
+    actor = CurrentActor(state=ActorState.ACTIVE, account_id=fixture.owner_id,
+        session_id=session.session_id, is_bootstrap_owner=True, current_library_id=fixture.library_id,
+        library_relationships=(LibraryRelationship(fixture.library_id, "owner", True),))
+    tables = ("app.accounts", "library.library_memberships", "app.capabilities",
+        "app.account_invitation_tokens", "app.mail_outbox", "app.security_audit_events")
+
+    def counts():
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return {table: connection.execute(f"select count(*) as n from {table}").fetchone()["n"]
+                for table in tables}
+
+    before = counts()
+
+    def action(connect):
+        return AdminAccountCreationService(repository=PostgresAdminAccountRepository(
+            fixture.config, connect=connect), invitation_token_seconds=86400).create_account(
+                actor=actor, username="creation.lock.race", contact_email="creation.lock@example.test",
+                capability_keys=("library.browse.read",), send_invitation=True, request_ref="create-lock-race")
+
+    results, failures, mutation_error = _overlap_after_account_lock(fixture, action,
+        lambda connection: connection.execute("update app.account_sessions set revoked_at = %s where id = %s",
+            (fixture.now, session.session_id)), locked_account_id=fixture.owner_id)
+    assert mutation_error is None
+    assert results == [], f"creation persisted after session revocation: {results!r}"
+    assert len(failures) == 1 and isinstance(failures[0], PermissionError), failures
+    assert counts() == before
+
+
+@pytest.mark.parametrize("purpose", ["login", "forgot"])
+def test_live_preauth_rejects_expiry_during_token_lock_wait(auth_lock_inventory, purpose):
+    from music_app.services.auth_preauth_postgres import PostgresPreAuthCsrfService
+    fixture = auth_lock_inventory
+    clock = [fixture.now]
+    service = PostgresPreAuthCsrfService(fixture.config, clock=lambda: clock[0])
+    issued = getattr(service, f"issue_{purpose}_token")()
+    connected = Event()
+    backend, results, failures = [], [], []
+
+    def connect(_url):
+        connection = isolatedPostgres._connect(fixture.runtime_url)
+        connection.execute("set statement_timeout = '5s'")
+        connection.commit()
+        backend.append(connection.info.backend_pid)
+        connected.set()
+        return connection
+
+    def consume():
+        try:
+            worker_service = PostgresPreAuthCsrfService(fixture.config, connect=connect, clock=lambda: clock[0])
+            results.append(getattr(worker_service, f"consume_{purpose}_token")(issued.raw_token))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = None
+    try:
+        with isolatedPostgres._connect(fixture.setup_url) as locker:
+            locker.execute("select id from app.auth_preflight_tokens where id = %s for update",
+                (issued.token_id,)).fetchone()
+            worker = Thread(target=consume)
+            worker.start()
+            assert connected.wait(2), failures
+            with isolatedPostgres._connect(fixture.setup_url) as inspect:
+                deadline = monotonic() + 3
+                blocked = False
+                while monotonic() < deadline:
+                    blocked = inspect.execute("select %s = any(pg_blocking_pids(%s)) as blocked",
+                        (locker.info.backend_pid, backend[0])).fetchone()["blocked"]
+                    if blocked:
+                        break
+                    Event().wait(0.01)
+                assert blocked, "consumer did not reach the token row lock"
+            clock[0] = issued.expires_at + timedelta(seconds=1)
+    finally:
+        if worker is not None:
+            worker.join(7)
+            assert not worker.is_alive(), "cannot clean database while token consumer is active"
+    assert failures == []
+    assert results == [False]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select consumed_at from app.auth_preflight_tokens where id = %s",
+            (issued.token_id,)).fetchone()["consumed_at"] is None
+
+
 def test_live_invitation_rotation_rechecks_credentials_after_account_lock(auth_lock_inventory):
     from music_app.services.admin_account_invitations_postgres import PostgresAdminAccountInvitationService
     fixture = auth_lock_inventory

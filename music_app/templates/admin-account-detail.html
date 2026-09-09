@@ -61,7 +61,7 @@
         <aside class="role-note"><span aria-hidden="true">ⓘ</span><span>Listener applies a baseline set of capabilities.<br>Individual permissions below override the role and are authoritative.</span></aside>
         {% endif %}
         {% set selected = member.capability_keys if member else listener_defaults %}
-        <div class="effective-access"><strong>Effective access</strong><span>{% if is_owner %}Owner · Full access{% else %}Listener{% if member and member.capability_keys | list != listener_defaults | list %} · Customized <small>(overrides applied)</small>{% endif %}{% endif %}</span></div>
+        <div class="effective-access"><strong>Effective access</strong><span>{% if is_owner %}Owner · Full access{% else %}Listener{% if member and member.capability_keys | sort != listener_defaults | sort %} · Customized <small>(overrides applied)</small>{% endif %}{% endif %}</span></div>
 
         <fieldset class="permission-fieldset">
           <legend>{{ "Individual" if member else "Explicit" }} permissions</legend>

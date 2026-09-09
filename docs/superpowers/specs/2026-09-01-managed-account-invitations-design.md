@@ -126,6 +126,9 @@ Account creation may issue and email the initial invitation without a separate
 recent-auth prompt because the already-authorized create operation is one
 atomic workflow. Copy and resend from the roster are sensitive mutations and
 reuse the existing administrator reauthentication mechanism.
+Creation still revalidates the admitted session after locking account and library
+authority: revoked, idle-expired, or absolute-expired sessions cannot create an
+account. A live session does not need a fresh ten-minute reauthentication.
 
 The copy endpoint returns the complete configured-public-base invitation URL
 only in its successful JSON response. It uses `Cache-Control: no-store` and

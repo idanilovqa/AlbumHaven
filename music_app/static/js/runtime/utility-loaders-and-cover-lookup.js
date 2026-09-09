@@ -1240,7 +1240,7 @@ async function disconnectLastfmIntegration() {
 }
 
 function closeUtilityModal(skipAppearanceGuard = false) {
-  if (!skipAppearanceGuard && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;

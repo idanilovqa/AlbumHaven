@@ -32,6 +32,151 @@ function loadHelper() {
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
+function loadQueueController(t, initialIndex = 0) {
+  const tracks = ['A', 'B', 'C', 'D'].map(name => ({ path: `${name}.flac`, src: `/track/${name}` }));
+  const starts = [];
+  const results = [];
+  const errors = [];
+  const controls = { player: {}, previous: {}, next: {} };
+  const context = {
+    state: { player: { current: tracks[initialIndex], playbackQueue: { tracks, currentIndex: initialIndex } } },
+    canStartPlaybackInThisTab: () => true,
+    startStreamingTrack: track => new Promise((resolve, reject) => starts.push({ track, resolve, reject })),
+    observeStreamingFacadeCallback: result => result.catch(error => errors.push(error)),
+  };
+  context.getPlayerPlaybackSnapshot = () => ({ src: context.state.player.current?.src, paused: false });
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(helperPath, 'utf8'), context, { filename: helperPath });
+  const playbackPath = path.join(path.dirname(controllerPath), 'player-loop-playback.js');
+  vm.runInContext(fs.readFileSync(playbackPath, 'utf8'), context, { filename: playbackPath });
+  vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
+  context.setCurrentPlayerTrack = track => { context.state.player.current = track; };
+  context.compactPlayerElements = () => controls;
+  context.updatePlayerUi = () => context.syncCompactPlayerUi();
+  const playTrack = context.playTrackFromPayload;
+  context.playTrackFromPayload = (...args) => {
+    const result = playTrack(...args);
+    results.push(result);
+    // Keep expected RED rejections owned by this harness; production reporting is asserted separately.
+    result.catch(() => {});
+    return result;
+  };
+  const settle = async (index, error) => {
+    if (error) starts[index].reject(error);
+    else starts[index].resolve({ track: starts[index].track });
+    await new Promise(resolve => setImmediate(resolve));
+  };
+  t.after(async () => {
+    starts.forEach(start => start.resolve({ track: start.track }));
+    await Promise.allSettled(results);
+    await new Promise(resolve => setImmediate(resolve));
+  });
+  return { context, tracks, starts, controls, errors, settle };
+}
+
+for (const [name, initialIndex, offsets, expected] of [
+  ['next', 0, [1, 1], ['B.flac', 'C.flac']],
+  ['previous', 3, [-1, -1], ['C.flac', 'B.flac']],
+  ['mixed', 1, [1, -1, 1, 1], ['C.flac', 'B.flac', 'C.flac', 'D.flac']],
+]) {
+  test(`compact pending ${name} navigation advances before streaming startup completes`, async t => {
+    const { context, starts, tracks, settle } = loadQueueController(t, initialIndex);
+    offsets.forEach(offset => context.playCompactQueueOffset(offset));
+    assert.deepEqual(starts.map(start => start.track.path), expected);
+    assert.equal(context.state.player.current, tracks[initialIndex]);
+    await settle(starts.length - 1);
+    assert.equal(context.state.player.current.path, expected.at(-1));
+    assert.equal(context.currentQueueIndex(), tracks.findIndex(track => track.path === expected.at(-1)));
+  });
+}
+
+test('compact pending navigation refreshes button bounds and cannot step past the queue', t => {
+  const { context, starts, controls } = loadQueueController(t);
+  [-1, 1, 1, 1, 1].forEach(offset => context.playCompactQueueOffset(offset));
+  assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac', 'D.flac']);
+  assert.equal(controls.next.disabled, true);
+  assert.equal(controls.previous.disabled, false);
+});
+
+for (const outcome of ['success', 'rejection']) {
+  test(`compact older ${outcome} cannot clear a newer pending selection`, async t => {
+    const { context, starts, controls, errors, settle } = loadQueueController(t);
+    context.playCompactQueueOffset(1);
+    context.playCompactQueueOffset(1);
+    await settle(0, outcome === 'rejection' ? new Error('older startup failed') : null);
+    assert.equal(context.currentQueueIndex(), 2);
+    context.playCompactQueueOffset(1);
+    assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac', 'D.flac']);
+    assert.equal(controls.next.disabled, true);
+    assert.deepEqual(errors, []);
+  });
+}
+
+for (const outcome of ['false', 'rejection']) {
+  test(`compact latest ${outcome} restores the playing cursor and controls`, async t => {
+    const { context, starts, controls, errors, settle } = loadQueueController(t);
+    if (outcome === 'false') context.canStartPlaybackInThisTab = () => false;
+    context.playCompactQueueOffset(1);
+    if (outcome === 'rejection') await settle(0, new Error('startup failed'));
+    else await new Promise(resolve => setImmediate(resolve));
+    assert.equal(context.state.player.playbackQueue.currentIndex, 0);
+    assert.equal(context.currentQueueIndex(), 0);
+    assert.equal(controls.previous.disabled, true);
+    assert.equal(controls.next.disabled, false);
+    assert.equal(errors.length, outcome === 'rejection' ? 1 : 0);
+    context.canStartPlaybackInThisTab = () => true;
+    context.playCompactQueueOffset(1);
+    assert.equal(starts.at(-1).track.path, 'B.flac');
+  });
+}
+
+test('compact latest failure followed by older completion cannot restore the abandoned selection', async t => {
+  const { context, starts, settle } = loadQueueController(t);
+  context.playCompactQueueOffset(1);
+  context.playCompactQueueOffset(1);
+  await settle(1, new Error('newer startup failed'));
+  await settle(0);
+  assert.equal(context.state.player.current.path, 'A.flac');
+  assert.equal(context.state.player.playbackQueue.currentIndex, 0);
+  context.playCompactQueueOffset(1);
+  assert.equal(starts.at(-1).track.path, 'B.flac');
+});
+
+test('compact pending navigation preserves cursor through queue metadata refresh', t => {
+  const { context, starts } = loadQueueController(t);
+  context.playCompactQueueOffset(1);
+  context.state.player.playbackQueue.tracks = context.state.player.playbackQueue.tracks.map(track => ({ ...track, artist: 'Updated' }));
+  context.playCompactQueueOffset(1);
+  assert.deepEqual(starts.map(start => start.track.path), ['B.flac', 'C.flac']);
+});
+
+for (const replacement of ['queue', 'tracks', 'index', 'clear']) {
+  test(`compact pending navigation discards its cursor after ${replacement} replacement`, async t => {
+    const { context, tracks, starts, settle } = loadQueueController(t);
+    context.playCompactQueueOffset(1);
+    const originalQueue = context.state.player.playbackQueue;
+    if (replacement === 'queue') context.state.player.playbackQueue = { tracks: [tracks[3], tracks[0], tracks[2]], currentIndex: 0 };
+    if (replacement === 'tracks') originalQueue.tracks = [tracks[3], tracks[0], tracks[2]];
+    if (replacement === 'index') {
+      originalQueue.currentIndex = 3;
+      context.state.player.current = tracks[2];
+    }
+    if (replacement === 'clear') context.state.player.playbackQueue = null;
+    const replacementQueue = context.state.player.playbackQueue;
+    const expectedIndex = replacement === 'clear' ? -1 : replacement === 'index' ? 2 : 1;
+    assert.equal(context.currentQueueIndex(), expectedIndex);
+    context.playCompactQueueOffset(1);
+    assert.equal(starts.length, replacement === 'clear' ? 1 : 2);
+    if (replacement !== 'clear') {
+      assert.equal(starts[1].track.path, replacement === 'index' ? 'D.flac' : 'C.flac');
+      await settle(1);
+    }
+    await settle(0, new Error('superseded compact startup failed'));
+    assert.equal(context.state.player.playbackQueue, replacementQueue);
+    if (replacementQueue) assert.equal(replacementQueue.currentIndex, replacement === 'index' ? 3 : 2);
+  });
+}
+
 test('compact player is eligible only above the desktop shell breakpoint', () => {
   const helper = loadHelper();
 

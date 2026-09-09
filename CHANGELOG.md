@@ -51,6 +51,8 @@
   reset-delivery callbacks off the ASGI event loop.
 - Restored the browser history position when unsaved appearance changes cancel
   Settings navigation.
+- Preserved every rapid compact-player queue advance while streaming starts,
+  and restored the playing position when the latest selection fails.
 - Bounded retained watcher paths and moves within directory groups, and checked
   expanded album tracks for stable writes before parsing or publishing a mutation.
 - Shared watcher stability sampling intervals across pending files and moves,

@@ -30580,6 +30580,7 @@ let compactPlayerStyle = 'docked';
 let compactPlayerDrag = null;
 let compactPlayerPosition = null;
 let compactPlayerSuppressClick = false;
+let compactPlayerPendingSelection = null;
 const FLOATING_COMPACT_PLAYER_MARGIN = 4;
 const FLOATING_COMPACT_PLAYER_LEFT_MARGIN = 12;
 
@@ -30675,22 +30676,62 @@ function resetCompactPlayerPosition() {
   els.player.style.setProperty('--compact-player-y', `${compactPlayerPosition.y}px`);
 }
 
+function isCurrentCompactQueueSelection(selection) {
+  const queue = state.player.playbackQueue;
+  return Boolean(selection && compactPlayerPendingSelection === selection
+    && selection.queue === queue && queue.currentIndex === selection.index
+    && String(queue.tracks?.[selection.index]?.path || '') === selection.path);
+}
+
 function currentQueueIndex() {
   const queue = state.player.playbackQueue;
+  if (isCurrentCompactQueueSelection(compactPlayerPendingSelection)) {
+    return compactPlayerPendingSelection.index;
+  }
+  compactPlayerPendingSelection = null;
   if (!queue?.tracks?.length) return -1;
   const path = String(state.player.current?.path || '');
   const found = queue.tracks.findIndex(track => String(track?.path || '') === path);
   return found >= 0 ? found : Number(queue.currentIndex) || 0;
 }
 
-function playCompactQueueOffset(offset) {
+async function playCompactQueueOffset(offset) {
   const queue = state.player.playbackQueue;
   const index = currentQueueIndex();
   if (!queue?.tracks?.length || index < 0) return;
   const targetIndex = index + offset;
   if (targetIndex < 0 || targetIndex >= queue.tracks.length) return;
+  const track = queue.tracks[targetIndex];
+  const selection = { queue, index: targetIndex, path: String(track?.path || '') };
+  compactPlayerPendingSelection = selection;
   queue.currentIndex = targetIndex;
-  void playTrackFromPayload(queue.tracks[targetIndex]);
+  let started = false;
+  try {
+    const playbackStart = playTrackFromPayload(track);
+    syncCompactPlayerUi();
+    started = await playbackStart;
+    return started;
+  } catch (error) {
+    if (isCurrentCompactQueueSelection(selection)) {
+      if (typeof observeStreamingFacadeCallback === 'function') {
+        observeStreamingFacadeCallback(Promise.reject(error), 'compact-track-selection-start-error');
+      } else {
+        console.warn('[AlbumHaven][Playback] Compact track selection failed.', error);
+      }
+    }
+    return false;
+  } finally {
+    if (compactPlayerPendingSelection === selection) {
+      const ownsQueueCursor = isCurrentCompactQueueSelection(selection);
+      compactPlayerPendingSelection = null;
+      if (!started && ownsQueueCursor) {
+        const playingPath = String(state.player.current?.path || '');
+        const playingIndex = queue.tracks.findIndex(item => String(item?.path || '') === playingPath);
+        queue.currentIndex = playingIndex >= 0 ? playingIndex : index;
+      }
+      syncCompactPlayerUi();
+    }
+  }
 }
 
 function syncCompactPlayerUi(snapshot = {}) {

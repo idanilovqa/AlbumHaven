@@ -515,3 +515,253 @@ def test_live_expired_throttle_cleanup_during_verification_preserves_auth_result
         assert connection.execute("select count(*) as n from app.auth_throttles").fetchone()["n"] == 0
         version = connection.execute("select credential_version from app.account_credentials where account_id = %s", (fixture.target_id,)).fetchone()["credential_version"]
         assert version == (2 if route == "profile" and successful else 1)
+
+
+class _ObservedAuthConnection:
+    def __init__(self, connection, after_execute=lambda _sql: None, *, close=True, errors=None):
+        self.connection, self.after_execute, self.close = connection, after_execute, close
+        self.errors = errors
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        if self.close:
+            return self.connection.__exit__(*args)
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    def execute(self, sql, params=()):
+        try:
+            result = self.connection.execute(sql, params)
+        except Exception as exc:
+            if self.errors is not None:
+                self.errors.append((" ".join(sql.split()), getattr(exc, "sqlstate", None)))
+            raise
+        self.after_execute(" ".join(sql.casefold().split()))
+        return result
+
+
+def _live_login_service(fixture, *, connect=isolatedPostgres._connect):
+    from music_app.services.auth_login_postgres import PostgresLoginAuthService
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    from tests.py.test_auth_login_postgres import _config, DUMMY_HASH
+    config = {**_config(), "ALBUM_HAVEN_APP_DATABASE_URL": fixture.runtime_url}
+    sessions = PostgresAuthSessionService(config, clock=lambda: fixture.now)
+    return PostgresLoginAuthService(config, connect=connect, dummy_encoded_hash=DUMMY_HASH,
+        session_service=sessions, audit_repository=PostgresSecurityAuditRepository(),
+        clock=lambda: fixture.now), sessions, config
+
+
+def test_live_login_failure_audit_does_not_invert_success_account_throttle_locks(auth_lock_inventory):
+    from music_app.services.auth_audit_postgres import LoginAuditReason
+    from tests.py.test_auth_login_postgres import ENCODED_HASH
+    fixture = auth_lock_inventory
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_credentials
+            (account_id, encoded_hash, hash_policy_version, credential_version)
+            values (%s, %s, 3, 1)""", (fixture.target_id, ENCODED_HASH))
+    service, sessions, _ = _live_login_service(fixture)
+    buckets = service._buckets("auth.race", "198.51.100.45")
+    reservations = [service._reserve_capacity(buckets, fixture.now,
+        request_ref="lock-reservation", source_class=None) for _ in range(2)]
+    account, credential = service._load_identity("auth.race")
+    prepared = sessions.prepare_session(fixture.target_id)
+    connected, backend, failures = Event(), [], []
+
+    def connect(_url):
+        connection = isolatedPostgres._connect(fixture.runtime_url)
+        connection.execute("set statement_timeout = '5s'")
+        connection.commit()
+        backend.append(connection.info.backend_pid)
+        connected.set()
+        return connection
+
+    def fail_login():
+        try:
+            failing, _, _ = _live_login_service(fixture, connect=connect)
+            failing._finalize_failure(reservations[0], fixture.now,
+                reason=LoginAuditReason.CREDENTIAL_MISMATCH, request_ref="failure-lock-order",
+                source_class=None, target_account_id=fixture.target_id)
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker, success, success_error, sql_errors = None, None, None, []
+    try:
+        with isolatedPostgres._connect(fixture.setup_url) as locker:
+            locker.execute("select id from app.accounts where id = %s for update", (fixture.target_id,))
+            worker = Thread(target=fail_login)
+            worker.start()
+            assert connected.wait(2), f"failure finalizer did not connect: {failures!r}"
+            with isolatedPostgres._connect(fixture.setup_url) as inspect:
+                blocked, deadline = False, monotonic() + 3
+                while monotonic() < deadline:
+                    blocked = inspect.execute("select %s = any(pg_blocking_pids(%s)) as blocked",
+                        (locker.info.backend_pid, backend[0])).fetchone()["blocked"]
+                    if blocked:
+                        break
+                    Event().wait(0.01)
+                assert blocked, f"failure finalizer did not wait on account: {failures!r}"
+            locker.execute("set local lock_timeout = '500ms'")
+            successful, _, _ = _live_login_service(fixture,
+                connect=lambda _url: _ObservedAuthConnection(locker, close=False, errors=sql_errors))
+            try:
+                success = successful._finalize_success(account, credential, reservations[1], fixture.now,
+                    replacement=None, prepared=prepared, request_ref="success-lock-order", source_class=None)
+            except Exception as exc:
+                success_error = exc
+    finally:
+        if worker is not None:
+            worker.join(7)
+            assert not worker.is_alive(), "login worker must exit before database cleanup"
+    assert failures == []
+    assert success_error is None, f"successful login failed: {success_error!r}; SQL failures: {sql_errors!r}"
+    assert success[1] is True
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        audits = connection.execute("""select outcome from app.security_audit_events
+            where request_ref in ('failure-lock-order', 'success-lock-order') order by outcome""").fetchall()
+        assert [row["outcome"] for row in audits] == ["invalid", "success"]
+        assert connection.execute("select count(*) as n from app.account_sessions where account_id = %s",
+            (fixture.target_id,)).fetchone()["n"] == 1
+
+
+@pytest.mark.parametrize("route", ["login", "shared"])
+def test_live_reservation_survives_cleanup_between_insert_and_row_lock(auth_lock_inventory, route):
+    from music_app.services.auth_credential_attempts_postgres import PostgresCredentialAttempts
+    from music_app.services.auth_throttle_cleanup_postgres import PostgresAuthThrottleCleanupService
+    fixture = auth_lock_inventory
+    login, _, config = _live_login_service(fixture)
+    buckets = login._buckets("auth.race", "198.51.100.46")
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        for kind, digest in buckets[:2 if route == "login" else 1]:
+            connection.execute("""insert into app.auth_throttles
+                (bucket_kind, bucket_hash, key_version, window_started_at, window_expires_at, failure_count)
+                values (%s, %s, 3, %s, %s, %s)""", (kind, digest,
+                fixture.now - timedelta(seconds=1800) if kind == "login_account" else fixture.now,
+                fixture.now - timedelta(seconds=1) if kind == "login_account" else fixture.now + timedelta(seconds=900),
+                4 if kind == "login_account" else 2))
+    cleaned = []
+    cleanup = PostgresAuthThrottleCleanupService(config, clock=lambda: fixture.now)
+
+    def after_execute(sql):
+        if "insert into app.auth_throttles" in sql and not cleaned:
+            cleaned.append(cleanup.cleanup(batch_size=100))
+
+    def connect(_url):
+        return _ObservedAuthConnection(isolatedPostgres._connect(fixture.runtime_url), after_execute)
+
+    if route == "login":
+        service, _, _ = _live_login_service(fixture, connect=connect)
+        reservation = service._reserve_capacity(buckets, fixture.now, request_ref="cleanup-reserve", source_class=None)
+    else:
+        reservation = PostgresCredentialAttempts(config, connect=connect,
+            clock=lambda: fixture.now).reserve("auth.race")
+    assert reservation is not None and len(cleaned) == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute("""select bucket_kind, failure_count, window_started_at
+            from app.auth_throttles order by bucket_kind""").fetchall()
+    assert rows[0] == {"bucket_kind": "login_account", "failure_count": 1, "window_started_at": fixture.now}
+    if route == "login":
+        assert rows[1] == {"bucket_kind": "login_source", "failure_count": 3, "window_started_at": fixture.now}
+
+
+@pytest.mark.parametrize("locked_row", ["account", "invitation", "outbox"])
+@pytest.mark.parametrize("expires", [True, False])
+def test_live_invitation_mail_rechecks_expiry_after_final_claim_lock(auth_lock_inventory, locked_row, expires):
+    from music_app.services.auth_mail_outbox_postgres import PostgresInvitationOutboxService
+    from music_app.services.auth_invitation_models import InvitationDelivery
+    fixture = auth_lock_inventory
+    clock, token = [fixture.now], issue_opaque_token()
+    expiry = fixture.now + timedelta(seconds=10 if expires else 600)
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        token_id = connection.execute("""insert into app.account_invitation_tokens
+            (account_id, token_hash, created_at, expires_at, request_ref)
+            values (%s, %s, %s, %s, 'mail-clock') returning id""",
+            (fixture.target_id, token.digest, fixture.now, expiry)).fetchone()["id"]
+        outbox_id = connection.execute("""insert into app.mail_outbox
+            (account_id, invitation_token_id, message_category) values (%s, %s, 'account_invitation') returning id""",
+            (fixture.target_id, token_id)).fetchone()["id"]
+    delivery = InvitationDelivery(outbox_id, token_id, fixture.target_id,
+        "auth.race@example.test", "auth.race", token.raw, expiry)
+    connected, backend, results, failures = Event(), [], [], []
+
+    def connect(_url):
+        connection = isolatedPostgres._connect(fixture.runtime_url)
+        connection.execute("set statement_timeout = '5s'")
+        connection.commit()
+        backend.append(connection.info.backend_pid)
+        connected.set()
+        return connection
+
+    def claim():
+        try:
+            results.append(PostgresInvitationOutboxService(fixture.config, connect=connect,
+                now=lambda: clock[0]).claim_invitation(delivery))
+        except BaseException as exc:
+            failures.append(exc)
+
+    worker = None
+    try:
+        with isolatedPostgres._connect(fixture.setup_url) as locker:
+            table, row_id = {"account": ("app.accounts", fixture.target_id),
+                "invitation": ("app.account_invitation_tokens", token_id),
+                "outbox": ("app.mail_outbox", outbox_id)}[locked_row]
+            locker.execute(f"select id from {table} where id = %s for update", (row_id,))
+            worker = Thread(target=claim)
+            worker.start()
+            assert connected.wait(2), f"mail claim did not connect: {failures!r}"
+            with isolatedPostgres._connect(fixture.setup_url) as inspect:
+                blocked, deadline = False, monotonic() + 3
+                while monotonic() < deadline:
+                    blocked = inspect.execute("select %s = any(pg_blocking_pids(%s)) as blocked",
+                        (locker.info.backend_pid, backend[0])).fetchone()["blocked"]
+                    if blocked:
+                        break
+                    Event().wait(0.01)
+                assert blocked, f"mail claim did not reach {locked_row}: {failures!r}"
+            clock[0] += timedelta(seconds=20)
+    finally:
+        if worker is not None:
+            worker.join(7)
+            assert not worker.is_alive(), "mail worker must exit before database cleanup"
+    assert failures == [] and len(results) == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        stored = connection.execute("select delivery_status, attempt_count, claimed_at from app.mail_outbox where id = %s",
+            (outbox_id,)).fetchone()
+    if expires:
+        assert results == [None]
+        assert stored == {"delivery_status": "pending", "attempt_count": 0, "claimed_at": None}
+    else:
+        assert results[0] is not None and results[0].claimed_at == clock[0]
+        assert stored == {"delivery_status": "sending", "attempt_count": 1, "claimed_at": clock[0]}
+
+
+def test_live_reset_mail_rechecks_expiry_after_delayed_claim_query(auth_lock_inventory):
+    from music_app.services.auth_mail_outbox_postgres import PostgresPasswordResetOutboxService
+    from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
+    fixture = auth_lock_inventory
+    clock, token = [fixture.now], issue_opaque_token()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_credentials
+            (account_id, encoded_hash, hash_policy_version, credential_version)
+            values (%s, '$argon2id$fixture', 1, 1)""", (fixture.target_id,))
+        token_id = connection.execute("""insert into app.password_reset_tokens
+            (account_id, token_hash, credential_version, created_at, expires_at, request_ref)
+            values (%s, %s, 1, %s, %s, 'reset-mail-clock') returning id""",
+            (fixture.target_id, token.digest, fixture.now, fixture.now + timedelta(seconds=10))).fetchone()["id"]
+        outbox_id = connection.execute("""insert into app.mail_outbox
+            (account_id, reset_token_id, message_category) values (%s, %s, 'password_reset') returning id""",
+            (fixture.target_id, token_id)).fetchone()["id"]
+
+    def after_execute(sql):
+        if "for update of outbox skip locked" in sql:
+            clock[0] += timedelta(seconds=20)
+
+    service = PostgresPasswordResetOutboxService(fixture.config, now=lambda: clock[0],
+        connect=lambda _url: _ObservedAuthConnection(isolatedPostgres._connect(fixture.runtime_url), after_execute))
+    delivery = PasswordResetDelivery(outbox_id, fixture.target_id, "auth.race@example.test", token.raw)
+    assert service.claim_password_reset(delivery) is None
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select delivery_status, attempt_count from app.mail_outbox where id = %s",
+            (outbox_id,)).fetchone() == {"delivery_status": "pending", "attempt_count": 0}

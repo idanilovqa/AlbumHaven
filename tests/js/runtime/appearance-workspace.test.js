@@ -367,6 +367,85 @@ test('a revision conflict advances the server revision while retaining the draft
   assert.equal(controller.getState().dirty, false);
 });
 
+for (const action of ['cancel', 'retry']) {
+  test(`conflict baseline refresh preserves the server snapshot and explicit ${action}`, async () => {
+    const initial = initialAppearance();
+    const serverStyle = classicGreen();
+    serverStyle.surface.start = '#123456';
+    const server = { ...initial, revision: 8, palette_id: 'slate', panel_index: 1,
+      player_style_override: serverStyle, player_recent_sets: [serverStyle],
+      waveform_recent_colors: ['#ABCDEF', '#123456'] };
+    const requests = [];
+    const { controller, applied } = setup({ initial, request: async (_method, payload) => {
+      requests.push(payload);
+      if (requests.length === 1) throw Object.assign(new Error('appearance_conflict'), {
+        status: 409, data: { appearance: server },
+      });
+      const { expected_revision, applied_player_set, waveform_color_updates, ...draft } = payload;
+      return { ...draft, revision: expected_revision + 1, player_recent_sets: server.player_recent_sets };
+    } });
+    controller.setPalette('silver');
+    controller.restoreWaveformColors({ fill: '#345678', edge: '#56789A' });
+    const before = controller.getState();
+    assert.equal(await controller.save(), false);
+    const conflicted = controller.getState();
+    assert.deepEqual(conflicted.saved, editableSnapshot(server));
+    assert.equal(conflicted.revision, 8);
+    assert.deepEqual(conflicted.draft, before.draft, 'the entire draft remains available for explicit retry');
+    assert.deepEqual(conflicted.waveformColorUpdates, before.waveformColorUpdates);
+    assert.deepEqual(conflicted.playerRecentSets, server.player_recent_sets);
+    assert.deepEqual(conflicted.recentColors, server.waveform_recent_colors);
+    assert.deepEqual(applied, [editableSnapshot(server)], 'only confirmed server preferences recolor the live app');
+    if (action === 'cancel') {
+      controller.cancel();
+      assert.deepEqual(controller.getState().draft, editableSnapshot(server));
+      controller.setAlertFamily('quiet');
+    }
+    assert.equal(await controller.save(), true);
+    assert.equal(requests[1].expected_revision, 8);
+    if (action === 'cancel') {
+      assert.equal(requests[1].palette_id, 'slate');
+      assert.equal(requests[1].panel_index, 1);
+      assert.deepEqual(requests[1].player_style_override, serverStyle);
+      assert.equal(requests[1].alert_family, 'quiet');
+      assert.equal(requests[1].applied_player_set, null);
+      assert.equal(requests[1].waveform_color_updates, undefined);
+    } else {
+      assert.deepEqual(requests[1], { ...requests[0], expected_revision: 8 }, 'retry only advances the expected server revision');
+    }
+  });
+}
+
+for (const snapshot of [{ revision: 8 }, { ...initialAppearance(), revision: 8, player_recent_sets: ['invalid'] }]) {
+  test(`conflict baseline rejects an incomplete snapshot (${Object.keys(snapshot).length} fields) atomically`, async () => {
+    const { controller, applied } = setup({ request: async () => {
+      throw Object.assign(new Error('appearance_conflict'), { status: 409, data: { appearance: snapshot } });
+    } });
+    controller.setPalette('silver');
+    const before = controller.getState();
+    assert.equal(await controller.save(), false);
+    assert.equal(controller.getState().revision, before.revision);
+    assert.deepEqual(controller.getState().saved, before.saved);
+    assert.deepEqual(controller.getState().draft, before.draft);
+    assert.deepEqual(applied, []);
+  });
+}
+
+test('conflict baseline from a cleared account cannot restore prior state', async () => {
+  let reject;
+  const { controller, applied } = setup({ request: () => new Promise((_resolve, fail) => { reject = fail; }) });
+  controller.setPalette('silver');
+  const pending = controller.save();
+  controller.clear('Session ended');
+  const cleared = controller.getState();
+  reject(Object.assign(new Error('appearance_conflict'), {
+    status: 409, data: { appearance: { ...initialAppearance(), revision: 8 } },
+  }));
+  assert.equal(await pending, false);
+  assert.deepEqual(controller.getState(), cleared);
+  assert.deepEqual(applied, []);
+});
+
 test('EditorPage exposes one reusable global footer with contextual Reset, Cancel, and Save slots', () => {
   const source = path.join(__dirname, '../../../music_app/static/js/editor-page.js');
   assert.ok(fs.existsSync(source), 'Reusable EditorPage/EditorFooter module must exist');

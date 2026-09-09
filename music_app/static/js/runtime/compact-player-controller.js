@@ -187,7 +187,7 @@ function syncCompactPlayerUi(snapshot = {}) {
   const locked = snapshot.lockedByAnotherTab ?? (typeof isPlaybackLockedByAnotherTab === 'function' && isPlaybackLockedByAnotherTab());
   if (els.cover) {
     els.cover.style.backgroundImage = track?.coverPath
-      ? `url('/cover?path=${encodeURIComponent(track.coverPath)}')`
+      ? `url("/cover?path=${encodeURIComponent(track.coverPath)}")`
       : '';
     els.cover.classList.toggle('is-idle-placeholder', !track);
     els.cover.disabled = !track;

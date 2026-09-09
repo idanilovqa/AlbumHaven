@@ -331,7 +331,7 @@ class PostgresPasswordResetOutboxService:
                     select outbox.id, outbox.account_id,
                            account.username_display,
                            account.contact_email,
-                           outbox.attempt_count
+                           outbox.attempt_count, reset_token.expires_at
                     from app.mail_outbox outbox
                     join app.password_reset_tokens reset_token
                       on reset_token.id = outbox.reset_token_id
@@ -363,8 +363,11 @@ class PostgresPasswordResetOutboxService:
                     raise RuntimeError("Password reset outbox claim context is invalid.")
                 payload = _row_mapping(
                     rows[0],
-                    ("id", "account_id", "username_display", "contact_email", "attempt_count"),
+                    ("id", "account_id", "username_display", "contact_email", "attempt_count", "expires_at"),
                 )
+                now = _aware_utc(self._now())
+                if _aware_utc(payload.get("expires_at")) <= now:
+                    return None
                 claimed_at = now
                 connection.execute(
                     """
@@ -696,6 +699,9 @@ class PostgresInvitationOutboxService:
                     )
                     == invitation_token_id
                 ):
+                    return None
+                now = _aware_utc(self._now())
+                if expires_at <= now:
                     return None
                 claimed_at = now
                 claimed = connection.execute(

@@ -36,7 +36,7 @@ const expandedControls = `
 const compactControls = `
   <div class="compact-player-shell" aria-label="Compact player">
     <button class="button ui-button ui-button--icon ui-button--small compact-player-expand" type="button" aria-label="Expand player"><span class="ui-button__content">›</span></button>
-    <button class="compact-player-cover" type="button" aria-label="Open album details"></button>
+    <button class="compact-player-cover" data-compact-player-cover type="button" aria-label="Open album details"></button>
     <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
       <button class="compact-player-skip" type="button" data-compact-player-previous aria-label="Previous track">‹</button>
       <button class="compact-player-play" type="button" data-compact-player-play aria-label="Pause">⏸</button>
@@ -86,6 +86,34 @@ async function mountPlayer(page, mode) {
   await page.addStyleTag({ path: baseLayoutCssPath });
   await page.addStyleTag({ path: buttonCssPath });
   await page.addStyleTag({ path: playerCssPath });
+}
+
+for (const mode of ['docked', 'floating']) {
+  test(`compact cover CSS accepts quoted paths in ${mode} mode`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 640 });
+    const requestedPaths = [];
+    await page.route('**/cover?*', route => {
+      requestedPaths.push(new URL(route.request().url()).searchParams.get('path'));
+      return route.fulfill({ contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="green"/></svg>' });
+    });
+    await mountPlayer(page, mode);
+    await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/playback-control-cluster.js') });
+    await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/compact-player-helpers.js') });
+    await page.addScriptTag({ content: 'var state = { player: { current: null, playbackQueue: { tracks: [] } } }; function currentQueueIndex() { return -1; }' });
+    await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/compact-player-controller.js') });
+    await page.evaluate(value => { compactPlayerStyle = value; }, mode);
+    const cover = page.locator('[data-compact-player-cover]');
+    for (const coverPath of ['Album/Previous cover.jpg', 'Artist/It\'s a "live" album (2026)/cover.jpg']) {
+      await page.evaluate(value => {
+        syncCompactPlayerUi({ playback: { paused: true }, displayTrack: { coverPath: value, src: '/audio' }, lockedByAnotherTab: false });
+      }, coverPath);
+      await expect(cover).toHaveCSS('background-image', `url("${new URL(`/cover?path=${encodeURIComponent(coverPath)}`, componentUrl).href}")`);
+      await expect.poll(() => requestedPaths).toContain(coverPath);
+    }
+    await page.evaluate(() => { state.player.current = null; syncCompactPlayerUi({ playback: { paused: true }, lockedByAnotherTab: false }); });
+    await expect(cover).toHaveCSS('background-image', 'none');
+  });
 }
 
 function centerY(box) {

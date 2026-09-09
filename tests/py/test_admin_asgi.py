@@ -137,6 +137,27 @@ def _request(app, payload, **kwargs):
     return asyncio.run(_request_async(app, payload, **kwargs))
 
 
+@pytest.mark.parametrize("parser_name", ["_json_payload", "_bounded_json_object"])
+def test_admin_json_parsers_stop_receiving_when_stream_exceeds_limit(parser_name):
+    from starlette.requests import Request
+    from music_app.routes import admin_asgi
+
+    chunks = [b" " * 8192, b" " * 8193, b"must not be received"]
+    received = []
+
+    async def receive():
+        index = len(received)
+        received.append(index)
+        return {"type": "http.request", "body": chunks[index],
+                "more_body": index < len(chunks) - 1}
+
+    request = Request({"type": "http", "headers": [
+        (b"content-type", b"application/json"), (b"content-length", b"2"),
+    ]}, receive)
+    assert asyncio.run(getattr(admin_asgi, parser_name)(request)) is None
+    assert received == [0, 1]
+
+
 def test_admin_account_route_creates_pending_account_without_password():
     app, service, deliveries = _app()
     payload = {

@@ -80,10 +80,12 @@ class PostgresCredentialAttempts:
             domain="album-haven:login-account", normalized_value=normalize_login_identifier(username)).digest
         now = _utc(self._clock())
         with self._connect(self._database_url) as connection, connection.transaction():
+            # Retain the conflicting row lock without replacing its window.
             connection.execute("""insert into app.auth_throttles
                 (bucket_kind, bucket_hash, key_version, window_started_at, window_expires_at, failure_count)
                 values ('login_account', %s, %s, %s, %s, 0)
-                on conflict (bucket_kind, key_version, bucket_hash) do nothing""",
+                on conflict (bucket_kind, key_version, bucket_hash)
+                do update set updated_at = app.auth_throttles.updated_at""",
                 (digest, self._version, now, now + timedelta(seconds=self._window)))
             row = self._locked(connection, digest)
             expires = _utc(row.get("window_expires_at"))

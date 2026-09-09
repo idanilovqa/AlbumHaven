@@ -1,9 +1,104 @@
 """Real persistence checks for complete targeted album aggregates."""
 
+from pathlib import Path
+
 import pytest
 
 from tests.e2e.support import isolatedPostgres
 from tests.py.test_isolated_postgres_live import watcher_repair_inventory
+
+
+@pytest.mark.parametrize("retag", ["edition", "separated_year", "ordinary_year"])
+def test_targeted_external_identity_retag_matches_full_scan(watcher_repair_inventory, retag):
+    from music_app.services.library import build_albums_from_file_cache
+
+    fixture = watcher_repair_inventory
+    changed = {**fixture.entry("Owner/Changed/song.flac"), "year": 2000}
+    retained = {**fixture.entry("Owner/Retained/song.flac"), "year": 2000}
+    separate_keys = {"owner::repair album"} if retag == "separated_year" else set()
+    if separate_keys:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute("""
+                insert into library.separate_releases (library_id, release_key, metadata)
+                select id, 'owner::repair album', '{"source":"owner"}'::jsonb
+                from library.libraries where library_kind = 'local' and name = 'Local Library'
+            """)
+    previous = {item["path"]: item for item in (changed, retained)}
+    fixture.adapter.save_snapshot(
+        Path("unused-watcher-identity.json"), previous, "watcher-identity", 1.0,
+        separate_release_keys=separate_keys, observed_library_root_ids={"repair-main"},
+    )
+    replacement = {**changed, **({"edition": "Deluxe"} if retag == "edition" else {"year": 2001})}
+    expected_albums = build_albums_from_file_cache(
+        {**previous, changed["path"]: replacement}, separate_keys,
+    )
+    expected_membership = {str(track.path): album.key for album in expected_albums for track in album.tracks}
+    fixture.adapter.persist_targeted_inventory_mutation(
+        root_id="repair-main", active_file_entries={changed["path"]: replacement},
+    )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        rows = connection.execute("""
+            select file.private_path, album.album_key, album.release_year, album.metadata
+            from library.local_track_files file
+            join library.local_tracks track on track.id = file.track_id
+            join library.local_albums album on album.id = track.album_id
+            where file.scan_cache_stale is false order by file.private_path
+        """).fetchall()
+    assert {row["private_path"]: row["album_key"] for row in rows} == expected_membership
+    by_key = {album.key: album for album in expected_albums}
+    for row in rows:
+        assert row["metadata"].get("edition") == by_key[row["album_key"]].edition
+    if retag == "separated_year":
+        assert {row["release_year"] for row in rows} == {2000, 2001}
+
+
+@pytest.mark.parametrize("other_root", [False, True])
+@pytest.mark.parametrize("origin", ["automatic", "user"])
+@pytest.mark.parametrize("operation", ["retag", "delete_cover_member"])
+def test_targeted_automatic_cover_uses_complete_retained_membership(
+    watcher_repair_inventory, other_root, origin, operation,
+):
+    fixture = watcher_repair_inventory
+    changed = fixture.entry("Owner/Changed/song.flac")
+    covered = fixture.entry("Owner/Covered/song.flac", root=int(other_root))
+    automatic_cover = Path(covered["path"]).with_name("cover.png")
+    automatic_cover.write_bytes(b"scoped artwork fixture")
+    covered.update(cover_path=str(automatic_cover), cover_revision="automatic-revision",
+                   cover_selection_origin="automatic", local_cover_width=600, local_cover_height=600)
+    fixture.seed(changed, covered)
+    user_cover = automatic_cover.with_name("selected.png")
+    user_cover.write_bytes(b"scoped selected artwork")
+    if origin == "user":
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            connection.execute("""
+                update library.local_albums set cover_path = %s,
+                  metadata = metadata || '{"cover_selection_origin":"user","cover_revision":"user-revision","local_cover_width":900,"local_cover_height":800}'::jsonb
+                where album_key = 'owner::repair album'
+            """, (str(user_cover),))
+    if operation == "delete_cover_member":
+        Path(covered["path"]).unlink()
+        fixture.adapter.persist_targeted_inventory_mutation(
+            root_id=fixture.roots[int(other_root)]["id"], active_file_entries={}, deleted_paths=(covered["path"],),
+        )
+    else:
+        fixture.adapter.persist_targeted_inventory_mutation(
+            root_id="repair-main", active_file_entries={changed["path"]: {**changed, "title": "Corrected"}},
+        )
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        album = connection.execute("""
+            select cover_path, metadata from library.local_albums where album_key = 'owner::repair album'
+        """).fetchone()
+    expected = str(user_cover) if origin == "user" else str(automatic_cover) if operation == "retag" else None
+    assert album["cover_path"] == expected
+    if expected is not None:
+        assert album["metadata"]["cover_selection_origin"] == origin
+        assert album["metadata"]["cover_revision"] == f"{origin}-revision"
+        assert album["metadata"]["local_cover_width"] == (900 if origin == "user" else 600)
+        assert album["metadata"]["local_cover_height"] == (800 if origin == "user" else 600)
+    else:
+        assert album["metadata"].get("cover_revision") is None
+        assert album["metadata"].get("local_cover_width") is None
+        assert album["metadata"].get("local_cover_height") is None
 
 
 @pytest.mark.parametrize("other_root", [False, True])

@@ -429,6 +429,14 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
+      const currentAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+      const currentClaim = trackModalHydratedAlbumDetailsLru.get(currentAlbum)?.tagEditMutationClaim;
+      if (currentClaim && typeof tagEditViewMutationStillOwnsResources === 'function'
+          && tagEditViewMutationStillOwnsResources(currentClaim)) {
+        // A response started before an edit cannot replace its pending membership,
+        // even before that edit advances the inventory revision.
+        return currentAlbum;
+      }
       if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
         // Release only this request's aliases before joining or starting a load
         // under the current revision. Foreground callers never receive stale data.

@@ -558,7 +558,22 @@
       } catch (failure) {
         if (ownGeneration === generation) {
           if (failure?.status === 409 && Number.isInteger(failure?.data?.appearance?.revision)) {
-            revision = failure.data.appearance.revision;
+            const response = failure.data.appearance;
+            let current;
+            try {
+              if (!isCanonical(response) || response.revision < 0) throw new TypeError('Incomplete appearance conflict.');
+              current = { preference: normalizePreferences(response),
+                playerSets: normalizePlayerSets(response.player_recent_sets),
+                history: normalizeRecentColors(response.waveform_recent_colors) };
+            } catch (_invalidConflict) {
+              error = 'Appearance changed elsewhere, but the current settings could not be read. Your draft is kept; reload and try again.';
+              return false;
+            }
+            // Cancel must restore this confirmed baseline. Keep the entire local
+            // draft and pending color events available for an explicit retry.
+            saved = current.preference; revision = response.revision;
+            playerRecentSets = current.playerSets; recentColors = current.history;
+            apply(copy(saved));
           }
           error = failure?.status === 409 ? 'Appearance changed elsewhere. Your draft is kept; review it and try Save again.' : 'Backgrounds could not be saved. Your changes are kept. Try Save again.';
         }
@@ -800,9 +815,9 @@
         const panel = palette?.panels[preference.panel_index];
         find('[data-background-pair-title]').textContent = palette ? palette.name + ' + ' + panel[0] : legacy ? 'Current custom colors' : 'Theme defaults';
         find('[data-background-pair-description]').textContent = panel?.[2] || 'Saved backgrounds remain unchanged until Save.';
+        applyDraftEditorTheme(state.saved, editor);
+        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-background-preview]');
-        applyDraftEditorTheme(state.draft, editor);
-        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
         preview.style.setProperty('--preview-floating', !palette && !preference.panel_background_color ? '#1F2937' : effective.panel);
@@ -867,9 +882,9 @@
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
         editor.querySelectorAll('.appearance-alert-family-card').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-family') === state.draft.alert_family)));
         editor.querySelectorAll('[data-alert-preview-severity]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-preview-severity') === previewSeverity)));
+        applyDraftEditorTheme(state.saved, editor);
+        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-alert-live-preview]');
-        applyDraftEditorTheme(state.draft, editor);
-        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-alert-family', state.draft.alert_family || 'ember');
         preview.setAttribute('data-alert-preview-active-severity', previewSeverity);
@@ -917,9 +932,9 @@
         editor.querySelectorAll('[data-album-details-layout]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-details-layout') === state.draft.album_details_layout)));
         editor.querySelectorAll('[data-album-playing-row-animation]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-playing-row-animation') === state.draft.album_playing_row_animation)));
         editor.querySelectorAll('[data-album-preview-state]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-preview-state') === previewState)));
+        applyDraftEditorTheme(state.saved, editor);
+        applyDraftEditorTheme(state.saved, footerHost);
         const preview = editor.querySelector('[data-album-page-live-preview]');
-        applyDraftEditorTheme(state.draft, editor);
-        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-layout', state.draft.album_details_layout || 'classic_bar');
         preview.setAttribute('data-preview-state', previewState);
@@ -968,9 +983,9 @@
         const outline = state.draft.interaction_overrides?.item_outline || defaultItemOutline;
         editor.querySelectorAll('[data-item-outline-color]').forEach(button => button.setAttribute('aria-pressed', String(outline.source === 'custom' && outline.color === button.getAttribute('data-color'))));
         find('[data-item-outline-source="player"]').setAttribute('aria-pressed', String(outline.source === 'player'));
+        applyDraftEditorTheme(state.saved, editor);
+        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('.selection-hover-preview');
-        applyDraftEditorTheme(state.draft, editor);
-        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--navigation-tree-selection-accent-color', accent.color);
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
@@ -1036,9 +1051,9 @@
           find('[data-waveform-recents-help]').textContent = history.length ? 'Recent colors · last five choices. Choose a swatch below either field.' : 'Your five most recent waveform colors will appear here.';
         }
         const style = effectivePlayerStyle(state);
+        applyDraftEditorTheme(state.saved, editor);
+        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-player-live-preview]');
-        applyDraftEditorTheme(state.draft, editor);
-        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--preview-player-start', style.surface.start); preview.style.setProperty('--preview-player-end', style.surface.mode === 'solid' ? style.surface.start : style.surface.end); preview.style.setProperty('--preview-player-angle', `${style.surface.angle}deg`);
         preview.style.setProperty('--preview-control-fill', style.controls.fill); preview.style.setProperty('--preview-control-border', style.controls.border);

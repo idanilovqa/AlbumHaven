@@ -435,6 +435,8 @@ class PostgresLoginAuthService:
         source_class: str | None,
     ) -> tuple[_ReservedBucket, ...] | None:
         with self._operation() as connection:
+            # Even an existing bucket must stay locked against expiry cleanup
+            # until the reservation has read and incremented its current window.
             for kind, digest in buckets:
                 _execute(
                     connection,
@@ -443,7 +445,8 @@ class PostgresLoginAuthService:
                       bucket_kind, bucket_hash, key_version,
                       window_started_at, window_expires_at, failure_count
                     ) values (%s, %s, %s, %s, %s, 0)
-                    on conflict (bucket_kind, key_version, bucket_hash) do nothing
+                    on conflict (bucket_kind, key_version, bucket_hash)
+                    do update set updated_at = app.auth_throttles.updated_at
                     """,
                     (
                         kind,
@@ -559,6 +562,14 @@ class PostgresLoginAuthService:
         target_account_id: int | None = None,
     ) -> None:
         with self._operation() as connection:
+            # The audit's target-account FK also locks this account. Acquire it
+            # before throttles, matching successful login's lock order.
+            if target_account_id is not None:
+                accounts = _fetchall(connection,
+                    "select id from app.accounts where id = %s for update",
+                    (target_account_id,))
+                if len(accounts) != 1:
+                    raise RuntimeError("Login account state is unavailable.")
             self._finalize_failure_in_transaction(connection, reservation, now)
             self._append_audit(
                 connection,

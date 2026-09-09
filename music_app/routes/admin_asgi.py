@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import json
 from inspect import isawaitable
 from pathlib import Path
 import threading
@@ -15,6 +14,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.appearance_asgi import load_appearance_context
+from music_app.routes.bounded_json import read_bounded_json_object
 from music_app.services.admin_account_creation import AdminAccountCreationService
 from music_app.services.admin_account_creation_postgres import (
     ManagedAccountIdentityConflict,
@@ -446,21 +446,7 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
 
 
 async def _json_payload(request: Request) -> dict[str, object] | None:
-    if request.headers.get("content-type", "").split(";", 1)[0].strip().casefold() != "application/json":
-        return None
-    try:
-        length = int(request.headers.get("content-length", "0"))
-    except ValueError:
-        return None
-    if length < 2 or length > _MAX_BODY_BYTES:
-        return None
-    body = await request.body()
-    if len(body) != length:
-        return None
-    try:
-        payload = json.loads(body)
-    except (ValueError, RecursionError):
-        return None
+    payload = await _bounded_json_object(request)
     if not isinstance(payload, dict) or set(payload) != _FIELDS:
         return None
     if not all(isinstance(payload[key], str) for key in ("username", "contact_email")):
@@ -565,11 +551,8 @@ async def _bounded_json_object(request: Request) -> dict[str, object] | None:
         return None
     if length < 2 or length > _MAX_BODY_BYTES:
         return None
-    body = await request.body()
-    if len(body) != length:
-        return None
     try:
-        payload = json.loads(body)
+        payload = await read_bounded_json_object(request, max_bytes=_MAX_BODY_BYTES)
     except (ValueError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None

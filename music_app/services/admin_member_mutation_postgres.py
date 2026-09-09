@@ -312,7 +312,7 @@ class PostgresAdminMemberMutationService:
         rows = connection.execute(
             """
             with locked_accounts as (
-              select id, is_active, disabled_at
+              select id, account_kind, is_active, disabled_at
               from app.accounts
               where id in (%s, %s)
               order by id for update
@@ -342,6 +342,21 @@ class PostgresAdminMemberMutationService:
             join locked_accounts target on target.id = %s
             where actor.id = %s and actor.is_active is true
               and actor.disabled_at is null
+              and target.account_kind in ('bootstrap_owner', 'managed_user')
+              and (
+                target.id = locked_library.owner_account_id
+                or exists (
+                  select 1 from library.library_memberships scoped_membership
+                  where scoped_membership.library_id = locked_library.id
+                    and scoped_membership.account_id = target.id
+                )
+                or exists (
+                  select 1 from app.capabilities prior_access
+                  where prior_access.account_id = target.id
+                    and prior_access.scope_kind = 'library'
+                    and prior_access.scope_id = locked_library.id
+                )
+              )
             """,
             (
                 actor_account_id,

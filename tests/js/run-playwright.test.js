@@ -4344,6 +4344,44 @@ test('managed isolated cleanup and database failures fail the attempt closed', a
   });
 });
 
+test('managed database cleanup failure retains the owned fixture and original error', async () => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-test-dbcleanup-'));
+  const evidence = path.join(fixture, 'retained-evidence.txt');
+  fs.writeFileSync(evidence, 'fixture evidence');
+  const databaseError = new Error('database cleanup failed');
+  const child = createFakeChildProcess(5959);
+  const events = [];
+  try {
+    await assert.rejects(_private.runManagedPlaywrightAttempt({
+      passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+      managesScanApp: false, managesIsolatedApp: true, servesRealApp: false,
+      supportAppPort: 4325, realAppPort: 5001, managedPorts: [],
+      ownedIsolatedTempRoot: fixture, isHeadless: true, browserName: 'chromium',
+      async startManagedIsolatedAppFn() { return child; },
+      createManagedIsolatedAppRestartControllerFn() {
+        return { async close() {}, getCurrentChild() { return child; } };
+      },
+      async runPlaywrightProcessFn() { return { exitCode: 0, lifecycle: {} }; },
+      async stopManagedIsolatedAppFn() { events.push('app-stopped'); },
+      cleanupIsolatedLibraryDatabaseFn() { events.push('database-failed'); throw databaseError; },
+      cleanupIsolatedE2ETempRootsFn() {
+        events.push('fixture-deleted');
+        fs.rmSync(fixture, { recursive: true, force: true });
+        return [fixture];
+      },
+      reportManagedPortOwnersFn() { return []; },
+    }), error => {
+      assert.equal(error, databaseError);
+      assert.equal(error.lifecycle.exitReason, 'fake-database-cleanup-error');
+      return true;
+    });
+    assert.deepEqual(events, ['app-stopped', 'database-failed']);
+    assert.equal(fs.readFileSync(evidence, 'utf8'), 'fixture evidence');
+  } finally {
+    fs.rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('runPlaywrightProcess prevents inherited report auto-open without changing headed mode', async () => {
   const child = createFakeChildProcess();
   let spawnedCommand;

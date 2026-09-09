@@ -517,6 +517,55 @@ test('in-flight details preserve an optimistic owner across inventory revisions 
   assert.equal(await settledLoad, canonical);
 });
 
+for (const speculative of [false, true]) {
+  test(`same-revision ${speculative ? 'speculative' : 'foreground'} hydration retains optimistic ownership until settlement`, async () => {
+    const preview = { key: 'same-revision-owned', name: 'Owned Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+    const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+    const claim = { generation: 1 };
+    const responses = [];
+    const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+      activeTagEditMutationClaim: claim,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    assert.equal(await pending, optimistic, 'the waiting view must not render the pre-edit response');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+    assert.equal(responses.length, 1);
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic, 'the original claim remains attached');
+    context.activeTagEditMutationClaim = null;
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const settled = context.loadTrackModalAlbumDetails(preview.key);
+    const canonical = { ...optimistic, name: 'Canonical Album' };
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+    assert.equal(await settled, canonical);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), canonical);
+  });
+}
+
+test('same-revision hydration may replace a settled optimistic owner', async () => {
+  const preview = { key: 'settled-owner', name: 'Album', preview_only: true, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, tracks: [{ path: 'retained' }] };
+  const canonical = { ...optimistic, name: 'Authoritative album' };
+  const claim = { generation: 1 };
+  let respond;
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => { respond = resolve; }),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.activeTagEditMutationClaim = null;
+  respond({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await pending, canonical);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), canonical);
+});
+
 test('revision reload preserves a speculative detail request promoted to foreground', async () => {
   const preview = { key: 'promoted-album', name: 'Promoted Album', preview_only: true, tracks: [] };
   const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };

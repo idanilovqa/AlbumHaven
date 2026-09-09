@@ -811,6 +811,44 @@ def test_targeted_projection_invalidation_clears_browse_and_utility_caches(monke
     assert invalidated == ["problems", "rules", "postgres"]
 
 
+def test_committed_inventory_callbacks_publish_monotonic_revisions(monkeypatch):
+    from threading import Event, Thread
+    from music_app.services import state
+
+    invalidations = []
+    monkeypatch.setattr(state, "invalidate_problematic_albums_payload_cache", lambda _: invalidations.append("problems"))
+    monkeypatch.setattr(state, "invalidate_utility_rules_payload_cache", lambda _: invalidations.append("rules"))
+    monkeypatch.setattr(state, "invalidate_postgres_utility_projection_cache", lambda **_: invalidations.append("postgres"))
+    library_state = {"inventory_mutation_revision": 3, "_view_payload_root_browse_cache": {"old": True}}
+    older_committed = Event()
+    release_older_callback = Event()
+    failures = []
+
+    def delayed_older_publication():
+        try:
+            older_committed.set()
+            assert release_older_callback.wait(2)
+            state.invalidate_targeted_library_projections(library_state, {}, revision=4, affected_album_keys=("old",))
+        except BaseException as error:
+            failures.append(error)
+
+    worker = Thread(target=delayed_older_publication, daemon=True)
+    worker.start()
+    try:
+        assert older_committed.wait(2)
+        state.invalidate_targeted_library_projections(library_state, {}, revision=5, affected_album_keys=("new",))
+        assert library_state["inventory_mutation_revision"] == 5
+        library_state["_view_payload_root_browse_cache"]["since-newer-callback"] = True
+    finally:
+        release_older_callback.set()
+        worker.join(2)
+    assert not worker.is_alive()
+    assert not failures
+    assert library_state["inventory_mutation_revision"] == 5
+    assert library_state["_view_payload_root_browse_cache"] == {}
+    assert invalidations == ["problems", "rules", "postgres"] * 2
+
+
 @pytest.fixture
 def changing_media_stat(monkeypatch):
     original_stat = Path.stat

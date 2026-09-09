@@ -83,11 +83,15 @@ def invalidate_targeted_library_projections(
     affected_album_keys: tuple[str, ...],
 ) -> None:
     """Invalidate only live projections affected by a committed watcher event."""
-    browse_cache = library_state.get("_view_payload_root_browse_cache")
-    if isinstance(browse_cache, dict):
-        browse_cache.clear()
-    library_state["inventory_mutation_revision"] = max(0, int(revision or 0))
-    library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
+    with _CACHE_LOCK:
+        browse_cache = library_state.get("_view_payload_root_browse_cache")
+        if isinstance(browse_cache, dict):
+            browse_cache.clear()
+        library_state["inventory_mutation_revision"] = max(
+            0, int(revision or 0),
+            int(library_state.get("inventory_mutation_revision") or 0),
+        )
+        library_state["targeted_inventory_album_keys"] = tuple(affected_album_keys)
     invalidate_problematic_albums_payload_cache(library_state)
     invalidate_utility_rules_payload_cache(library_state)
     invalidate_postgres_utility_projection_cache(

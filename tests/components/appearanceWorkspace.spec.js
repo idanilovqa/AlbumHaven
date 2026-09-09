@@ -154,6 +154,50 @@ test('structured HEX fields display invalid text and block Save until correction
   }
 });
 
+test('unsaved palette stays in five previews while editor and shared footer retain the saved theme', async ({ page }) => {
+  await mount(page, 'mount', { sharedFooter: true });
+  const expected = await page.evaluate(() => {
+    const api = window.AlbumHavenAppearance;
+    const saved = api.instance.controller.getState().saved;
+    return { saved: api.resolveAppearance(saved).tokens.control,
+      draft: api.resolveAppearance({ ...saved, palette_id: 'silver', panel_index: 0 }).tokens.control };
+  });
+  expect(expected.draft).not.toBe(expected.saved);
+  await page.locator('[data-background-palette="silver"]').click();
+  const samples = [];
+  for (const [method, previewSelector] of [
+    ['mount', '[data-background-preview]'], ['mountAlerts', '[data-alert-live-preview]'],
+    ['mountAlbumPage', '[data-album-page-live-preview]'], ['mountSelectionAccent', '.selection-hover-preview'],
+    ['mountSeekbar', '[data-player-live-preview]'],
+  ]) {
+    samples.push(await page.evaluate(({ method, previewSelector }) => {
+      window.AlbumHavenAppearance.instance[method](document.getElementById('editor'), { getSeekbarMode: () => 'waveform' });
+      const token = element => getComputedStyle(element).getPropertyValue('--appearance-control').trim();
+      return { method, editor: token(document.getElementById('editor').firstElementChild),
+        footer: token(document.querySelector('#utility-modal-footer [data-background-save]')),
+        preview: token(document.querySelector(previewSelector)),
+        document: token(document.documentElement) };
+    }, { method, previewSelector }));
+  }
+  expect(samples).toEqual(samples.map(({ method }) => ({ method, editor: expected.saved,
+    footer: expected.saved, preview: expected.draft, document: expected.saved })));
+  await page.locator('#utility-modal-footer [data-background-cancel]').click();
+  expect(await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.getState().dirty)).toBe(false);
+  await page.evaluate(() => { window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')); });
+  await page.locator('[data-background-palette="silver"]').click();
+  await page.route('**/account/appearance', route => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    const { expected_revision, applied_player_set, waveform_color_updates, ...preferences } = route.request().postDataJSON();
+    return route.fulfill({ json: { ...preferences, revision: expected_revision + 1, player_recent_sets: [] } });
+  });
+  await page.locator('#utility-modal-footer [data-background-save]').click();
+  await expect(page.locator('html')).toHaveAttribute('data-appearance-palette', 'silver');
+  await expect(page.locator('#utility-modal-footer [data-background-save]')).toBeDisabled();
+  expect(await page.evaluate(() => ['.appearance-background-editor', '#utility-modal-footer', '[data-background-preview]']
+    .map(selector => getComputedStyle(document.querySelector(selector)).getPropertyValue('--appearance-control').trim())))
+    .toEqual([expected.draft, expected.draft, expected.draft]);
+});
+
 for (const method of ['mount', 'mountSeekbar']) {
   test(`default account gives ${method} controls and shared footer resolved tokens`, async ({ page }) => {
     await mount(page, method, { saved: { palette_id: null }, sharedFooter: true });

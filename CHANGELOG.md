@@ -2,6 +2,17 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Preserved legacy selection accents during appearance upgrades and refreshed
+  the saved appearance baseline after concurrent changes in another client.
+  Kept unsaved colors inside previews while editor controls retain saved colors.
+- Enforced administrator body limits while streaming, kept account mutations
+  within the current library, and closed authentication cleanup and mail-expiry
+  races without changing credential limits.
+- Preserved release identity and automatic cover selection during targeted
+  scans, kept published inventory revisions monotonic, and retained fixture
+  evidence when database cleanup fails.
+- Kept pending track edits authoritative over late hydration responses and
+  displayed compact-player artwork whose path contains an apostrophe.
 - Bounded breached-password network work through worker cleanup, refreshed
   invitation lifetimes after lock waits, and cleared dismissed reauthentication
   passwords from the administrator roster.

@@ -533,7 +533,8 @@ def test_password_reset_repository_claim_requires_matching_active_digest_and_is_
         PasswordResetDelivery,
     )
 
-    connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one"),))
+    connection = Connection(claim_rows=(_claim_row(id=81, username_display="member.one",
+        expires_at=NOW + timedelta(minutes=15)),))
     delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
 
     claim = _reset_service(outbox, connection).claim_password_reset(delivery)

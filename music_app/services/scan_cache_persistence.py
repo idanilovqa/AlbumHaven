@@ -56,6 +56,13 @@ _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_scan_cache"
 _PIPELINE_BATCH_SIZE = 1_000
 _MISSING_STRUCTURAL_VALUE = object()
+_ALBUM_COVER_AUTHORITY_FIELDS = (
+    "cover_selection_origin", "local_cover_width", "local_cover_height",
+    "remote_cover_url", "remote_cover_thumbnail_url", "remote_cover_source",
+    "remote_cover_source_label", "remote_cover_album_url",
+    "remote_cover_width", "remote_cover_height",
+)
+_ALBUM_COVER_METADATA_FIELDS = ("cover_revision", *_ALBUM_COVER_AUTHORITY_FIELDS)
 _TARGETED_STRUCTURAL_EDIT_FIELD_SETS = {
     frozenset({"album"}),
     frozenset({"exception_type"}),
@@ -286,6 +293,7 @@ class PostgresScanCacheAdapter:
                 featured_artist_rows=featured_artist_rows,
                 track_rows=track_rows,
                 existing_memberships=existing_memberships,
+                separate_release_keys=separate_release_keys,
             )
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
@@ -349,7 +357,16 @@ class PostgresScanCacheAdapter:
                     file_entry = _fallback_file_entry(row)
                     if file_entry is None:
                         continue
-                    file_entry.update(row.get("file_entry") or {})
+                    persisted_entry = row.get("file_entry")
+                    if isinstance(persisted_entry, dict):
+                        # An album cover is not evidence that this surviving
+                        # file supplies it after another member is removed.
+                        file_entry.pop("cover_path", None)
+                        file_entry.update(persisted_entry)
+                    if file_entry.get("cover_path") and not file_entry.get("cover_selection_origin"):
+                        # File serialization keeps the cover path/revision; the
+                        # owning album retains the selection's origin.
+                        file_entry["cover_selection_origin"] = row.get("cover_selection_origin")
                     files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
                     owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
                 # Entirely missing albums retain their historical credits.
@@ -361,7 +378,7 @@ class PostgresScanCacheAdapter:
                     complete_albums = self._build_albums(
                         _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
                     )
-                    complete_artists, _, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
+                    complete_artists, complete_album_rows, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
                     _execute_pipeline_batches(connection, _upsert_local_artist_sql(), complete_artists)
                     member_names = _deduped_artist_names([
                         name for album in complete_albums
@@ -374,8 +391,18 @@ class PostgresScanCacheAdapter:
                         if row["artist_key"] != owner_keys[album_key]
                         and row["artist_key"] in artist_names
                     ])
+                    cover_row = next(
+                        (row for row in complete_album_rows if row["cover_path"]),
+                        complete_album_rows[0] if complete_album_rows else {},
+                    )
+                    cover_metadata = _jsonb_compatible(cover_row.get("metadata") or {})
                     aggregate_rows.append({
                         "album_key": album_key,
+                        "cover_path": cover_row.get("cover_path"),
+                        "cover_metadata": _jsonb({
+                            field: cover_metadata.get(field)
+                            for field in _ALBUM_COVER_METADATA_FIELDS
+                        }),
                         "metadata": _jsonb({
                             "artists": member_names,
                             "featured_artists": featured_names,
@@ -2187,21 +2214,9 @@ def _raw_tag_album_rating_from_file_entries(
 
 
 def _album_cover_authority_metadata(album: object) -> dict[str, object]:
-    fields = (
-        "cover_selection_origin",
-        "local_cover_width",
-        "local_cover_height",
-        "remote_cover_url",
-        "remote_cover_thumbnail_url",
-        "remote_cover_source",
-        "remote_cover_source_label",
-        "remote_cover_album_url",
-        "remote_cover_width",
-        "remote_cover_height",
-    )
     return {
         field: value
-        for field in fields
+        for field in _ALBUM_COVER_AUTHORITY_FIELDS
         if (value := getattr(album, field, None)) is not None
     }
 
@@ -2212,6 +2227,7 @@ def _remap_targeted_album_identity_rows(
     featured_artist_rows: list[dict[str, object]],
     track_rows: list[dict[str, object]],
     existing_memberships: list[dict[str, object]],
+    separate_release_keys: set[str] | None = None,
 ) -> None:
     """Keep established album keys when watcher context still names that album."""
     albums_by_key = {
@@ -2240,6 +2256,18 @@ def _remap_targeted_album_identity_rows(
         generated_artist_key = str(album_row.get("artist_key") or "").strip()
         existing_key = str(existing.get("album_key") or "").strip()
         existing_artist_key = str(existing.get("artist_key") or "").strip()
+        generated_metadata = _jsonb_compatible(album_row.get("metadata") or {})
+        generated_edition = str(generated_metadata.get("edition") or "").strip()
+        existing_edition = str(existing.get("edition") or "").strip()
+        if generated_edition.lower() != existing_edition.lower():
+            continue
+        release_key = album_separate_release_key(
+            generated_artist_key, generated_title, generated_edition,
+        )
+        if release_key in (separate_release_keys or ()) and (
+            safe_int(album_row.get("release_year")) != safe_int(existing.get("release_year"))
+        ):
+            continue
         if (
             generated_artist_key
             and existing_artist_key
@@ -4983,6 +5011,8 @@ def _load_targeted_album_memberships_sql() -> str:
           library.local_track_files.private_path,
           library.local_albums.album_key,
           library.local_albums.title as album_title,
+          library.local_albums.release_year,
+          library.local_albums.metadata ->> 'edition' as edition,
           library.local_artists.artist_key
         from bootstrap_context
         join library.local_track_files
@@ -5121,9 +5151,9 @@ def _upsert_local_album_sql(
         else "excluded.cover_path"
     )
     metadata_update = (
-        """library.local_albums.metadata || case
+        f"""library.local_albums.metadata || case
                 when library.local_albums.metadata ->> 'cover_selection_origin' = 'user'
-                then excluded.metadata - array['cover_revision', 'cover_selection_origin']
+                then excluded.metadata - array[{', '.join(repr(field) for field in _ALBUM_COVER_METADATA_FIELDS)}]
                 else excluded.metadata
               end"""
         if preserve_existing_cover_authority
@@ -5176,7 +5206,12 @@ def _upsert_local_album_sql(
 def _update_targeted_album_aggregate_sql() -> str:
     return """
         update library.local_albums as album
-        set metadata = album.metadata || %(metadata)s
+        set cover_path = case
+              when album.metadata ->> 'cover_selection_origin' = 'user'
+              then album.cover_path else %(cover_path)s end,
+            metadata = album.metadata || %(metadata)s || case
+              when album.metadata ->> 'cover_selection_origin' = 'user'
+              then '{}'::jsonb else %(cover_metadata)s::jsonb end
         from library.libraries as owned_library, app.bootstrap_owners as owner
         where album.library_id = owned_library.id
           and owned_library.owner_account_id = owner.account_id

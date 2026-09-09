@@ -3239,7 +3239,7 @@ async function runManagedPlaywrightAttempt(options = {}) {
     }
     // No retained/skipped lifecycle status exists: pending means intentionally
     // unperformed here, with the cleanup exit reason preserving the cause.
-    if (!processCleanupUnproven) {
+    if (!processCleanupUnproven && !databaseCleanupError) {
       try {
         const removedRoots = cleanupIsolatedE2ETempRootsFn(
           os.tmpdir(),

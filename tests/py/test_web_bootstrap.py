@@ -178,7 +178,7 @@ def test_missing_runtime_digest_never_makes_app_javascript_immutable(asgi_app):
     assert headers["cache-control"] == "no-store, max-age=0"
 
 
-def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templates(
+def test_runtime_asset_version_is_refreshed_for_each_html_response(
     tmp_path,
     monkeypatch,
 ):
@@ -188,7 +188,7 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
 
     def fake_runtime_asset_version(asset_paths=None):
         digest_calls.append(asset_paths)
-        return "startup-runtime-digest"
+        return f"runtime-digest-{len(digest_calls)}"
 
     monkeypatch.setattr(web_asgi, "_runtime_asset_version", fake_runtime_asset_version)
     asgi_app = create_test_asgi_app(tmp_path / "runtime-digest-app", monkeypatch)
@@ -211,10 +211,10 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 
-    assert digest_calls == [None]
-    assert asgi_app.state.runtime_asset_version == "startup-runtime-digest"
-    assert first_context["runtime_asset_version"] == "startup-runtime-digest"
-    assert second_context["runtime_asset_version"] == "startup-runtime-digest"
+    assert digest_calls == [None, None, None]
+    assert asgi_app.state.runtime_asset_version == "runtime-digest-3"
+    assert first_context["runtime_asset_version"] == "runtime-digest-2"
+    assert second_context["runtime_asset_version"] == "runtime-digest-3"
     assert captured_contexts == [first_context, second_context]
 
 

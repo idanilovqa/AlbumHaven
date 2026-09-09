@@ -196,8 +196,19 @@ test('track modal playback refresh preserves generic Play track and Pause track 
   assert.equal(durationEl.innerHTML, '0:00 / 0:00');
   assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
+  let iconWrites = 0;
+  let iconMarkup = button.innerHTML;
+  Object.defineProperty(button, 'innerHTML', {
+    get() { return iconMarkup; },
+    set(value) { iconWrites += 1; iconMarkup = value; },
+  });
+  playback.currentTime = 1;
+  context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 0, 'time updates must preserve the icon targeted by an in-progress click');
+
   playback.paused = true;
   context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 1, 'a playback state change updates the icon once');
   assert.equal(attributes.get('aria-label'), 'Play track');
   assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--play"/);
   assert.doesNotMatch(button.innerHTML, /&#x25B6;|▶/);
@@ -210,6 +221,7 @@ test('Loose Tracks playback refresh applies the AlbumTrackTable current and anim
   const buttonAttributes = new Map();
   const button = {
     innerHTML: '',
+    getAttribute(name) { return buttonAttributes.get(name) || ''; },
     setAttribute(name, value) { buttonAttributes.set(name, String(value)); },
   };
   const durationEl = { dataset: { originalDuration: '3:00' }, innerHTML: '' };

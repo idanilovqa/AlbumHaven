@@ -629,11 +629,28 @@ function renderLibraryLoader(data = {}, options = {}) {
 }
 
 function renderRelated() {
+  if (typeof galleryMainSurfaceController !== 'undefined'
+      && galleryMainSurfaceController?.isOpen?.('artist-family')
+      && typeof closeGalleryMainSurface === 'function') {
+    closeGalleryMainSurface(false);
+  }
+  const galleryPanel = document.querySelector?.('[data-artist-family-panel]');
+  const galleryToggle = document.querySelector?.('[data-gallery-bar-action="artist-family"]');
+  const galleryBody = document.querySelector?.('[data-gallery-family-panel-body]');
+  if (galleryPanel) {
+    galleryPanel.hidden = true;
+    galleryPanel.classList.remove('is-open');
+    galleryPanel.setAttribute('aria-hidden', 'true');
+  }
+  if (galleryToggle) galleryToggle.setAttribute('aria-expanded', 'false');
+  if (galleryBody) {
+    galleryBody.innerHTML = '';
+    delete galleryBody.dataset.galleryRenderSignature;
+  }
   const box = document.getElementById('related-box');
   const toggle = document.getElementById('related-toggle');
   const wrap = document.getElementById('related-list-wrap');
   const list = document.getElementById('related-list');
-  const related = state.view.related_artists || [];
   if (!box || !toggle || !wrap || !list) return;
   const contextualPane = state.view?.shell_layout?.slots?.contextual_pane || {};
   if (Object.prototype.hasOwnProperty.call(contextualPane, 'is_visible')) {
@@ -649,22 +666,12 @@ function renderRelated() {
   if (Object.prototype.hasOwnProperty.call(localTree, 'active_submode')) {
     box.dataset.shellLocalTreeSubmode = String(localTree.active_submode || '');
   }
-  if (
-    state.ui.scanPageReturnContext
-    || (state.busy && !state.ui.activeViewPayloadReady)
-    || !state.view.selected_artist
-    || !related.length
-  ) {
-    box.style.display = 'none';
-    wrap.hidden = true;
-    list.innerHTML = '';
-    return;
-  }
-  box.style.display = 'block';
-  box.classList.toggle('is-collapsed', !state.relatedExpanded);
-  toggle.setAttribute('aria-expanded', state.relatedExpanded ? 'true' : 'false');
-  wrap.hidden = !state.relatedExpanded;
-  list.innerHTML = buildRelatedMarkup(state.view);
+  box.hidden = true;
+  box.style.display = 'none';
+  box.classList.add('is-collapsed');
+  toggle.setAttribute('aria-expanded', 'false');
+  wrap.hidden = true;
+  list.innerHTML = '';
 }
 
 function applyLocalRelatedArtistFilter(nextRelatedArtists, options = {}) {

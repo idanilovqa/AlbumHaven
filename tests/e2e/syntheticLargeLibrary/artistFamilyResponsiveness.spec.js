@@ -110,6 +110,29 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
         .map((text) => String(text || '').trim());
       expect(chipTexts.filter((text) => text === EXPECTED_FAMILY.primary)).toHaveLength(1);
       expect(chipTexts.filter((text) => text === EXPECTED_FAMILY.resonance)).toHaveLength(1);
+      await artistFamilyActions.waitForAllChipsActive(chipTexts);
+    });
+
+    await stepLogger.step('Keep the family control in its own row, envelope its anchor, and reorder related artists by mouse', async () => {
+      await artistFamilyActions.expand();
+      const before = (await artistFamilyActions.readChipTexts()).map((text) => String(text || '').trim());
+      const structure = await artistFamilyActions.readPanelStructure();
+      expect(structure.headerBox).not.toBeNull();
+      expect(structure.combineBox.y).toBeGreaterThanOrEqual(structure.headerBox.y + structure.headerBox.height - 1);
+      expect(structure.primaryDraggable).toBe('false');
+      expect(structure.anchorEnvelope).toBe('right');
+      expect(structure.anchorWidth).toMatch(/^\d+px$/);
+      expect(structure.anchorHeight).toMatch(/^\d+px$/);
+      expect(structure.total).toMatch(/^\d+ albums?$/);
+
+      const source = EXPECTED_FAMILY.resonance;
+      const target = EXPECTED_FAMILY.cosmic;
+      expect(before.indexOf(source)).toBeGreaterThan(before.indexOf(target));
+      await artistFamilyActions.dragChipBefore(source, target);
+      const after = (await artistFamilyActions.readChipTexts()).map((text) => String(text || '').trim());
+      expect(after[0]).toBe(EXPECTED_FAMILY.primary);
+      expect(after.indexOf(source)).toBeLessThan(after.indexOf(target));
+      expect((await artistFamilyActions.readPanelStructure()).total).toBe(structure.total);
     });
 
     await stepLogger.step('Find one Resonance heading across the entire virtualized gallery', async () => {
@@ -119,8 +142,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
     await stepLogger.step('Keep one Resonance heading after filtering to that artist', async () => {
       await artistFamilyActions.expand();
-      await artistFamilyActions.clickChipByName(EXPECTED_FAMILY.resonance);
-      await artistFamilyActions.waitForChipActive(EXPECTED_FAMILY.resonance, true);
+      await artistFamilyActions.selectOnlyChipByName(EXPECTED_FAMILY.resonance);
       await galleryActions.waitForOnlyArtistHeadings([EXPECTED_FAMILY.resonance], { timeout: 60000 });
       await galleryActions.scrollToAlbumUnderHeading(
         EXPECTED_FAMILY.resonance,
@@ -347,6 +369,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
         EXPECTED_FAMILY.progWorld,
       ]));
       await artistFamilyActions.waitForPrimaryChipActive(EXPECTED_FAMILY.primary);
+      await artistFamilyActions.waitForAllChipsActive(chipTexts);
     });
 
     const searchIdleMemory = await stepLogger.step('Sample idle memory after the search-loaded Neal Morse family view settles', async () => (
@@ -362,7 +385,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     const resonanceChipReadyMs = await stepLogger.step('Filter the family view down to Neal Morse & The Resonance only', async () => (
       measureActionTime(
         async () => {
-          await artistFamilyActions.clickChipByName(EXPECTED_FAMILY.resonance);
+          await artistFamilyActions.selectOnlyChipByName(EXPECTED_FAMILY.resonance);
         },
         async () => {
           await artistFamilyActions.waitForChipActive(EXPECTED_FAMILY.resonance, true);
@@ -679,8 +702,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     });
 
     await stepLogger.step('Narrow the Neal Morse family view down to the primary and Resonance sections before testing Combine similar artists', async () => {
-      await artistFamilyActions.clickChipByName(EXPECTED_FAMILY.resonance);
-      await artistFamilyActions.waitForChipActive(EXPECTED_FAMILY.resonance, true);
+      await artistFamilyActions.selectOnlyChipByName(EXPECTED_FAMILY.resonance);
       await artistFamilyActions.clickPrimaryChip();
       await artistFamilyActions.waitForPrimaryAndRelatedFilterActive(
         EXPECTED_FAMILY.resonance,

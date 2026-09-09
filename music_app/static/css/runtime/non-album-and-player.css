@@ -1,4 +1,4 @@
-﻿.non-album-modal {
+.non-album-modal {
   position: fixed;
   inset: 0;
   z-index: 110;
@@ -1700,4 +1700,57 @@ body.modal-open { overflow: hidden; }
 
 .utility-operational-problem-copy span {
   color: var(--muted);
+}
+/* Player size controls stay in the visible row and use only a chevron. */
+:root .global-player:not(.is-compact) { padding-left: 6px; }
+:root .global-player .player-collapse-button {
+  position: relative; left: auto; top: auto; flex: 0 0 22px;
+}
+:root .global-player :is(.player-collapse-button, .compact-player-expand),
+:root .global-player :is(.player-collapse-button, .compact-player-expand):is(:hover, :focus, :focus-visible, :active) {
+  border: 0 !important; outline: none !important; box-shadow: none !important;
+  background: transparent !important;
+}
+:root .global-player :is(.player-collapse-button, .compact-player-expand) .ui-button__content {
+  font-size: 0;
+}
+:root .global-player :is(.player-collapse-button, .compact-player-expand) .ui-button__content::before {
+  content: ''; display: block; width: 8px; height: 8px;
+  border: solid currentColor; border-width: 0 2px 2px 0;
+  transform: rotate(-45deg); font-size: 0;
+}
+:root .global-player .player-collapse-button .ui-button__content::before { transform: rotate(135deg); }
+:root .global-player :is(.player-collapse-button, .compact-player-expand)[hidden] { display: none; }
+
+/* Floating compact player keeps a small, stable expand button above the art. */
+:root .global-player.is-floating-compact .compact-player-expand,
+:root .global-player.is-floating-compact .compact-player-expand:is(:hover, :focus, :focus-visible, :active) {
+  background: var(--appearance-player, #10251f) !important;
+  border: 1px solid color-mix(in srgb, var(--appearance-player-ink, #dcebe3) 35%, transparent) !important;
+  border-radius: 9px;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Center the painted chevron, whose rotated borders sit right of its box. */
+:root .global-player.is-floating-compact .compact-player-expand .ui-button__content::before {
+  width: 6px;
+  height: 6px;
+  transform: translateX(-2px) rotate(-45deg);
+}
+
+/* Leave room inside the scrolling loop list for the circular control and glow. */
+.utility-loop-group-main { box-sizing: border-box; padding-left: 12px; }
+
+.utility-loop-stereo-waveform { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.utility-loop-stereo-waveform[hidden] { display: none; }
+.utility-loop-timeline-wrap.is-stereo-waveform .utility-loop-timeline {
+  appearance: none; -webkit-appearance: none; height: 32px; margin: 0; background: transparent; opacity: 0; cursor: pointer;
+}
+.utility-loop-timeline-wrap.is-stereo-waveform:focus-within { outline: 1px solid var(--appearance-waveform-edge, #AFD8C2); outline-offset: 2px; }
+
+/* A restrained palette-colored halo keeps player text crisp. */
+:root .global-player :is(.player-title, .player-time) {
+  text-shadow: 0 0 4px color-mix(in srgb, var(--appearance-waveform-edge, #AFD8C2) 24%, transparent),
+    0 0 8px color-mix(in srgb, var(--appearance-play, #24B86B) 16%, transparent);
 }

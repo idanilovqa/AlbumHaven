@@ -1,3 +1,34 @@
+const utilityLoopStereoLoads = new WeakMap();
+
+function updateUtilityLoopStereoWaveform(loopId, audio) {
+  const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
+  if (!canvas || !audio) return;
+  const enabled = state.player.appearance?.seekbarMode === 'waveform';
+  const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
+  canvas.hidden = !enabled || editing;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', enabled && !editing);
+  if (!enabled || editing) return;
+  const cached = utilityLoopStereoLoads.get(canvas);
+  if (cached?.peaks) {
+    const duration = Number(audio.duration) || 0;
+    drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
+    return;
+  }
+  if (cached) return;
+  const entry = { peaks: null };
+  utilityLoopStereoLoads.set(canvas, entry);
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).then(peaks => {
+    entry.peaks = peaks;
+    if (peaks && canvas.isConnected) updateUtilityLoopStereoWaveform(loopId, audio);
+  }).catch(() => {});
+}
+
+function refreshUtilityLoopStereoWaveforms() {
+  document.querySelectorAll('[data-loop-audio]').forEach(audio => {
+    updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
+  });
+}
+
 function isUtilityLoopTextEntry(element) {
   if (!(element instanceof HTMLElement)) return false;
   const tagName = String(element.tagName || '').toUpperCase();
@@ -261,18 +292,24 @@ function positionUtilityLoopSpeedMenu(loopId) {
 
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
-  const activeRect = activeOption.getBoundingClientRect();
-  const activeOffset = activeOption.offsetTop + (activeRect.height / 2);
+
+
 
   let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  let top = triggerRect.top + (triggerRect.height / 2) - activeOffset;
+  const below = window.innerHeight - triggerRect.bottom - 8;
+  const above = triggerRect.top - 8;
+  const opensBelow = below >= menuRect.height || below >= above;
+  menu.style.maxHeight = `${Math.max(0, (opensBelow ? below : above) - 6)}px`;
+  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
+  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
 
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, menuRect.height, padding);
+  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
 
   menu.style.left = `${clamped.left}px`;
   menu.style.top = `${clamped.top}px`;
   menu.style.visibility = '';
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
 }
 
 function updateUtilityLoopPlayerUi(loopId) {
@@ -289,6 +326,7 @@ function updateUtilityLoopPlayerUi(loopId) {
     timeline.max = String(Math.max(duration, 0.1));
     timeline.value = String(Math.min(current, duration || current));
   }
+  updateUtilityLoopStereoWaveform(id, audio);
   const waveform = state.utility.savedLoopWaveforms?.[id];
   if (elements.canvas && waveform && state.utility.loopEditors?.[id]?.active) {
     drawCombinedLoopWaveform(elements.canvas, waveform, duration > 0 ? current / duration : 0);
@@ -297,7 +335,8 @@ function updateUtilityLoopPlayerUi(loopId) {
     time.textContent = `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   if (playButton) {
-    playButton.textContent = audio.paused ? '\u25B6' : '\u23F8';
+    const icon = audio.paused ? '\u25B6' : '\u23F8';
+    if (playButton.textContent !== icon) playButton.textContent = icon;
     playButton.setAttribute('aria-label', audio.paused ? 'Play' : 'Pause');
   }
 }

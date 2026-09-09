@@ -111,6 +111,7 @@ if (bootstrap.startupPayloadTiers?.hydration && typeof bootstrap.startupPayloadT
   bootstrap.startupPayloadTiers.hydration.embeddedViewPatch = null;
 }
 renderView();
+if (typeof initGalleryMain === 'function') initGalleryMain();
 startupMetrics.markInitialRender(state.view);
 const hasAuthoritativeServerRenderedInitialView = Boolean(
   !bootstrap.partialView
@@ -360,4 +361,15 @@ window.addEventListener('scroll', () => {
 
 if (typeof syncArtistsDrawerVisibility === 'function') {
   syncArtistsDrawerVisibility();
+}
+
+const tagEditorFooter = document.getElementById('tag-editor-footer');
+if (tagEditorFooter) {
+  EditorPage.mountFooter(tagEditorFooter, {
+    showReset: false,
+    canSave: false,
+    leadingElement: document.getElementById('tag-editor-auto-number-controls'),
+    secondary: { label: 'Cancel', attributes: { 'data-close-tag-editor': '1' } },
+    primary: { label: 'Apply', attributes: { 'data-open-tag-edit-confirm': '1' } },
+  });
 }

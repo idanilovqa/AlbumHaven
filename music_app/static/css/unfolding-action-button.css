@@ -1,0 +1,57 @@
+.unfolding-action-button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--appearance-control, var(--app-control, var(--panel)));
+  transition: width 180ms ease;
+}
+.unfolding-action-button.is-open { width: calc(32px * var(--unfolding-action-count, 2) + 2px); }
+.unfolding-action-button:is(:hover, :focus-within) {
+  outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play));
+  outline-offset: 1px;
+}
+:root .unfolding-action-button > .unfolding-action-button__action {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 0px;
+  width: 0;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: flex-basis 180ms ease, opacity 180ms ease, color 150ms ease;
+}
+:root .unfolding-action-button.is-open > .unfolding-action-button__action,
+:root .unfolding-action-button > .unfolding-action-button__action.is-active {
+  flex-basis: 32px;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+:root .unfolding-action-button > .unfolding-action-button__action.is-active {
+  color: var(--appearance-ink, var(--text));
+}
+:root .unfolding-action-button > .unfolding-action-button__action:focus-visible { background: var(--app-active, #1b3047); }
+@media (prefers-reduced-motion: reduce) {
+  .unfolding-action-button,
+  :root .unfolding-action-button > .unfolding-action-button__action { transition: none; }
+}
+
+:root .unfolding-action-button > .unfolding-action-button__action:is(:hover, :active) {
+  background: transparent !important;
+}
+
+:root .unfolding-action-button > .unfolding-action-button__action:is(:hover, :focus-visible) { color: var(--appearance-interaction-outline, var(--appearance-play)); }

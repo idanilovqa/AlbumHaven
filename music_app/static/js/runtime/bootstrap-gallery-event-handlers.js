@@ -1,4 +1,5 @@
 ﻿function handleGalleryBootstrapClick(event) {
+  if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -19,17 +20,6 @@
   if (!event.target.closest('#track-modal-version-context-menu')) {
     hideVersionContextMenu();
   }
-  if (!event.target.closest('#gallery-options-menu, [data-open-gallery-options="1"]') && state.gallery.menuOpen) {
-    hideGalleryOptionsMenu();
-  }
-  const galleryOptionsButton = event.target.closest('[data-open-gallery-options="1"]');
-  if (galleryOptionsButton) {
-    event.preventDefault();
-    if (state.gallery.menuOpen) hideGalleryOptionsMenu();
-    else showGalleryOptionsMenu(galleryOptionsButton);
-    return;
-  }
-
   const toggleCombineSimilarArtistsButton = event.target.closest('[data-toggle-combine-similar-artists="1"]');
   if (toggleCombineSimilarArtistsButton && !toggleCombineSimilarArtistsButton.disabled) {
     event.preventDefault();
@@ -41,60 +31,9 @@
     }
     return;
   }
-
-  const galleryCategoryToggle = event.target.closest('[data-gallery-category-toggle]');
-  if (galleryCategoryToggle && !galleryCategoryToggle.disabled) {
-    event.preventDefault();
-    const category = String(galleryCategoryToggle.getAttribute('data-gallery-category-toggle') || '').trim();
-    const currentCategories = typeof resolveMainGalleryCategorySelection === 'function'
-      ? resolveMainGalleryCategorySelection(state.view?.visible_library_categories)
-      : ['main_library', 'hoard', 'new_arrivals'];
-    const nextCategories = currentCategories.includes(category)
-      ? currentCategories.filter((item) => item !== category)
-      : [...currentCategories, category];
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'all',
-      visible_library_categories: nextCategories,
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
-  const openNewArrivalsButton = event.target.closest('[data-open-new-arrivals="1"]');
-  if (openNewArrivalsButton) {
-    event.preventDefault();
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'new_arrivals',
-      visible_library_categories: ['new_arrivals'],
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
-  const openMainGalleryButton = event.target.closest('[data-open-main-gallery="1"]');
-  if (openMainGalleryButton) {
-    event.preventDefault();
-    const restoredCategories = typeof resolveMainGalleryCategorySelection === 'function'
-      ? resolveMainGalleryCategorySelection(state.view?.visible_library_categories)
-      : ['main_library', 'hoard', 'new_arrivals'];
-    fetchAndRender(buildUrl({
-      ...state.view,
-      gallery_scope: 'all',
-      visible_library_categories: restoredCategories,
-      related_filter_artists: [],
-      primary_filter_active: false,
-    }), true);
-    return;
-  }
-
   const openNonAlbumModalButton = event.target.closest('[data-open-non-album-modal="1"]');
   if (openNonAlbumModalButton) {
     event.preventDefault();
-    hideGalleryOptionsMenu();
     openNonAlbumModal();
     return;
   }
@@ -525,14 +464,49 @@ function handleSidebarArtistSelectionClick(event) {
   }
   state.ui.pendingSidebarSelectedArtist = artist;
   state.ui.pendingSidebarAllArtistsActive = false;
+  const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
+  const primaryArtistChanged = String(artist || '').trim() !== currentSelectedArtist;
   const activeSearchQuery = String(state.view?.query || '').trim();
+  const previousGalleryMainState = state.gallery.mainState;
+  const previousAlbumTypes = new Set(previousGalleryMainState?.albumTypes || ['studio', 'ep']);
+  const galleryFiltersWereCustomized = Boolean(previousGalleryMainState && (
+    Object.values(previousGalleryMainState.sources || {}).some((enabled) => enabled === false)
+    || previousAlbumTypes.size !== 2
+    || !previousAlbumTypes.has('studio')
+    || !previousAlbumTypes.has('ep')
+    || previousGalleryMainState.familySelectionExplicit === true
+    || (previousGalleryMainState.familyArtists || []).length
+  ));
+  if (primaryArtistChanged) {
+    clearPendingSelectedArtistReconcile();
+    clearPendingGallerySearchCommit();
+    updateGallerySearchDraftQuery('');
+    state.ui.pendingSearchClearOnBlur = false;
+    state.ui.preSearchView = null;
+    state.ui.preSearchViewOrigin = '';
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) searchInput.value = '';
+    closeRecentSearchPopover();
+    releaseAlbumDetailPrewarmSearchSuspension(
+      Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
+    );
+    releasePendingSearchWaveformPeakLoadSuspension();
+    state.gallery.mainState = resetGalleryMainStateForPrimaryArtist(
+      state.gallery.mainState || {},
+    );
+  }
   const nextView = {
     ...state.view,
+    query: primaryArtistChanged ? '' : state.view.query,
     selected_artist: artist,
     all_artists_active: false,
+    visible_library_categories: primaryArtistChanged
+      ? ['main_library', 'new_arrivals', 'hoard']
+      : state.view.visible_library_categories,
     related_filter_artists: [],
     primary_filter_active: false,
-    ...(activeSearchQuery ? {
+    search_context: primaryArtistChanged ? null : state.view.search_context,
+    ...(!primaryArtistChanged && activeSearchQuery ? {
       search_context: {
         ...(state.view?.search_context && typeof state.view.search_context === 'object'
           ? state.view.search_context
@@ -543,7 +517,6 @@ function handleSidebarArtistSelectionClick(event) {
     } : {}),
   };
   const sidebarSelectionUpdated = applyImmediateSidebarArtistSelection(sidebarArtistLink, artist);
-  const currentSelectedArtist = String(state.view?.selected_artist || '').trim();
   const currentRelatedArtists = Array.isArray(state.view?.related_artists)
     ? state.view.related_artists
     : [];
@@ -566,7 +539,9 @@ function handleSidebarArtistSelectionClick(event) {
     hasCurrentFamilyContext
     && !currentFamilyArtistNames.has(String(artist || '').trim())
   );
-  if (!isUnrelatedFamilyTransition && tryRenderOptimisticSidebarArtistSelection(nextView)) {
+  if (!isUnrelatedFamilyTransition && tryRenderOptimisticSidebarArtistSelection(nextView, {
+    forceFetch: primaryArtistChanged && galleryFiltersWereCustomized,
+  })) {
     return true;
   }
   if (isUnrelatedFamilyTransition) {
@@ -772,6 +747,13 @@ function openRecentSearchPopover() {
   ui.recentSearchPopoverOpen = true;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
+  const { input, popover } = getRecentSearchElements();
+  if (typeof openGalleryMainSurface === 'function' && input && popover) {
+    positionSearchSuggestionsSurface(popover);
+    if (typeof galleryMainSurfaceController === 'undefined' || !galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+      openGalleryMainSurface('search-suggestions', input, popover, 'left');
+    }
+  }
   return true;
 }
 
@@ -781,6 +763,9 @@ function closeRecentSearchPopover() {
   ui.recentSearchPopoverOpen = false;
   ui.recentSearchActiveIndex = -1;
   renderRecentSearchPopover();
+  if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('search-suggestions')) {
+    galleryMainSurfaceController.close(false);
+  }
 }
 
 function selectRecentSearchQuery(query) {
@@ -854,10 +839,7 @@ function handleGalleryBootstrapSearchKeyDown(event) {
   if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return false;
   if (!queries.length) return false;
   event.preventDefault();
-  if (!open) {
-    ui.recentSearchPopoverOpen = true;
-    ui.recentSearchActiveIndex = -1;
-  }
+  if (!open) openRecentSearchPopover();
   if (event.key === 'Home') ui.recentSearchActiveIndex = 0;
   else if (event.key === 'End') ui.recentSearchActiveIndex = queries.length - 1;
   else if (event.key === 'ArrowDown') {
@@ -1009,6 +991,8 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
   const ui = ensureRecentSearchState();
   if (ui && !String(normalizedQuery || '').trim()) {
     closeRecentSearchPopover();
+  } else if (ui && !ui.recentSearchPopoverOpen) {
+    openRecentSearchPopover();
   }
   if (ui && ui.recentSearchActiveIndex >= 0) {
     ui.recentSearchActiveIndex = -1;
@@ -1482,7 +1466,7 @@ function isCompleteReusableSelectedArtistBrowseView(view, selectedArtist) {
     && albums.every((album) => !Boolean(album?.preview_only));
 }
 
-function tryRenderOptimisticSidebarArtistSelection(nextView) {
+function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
   const query = String(state.view?.query || '').trim();
   const optimisticGroups = buildOptimisticSidebarArtistSelectionGroups(nextView.selected_artist);
   const reusableSelectedArtistBrowseView = query
@@ -1494,6 +1478,12 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
     state.ui.viewStateRevision = Number(state.ui.viewStateRevision || 0) + 1;
     applyViewPayload({
       ...reusableSelectedArtistBrowseView,
+      query: nextView.query,
+      selected_artist: nextView.selected_artist,
+      all_artists_active: nextView.all_artists_active,
+      visible_library_categories: nextView.visible_library_categories,
+      related_filter_artists: nextView.related_filter_artists,
+      primary_filter_active: nextView.primary_filter_active,
       search_context: nextView.search_context,
     }, {
       trackSidebarReveal: false,
@@ -1503,7 +1493,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
       resetScrollForUserArtistSelection: true,
     });
     pushBrowserViewState(nextView);
-    if (!isCompleteReusableSelectedArtistBrowseView(
+    if (options.forceFetch || !isCompleteReusableSelectedArtistBrowseView(
       reusableSelectedArtistBrowseView,
       nextView.selected_artist,
     )) {
@@ -1519,7 +1509,7 @@ function tryRenderOptimisticSidebarArtistSelection(nextView) {
   const optimisticRelatedArtists = Array.isArray(optimisticGroups.relatedArtists)
     ? optimisticGroups.relatedArtists
     : [];
-  const shouldSkipFetch = Boolean(optimisticGroups.skipFetch);
+  const shouldSkipFetch = Boolean(optimisticGroups.skipFetch) && options.forceFetch !== true;
   const optimisticArtistGroups = typeof buildSelectedArtistRuntimeArtistGroups === 'function'
     ? buildSelectedArtistRuntimeArtistGroups(nextView, optimisticPrimaryGroups, optimisticFamilyGroups)
     : [...optimisticPrimaryGroups, ...optimisticFamilyGroups];
@@ -1890,5 +1880,6 @@ function syncSearchClear() {
 }
 
 function handleGalleryBootstrapPopState() {
+  if (typeof syncGalleryMainStateFromLocation === 'function') syncGalleryMainStateFromLocation();
   fetchAndRender(getBrowserLocationHref(), false);
 }

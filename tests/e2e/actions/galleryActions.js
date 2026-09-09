@@ -536,7 +536,7 @@ export class GalleryActions {
       const headings = Array.from(document.querySelectorAll(selectors.artistHeadingSelector))
         .map((element) => (element.textContent || '').trim())
         .filter(Boolean);
-      if (!headings.length) return false;
+      if (!headings.length) return selectors.expectedArtists.length === 0;
       return headings.length === selectors.expectedArtists.length
         && selectors.expectedArtists.every((expectedArtist) => headings.includes(expectedArtist));
     }, {
@@ -545,6 +545,21 @@ export class GalleryActions {
       artistHeadingSelector: this.galleryPage.artistHeadingSelector,
       expectedArtists,
     });
+  }
+
+  async waitForEmptyFamilySelection(options = {}) {
+    await this.galleryPage.emptyFamilySelection.waitFor({
+      state: 'visible',
+      timeout: options.timeout || 30000,
+    });
+    await expect(this.galleryPage.emptyFamilySelection).toHaveText(
+      'Select at least one artist in Artist Family.',
+      { timeout: options.timeout || 30000 },
+    );
+    await expect(this.galleryPage.galleryContextSummary).toHaveText(
+      '0 artists · 0 albums',
+      { timeout: options.timeout || 30000 },
+    );
   }
 
   async waitForDisplayedArtistSections(expectedArtists, options = {}) {

@@ -1,3 +1,4 @@
+import { InteractionSurfaces, expectAlbumPauseFirstClick, expectSlowActivationLights, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
 
 const CASE_ID = 'FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022';
@@ -17,6 +18,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   utilityAppearanceActions,
   utilityTabBarActions,
 }) => {
+  const surfaces = new InteractionSurfaces(page);
   let selectedTrack;
 
   await stepLogger.step('Start generated playback through the production album flow', async () => {
@@ -37,6 +39,16 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     });
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+    await expect(surfaces.playingRow).not.toHaveCSS('box-shadow', 'none');
+    await expect(surfaces.playingRow).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expectStableButtonHover(page, surfaces.albumArt);
+    await expect(surfaces.albumArt).toHaveCSS('outline-style', 'none');
+    await expectSlowActivationLights(trackModalActions.trackModal.playButtons.first());
+    await globalPlayerActions.waitForPlaybackState({ paused: true });
+    await trackModalActions.trackModal.playButtons.first().click();
+    await globalPlayerActions.waitForPlaybackState({ paused: false });
+    await expectAlbumPauseFirstClick(page, globalPlayerActions);
+    await expect(surfaces.playerTitle).not.toHaveCSS('text-shadow', 'none');
     await trackModalActions.close();
   });
 
@@ -123,6 +135,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await expect(globalPlayerActions.globalPlayer.compactPlayer.coverButton)
       .toHaveAttribute('aria-label', 'Double-click to open album details');
 
+    await expectStableButtonHover(page, globalPlayerActions.globalPlayer.compactPlayer.expand.root);
+    await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toHaveCSS('border-top-width', '1px');
     const idleAppearance = floating.floatingAppearance;
     await globalPlayerActions.globalPlayer.player.hover();
     const hoverAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
@@ -167,4 +181,19 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect((await globalPlayerActions.readViewCheckpoint()).style).toBe('floating');
     await globalPlayerActions.expandPlayer();
   });
+  await stepLogger.step('A second tab shows a disabled play icon rather than a Locked label', async () => {
+    await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.playTrackAt(0);
+    await globalPlayerActions.waitForPlaybackState({ paused: false });
+    const peer = await page.context().newPage();
+    try {
+      await peer.goto(page.url());
+      const peerSurfaces = new InteractionSurfaces(peer);
+      await expect(peerSurfaces.play).toBeDisabled();
+      await expect(peerSurfaces.play).not.toContainText('Locked');
+      await expect(peerSurfaces.play).toHaveAttribute('aria-label', 'Playback locked in another tab');
+    } finally { await peer.close(); }
+  });
+
 });

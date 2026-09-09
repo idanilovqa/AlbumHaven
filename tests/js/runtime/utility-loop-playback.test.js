@@ -1956,3 +1956,55 @@ test('successful saved-loop deletion stops the editor expiry once after confirma
 
   assert.deepEqual(stops, ['saved-loop-loop-1']);
 });
+
+ test('saved loop uses the combined L+R renderer and reuses peaks across progress updates', async () => {
+  const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } };
+  const audio = { duration: 20, currentTime: 5 };
+  const peaks = { left: [0.2, 0.8], right: [0.7, 0.3] };
+  let loads = 0;
+  const draws = [];
+  const state = { player: { appearance: { seekbarMode: 'default' } }, utility: { loopEditors: {} } };
+  const context = loadHelper({ state, document: { querySelector: () => canvas },
+    loadSavedLoopWaveformPeaks: async () => { loads++; return peaks; },
+    drawCombinedLoopWaveform: (...args) => draws.push(args),
+  });
+  context.loadSavedLoopWaveformPeaks = async () => { loads++; return peaks; };
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(loads, 0);
+  assert.equal(canvas.hidden, true);
+  state.player.appearance.seekbarMode = 'waveform';
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(canvas.hidden, false);
+  assert.equal(draws[0][1], peaks);
+  assert.equal(draws[0][2], 0.25);
+  audio.currentTime = 10;
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(loads, 1);
+  assert.equal(draws.at(-1)[2], 0.5);
+  state.utility.loopEditors.loop = { active: true };
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, true);
+  state.utility.loopEditors.loop.active = false;
+  state.player.appearance.seekbarMode = 'default';
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, true);
+});
+
+test('loop progress updates preserve the play button content until playback changes', () => {
+  let writes = 0;
+  let text = '';
+  const button = { get textContent() { return text; }, set textContent(value) { text = value; writes++; }, setAttribute() {} };
+  const audio = { paused: false, duration: 20, currentTime: 1 };
+  const context = loadHelper({ document: { querySelector: selector => selector.includes('data-loop-play=') ? button : null } });
+  context.getSavedLoopRangeElements = () => ({ audio });
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 1);
+  audio.currentTime = 2;
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 1, 'progress should not replace the pressed button content');
+  audio.paused = true;
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 2);
+  assert.equal(text, '▶');
+});

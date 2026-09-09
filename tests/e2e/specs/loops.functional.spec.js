@@ -1,3 +1,4 @@
+import { InteractionSurfaces, expectCombinedLoopWaveform, expectLoopPauseFirstClick, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
 
 const CASE_ID = 'FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011';
@@ -15,6 +16,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   galleryActions,
   globalPlayerActions,
   playbackEvidence,
+  page,
   settingsModalAppBarActions,
   stepLogger,
   trackModalActions,
@@ -22,6 +24,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   utilityLoopsActions,
   utilityTabBarActions,
 }) => {
+  const surfaces = new InteractionSurfaces(page);
   let nestedLoopDurationSeconds = 0;
   let fullTrackDurationSeconds = 0;
   let warmupLoopId = '';
@@ -324,6 +327,9 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       childLoopCount: 0,
     });
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    await expectCombinedLoopWaveform(page);
+    await expectStableButtonHover(page, surfaces.loopPlay);
+    await expectLoopPauseFirstClick(page);
     const detail = await utilityLoopsActions.readDetailSummary();
     expect(detail.title).toBe(LOOP_TRACK_TITLE);
     expect(detail.entryCount).toBe(1);

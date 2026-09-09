@@ -145,6 +145,8 @@ export class GalleryPage extends BasePage {
     this.libraryLoaderTitle = page.locator(this.libraryLoaderTitleSelector);
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
+    this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);

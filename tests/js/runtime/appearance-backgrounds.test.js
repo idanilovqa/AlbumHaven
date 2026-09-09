@@ -317,3 +317,45 @@ for (const stage of ['response', 'body']) {
     assert.equal(styles.size, 0);
   });
 }
+
+
+test('automatic application outlines use the play color while explicit color choices remain authoritative', () => {
+  const appearance = runtime();
+  const effective = { tokens: { play: '#24B86B', 'waveform-fill': '#387F68', 'player-control-border': '#86EFAC', accent: '#AAAAAA' } };
+  const preference = source => ({ interaction_overrides: { item_outline: { source, color: '#123456' } } });
+  assert.equal(appearance.resolveInteractionOutline(preference('automatic'), effective), '#24B86B');
+  assert.equal(appearance.resolveInteractionOutline(preference('player'), effective), '#24B86B');
+  assert.equal(appearance.resolveInteractionOutline(preference('custom'), effective), '#123456');
+  assert.equal(appearance.resolveInteractionOutline(preference('theme'), effective), '#AAAAAA');
+});
+
+test('explicit selected fill overrides neutral default and reset removes the override', () => {
+  const values = new Map();
+  const root = { style: { setProperty: (key, value) => values.set(key, value), removeProperty: key => values.delete(key) } };
+  const interaction_overrides = { item_hover: null, item_selected: '#823C68', button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } };
+  const preference = { ...defaults(), palette_id: null, panel_index: 0, player_override: null, selection_accent: { enabled: true, color: '#24B86B' }, interaction_overrides };
+  runtime().applyTheme(preference, root);
+  assert.equal(values.get('--selection-body-background'), '#823C68');
+  runtime().applyTheme({ ...preference, interaction_overrides: { ...interaction_overrides, item_selected: null } }, root);
+  assert.equal(values.has('--selection-body-background'), false);
+  runtime().applyTheme(preference, root);
+  runtime().clearTheme(root);
+  assert.equal(values.has('--selection-body-background'), false);
+});
+
+ test('panel outline keeps default blue across palettes unless explicitly overridden', () => {
+  const values = new Map();
+  const root = { style: { setProperty: (k,v) => values.set(k,v), removeProperty: k => values.delete(k) } };
+  const appearance = runtime();
+  const preference = { ...defaults(), palette_id: null, panel_index: 0, player_override: null, selection_accent: { enabled: true, color: '#24B86B' }, interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null }, panel_outline: null } };
+  for (const palette of appearance.palettes) {
+    const themed = { ...preference, palette_id: palette.id };
+    appearance.applyTheme(themed, root);
+    assert.equal(values.has('--appearance-selected-accent'), false, 'use the shared default blue instead of a palette accent');
+    appearance.applyTheme({ ...themed, interaction_overrides: { ...preference.interaction_overrides, panel_outline: '#AABBCC' } }, root);
+    assert.equal(values.get('--appearance-selected-accent'), '#AABBCC');
+  }
+  appearance.applyTheme(preference, root);
+  assert.equal(values.has('--appearance-selected-accent'), false);
+  assert.throws(() => appearance.normalizeInteractionOverrides({ ...preference.interaction_overrides, panel_outline: 'invalid' }), TypeError);
+});

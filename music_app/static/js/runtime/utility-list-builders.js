@@ -103,6 +103,7 @@ function buildUtilityLoopEntry(loop) {
             <div class="utility-loop-time" data-loop-time="${loopId}">0:00 / 0:00</div>
           </div>
           <div class="utility-loop-timeline-wrap">
+            <canvas class="utility-loop-stereo-waveform" data-loop-stereo-waveform="${loopId}" aria-hidden="true" hidden></canvas>
             <input class="utility-loop-timeline" type="range" data-loop-timeline="${escapeHtml(loop.id || '')}" min="0" max="100" step="0.01" value="0" aria-label="Playback position">
             <div class="loop-range-surface" data-loop-range-owner="saved-loop-${loopId}" data-loop-range-surface hidden>
               <canvas class="utility-saved-loop-waveform" data-loop-range-waveform aria-hidden="true"></canvas>
@@ -2828,6 +2829,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterMenu) {
     els.problemFilterMenu.hidden = !state.utility.problemDropdownOpen;
+    if (state.utility.problemDropdownOpen && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(els.problemFilterMenu, els.problemFilterButton);
+    else if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
     els.problemFilterMenu.innerHTML = reasonTypes.length
       ? reasonTypes.map((reason) => `
           <button class="utility-problem-filter-option ${selectedSet.has(reason) ? 'is-selected' : ''}" type="button" data-problem-filter-value="${escapeHtml(reason)}" role="option" aria-selected="${selectedSet.has(reason) ? 'true' : 'false'}">

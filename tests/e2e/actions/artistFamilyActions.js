@@ -59,13 +59,13 @@ export class ArtistFamilyActions {
   }
 
   async readChipTexts() {
-    return this.artistFamily.chips.allTextContents();
+    return this.artistFamily.chipLabels.allTextContents();
   }
 
   async readPanelState() {
     return {
       visible: await this.artistFamily.box.isVisible(),
-      chipTexts: (await this.artistFamily.chips.allTextContents())
+      chipTexts: (await this.artistFamily.chipLabels.allTextContents())
         .map((text) => String(text || '').trim())
         .filter(Boolean),
     };
@@ -86,16 +86,110 @@ export class ArtistFamilyActions {
     await this.artistFamily.chipByName(name).click({ noWaitAfter: true, ...options });
   }
 
+  async readPanelStructure() {
+    const [headerBox, combineBox, panelBox, toggleBox] = await Promise.all([
+      this.artistFamily.header.boundingBox(),
+      this.artistFamily.combineRow.boundingBox(),
+      this.artistFamily.box.boundingBox(),
+      this.artistFamily.toggle.boundingBox(),
+    ]);
+    // parity-check: allow-read-only-measurement-evaluate -- measure the shared trigger envelope
+    const envelope = await this.artistFamily.box.evaluate((panel) => ({
+      anchorEnvelope: panel.dataset.anchorEnvelope || '',
+      anchorWidth: getComputedStyle(panel).getPropertyValue('--gallery-anchor-width').trim(),
+      anchorHeight: getComputedStyle(panel).getPropertyValue('--gallery-anchor-height').trim(),
+    }));
+    return {
+      headerBox,
+      combineBox,
+      panelBox,
+      toggleBox,
+      total: String(await this.artistFamily.total.textContent() || '').trim(),
+      primaryDraggable: await this.artistFamily.primaryChip.getAttribute('draggable'),
+      ...envelope,
+    };
+  }
+
+  async dragChipBefore(sourceName, targetName) {
+    const source = this.artistFamily.chipByName(sourceName);
+    const target = this.artistFamily.chipByName(targetName);
+    await source.dragTo(target);
+    await this.artistFamily.waitForPageCondition((expected) => {
+      const names = Array.from(document.querySelectorAll(expected.chipSelector))
+        .map((chip) => (chip.querySelector(expected.chipLabelSelector)?.textContent || '').trim());
+      return names.indexOf(expected.sourceName) >= 0
+        && names.indexOf(expected.sourceName) < names.indexOf(expected.targetName);
+    }, { timeout: 10000 }, {
+      chipSelector: this.artistFamily.chipSelector,
+      chipLabelSelector: this.artistFamily.chipLabelSelector,
+      sourceName,
+      targetName,
+    });
+  }
+
+  async selectOnlyChipByName(name, options = {}) {
+    await this.expand(options);
+    const labels = (await this.readChipTexts())
+      .map((text) => String(text || '').trim())
+      .filter(Boolean);
+    if (!labels.includes(name)) {
+      throw new Error(`Artist Family does not contain ${JSON.stringify(name)}.`);
+    }
+    for (const label of labels) {
+      if (label === name) continue;
+      const chip = this.artistFamily.chipByName(label);
+      if (String(await chip.getAttribute('class') || '').split(/\s+/).includes('is-active')) {
+        await chip.click({ noWaitAfter: true, ...options });
+        await this.waitForChipActive(label, false, options);
+      }
+    }
+    const target = this.artistFamily.chipByName(name);
+    if (!String(await target.getAttribute('class') || '').split(/\s+/).includes('is-active')) {
+      await target.click({ noWaitAfter: true, ...options });
+    }
+    await this.waitForChipActive(name, true, options);
+  }
+
+  async waitForAllChipsActive(expectedNames, options = {}) {
+    await this.artistFamily.waitForPageCondition((expected) => {
+      const chips = Array.from(document.querySelectorAll(expected.chipSelector));
+      const activeNames = new Set(chips
+        .filter((chip) => chip.classList.contains('is-active'))
+        .map((chip) => (chip.querySelector(expected.chipLabelSelector)?.textContent || '').trim()));
+      return expected.names.every((name) => activeNames.has(name));
+    }, {
+      timeout: options.timeout || 30000,
+    }, {
+      chipSelector: this.artistFamily.chipSelector,
+      chipLabelSelector: this.artistFamily.chipLabelSelector,
+      names: expectedNames.map((name) => String(name || '').trim()).filter(Boolean),
+    });
+  }
+
+  async selectAllChips(options = {}) {
+    await this.expand(options);
+    const labels = (await this.readChipTexts()).map((text) => String(text || '').trim()).filter(Boolean);
+    for (const label of labels) {
+      const chip = this.artistFamily.chipByName(label);
+      if (!String(await chip.getAttribute('class') || '').split(/\s+/).includes('is-active')) {
+        await chip.click({ noWaitAfter: true, ...options });
+        await this.waitForChipActive(label, true, options);
+      }
+    }
+    await this.waitForAllChipsActive(labels, options);
+  }
+
   async waitForPrimaryChipActive(expectedText, options = {}) {
     await this.artistFamily.waitForPageCondition((selectors) => {
       const chip = document.querySelector(selectors.primaryChipSelector);
       if (!(chip instanceof HTMLElement)) return false;
       return chip.classList.contains('is-primary')
-        && (chip.textContent || '').trim() === selectors.expectedText;
+        && (chip.querySelector(selectors.chipLabelSelector)?.textContent || '').trim() === selectors.expectedText;
     }, {
       timeout: options.timeout || 30000,
     }, {
       primaryChipSelector: this.artistFamily.primaryChipSelector,
+      chipLabelSelector: this.artistFamily.chipLabelSelector,
       expectedText,
     });
   }
@@ -103,14 +197,15 @@ export class ArtistFamilyActions {
   async waitForChipActive(name, active = true, options = {}) {
     await this.artistFamily.waitForPageCondition((selectors) => {
       const chip = Array.from(document.querySelectorAll(selectors.chipSelector)).find((element) => (
-        (element.textContent || '').trim() === selectors.expectedText
+        (element.querySelector(selectors.chipLabelSelector)?.textContent || '').trim() === selectors.expectedText
       ));
       if (!(chip instanceof HTMLElement)) return false;
-      return chip.classList.contains('active') === selectors.active;
+      return chip.classList.contains('is-active') === selectors.active;
     }, {
       timeout: options.timeout || 30000,
     }, {
       chipSelector: this.artistFamily.chipSelector,
+      chipLabelSelector: this.artistFamily.chipLabelSelector,
       expectedText: name,
       active: Boolean(active),
     });
@@ -119,9 +214,10 @@ export class ArtistFamilyActions {
   async waitForPrimaryAndRelatedFilterActive(relatedArtist, options = {}) {
     await this.artistFamily.waitForPageCondition((expectedArtist) => {
       if (typeof state === 'undefined') return false;
-      return Boolean(state.view?.primary_filter_active)
-        && Array.isArray(state.view?.related_filter_artists)
-        && state.view.related_filter_artists.includes(expectedArtist);
+      const galleryState = state.gallery?.mainState;
+      return galleryState?.familySelectionExplicit === true
+        && Array.isArray(galleryState.familyArtists)
+        && galleryState.familyArtists.includes(expectedArtist);
     }, {
       timeout: options.timeout || 60000,
     }, String(relatedArtist || '').trim());

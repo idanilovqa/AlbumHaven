@@ -1,6 +1,6 @@
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -84,6 +84,10 @@ function handleViewportRefocusVisibilityChange() {
 }
 
 function suppressRefocusViewportInteraction(event) {
+  if (isViewportRefocusExemptTarget(getViewportRefocusEventTarget(event))) {
+    clearViewportRefocusSuppression();
+    return false;
+  }
   const now = Date.now();
   if (!isViewportRefocusSuppressionActive(now)) {
     return false;
@@ -98,6 +102,10 @@ function suppressRefocusViewportInteraction(event) {
 }
 
 function suppressRefocusViewportClick(event) {
+  if (isViewportRefocusExemptTarget(getViewportRefocusEventTarget(event))) {
+    clearViewportRefocusSuppression();
+    return false;
+  }
   const now = Date.now();
   if (now > Number(state.ui.suppressClickSequenceUntil || 0)) {
     return false;

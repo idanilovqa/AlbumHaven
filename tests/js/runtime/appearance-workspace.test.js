@@ -703,11 +703,11 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:not\(\.global-player \*\)/);
   assert.match(css, /:not\(:disabled\)/);
   assert.match(css, /:not\(\[aria-disabled=['"]true['"]\]\)/);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
-  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
+  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
   assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
   assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
   assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-accent\)/s);
   assert.doesNotMatch(css, /:root\[data-appearance-palette\][^{]*:focus-visible\s*\{[^}]*--appearance-interaction-outline/s);

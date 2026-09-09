@@ -1929,17 +1929,24 @@ function renderTagEditor(options = {}) {
       button.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
     });
   } else {
-    els.list.innerHTML = tracks.map((track) => {
+    const rows = tracks.map((track) => {
       const path = String(track.path || '');
       const fileType = getFileTypeFromPath(path);
       const filename = getFilenameFromPath(path) || track.title || path;
-      return `
+      const content = `
         <button class="tag-editor-track ${selectedPathSet.has(path) ? 'is-active' : ''}" type="button" data-tag-editor-track="${escapeHtml(path)}" aria-pressed="${selectedPathSet.has(path) ? 'true' : 'false'}" title="${escapeHtml(path)}">
           <span class="tag-editor-track-title">${escapeHtml(filename)}</span>
           ${fileType ? `<span class="utility-repair-file-type">${escapeHtml(fileType)}</span>` : ''}
         </button>
       `;
-    }).join('');
+      return { key: path, cells: { file: content } };
+    });
+    els.list.innerHTML = buildCompactDataTable({
+      id: 'tag-editor-files-table', ariaLabel: 'Files to edit',
+      columns: 'minmax(0, 1fr)', headers: 'screen-reader', density: 'compact',
+      frame: 'inset', overflow: 'none',
+      columnsConfig: [{ key: 'file', label: 'File' }], rows,
+    });
   }
 
   els.form.querySelectorAll('[data-tag-field]').forEach((input) => {

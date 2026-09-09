@@ -98,19 +98,19 @@ export class SearchToolbar extends BasePage {
   }
 
   get artistFamilyPanelSelector() {
-    return '#related-box';
+    return '#artist-family-panel';
   }
 
   get artistFamilyToggleSelector() {
-    return '#related-toggle';
+    return '[data-gallery-bar-action="artist-family"]';
   }
 
   get artistFamilyListSelector() {
-    return '#related-list';
+    return '[data-gallery-family-panel-body]';
   }
 
   get artistFamilyChipSelector() {
-    return '#related-list .related-chip';
+    return '[data-gallery-family-panel-body] [data-gallery-family-artist]';
   }
 
   get sidebarArtistSelector() {
@@ -235,7 +235,7 @@ export class SearchToolbar extends BasePage {
         (chip) => String(chip.textContent || '').trim(),
       );
       const readFamilySelection = (chips) => chips.map((chip) => ({
-        active: chip.classList.contains('active'),
+        active: chip.classList.contains('is-active'),
         ariaPressed: String(chip.getAttribute('aria-pressed') || ''),
         primary: chip.classList.contains('is-primary'),
       }));

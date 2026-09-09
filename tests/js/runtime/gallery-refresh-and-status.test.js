@@ -5551,20 +5551,20 @@ test('pollStatus toasts each observed scan error once and resets deduplication a
   }
 
   await pollWithLastError(errorText, 7);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   await pollWithLastError(errorText, 7);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   await pollWithLastError(null, 7);
   assert.equal(lastError.style.display, 'none');
   assert.equal(lastError.textContent, '');
 
   await pollWithLastError(errorText, 8);
-  assert.equal(lastError.style.display, 'block');
-  assert.equal(lastError.textContent, `Last scan error: ${errorText}`);
+  assert.equal(lastError.style.display, 'none');
+  assert.equal(lastError.textContent, '');
 
   assert.deepEqual(toastCounts, [1, 1, 1, 2]);
   assert.deepEqual(

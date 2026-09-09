@@ -73,7 +73,7 @@ export class AlbumCard extends BasePage {
   }
 
   get yearWithinCardSelector() {
-    return '.album-year';
+    return '.album-subtitle';
   }
 
   get ratingRowWithinCardSelector() {
@@ -141,7 +141,7 @@ export class AlbumCard extends BasePage {
   cardByIdentity(artistName, albumName, year, options = {}) {
     return this.cardsByArtistAndAlbum(artistName, albumName, options).filter({
       has: this.page.locator(this.yearWithinCardSelector).filter({
-        hasText: exactNormalizedText(String(year)),
+        hasText: new RegExp(`(?:^| · )${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
       }),
     });
   }

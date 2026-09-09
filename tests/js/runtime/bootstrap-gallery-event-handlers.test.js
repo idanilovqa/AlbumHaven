@@ -10,6 +10,8 @@ const viewStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 
 const viewStateHelperSource = fs.readFileSync(viewStateHelperPath, 'utf8');
 const modalHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'modal-and-overlay-helpers.js');
 const modalHelperSource = fs.readFileSync(modalHelperPath, 'utf8');
+const galleryMainStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
+const galleryMainStateHelperSource = fs.readFileSync(galleryMainStateHelperPath, 'utf8');
 
 function createContext(options = {}) {
   const productionUrlContext = {
@@ -320,6 +322,7 @@ function createContext(options = {}) {
   };
 
   vm.createContext(context);
+  vm.runInContext(galleryMainStateHelperSource, context, { filename: galleryMainStateHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -1059,7 +1062,7 @@ test('unrelated sidebar artist selection clears the stale family panel while its
   assert.deepEqual(calls.sequence, ['fetchAndRender']);
 });
 
-test('handleSidebarArtistSelectionClick renders an optimistic selected-artist search view before the canonical fetch returns', () => {
+test('tree selection clears search while rendering an optimistic selected-artist view before fetch', () => {
   const { context, calls } = createContext();
   context.state.view = {
     query: 'bi2',
@@ -1092,17 +1095,14 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected-artist se
   assert.equal(wasPrevented(), true);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
     payload: {
-      query: 'bi2',
+      query: '',
       selected_artist: 'БИ-2',
       all_artists_active: false,
       gallery_scope: 'all',
-      visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+      visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
       related_filter_artists: [],
       primary_filter_active: false,
-      search_context: {
-        selected_artist: 'БИ-2',
-        selected_artist_source: 'requested_artist',
-      },
+      search_context: null,
       show_all_artists_sidebar_link: true,
       artists_sidebar: [
         { artist: 'БИ-2', count: 2 },
@@ -1128,17 +1128,14 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected-artist se
     resetScrollForUserArtistSelection: true,
   }]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.pushBrowserViewState)), [{
-    query: 'bi2',
+    query: '',
     selected_artist: 'БИ-2',
     all_artists_active: false,
     gallery_scope: 'all',
-    visible_library_categories: ['main_library', 'hoard', 'new_arrivals'],
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
     related_filter_artists: [],
     primary_filter_active: false,
-    search_context: {
-      selected_artist: 'БИ-2',
-      selected_artist_source: 'requested_artist',
-    },
+    search_context: null,
     show_all_artists_sidebar_link: true,
     artists_sidebar: [
       { artist: 'БИ-2', count: 2 },
@@ -1165,7 +1162,7 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected-artist se
   }]);
 });
 
-test('handleSidebarArtistSelectionClick renders an optimistic selected artist view from current search results before reconciling', () => {
+test('tree selection clears search while reusing a matching result during reconciliation', () => {
   const { context, calls } = createContext();
   context.state.view = {
     ...context.state.view,
@@ -1196,14 +1193,13 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected artist vi
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
     payload: {
       ...initialView,
+      query: '',
       selected_artist: 'БИ-2',
       all_artists_active: false,
+      visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
       related_filter_artists: [],
       primary_filter_active: false,
-      search_context: {
-        selected_artist: 'БИ-2',
-        selected_artist_source: 'requested_artist',
-      },
+      search_context: null,
       related_artists: [],
       primary_artist_groups: [{
         artist: 'БИ-2',
@@ -1227,14 +1223,13 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected artist vi
   }]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.pushBrowserViewState)), [{
     ...initialView,
+    query: '',
     selected_artist: 'БИ-2',
     all_artists_active: false,
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
     related_filter_artists: [],
     primary_filter_active: false,
-    search_context: {
-      selected_artist: 'БИ-2',
-      selected_artist_source: 'requested_artist',
-    },
+    search_context: null,
   }]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.fetchAndRender)), [{
     url: '/view-data?artist=&gallery_scope=all&omit_sidebar=1',
@@ -1247,7 +1242,7 @@ test('handleSidebarArtistSelectionClick renders an optimistic selected artist vi
   }]);
 });
 
-test('handleSidebarArtistSelectionClick restores a cached selected artist search view before reconciling when current groups no longer contain that artist', () => {
+test('tree selection clears search while restoring a cached artist preview before reconciliation', () => {
   const cachedSelectedArtistView = {
     query: 'Neal Morse',
     selected_artist: 'Neal Morse',
@@ -1302,14 +1297,13 @@ test('handleSidebarArtistSelectionClick restores a cached selected artist search
   const { event, wasPrevented } = createSidebarArtistEvent('Neal Morse');
   const expectedNextView = {
     ...context.state.view,
+    query: '',
     selected_artist: 'Neal Morse',
     all_artists_active: false,
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
     related_filter_artists: [],
     primary_filter_active: false,
-    search_context: {
-      selected_artist: 'Neal Morse',
-      selected_artist_source: 'requested_artist',
-    },
+    search_context: null,
   };
   const originalViewStateRevision = 11;
   context.state.ui.viewStateRevision = originalViewStateRevision;
@@ -1424,7 +1418,7 @@ test('Album Details removal action opens the shared missing-album confirmation',
   }]);
 });
 
-test('handleSidebarArtistSelectionClick reconciles a family artist that matched only search content', () => {
+test('tree selection clears search while reconciling a family artist that matched search content', () => {
   const { context, calls } = createContext();
   context.state.view = {
     ...context.state.view,
@@ -1462,7 +1456,7 @@ test('handleSidebarArtistSelectionClick reconciles a family artist that matched 
 
   assert.equal(context.state.view.selected_artist, 'Neal Morse');
   assert.equal(calls.fetchAndRender.length, 1);
-  assert.equal(calls.pushBrowserViewState[0].query, 'transatlantic');
+  assert.equal(calls.pushBrowserViewState[0].query, '');
   assert.equal(calls.pushBrowserViewState[0].selected_artist, 'Neal Morse');
 });
 
@@ -1523,7 +1517,7 @@ test('handleSidebarArtistSelectionClick ignores a complete cached family view fo
   assert.equal(calls.fetchAndRender.length, 1);
 });
 
-test('handleSidebarArtistSelectionClick reuses an unclassified family group without fetching an empty search reconciliation', () => {
+test('tree selection clears search while promoting a visible family group to primary', () => {
   const speedMenu = { hidden: false };
   const { context, calls } = createContext({
     galleryMenuOpen: true,
@@ -1588,15 +1582,13 @@ test('handleSidebarArtistSelectionClick reuses an unclassified family group with
   assert.deepEqual(JSON.parse(JSON.stringify(calls.applyViewPayload)), [{
     payload: {
       ...initialView,
+      query: '',
       selected_artist: 'Cosmic Cathedral',
       all_artists_active: false,
+      visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
       related_filter_artists: [],
       primary_filter_active: false,
-      search_context: {
-        ...initialView.search_context,
-        selected_artist: 'Cosmic Cathedral',
-        selected_artist_source: 'requested_artist',
-      },
+      search_context: null,
       related_artists: ['Neal Morse', 'The Neal Morse Band'],
       primary_artist_groups: [{
         artist: 'Cosmic Cathedral',
@@ -1652,15 +1644,13 @@ test('handleSidebarArtistSelectionClick reuses an unclassified family group with
   }]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.pushBrowserViewState)), [{
     ...initialView,
+    query: '',
     selected_artist: 'Cosmic Cathedral',
     all_artists_active: false,
+    visible_library_categories: ['main_library', 'new_arrivals', 'hoard'],
     related_filter_artists: [],
     primary_filter_active: false,
-    search_context: {
-      ...initialView.search_context,
-      selected_artist: 'Cosmic Cathedral',
-      selected_artist_source: 'requested_artist',
-    },
+    search_context: null,
   }]);
   assert.equal(calls.fetchAndRender.length, 0);
   assert.equal(calls.scheduledSearchCommits.length, 0);
@@ -2547,6 +2537,55 @@ test('explicit sidebar selection replaces auto-match provenance before an immedi
   assert.equal(calls.buildApiUrl.at(-1).selected_artist, 'Neal Morse');
   assert.deepEqual(calls.buildApiUrlOptions.at(-1), {});
   assert.equal(calls.fetchAndRender.at(-1).runtimeOptions, undefined);
+});
+
+test('selecting a different tree artist clears search and filters but preserves Gallery display mode', () => {
+  const { context, calls } = createContext({ searchInputValue: 'neal morse' });
+  context.state.view = {
+    ...context.state.view,
+    query: 'neal morse',
+    selected_artist: 'Neal Morse',
+    visible_library_categories: ['hoard'],
+    related_filter_artists: ['Cosmic Cathedral'],
+    primary_filter_active: true,
+    search_context: {
+      selected_artist: 'Neal Morse',
+      selected_artist_source: 'requested_artist',
+    },
+  };
+  context.state.gallery.mainState = context.createGalleryMainState({
+    sources: { main_library: false, new_arrivals: false, hoard: true },
+    albumTypes: ['compilation'],
+    view: 'covers',
+    familyArtists: ['Cosmic Cathedral'],
+    familySelectionExplicit: true,
+  });
+  context.state.ui.preSearchView = { selected_artist: 'Neal Morse' };
+  context.state.ui.preSearchViewOrigin = 'interactive';
+  context.state.ui.pendingSearchCommitTimer = 17;
+  context.state.ui.pendingSearchClearOnBlur = true;
+
+  context.handleSidebarArtistSelectionClick(createSidebarArtistEvent('Devin Townsend').event);
+
+  const requestedView = calls.buildApiUrl.at(-1);
+  assert.equal(requestedView.selected_artist, 'Devin Townsend');
+  assert.equal(requestedView.query, '');
+  assert.equal(requestedView.search_context, null);
+  assert.deepEqual(Array.from(requestedView.visible_library_categories), ['main_library', 'new_arrivals', 'hoard']);
+  assert.deepEqual(Array.from(requestedView.related_filter_artists), []);
+  assert.equal(requestedView.primary_filter_active, false);
+  assert.equal(context.document.getElementById('search-input').value, '');
+  assert.equal(context.state.ui.searchDraftQuery, '');
+  assert.equal(context.state.ui.preSearchView, null);
+  assert.equal(context.state.ui.preSearchViewOrigin, '');
+  assert.equal(context.state.ui.pendingSearchCommitTimer, 0);
+  assert.equal(context.state.ui.pendingSearchClearOnBlur, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(context.state.gallery.mainState)), {
+    sources: { main_library: true, new_arrivals: true, hoard: true },
+    albumTypes: ['studio', 'ep'],
+    view: 'covers',
+    familyArtists: [],
+  });
 });
 
 test('pending uncached sidebar selection survives an immediate search clear without optimistic groups', () => {
@@ -4094,4 +4133,22 @@ test('handleGalleryBootstrapSearchSubmit is a no-op for an already-cleared empty
   assert.deepEqual(calls.buildApiUrl, []);
   assert.deepEqual(calls.fetchAndRender, []);
   assert.deepEqual(calls.setSessionStorageItem, []);
+});
+
+test('typing a new query reopens recent searches after clearing the field', () => {
+  const { context } = createContext();
+  context.recordRecentSearchQuery('Devin Townsend');
+  context.handleGalleryBootstrapSearchInput('');
+  context.handleGalleryBootstrapSearchInput('devin');
+  assert.equal(context.state.ui.recentSearchPopoverOpen, true);
+});
+
+test('keyboard opening uses the same positioned search popup path as focus', () => {
+  const { context } = createContext();
+  context.recordRecentSearchQuery('Devin Townsend');
+  let opens = 0;
+  context.openRecentSearchPopover = () => { opens += 1; context.state.ui.recentSearchPopoverOpen = true; context.state.ui.recentSearchActiveIndex = -1; return true; };
+  context.handleGalleryBootstrapSearchKeyDown({ key: 'ArrowDown', preventDefault() {} });
+  assert.equal(opens, 1);
+  assert.equal(context.state.ui.recentSearchActiveIndex, 0);
 });

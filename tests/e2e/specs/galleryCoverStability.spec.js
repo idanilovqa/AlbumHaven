@@ -118,9 +118,9 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     await artistFamilyActions.waitForVisible();
     await artistFamilyActions.expand();
     await artistFamilyActions.clickChipByName('The Neal Morse Band');
-    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
-    await artistFamilyActions.clickChipByName('The Neal Morse Band');
     await artistFamilyActions.waitForChipActive('The Neal Morse Band', false);
+    await artistFamilyActions.clickChipByName('The Neal Morse Band');
+    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));

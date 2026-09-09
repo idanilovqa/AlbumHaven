@@ -30,7 +30,7 @@ html .cover-lookup-drawer {
 .appearance-background-editor {
   --text: var(--appearance-ink); --muted: var(--appearance-muted);
   --panel: var(--appearance-card); --panel-2: var(--appearance-control);
-  --border: var(--appearance-line); --accent: var(--appearance-accent);
+  --border: var(--appearance-line); --accent: var(--appearance-waveform-fill, var(--appearance-accent));
   --appearance-editor-error: color-mix(in srgb, #ef4444 70%, var(--appearance-ink));
   color: var(--appearance-ink);
   background: var(--appearance-main-surface);
@@ -86,7 +86,7 @@ html .cover-lookup-drawer {
 .editor-footer-status { min-width: 0; margin: 0; color: var(--appearance-muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-footer-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .utility-modal-footer[hidden], .editor-footer [hidden] { display: none; }
-.appearance-background-editor :is(button, input):focus-visible { outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 3px; }
+.appearance-background-editor :is(button, input):focus-visible { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play, var(--appearance-accent))); outline-offset: 3px; }
 .appearance-background-editor :is(button, input):disabled { opacity: .42; filter: grayscale(1); cursor: default; }
 .appearance-background-editor [hidden] { display: none; }
 @media (max-width: 650px) {
@@ -103,9 +103,9 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] {
   --bg: var(--appearance-main-surface); --text: var(--appearance-ink); --muted: var(--appearance-muted);
   --panel: var(--appearance-card); --panel-2: var(--appearance-control); --border: var(--appearance-line);
-  --accent: var(--appearance-accent); --star-on: var(--appearance-stars);
+  --accent: var(--appearance-waveform-fill, var(--appearance-accent)); --star-on: var(--appearance-stars);
   --app-ink: var(--appearance-ink); --app-muted: var(--appearance-muted);
-  --app-control: var(--appearance-control); --app-active: var(--appearance-hover);
+  --app-control: var(--appearance-control); --app-active: var(--appearance-item-selected);
 }
 
 @media (min-width: 651px) and (max-width: 900px) {
@@ -140,33 +140,35 @@ html .cover-lookup-drawer {
 :root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); }
 .shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
 .shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.utility-loop-control button):not(.utility-loop-repeat):not(.utility-loop-speed-step):not(.utility-loop-speed-value):not(.loop-edit-action):not(.loop-range-handle):not(.gallery-switch):not(.gallery-type-choice):not(.gallery-menu-action):not(.album-card *):not(.tag-editor-track):not(.track-modal-cover-button):not(.gallery-info-button):not(.navigation-tree-item):not(.search-field-button):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
-  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
-  outline-offset: 2px;
+  outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play, var(--appearance-accent)));
+  outline-offset: 1px;
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-hover-background]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.track-modal-cover-button):not(.tag-editor-track):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
 }
-:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.tag-editor-track):not(.track-modal-cover-button):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.navigation-tree-item):not(.utility-list-item):not(.account-menu-item):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(button, .button, [role='button'], [data-actionable]):not(.appearance-muted-spectrum button):not(.utility-list-item):not(.account-menu-item):not(.navigation-tree-item):not(.tag-editor-track):not(.track-modal-cover-button):not(.ui-button--quiet):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled):not([aria-disabled='true']) {
   background: var(--appearance-item-action-pressed, var(--appearance-item-action-hover-background, var(--appearance-control)));
 }
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
-:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 2px; }
-:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
-:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):focus-visible {
-  outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));
-  outline-offset: 2px;
-}
-:root .utility-loop-play:is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
-  background: linear-gradient(135deg, #0fa66f, #1f995c);
-  border-color: #7cbaa4;
-  outline: 1px solid color-mix(in srgb, var(--appearance-interaction-outline, var(--appearance-accent, #72baff)) 46%, transparent);
+:root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
+:root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
+:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.gallery-info-button):focus-visible {
+  outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play, var(--appearance-accent)));
   outline-offset: 1px;
 }
+:root .utility-loop-play,
+:root .utility-loop-play:is(:hover, :active, :focus, :focus-visible) {
+  background: var(--appearance-play, linear-gradient(135deg, #0fa66f, #1f995c)) !important;
+  color: var(--appearance-play-ink, #022c22) !important;
+  border-color: var(--appearance-player-control-border, #7cbaa4) !important;
+  outline: none !important;
+}
+
 :root :is(.utility-loop-pitch-control button, .utility-loop-repeat, .utility-loop-speed-step, .utility-loop-speed-value):hover:not(:disabled) {
   outline: 1px solid rgba(110, 231, 183, 0.18);
   outline-offset: 1px;
@@ -222,7 +224,7 @@ html .cover-lookup-drawer {
 :root[data-appearance-player]:not([data-appearance-native-controls]) :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
 :root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
 :root[data-appearance-player]:not([data-appearance-native-handles]) .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
-:root[data-appearance-player]:not([data-appearance-native-controls]) .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 2px; }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 1px; }
 :root[data-appearance-player]:not([data-appearance-native-waveform]) .player-timeline { accent-color: var(--appearance-waveform-fill); }
 :root[data-appearance-player]:not([data-appearance-native-waveform]) .player-loop-region { background: color-mix(in srgb, var(--appearance-waveform-fill) 28%, transparent); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
 :root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-region.loop-range-selection {
@@ -309,7 +311,7 @@ html .cover-lookup-drawer {
 .appearance-interaction-row > strong { font-size: 11px; }
 .appearance-muted-spectrum { display: flex; gap: 7px; flex-wrap: wrap; }
 .appearance-muted-spectrum button { width: 28px; height: 28px; padding: 0; border: 1px solid var(--appearance-line); border-radius: 6px; background: var(--swatch); }
-.appearance-muted-spectrum button[aria-pressed='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 2px; }
+.appearance-muted-spectrum button[aria-pressed='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 1px; }
 .appearance-spectrum-picker {
   position: relative;
   display: block;
@@ -324,7 +326,7 @@ html .cover-lookup-drawer {
 }
 .appearance-spectrum-picker::after { content: ''; position: absolute; inset: 8px; border: 1px solid #fff9; border-radius: 50%; background: var(--appearance-panel-background); pointer-events: none; }
 .appearance-spectrum-picker input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; opacity: 0; cursor: pointer; }
-.appearance-spectrum-picker[data-selected='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 2px; }
+.appearance-spectrum-picker[data-selected='true'] { outline: 2px solid var(--appearance-ink); outline-offset: 1px; }
 .player-preview-dock {
   position: sticky;
   top: 0;
@@ -436,7 +438,7 @@ html .cover-lookup-drawer {
 .selection-preview-example.is-navigation-hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
 .selection-preview-example.is-navigation-selected { border-left: var(--navigation-tree-selection-accent-width,3px) solid var(--navigation-tree-selection-accent-color,#34CA78); background: var(--appearance-item-selected, var(--appearance-hover)); }
 .selection-preview-example.is-item-hover-background { background: var(--appearance-item-action-hover-background, var(--appearance-control)); }
-.selection-preview-example.is-item-outline { border-color: var(--appearance-interaction-outline, var(--appearance-accent)); outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
+.selection-preview-example.is-item-outline { border-color: var(--appearance-interaction-outline, var(--appearance-accent)); outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play, var(--appearance-accent))); outline-offset: 1px; }
 .selection-preview-example.is-item-pressed { background: var(--appearance-item-action-pressed, var(--appearance-control)); }
 .selection-hover-revert { display: flex; justify-content: flex-start; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--appearance-line); }
 @media (max-width: 1050px) { .background-editor-columns { grid-template-columns: minmax(0,1fr); } }
@@ -494,7 +496,7 @@ html .cover-lookup-drawer {
 .waveform-color-fields .background-color-inputs { margin-top: 10px; }
 .waveform-recents { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; min-height: 27px; }
 .waveform-recent-swatch { width: 28px; height: 28px; border: 1px solid var(--appearance-line); border-radius: 6px; cursor: pointer; box-shadow: inset 0 0 0 2px #0002; }
-.waveform-recent-swatch:hover { outline: 2px solid var(--appearance-accent); outline-offset: 2px; }
+.waveform-recent-swatch:hover { outline: 2px solid var(--appearance-accent); outline-offset: 1px; }
 .waveform-recovery { margin-top: 20px; padding-top: 17px; border-top: 1px solid var(--appearance-line); }
 .appearance-seekbar-editor .background-actions { justify-content: flex-end; }
 @media (max-width:650px) {
@@ -794,4 +796,75 @@ html .cover-lookup-drawer {
   .appearance-alert-family-card,
   .appearance-album-layout-card { transition: none; }
   .appearance-album-preview__track.is-playing::after { display: none; }
+}
+
+/* Shared interaction defaults follow the active player color roles. */
+:root {
+  --appearance-item-hover: color-mix(in srgb, var(--appearance-waveform-fill, #387f68) 14%, var(--panel, #171717));
+  --appearance-item-selected: color-mix(in srgb, var(--appearance-waveform-fill, #387f68) 28%, var(--panel, #171717));
+  --appearance-item-action-hover-background: var(--appearance-item-hover);
+  --appearance-item-action-pressed: var(--appearance-item-selected);
+}
+
+/* Dropdown rows use a neutral inset edge, independent of player accents. */
+:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button) {
+  transition: background-color 150ms ease, outline-color 150ms ease;
+}
+:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+  outline: 1px solid color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
+  outline-offset: -1px !important;
+  box-shadow: none !important;
+  background: color-mix(in srgb, var(--text, #eee) 5%, var(--panel, #171717)) !important;
+}
+
+/* Selection fill belongs to the file list, including its pressed/focused row. */
+:root .tag-editor-track.is-active,
+:root .tag-editor-track.is-active:is(:hover, :active, :focus-visible) {
+  background: var(--tag-editor-selection-fill) !important;
+  box-shadow: inset var(--navigation-tree-selection-accent-width, 3px) 0 0 var(--navigation-tree-selection-accent-color, var(--accent)) !important;
+}
+/* A defined transparent starting edge prevents currentColor flashing on hover. */
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button) {
+  outline: 1px solid transparent !important;
+  outline-offset: -1px !important;
+  transition: background-color 150ms ease !important;
+}
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button):hover:not(:disabled):not([aria-disabled="true"]) {
+  outline-color: color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
+  box-shadow: none !important;
+}
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button):is(:focus, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-active):not(:disabled):not([aria-disabled="true"]) {
+  outline-color: color-mix(in srgb, var(--text, #eee) 50%, var(--panel, #171717)) !important;
+  box-shadow: none !important;
+}
+
+/* File selection is immediate, including deselection of the previous row. */
+:root .tag-editor-track { transition: none !important; }
+
+/* Shared neutral selection body; the configured color belongs only to the edge. */
+:root {
+  --selection-body-background: color-mix(in srgb, var(--text, #eee) 10%, var(--panel, #171717));
+}
+:root .navigation-tree-item.is-selected,
+:root .navigation-tree-item.is-selected:is(:hover, :focus, :active),
+:root .selection-preview-example.is-navigation-selected {
+  background: var(--selection-body-background) !important;
+}
+/* Cover the full sticky preview area, including the editor's surrounding gutter. */
+.player-preview-dock {
+  z-index: 10;
+  isolation: isolate;
+  pointer-events: auto;
+}
+.player-preview-dock::before {
+  content: '';
+  position: absolute;
+  inset: -20px -20px 0;
+  z-index: -1;
+  background-color: #0b1929;
+  background-image: linear-gradient(var(--appearance-main-surface, var(--panel, #0b1929)), var(--appearance-main-surface, var(--panel, #0b1929)));
+  pointer-events: auto;
+}
+@media (max-width: 700px) {
+  .player-preview-dock::before { inset: -14px -14px 0; }
 }

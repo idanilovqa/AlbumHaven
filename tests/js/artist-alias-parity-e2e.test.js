@@ -42,7 +42,8 @@ test('FTC-SEARCH-NAV-022 keeps startup, collapsed search, and family browsing in
     'readAlbumYearByName(WHITESPACE_ALBUM)',
     'waitForViewReady(WHITESPACE_DISPLAY_ARTIST',
     'readChipTexts()',
-    'clickChipByName(WHITESPACE_RELATED_ARTIST)',
+    'waitForAllChipsActive(familyChips)',
+    'selectOnlyChipByName(WHITESPACE_RELATED_ARTIST)',
     'waitForOnlyArtistHeadings([WHITESPACE_RELATED_ARTIST])',
     'readArtistHeadings()).not.toContain(WHITESPACE_DISPLAY_ARTIST)',
     'waitForAlbumVisibleUnderHeading(',
@@ -179,11 +180,10 @@ test('album-card POM owns the exact subtitle selector used by the action layer',
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.subtitleWithinCardSelector\)/);
   assert.match(source, /yearByAlbumName\(albumName\)/);
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.yearWithinCardSelector\)/);
-  const actionSelectorMethods = source.slice(
-    source.indexOf('subtitleByAlbumName(albumName)'),
-    source.indexOf('ratingRowByArtistAndAlbum('),
-  );
-  assert.doesNotMatch(actionSelectorMethods, /\.evaluate(?:All)?\s*\(/);
+  const subtitleReader = source.match(/subtitleByAlbumName\(albumName\) \{[\s\S]*?\n  \}/)?.[0] || '';
+  const yearReader = source.match(/yearByAlbumName\(albumName\) \{[\s\S]*?\n  \}/)?.[0] || '';
+  assert.doesNotMatch(subtitleReader, /\.evaluate(?:All)?\s*\(/);
+  assert.doesNotMatch(yearReader, /\.evaluate(?:All)?\s*\(/);
 });
 
 test('alias parity spec stays scenario-only and avoids browser-side mutation shortcuts', () => {
@@ -207,7 +207,8 @@ test('FTC-SEARCH-NAV-020 preserves the approved family-chip transition sequence'
     .split("stepLogger.step('Exercise the existing Artist Family chip semantics", 2)[1]
     .split("stepLogger.step('Keep both source credits under the canonical root grouping'", 1)[0];
   const checkpoints = [
-    "clickChipByName('Neal Morse')",
+    'waitForAllChipsActive(familyChips)',
+    "selectOnlyChipByName('Neal Morse')",
     "waitForOnlyArtistHeadings(['Neal Morse'])",
     'waitForAlbumHidden(fixture.album)',
     'clickPrimaryChip()',
@@ -217,6 +218,9 @@ test('FTC-SEARCH-NAV-020 preserves the approved family-chip transition sequence'
     "clickChipByName('Neal Morse')",
     "waitForChipActive('Neal Morse', false)",
     'waitForOnlyArtistHeadings([MORSE_CANONICAL_ARTIST])',
+    'clickPrimaryChip()',
+    'waitForOnlyArtistHeadings([])',
+    'waitForEmptyFamilySelection()',
   ];
   let cursor = -1;
   for (const checkpoint of checkpoints) {
@@ -241,14 +245,14 @@ test('FTC-SEARCH-NAV-020 resets a real deep gallery viewport through family-tree
     'searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST)',
     'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, {',
     "selectSidebarArtistByName('Neal Morse')",
-    "artistFamilyActions.waitForViewReady('Neal Morse', {",
+    "artistFamilyActions.waitForViewReady('Neal Morse')",
     'waitForAlbumVisibleUnderHeading(',
     'selectSidebarArtistByName(MORSE_CANONICAL_ARTIST)',
-    'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, {',
+    'artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST)',
     'jumpGalleryToMiddle()',
     "selectSidebarArtistByName('Neal Morse')",
     "waitForSidebarSelection('Neal Morse')",
-    "artistFamilyActions.waitForViewReady('Neal Morse', {",
+    "artistFamilyActions.waitForViewReady('Neal Morse')",
     'waitForGalleryScrollAtStart()',
     'readArtistSelectionGalleryViewportState(',
     'expectNealMorseScrollResetViewport(expect, viewport)',
@@ -336,9 +340,8 @@ test('FTC-SEARCH-NAV-020 verifies root aggregation before real sidebar regroupin
   const rootStep = source
     .split("stepLogger.step('Keep both source credits under the canonical root grouping'", 2)[1];
   const checkpoints = [
-    'searchToolbarActions.clearSearch({ submitWithEnter: true })',
+    "galleryActions.goto('/?surface=albums')",
     "searchToolbarActions.waitForQuery('')",
-    'clickAllArtists({ expectArtistQueryCleared: true })',
     'waitForInitialAllArtistsSections({ minimumHeadingCount: 4 })',
     'readSidebarArtistNameCount(MORSE_CANONICAL_ARTIST)',
     'readSidebarArtistAlbumCount(MORSE_CANONICAL_ARTIST)',

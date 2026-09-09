@@ -2427,6 +2427,32 @@ function loadHelpers() {
 
 {
   const context = loadHelpers();
+  context.applyViewPayload({
+    surface: { active: 'albums' },
+    gallery_scope: 'new_arrivals',
+    visible_library_categories: ['new_arrivals'],
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'initial' }] }],
+  }, { trackSidebarReveal: false });
+
+  const hydrated = context.applyViewPayload({
+    surface: { active: 'albums' },
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'new_arrivals'],
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'hydrated' }] }],
+  }, {
+    trackSidebarReveal: false,
+    preserveGalleryBrowseLocationState: true,
+  });
+
+  assert.equal(hydrated.gallery_scope, 'new_arrivals');
+  assert.deepEqual(JSON.parse(JSON.stringify(hydrated.visible_library_categories)), ['new_arrivals']);
+  assert.equal(hydrated.artist_groups[0].albums[0].key, 'hydrated');
+}
+
+{
+  const context = loadHelpers();
   const compacted = context.compactRuntimeAlbumPayload({
     key: 'explicitly-cleared-album',
     preview_only: true,

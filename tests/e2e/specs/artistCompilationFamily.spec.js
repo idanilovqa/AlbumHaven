@@ -118,8 +118,7 @@ test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relat
       [CONTROL_PARTNER, CONTROL_PARTNER_SOLO],
       [CONTROL_OWNER, CONTROL_SHARED_ALBUM],
     ]) {
-      await artistFamilyActions.clickChipByName(familyArtist);
-      await artistFamilyActions.waitForChipActive(familyArtist);
+      await artistFamilyActions.selectOnlyChipByName(familyArtist);
       await galleryActions.scrollToAlbumUnderHeading(familyArtist, expectedAlbum);
       await galleryActions.waitForAlbumVisibleUnderHeading(familyArtist, expectedAlbum);
       const visibleAlbums = await galleryActions.readAlbumNamesByHeading(familyArtist);

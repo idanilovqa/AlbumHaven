@@ -1447,16 +1447,6 @@ async function pollStatus() {
     const lastErrorText = scanOutcome === 'running'
       ? ''
       : String(normalizedStatus.last_error || '').trim();
-    const err = document.getElementById('last-error');
-    if (err) {
-      if (lastErrorText) {
-        err.style.display = 'block';
-        err.textContent = `Last scan error: ${lastErrorText}`;
-      } else {
-        err.style.display = 'none';
-        err.textContent = '';
-      }
-    }
     if (lastErrorText) {
       if (state.ui.lastStatusErrorToastIdentity !== lastErrorText) {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;

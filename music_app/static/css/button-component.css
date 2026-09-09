@@ -17,8 +17,8 @@
   text-align: center;
   vertical-align: middle;
   cursor: pointer;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
 }
 .ui-button[hidden] { display: none !important; }
@@ -56,8 +56,8 @@
   padding: 0;
   border: 1px solid var(--appearance-line, #ffffff04);
   border-radius: 8px;
-  outline: 2px solid transparent;
-  outline-offset: 2px;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
   background: var(--appearance-control, var(--app-control, var(--panel, #1e2c3e)));
   color: var(--appearance-ink, var(--app-ink, var(--text, #f3f6fa)));
   font: inherit;

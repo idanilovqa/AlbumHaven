@@ -333,92 +333,18 @@ function buildAlbumMoveConfirmMessage(album, actionConfig) {
   return `Move "${albumName}" to ${targetLabel}?`;
 }
 
-function ensureGalleryOptionsMenu() {
-  let menu = document.getElementById('gallery-options-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'gallery-options-menu';
-  menu.className = 'gallery-options-menu';
-  document.body.appendChild(menu);
-  return menu;
-}
-
 function renderGalleryOptionsMenu() {
-  const menu = ensureGalleryOptionsMenu();
-  const looseCount = getVisibleNonAlbumTracks().length;
-  const nonAlbumLabel = getNonAlbumMenuLabel();
-  const preferenceArtist = getCurrentGalleryPreferenceArtist();
-  const combineEnabled = getCombineSimilarArtistsPreference(preferenceArtist);
-  const galleryScope = String(state.view?.gallery_scope || 'all');
-  const visibleCategories = typeof normalizeVisibleLibraryCategorySelection === 'function'
-    ? normalizeVisibleLibraryCategorySelection(state.view?.visible_library_categories)
-    : ['main_library', 'hoard', 'new_arrivals'];
-  const categoryButtons = galleryScope === 'new_arrivals'
-    ? ''
-    : Object.entries(LIBRARY_CATEGORY_LABELS).map(([category, label]) => {
-      const isActive = visibleCategories.includes(category);
-      const disableToggleOff = isActive && visibleCategories.length <= 1;
-      return `
-        <button
-          type="button"
-          class="gallery-options-menu-item"
-          data-gallery-category-toggle="${escapeHtml(category)}"
-          aria-pressed="${isActive ? 'true' : 'false'}"
-          ${disableToggleOff ? 'disabled' : ''}
-          title="${escapeHtml(isActive ? `Hide ${label}` : `Show ${label}`)}"
-        >
-          <span>${escapeHtml(label)}</span>
-          <span class="gallery-options-count">${isActive ? 'On' : 'Off'}</span>
-        </button>
-      `;
-    }).join('')
-    + `
-      <button type="button" class="gallery-options-menu-item" data-open-new-arrivals="1" title="Show only albums from New Arrivals roots">
-        <span>Open New Arrivals</span>
-        <span class="gallery-options-count">Page</span>
-      </button>
-    `;
-  menu.innerHTML = `
-    ${galleryScope === 'new_arrivals'
-      ? `
-        <button type="button" class="gallery-options-menu-item" data-open-main-gallery="1" title="Return to the main gallery and restore its category mix">
-          <span>Back to Main Gallery</span>
-          <span class="gallery-options-count">Page</span>
-        </button>
-      `
-      : categoryButtons}
-    <button
-      type="button"
-      class="gallery-options-menu-item"
-      data-toggle-combine-similar-artists="1"
-      ${preferenceArtist ? '' : 'disabled'}
-      title="${preferenceArtist ? `Combine collaboration-style aliases for ${escapeHtml(preferenceArtist)}` : 'Select a single artist to change this setting'}"
-    >
-      <span>Combine similar artists</span>
-      <span class="gallery-options-count">${preferenceArtist ? (combineEnabled ? 'On' : 'Off') : 'N/A'}</span>
-    </button>
-    <button type="button" class="gallery-options-menu-item" data-open-non-album-modal="1" ${looseCount ? '' : 'disabled'} title="${looseCount ? `Show ${escapeHtml(nonAlbumLabel.toLowerCase())} list` : `No ${escapeHtml(nonAlbumLabel.toLowerCase())} in this view`}">
-      <span>${escapeHtml(nonAlbumLabel)}</span>
-      <span class="gallery-options-count">${looseCount}</span>
-    </button>
-  `;
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
 }
 
 function showGalleryOptionsMenu(anchor) {
-  const menu = ensureGalleryOptionsMenu();
-  renderGalleryOptionsMenu();
-  const rect = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.max(12, rect.right - 220)}px`;
-  menu.style.top = `${rect.bottom + 8}px`;
-  menu.hidden = false;
-  state.gallery.menuOpen = true;
+  const sources = document.getElementById('gallery-sources-menu');
+  if (sources && typeof openGalleryMainSurface === 'function') openGalleryMainSurface('sources', anchor, sources);
 }
 
 function hideGalleryOptionsMenu() {
-  const menu = document.getElementById('gallery-options-menu');
-  if (!menu) return;
-  menu.hidden = true;
   state.gallery.menuOpen = false;
+  if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
 function openNonAlbumModal() {

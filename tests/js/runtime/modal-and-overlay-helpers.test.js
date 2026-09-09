@@ -16,6 +16,13 @@ const helperPath = path.join(
   'modal-and-overlay-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const buttonComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'button-component.js');
+const galleryMainComponentsPath = path.join(path.dirname(helperPath), 'gallery-main-components.js');
+const galleryMainComponentsSource = fs.readFileSync(galleryMainComponentsPath, 'utf8');
+const bootstrapGalleryHandlersSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js'),
+  'utf8',
+);
 const compactTableSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'compact-data-table.js'),
   'utf8',
@@ -222,6 +229,7 @@ function loadHelper() {
     getAlbumIdentity(album) {
       return String(album?.key || '');
     },
+    ButtonComponent: require(buttonComponentPath),
   };
 
   vm.createContext(context);
@@ -1111,28 +1119,28 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
   assert.equal(items[0].src, '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&v=epoch-6');
 }
 
-{
+test('legacy Gallery options no longer owns source switches or New Arrivals navigation', () => {
   const { context } = loadHelper();
-  context.state.view.gallery_scope = 'all';
-  context.state.view.visible_library_categories = ['main_library', 'new_arrivals'];
-  context.renderGalleryOptionsMenu();
-  const menu = context.document.getElementById('gallery-options-menu');
-  assert.match(menu.innerHTML, /data-gallery-category-toggle="main_library"/);
-  assert.match(menu.innerHTML, /data-gallery-category-toggle="hoard"/);
-  assert.match(menu.innerHTML, /data-open-new-arrivals="1"/);
-  assert.match(menu.innerHTML, /Main Library[\s\S]*On/);
-  assert.match(menu.innerHTML, /Hoard[\s\S]*Off/);
-}
+  if (typeof context.renderGalleryOptionsMenu === 'function') {
+    context.renderGalleryOptionsMenu();
+    const legacyMenu = context.document.getElementById('gallery-options-menu');
+    assert.doesNotMatch(legacyMenu?.innerHTML || '', /data-gallery-category-toggle=/);
+    assert.doesNotMatch(legacyMenu?.innerHTML || '', /data-open-(?:new-arrivals|main-gallery)=/);
+  }
+  assert.doesNotMatch(helperSource, /data-open-(?:new-arrivals|main-gallery)=/);
+  assert.doesNotMatch(bootstrapGalleryHandlersSource, /data-open-(?:new-arrivals|main-gallery)=/);
+  assert.doesNotMatch(bootstrapGalleryHandlersSource, /data-gallery-category-toggle/);
 
-{
-  const { context } = loadHelper();
-  context.state.view.gallery_scope = 'new_arrivals';
-  context.state.view.visible_library_categories = ['new_arrivals'];
-  context.renderGalleryOptionsMenu();
-  const menu = context.document.getElementById('gallery-options-menu');
-  assert.match(menu.innerHTML, /data-open-main-gallery="1"/);
-  assert.doesNotMatch(menu.innerHTML, /data-gallery-category-toggle=/);
-}
+  vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
+  const switches = ['main_library', 'new_arrivals', 'hoard'].map((source) => (
+    context.buildGallerySwitchHtml({ id: `source-${source}`, source, label: source, checked: true })
+  )).join('');
+  assert.equal((switches.match(/role="switch"/g) || []).length, 3);
+  assert.match(switches, /data-gallery-source="main_library"/);
+  assert.match(switches, /data-gallery-source="new_arrivals"/);
+  assert.match(switches, /data-gallery-source="hoard"/);
+  assert.doesNotMatch(switches, /Open New Arrivals/);
+});
 
 {
   const { context } = loadHelper();

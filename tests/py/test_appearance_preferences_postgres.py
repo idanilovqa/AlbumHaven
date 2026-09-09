@@ -472,3 +472,16 @@ def test_compatibility_palette_save_binds_requested_album_and_alert_fields(inclu
         assert "quiet" in params
     for field in ("album_details_layout", "album_playing_row_animation", "alert_family"):
         assert f"{field} = coalesce" in sql
+
+
+@pytest.mark.parametrize("color", [None, "#AABBCC"])
+def test_panel_outline_override_roundtrips(color):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    payload = aggregate_write(interaction_overrides={**INTERACTION_OVERRIDES, "panel_outline": color})
+    assert normalize_appearance_preferences(payload) == payload
+
+
+def test_panel_outline_rejects_invalid_color():
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    with pytest.raises(ValueError):
+        normalize_appearance_preferences(aggregate_write(interaction_overrides={**INTERACTION_OVERRIDES, "panel_outline": "red;"}))

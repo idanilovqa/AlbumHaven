@@ -2340,10 +2340,13 @@ function refreshTrackModalPlaybackState() {
     const button = row.querySelector('.play-track-button');
     if (button) {
       const iconName = isActivelyPlaying ? 'pause' : 'play';
-      button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-        className: `album-track-table__play-icon ui-icon--${iconName}`,
-      });
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
@@ -2380,10 +2383,13 @@ function refreshNonAlbumModalPlaybackState() {
     const button = row.querySelector('.play-track-button');
     if (button) {
       const iconName = isActivelyPlaying ? 'pause' : 'play';
-      button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
-        className: `album-track-table__play-icon ui-icon--${iconName}`,
-      });
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');

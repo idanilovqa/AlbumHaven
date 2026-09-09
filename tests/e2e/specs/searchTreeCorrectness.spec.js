@@ -612,7 +612,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
       familyChipContentChanged: false,
       familyChipNodesChanged: false,
       familyControlsHidden: false,
-      familyControlsVisibleDuringActiveRequest: true,
+      familyControlsVisibleDuringActiveRequest: false,
       familyListReplaced: false,
       familyMutationCount: 0,
       familyPanelContentChanged: false,
@@ -834,7 +834,7 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
     await artistFamilyActions.waitForHidden();
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
-      chipTexts: [],
+      chipTexts: [UNRELATED_ARTIST],
     });
   });
 });

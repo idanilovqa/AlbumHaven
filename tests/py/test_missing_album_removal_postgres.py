@@ -199,13 +199,76 @@ def test_confirm_removal_rolls_back_database_failure():
     assert connection.events == ["begin", "rollback"]
 
 
+@pytest.mark.parametrize("owning_root", ["unhealthy-root", "healthy-root"])
+def test_confirm_removal_route_checks_pending_health_after_database_recovers(
+    monkeypatch, tmp_path, owning_root,
+):
+    from music_app.services import missing_album_removal_postgres as removal
+    from music_app.services.library_watch import LibraryEvent, LibraryEventKind
+    from music_app.services.library_watch_health import LibraryWatchHealthService
+
+    class RecoveringStore:
+        def upsert(self, _problem):
+            raise RuntimeError("temporary database outage")
+
+        def load(self):
+            # Connectivity recovered, but the failed health write is still pending.
+            return []
+
+    health = LibraryWatchHealthService(RecoveringStore())
+    with pytest.raises(RuntimeError, match="temporary database outage"):
+        health.record_event(LibraryEvent(
+            kind=LibraryEventKind.OVERFLOW, root_id="unhealthy-root", path=tmp_path, observed_at=1.0,
+        ))
+    assert health.root_allows_destructive_reconciliation("unhealthy-root") is False
+    assert health.root_allows_destructive_reconciliation("healthy-root") is True
+
+    class RootConnection(Connection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            if "confirm_missing_album_removal" in str(sql):
+                return cursor
+            if "pg_advisory_xact_lock" in str(sql):
+                return Cursor()
+            return Cursor([{"root_id": owning_root}])
+
+    connection = RootConnection({
+        "album_found": True, "active_file_count": 0,
+        "stale_private_paths": [], "root_private_paths": [str(tmp_path)],
+        "unresolved_root_count": 0, "unhealthy_root_count": 0,
+        "removed_album_key": ALBUM_KEY, "removed_album_count": 1,
+        "inventory_mutation_revision": 18,
+    })
+    monkeypatch.setattr(removal, "_connect", lambda _url: connection)
+    app = create_test_asgi_app(tmp_path, monkeypatch)
+    app.state.config["ALBUM_HAVEN_APP_DATABASE_URL"] = DATABASE_URL
+    app.state.library_watch_health_service = health
+
+    status, _headers, body = run_asgi_request(
+        app, "POST", f"/api/library/albums/{ALBUM_KEY}/confirm-removal",
+    )
+
+    if owning_root == "unhealthy-root":
+        assert status == 409
+        assert decode_json(body)["code"] == "library_root_unavailable"
+        assert connection.events == ["begin", "rollback"]
+        assert not app.state.library_state.get("targeted_inventory_album_keys")
+    else:
+        assert status == 200
+        assert connection.events == ["begin", "commit"]
+        assert decode_json(body)["removed_album_key"] == ALBUM_KEY
+    assert "pg_advisory_xact_lock" in connection.operations[0][0]
+    assert "library.local_track_files" in connection.operations[1][0]
+    assert ALBUM_KEY in _flatten_values(connection.operations[1][1])
+
+
 def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, tmp_path):
     from music_app.routes import api_wave_a_asgi_routes
 
     calls: list[str] = []
 
     class Service:
-        def __init__(self, config):
+        def __init__(self, config, *, root_health_check=None):
             assert config["ALBUM_HAVEN_APP_DATABASE_URL"] == DATABASE_URL
 
         def confirm_removal(self, album_key):
@@ -257,7 +320,7 @@ def test_confirm_removal_route_preserves_decoded_slashes_and_literal_percent_seq
     calls: list[str] = []
 
     class Service:
-        def __init__(self, _config):
+        def __init__(self, _config, *, root_health_check=None):
             pass
 
         def confirm_removal(self, album_key):
@@ -291,7 +354,7 @@ def test_confirm_removal_route_maps_reappeared_album_to_409(monkeypatch, tmp_pat
     from music_app.services.missing_album_removal_postgres import MissingAlbumReappeared
 
     class Service:
-        def __init__(self, _config):
+        def __init__(self, _config, *, root_health_check=None):
             pass
 
         def confirm_removal(self, _album_key):
@@ -325,7 +388,7 @@ def test_confirm_removal_route_maps_unavailable_root_to_409(monkeypatch, tmp_pat
     )
 
     class Service:
-        def __init__(self, _config):
+        def __init__(self, _config, *, root_health_check=None):
             pass
 
         def confirm_removal(self, _album_key):

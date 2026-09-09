@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from collections.abc import Mapping
@@ -118,8 +119,14 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
     if not normalized_key:
         return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
     try:
+        health_service = getattr(request.app.state, "library_watch_health_service", None)
+        root_health_check = getattr(health_service, "root_allows_destructive_reconciliation", None)
+        if not callable(root_health_check):
+            raise MissingAlbumRootUnavailable()
         result = await run_in_threadpool(
-            PostgresMissingAlbumRemovalService(_app_config(request)).confirm_removal,
+            PostgresMissingAlbumRemovalService(
+                _app_config(request), root_health_check=root_health_check,
+            ).confirm_removal,
             normalized_key,
         )
     except MissingAlbumReappeared:
@@ -508,18 +515,24 @@ async def library_settings_write(request: Request) -> JSONResponse:
             "replace_library_watch_roots",
             None,
         )
-        result = save_library_settings_and_start_refresh(
-            _app_config(request),
-            settings_payload,
-            library_state=_library_state(request),
-            start_background_refresh=_start_background_refresh_for_asgi_request(request),
-            build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
-            replace_watch_roots=(
-                replace_live_watch_roots
-                if callable(replace_live_watch_roots)
-                else (lambda _roots: None)
-            ),
-        )
+        write_lock = getattr(request.app.state, "library_settings_write_lock", None)
+        if write_lock is None:
+            write_lock = asyncio.Lock()
+            request.app.state.library_settings_write_lock = write_lock
+        async with write_lock:
+            result = await run_in_threadpool(
+                save_library_settings_and_start_refresh,
+                _app_config(request),
+                settings_payload,
+                library_state=_library_state(request),
+                start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
+                replace_watch_roots=(
+                    replace_live_watch_roots
+                    if callable(replace_live_watch_roots)
+                    else (lambda _roots: None)
+                ),
+            )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except LibrarySettingsWorkflowError as exc:

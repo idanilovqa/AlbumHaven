@@ -11475,6 +11475,74 @@ def test_missing_album_search_wildcard_nonmatch_stays_bounded():
     assert _missing_album_projection_payloads([row], query="%a" * 40 + "z") == []
 
 
+@pytest.mark.parametrize("surface", ["counts", "sidebar", "albums"])
+def test_missing_album_alias_uses_canonical_group_without_changing_credit(
+    monkeypatch, missing_album_browse_repository, surface,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Canonical", album_id=1, album_key="active", title="Active")
+    aggregate = [{"artist_id": 1, "artist_name": "Canonical", "album_ids": [1], "album_count": 1}]
+    missing = _missing_browse_row(album_id=2, title="Missing", category="main_library", artist="Alias")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing])
+    monkeypatch.setattr(repository, "_load_root_sidebar_rows", lambda *_args, **_kwargs: aggregate)
+    monkeypatch.setattr(repository, "_load_root_startup_rows", lambda *_args, **_kwargs: (aggregate, [active]))
+    monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda *_args, **_kwargs: [active])
+
+    payload = {
+        "counts": repository.build_root_counts_payload,
+        "sidebar": repository.build_root_sidebar_payload,
+        "albums": repository.build_root_album_browse_payload,
+    }[surface](query_params={"category": ["main_library"]})
+
+    assert payload["artist_count"] == 1
+    assert payload["album_count"] == 2
+    if surface != "counts":
+        assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 2)]
+        assert [group["artist"] for group in payload["artist_groups"]] == ["Canonical"]
+        album = next(album for album in payload["artist_groups"][0]["albums"] if album["key"] == "missing-2")
+        assert album["album_artist"] == "Alias"
+        assert album["artists"] == ["Alias"]
+
+
+@pytest.mark.parametrize("all_artists", [False, True])
+@pytest.mark.parametrize("query", ["Needle Album", "Needle Track", "Needle File"])
+def test_general_search_retains_matching_missing_albums(
+    monkeypatch, missing_album_browse_repository, all_artists, query,
+):
+    repository = missing_album_browse_repository
+    missing = _missing_browse_row(album_id=2, title="Needle Album", category="main_library", artist="Alias")
+    missing["track_title"] = "Needle Track"
+    missing["file_private_path"] = "C:/Private Directory/Needle File.flac"
+    excluded = _missing_browse_row(album_id=3, title="Needle Album", category="hoard")
+    unrelated = _missing_browse_row(album_id=4, title="Other Album", category="main_library")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing, excluded, unrelated])
+
+    payload = repository.build_search_payload(query_params={
+        "q": query, "all_artists": "1" if all_artists else "0", "category": ["main_library"],
+    })
+
+    assert payload["album_count"] == 1
+    assert payload["artist_count"] == 1
+    assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 1)]
+    assert [group["artist"] for group in payload["artist_groups"]] == ["Canonical"]
+    album = payload["artist_groups"][0]["albums"][0]
+    assert album["key"] == "missing-2"
+    assert album["album_artist"] == "Alias"
+    assert album["inventory_status"] == "missing"
+    assert album["tracks"] == []
+    assert album["_file_entries"] == []
+    assert "Private Directory" not in json.dumps(payload)
+
+
 @pytest.mark.parametrize("credit_source", ["metadata", "persisted_membership"])
 def test_selected_artist_missing_album_search_preserves_featured_artist_matches(
     monkeypatch, missing_album_browse_repository, credit_source,

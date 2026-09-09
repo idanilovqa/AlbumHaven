@@ -298,7 +298,9 @@ class PostgresLibraryBrowseRepository:
         album_count += len(missing_albums)
         for album in missing_albums:
             artist_counts.setdefault(
-                _row_artist_identity({"artist_name": album.get("album_artist")}),
+                _row_artist_identity({"artist_name": _canonical_artist_name(
+                    album.get("album_artist") or "Unknown Artist", root_alias_to_canonical,
+                )}),
                 0,
             )
         return {
@@ -362,6 +364,7 @@ class PostgresLibraryBrowseRepository:
             _merge_missing_albums_into_artist_groups(
                 preview_artist_groups,
                 missing_albums,
+                alias_to_canonical=root_alias_to_canonical,
             )
             self._apply_private_album_rating_overlays(
                 _album_payloads_from_groups(preview_artist_groups),
@@ -387,7 +390,9 @@ class PostgresLibraryBrowseRepository:
         )
         album_count += len(missing_albums)
         for album in missing_albums:
-            artist = str(album.get("album_artist") or "Unknown Artist").strip()
+            artist = _canonical_artist_name(
+                album.get("album_artist") or "Unknown Artist", root_alias_to_canonical,
+            )
             artist_key = _row_artist_identity({"artist_name": artist})
             artist_displays.setdefault(artist_key, artist)
             artist_sort_values.setdefault(artist_key, artist)
@@ -1003,7 +1008,9 @@ class PostgresLibraryBrowseRepository:
             self._load_missing_album_rows(),
             view_state=view_state,
         )
-        _merge_missing_albums_into_artist_groups(artist_groups, missing_albums)
+        _merge_missing_albums_into_artist_groups(
+            artist_groups, missing_albums, alias_to_canonical=root_alias_to_canonical,
+        )
         self._apply_private_album_rating_overlays(
             _album_payloads_from_groups(artist_groups),
             source_rows=rows,
@@ -1247,6 +1254,18 @@ class PostgresLibraryBrowseRepository:
             alias_to_canonical,
         )
         artist_groups = _search_artist_groups(rows, query=query)
+        _merge_missing_albums_into_artist_groups(
+            artist_groups,
+            _missing_album_projection_payloads(
+                self._load_missing_album_rows(connection=connection),
+                view_state=view_state,
+                query=query,
+            ),
+            alias_to_canonical=alias_to_canonical,
+        )
+        artist_groups.sort(key=lambda group: _search_artist_group_sort_key(
+            str(group.get("artist") or ""), query=query,
+        ))
         _queue_display_cover_variants_for_groups(
             self._config,
             artist_groups,
@@ -5136,13 +5155,17 @@ def _root_album_browse_artist_groups(rows: list[object]) -> list[dict[str, objec
 def _merge_missing_albums_into_artist_groups(
     artist_groups: list[dict[str, object]],
     missing_albums: list[dict[str, object]],
+    *,
+    alias_to_canonical: Mapping[str, object] | None = None,
 ) -> None:
     groups_by_artist = {
         _artist_display_dedupe_key(str(group.get("artist") or "")): group
         for group in artist_groups
     }
     for album in missing_albums:
-        artist = str(album.get("album_artist") or "Unknown Artist").strip()
+        artist = _canonical_artist_name(
+            album.get("album_artist") or "Unknown Artist", alias_to_canonical or {},
+        )
         artist_key = _artist_display_dedupe_key(artist)
         group = groups_by_artist.get(artist_key)
         if group is None:

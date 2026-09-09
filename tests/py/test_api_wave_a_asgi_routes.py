@@ -560,6 +560,81 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     }
 
 
+@pytest.mark.parametrize("concurrent_save", [False, True])
+def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_serialized(
+    asgi_app, monkeypatch, concurrent_save,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
+
+    entered = Event()
+    release = Event()
+    saved = []
+    replacements = []
+
+    def save_roots(_config, settings):
+        saved.append(settings["main_library_roots"][0]["id"])
+        return settings
+
+    def replace_roots(roots):
+        replacements.append(roots[0]["id"])
+        entered.set()
+        assert release.wait(3.0), "test cleanup must release watcher replacement"
+
+    def workflow(config, settings, **kwargs):
+        return save_library_settings_and_start_refresh(
+            config, settings, save_root_settings=save_roots, **kwargs,
+        )
+
+    def start_refresh(library_state, *_args, **_kwargs):
+        library_state["scan_in_progress"] = True
+
+    monkeypatch.setattr(routes, "save_library_settings_and_start_refresh", workflow)
+    monkeypatch.setattr(routes, "start_background_refresh_for_state", start_refresh)
+    asgi_app.state.replace_library_watch_roots = replace_roots
+    # Only a deadlock guard; successful requests release this before it fires.
+    timer = Timer(1.5, release.set)
+    timer.start()
+
+    async def exercise():
+        tasks = []
+        try:
+            tasks.append(asyncio.create_task(_run_asgi_request_async(
+                asgi_app, "POST", "/library-settings",
+                json_body={"settings": {"main_library_roots": [{"id": "first", "path": "C:/First"}]}},
+            )))
+            assert await asyncio.to_thread(entered.wait, 1.0)
+            assert not release.is_set(), "watcher replacement blocked the ASGI loop"
+            if concurrent_save:
+                tasks.append(asyncio.create_task(_run_asgi_request_async(
+                    asgi_app, "POST", "/library-settings",
+                    json_body={"settings": {"main_library_roots": [{"id": "second", "path": "C:/Second"}]}},
+                )))
+            heartbeat = await asyncio.wait_for(_run_asgi_request_async(
+                asgi_app, "GET", "/utilities/save-task/missing-task",
+            ), timeout=0.5)
+            assert heartbeat[0] == 404
+            assert not release.is_set()
+            release.set()
+            return await asyncio.gather(*tasks)
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        results = asyncio.run(exercise())
+    finally:
+        release.set()
+        timer.cancel()
+        timer.join(timeout=2.0)
+        assert not timer.is_alive()
+
+    assert [result[0] for result in results] == ([200, 409] if concurrent_save else [200])
+    assert saved == ["first"]
+    assert replacements == ["first"]
+    assert asgi_app.state.library_state["scan_in_progress"] is True
+
+
 def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, monkeypatch):
     from music_app.services import library_roots as library_roots_module
 

@@ -10,6 +10,9 @@
   details, track tables, alerts, and search and navigation refinements.
 - Added targeted library filesystem watching, reconciliation, health reporting,
   and transactional missing-album removal backed by Postgres.
+- Protected missing-album removal with pending watcher health, kept missing
+  albums in canonical artist groups and search, and made settings saves
+  responsive while preserving serialized root replacement.
 - Bounded HTTPS shutdown behavior and expanded the JavaScript, Python,
   component, functional, authentication, and performance release gates.
 - Applied configured password limits consistently, bounded appearance JSON

@@ -151,7 +151,7 @@ export class GalleryPage extends BasePage {
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
     this.coverReadyStates = page.locator(this.coverReadyStateSelector);
-    this.galleryOptionsButton = page.locator('#gallery-options-button');
+    this.galleryOptionsButton = page.locator('[data-gallery-bar-action="album-types"]');
     this.productionViewObserver = new ProductionViewObserver(page);
   }
 

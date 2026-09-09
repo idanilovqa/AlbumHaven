@@ -162,6 +162,10 @@ export class AlbumCard extends BasePage {
     return this.cardByAlbumName(albumName).locator('.album-artbox').first();
   }
 
+  emptyArtboxMarkByAlbumName(albumName) {
+    return this.artboxByAlbumName(albumName).locator('.album-artbox__missing-mark svg');
+  }
+
   missingAlertByAlbumName(albumName) {
     return new SmallAlert(this.cardByAlbumName(albumName).locator('[data-small-alert="error"]').first());
   }

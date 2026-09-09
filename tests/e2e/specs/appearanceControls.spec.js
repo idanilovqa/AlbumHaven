@@ -23,6 +23,8 @@ const PLAYER_COLORS = Object.freeze({
   surfaceEnd: '#234567',
   controlFill: '#345678',
   controlBorder: '#456789',
+  pairedControlFill: '#51A1C4',
+  pairedControlBorder: '#2F91D1',
   waveformFill: '#56789A',
   waveformEdge: '#6789AB',
   pairedControlFill: '#51A1C4',

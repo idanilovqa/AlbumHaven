@@ -810,7 +810,7 @@ html .cover-lookup-drawer {
 :root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button) {
   transition: background-color 150ms ease, outline-color 150ms ease;
 }
-:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button):not(.tag-editor-track.is-active):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
   outline: 1px solid color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
   outline-offset: -1px !important;
   box-shadow: none !important;

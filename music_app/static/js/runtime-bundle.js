@@ -29773,7 +29773,7 @@ class VirtualArtistGrid {
   recalculate() {
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
-    const width = Math.max(1, this.scrollEl.clientWidth - 8);
+    const width = Math.max(1, this.scrollEl.clientWidth - 4);
     this.columns = Math.max(1, Math.floor((width + this.columnGap) / (selectedCardWidth + this.columnGap)));
     this.cardTrackWidth = (width - (this.columns - 1) * this.columnGap) / this.columns;
     const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);

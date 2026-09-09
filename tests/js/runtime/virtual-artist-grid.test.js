@@ -3814,11 +3814,11 @@ test('narrower viewport drops a column without exceeding the 100-scale card widt
       galleryScalePercent: 100,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 241.333px))',
+        gridTemplate: 'repeat(3, minmax(0, 242.666px))',
       },
       narrow: {
         columns: 2,
-        gridTemplate: 'repeat(2, minmax(0, 364px))',
+        gridTemplate: 'repeat(2, minmax(0, 366px))',
       },
     },
   );
@@ -3853,11 +3853,11 @@ test('selected gallery scale controls the breakpoint while cards fill available 
       galleryScalePercent: 125,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 301.333px))',
+        gridTemplate: 'repeat(3, minmax(0, 302.666px))',
       },
       narrow: {
         columns: 2,
-        gridTemplate: 'repeat(2, minmax(0, 449px))',
+        gridTemplate: 'repeat(2, minmax(0, 451px))',
       },
     },
   );

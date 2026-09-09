@@ -364,7 +364,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
   --player-waveform-centerline: 57px;
   --player-regular-centerline: 39px;
   --player-controls-size: 48px;
-  --player-leading-width: 114px;
+  --player-leading-width: 144px;
   position: fixed;
   left: 0;
   right: 0;
@@ -1725,6 +1725,7 @@ body.modal-open { overflow: hidden; }
 /* Floating compact player keeps a small, stable expand button above the art. */
 :root .global-player.is-floating-compact .compact-player-expand,
 :root .global-player.is-floating-compact .compact-player-expand:is(:hover, :focus, :focus-visible, :active) {
+  color: var(--appearance-player-ink, #dcebe3) !important;
   background: var(--appearance-player, #10251f) !important;
   border: 1px solid color-mix(in srgb, var(--appearance-player-ink, #dcebe3) 35%, transparent) !important;
   border-radius: 9px;

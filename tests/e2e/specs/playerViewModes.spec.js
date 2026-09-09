@@ -137,7 +137,10 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
 
     await expectStableButtonHover(page, globalPlayerActions.globalPlayer.compactPlayer.expand.root);
     await expect(globalPlayerActions.globalPlayer.compactPlayer.expand.root).toHaveCSS('border-top-width', '1px');
-    const idleAppearance = floating.floatingAppearance;
+    await page.mouse.move(page.viewportSize().width / 2, page.viewportSize().height / 2);
+    await surfaces.search.focus();
+    await expect(globalPlayerActions.globalPlayer.player).toHaveCSS('--compact-floating-edge-strength', '12%');
+    const idleAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
     await globalPlayerActions.globalPlayer.player.hover();
     const hoverAppearance = (await globalPlayerActions.readViewCheckpoint()).floatingAppearance;
     expect(hoverAppearance.borderColor).not.toBe(idleAppearance.borderColor);

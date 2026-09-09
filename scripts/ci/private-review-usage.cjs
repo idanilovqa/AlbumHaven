@@ -38,6 +38,14 @@ function count(value, nullable = true) {
   if (!Number.isSafeInteger(value) || value < 0) invalid();
   return value;
 }
+function reviewUnitId(value) {
+  if (typeof value !== 'string' || !/^(?:batch-(?!000)[0-9]{3}|integration)$/.test(value)) invalid();
+  return value;
+}
+function manifestDigest(value) {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) invalid();
+  return value;
+}
 function normalizeUsage(value) {
   if (value == null) return null;
   object(value);
@@ -83,11 +91,54 @@ function normalizeReport(value) {
     if (count(source.pullRequestNumber, false) < 1) invalid();
     context.pullRequestNumber = source.pullRequestNumber;
   }
+  if (source.reviewUnitId !== undefined || source.manifestDigest !== undefined) {
+    if (context.reviewer !== 'codex') invalid();
+    context.reviewUnitId = reviewUnitId(source.reviewUnitId);
+    context.manifestDigest = manifestDigest(source.manifestDigest);
+  }
   return {
     schemaVersion: 1, context,
     telemetryStatus: choice(value.telemetryStatus, ['available', 'partial', 'unavailable']),
     records: value.records.map(record => normalizeRecord(record, context.reviewer)),
   };
+}
+
+function validateUsageUnits(value, expected = {}) {
+  object(value);
+  const fields = ['schemaVersion', 'repository', 'runId', 'runAttempt', 'headSha',
+    'pullRequestNumber', 'manifestDigest', 'units'];
+  if (Object.keys(value).some(field => !fields.includes(field))
+      || fields.some(field => !Object.hasOwn(value, field))
+      || value.schemaVersion !== 1 || !Array.isArray(value.units)
+      || value.units.length < 3 || value.units.length > 66) invalid();
+  const context = normalizeReport({ schemaVersion: 1,
+    context: { ...value, reviewer: 'codex', reviewUnitId: 'integration' },
+    telemetryStatus: 'unavailable', records: [] }).context;
+  if (!context.repository || !context.pullRequestNumber || value.headSha !== context.headSha) invalid();
+  for (const field of ['repository', 'runId', 'runAttempt', 'headSha', 'pullRequestNumber', 'manifestDigest']) {
+    if (expected[field] !== undefined && context[field] !== expected[field]) {
+      throw new Error('Conflicting private review unit manifest context.');
+    }
+  }
+  const seen = new Set();
+  const units = value.units.map(unit => {
+    object(unit);
+    const reviewer = choice(unit.reviewer, REVIEWERS);
+    const id = reviewer === 'codex' ? reviewUnitId(unit.reviewUnitId) : undefined;
+    const allowed = reviewer === 'codex' ? ['reviewer', 'reviewUnitId', 'artifactName'] : ['reviewer', 'artifactName'];
+    if (Object.keys(unit).some(field => !allowed.includes(field))) invalid();
+    const artifactName = `private-review-usage-${reviewer}-${context.runId}-${context.runAttempt}${id ? '-' + id : ''}`;
+    if (unit.artifactName !== artifactName || seen.has(artifactName)) invalid();
+    seen.add(artifactName);
+    return { reviewer, ...(id ? { reviewUnitId: id } : {}), artifactName };
+  });
+  const batches = units.filter(unit => unit.reviewUnitId?.startsWith('batch-'));
+  if (units.filter(unit => unit.reviewer === 'pr-agent').length !== 1
+      || units.filter(unit => unit.reviewUnitId === 'integration').length !== 1
+      || batches.length < 1 || batches.length > 64) invalid();
+  return { schemaVersion: 1, repository: context.repository, runId: context.runId,
+    runAttempt: context.runAttempt, headSha: context.headSha, pullRequestNumber: context.pullRequestNumber,
+    manifestDigest: context.manifestDigest, units };
 }
 
 function requireRsa(key) {
@@ -178,7 +229,7 @@ function summarizeGroup(reviewer, model, records, telemetryStatus) {
   const known = estimates.filter(Boolean);
   const sum = known.reduce((total, value) => total + value.amount, 0);
   if (!Number.isFinite(sum)) invalid();
-  const complete = records.length > 0 && known.length === records.length;
+  const complete = telemetryStatus === 'available' && records.length > 0 && known.length === records.length;
   const withUsage = records.filter(record => record.usage !== null).length;
   return {
     reviewer, model, modelAttributions: [...new Set(records.map(record => record.modelAttribution))].sort(),
@@ -193,14 +244,47 @@ function summarizeGroup(reviewer, model, records, telemetryStatus) {
     standardRateAssumedResponses: known.filter(value => value.standardAssumed).length,
   };
 }
-function summarizeReports(reports) {
+function summarizeReports(reports, { expectedUnits } = {}) {
   if (!Array.isArray(reports)) invalid();
   const normalized = reports.map(normalizeReport);
+  const manifest = expectedUnits === undefined ? null : validateUsageUnits(expectedUnits);
+  if (!manifest && normalized.some(report => report.context.reviewUnitId)) {
+    throw new Error('Missing private review unit manifest.');
+  }
   let context = null;
+  const identityFor = report => `${report.context.reviewer}:${report.context.reviewUnitId || ''}`;
+  let containers = normalized.map(report => ({ report, duplicateResponses: 0, records: [] }));
+  if (manifest) {
+    const byUnit = new Map();
+    for (const report of normalized) {
+      for (const field of ['repository', 'runId', 'runAttempt', 'headSha']) {
+        if (report.context[field] !== manifest[field]) throw new Error('Conflicting private review run context.');
+      }
+      if ((report.context.pullRequestNumber !== undefined && report.context.pullRequestNumber !== manifest.pullRequestNumber)
+          || (report.context.reviewer === 'codex' && report.context.manifestDigest !== manifest.manifestDigest)) {
+        throw new Error('Conflicting private review unit context.');
+      }
+      const identity = identityFor(report);
+      if (byUnit.has(identity) || !manifest.units.some(unit => `${unit.reviewer}:${unit.reviewUnitId || ''}` === identity)) {
+        throw new Error('Duplicate or unexpected private review unit.');
+      }
+      byUnit.set(identity, report);
+    }
+    containers = manifest.units.map(unit => {
+      const report = byUnit.get(`${unit.reviewer}:${unit.reviewUnitId || ''}`) || {
+        schemaVersion: 1, telemetryStatus: 'unavailable', records: [],
+        context: { repository: manifest.repository, runId: manifest.runId, runAttempt: manifest.runAttempt,
+          headSha: manifest.headSha, pullRequestNumber: manifest.pullRequestNumber, reviewer: unit.reviewer,
+          ...(unit.reviewUnitId ? { reviewUnitId: unit.reviewUnitId, manifestDigest: manifest.manifestDigest } : {}) },
+      };
+      return { report, duplicateResponses: 0, records: [] };
+    });
+  }
   const seen = new Map();
   const records = [];
-  for (const report of normalized) {
-    const { reviewer, ...candidate } = report.context;
+  for (const container of containers) {
+    const { report } = container;
+    const { reviewer, reviewUnitId: unit, manifestDigest: digest, ...candidate } = report.context;
     if (context === null) context = { ...candidate };
     for (const field of ['runId', 'runAttempt', 'headSha', 'repository', 'pullRequestNumber']) {
       if (context[field] !== undefined && candidate[field] !== undefined && context[field] !== candidate[field]) {
@@ -210,39 +294,60 @@ function summarizeReports(reports) {
     }
     for (const record of report.records) {
       const identity = record.responseId ? `${reviewer}:response:${record.responseId}`
-        : record.callId ? `${reviewer}:call:${record.callId}:${record.status}` : null;
+        : record.callId ? `${reviewer}:${unit || ''}:call:${record.callId}:${record.status}` : null;
       const semantic = { ...record, callId: record.responseId ? null : record.callId };
       const serialized = JSON.stringify(semantic);
       if (identity && seen.has(identity)) {
         if (seen.get(identity) !== serialized) throw new Error('Conflicting private review response records.');
+        container.duplicateResponses += 1;
         continue;
       }
       if (identity) seen.set(identity, serialized);
       records.push(record);
+      container.records.push(record);
     }
   }
+  if (manifest && context) context.manifestDigest = manifest.manifestDigest;
+  const statusFor = reports => {
+    if (!reports.length) return 'missing';
+    const statuses = reports.map(report => report.records.length ? report.telemetryStatus : 'unavailable');
+    if (statuses.every(status => status === 'unavailable')) return 'unavailable';
+    return statuses.every(status => status === 'available') ? 'available' : 'partial';
+  };
+  const modelGroups = (reviewer, records, status) => {
+    const models = records.length ? [...new Set(records.map(record => record.model))].sort() : [null];
+    return models.map(model => summarizeGroup(reviewer, model, records.filter(record => record.model === model), status));
+  };
   const groups = [];
+  const reviewerTotals = [];
   const missingReviewers = [];
   for (const reviewer of REVIEWERS) {
-    const containers = normalized.filter(report => report.context.reviewer === reviewer);
+    const ownedReports = containers.map(container => container.report).filter(report => report.context.reviewer === reviewer);
     const owned = records.filter(record => record.reviewer === reviewer);
-    let status;
-    if (!containers.length) { status = 'missing'; missingReviewers.push(reviewer); }
-    else if (containers.every(report => report.telemetryStatus === 'unavailable')) status = 'unavailable';
-    else if (containers.some(report => report.telemetryStatus !== 'available')) status = 'partial';
-    else status = 'available';
-    const models = owned.length ? [...new Set(owned.map(record => record.model))].sort() : [null];
-    for (const model of models) groups.push(summarizeGroup(reviewer, model,
-      owned.filter(record => record.model === model), status));
+    const status = statusFor(ownedReports);
+    if (!normalized.some(report => report.context.reviewer === reviewer)) missingReviewers.push(reviewer);
+    groups.push(...modelGroups(reviewer, owned, status));
+    reviewerTotals.push(summarizeGroup(reviewer, null, owned, status));
   }
+  const units = manifest ? containers.map(container => {
+    const { reviewer, reviewUnitId: id } = container.report.context;
+    const status = statusFor([container.report]);
+    return { reviewer, reviewUnitId: id ?? null, telemetryStatus: status,
+      groups: modelGroups(reviewer, container.records, status),
+      totals: summarizeGroup(reviewer, null, container.records, status),
+      duplicateResponses: container.duplicateResponses };
+  }) : [];
   return {
     schemaVersion: 1, context,
     pricing: { asOf: '2026-09-08', currency: 'USD', unit: 'per million tokens', sources: [...PRICING_SOURCES],
       rateOrder: ['uncachedInput', 'cachedInput', 'cacheWriteInput', 'output'],
       rates: Object.fromEntries(Object.entries(STANDARD_RATES).map(([model, rates]) => [model, [...rates]])),
       longInputThreshold: 272000, longInputMultiplier: 2, longOutputMultiplier: 1.5 },
-    coverage: { expectedReviewers: [...REVIEWERS], missingReviewers, billingComplete: false },
-    groups,
+    coverage: { expectedReviewers: [...REVIEWERS], missingReviewers, billingComplete: false,
+      missingUnits: units.filter(unit => unit.telemetryStatus === 'unavailable').map(unit => ({
+        reviewer: unit.reviewer, reviewUnitId: unit.reviewUnitId,
+      })) },
+    groups, units, reviewerTotals,
     notes: [
       'Observed responses only; telemetry is not billing-complete and may omit retries or cancelled calls.',
       'Requested model attribution is not a guarantee of the billed model.',
@@ -251,6 +356,7 @@ function summarizeReports(reports) {
       'Cached and cache-write tokens are included in input; reasoning tokens are included in output. Do not add them again.',
       'Missing counters and reviewer reports remain unknown. Known token totals cover only responses with that counter.',
       'Known estimated cost is a subtotal of successful responses with estimable cost; failed calls retain unknown cost even when counters exist.',
+      'Repeated response IDs are attributed once, to the first unit in manifest order; unit detail identifies excluded copies.',
     ],
   };
 }
@@ -268,6 +374,22 @@ function markdown(summary) {
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
   for (const row of summary.groups) {
     lines.push(`| ${row.reviewer} / ${row.model ?? 'unknown'} | ${row.telemetryStatus} | ${row.responses.observed} / ${row.responses.withUsage} / ${row.responses.unknownUsage} | ${row.responses.failure} | ${token(row, 'inputTokens')} | ${token(row, 'cachedInputTokens')} | ${token(row, 'cacheWriteInputTokens')} | ${token(row, 'outputTokens')} | ${token(row, 'reasoningOutputTokens')} | ${row.estimatedCostUsd === null ? 'unknown' : row.estimatedCostUsd.toFixed(8)} | ${row.knownEstimatedCostUsd === null ? 'unknown' : row.knownEstimatedCostUsd.toFixed(8)} | ${row.estimateSources.join(', ') || 'unknown'} |`);
+  }
+  const cost = value => value === null ? 'unknown' : value.toFixed(8);
+  lines.push('', '## Reviewer totals', '',
+    '| Reviewer | Telemetry | Observed | Input | Output | Estimated USD | Known subtotal USD |',
+    '| --- | --- | --- | --- | --- | --- | --- |');
+  for (const row of summary.reviewerTotals) {
+    lines.push(`| ${row.reviewer} | ${row.telemetryStatus} | ${row.responses.observed} | ${token(row, 'inputTokens')} | ${token(row, 'outputTokens')} | ${cost(row.estimatedCostUsd)} | ${cost(row.knownEstimatedCostUsd)} |`);
+  }
+  if (summary.units.length) {
+    lines.push('', '## Review unit detail', '',
+      '| Reviewer / unit | Telemetry | Unique responses | Excluded copies | Input | Output | Estimated USD | Known subtotal USD |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const unit of summary.units) {
+      const row = unit.totals;
+      lines.push(`| ${unit.reviewer} / ${unit.reviewUnitId ?? 'legacy'} | ${unit.telemetryStatus} | ${row.responses.observed} | ${unit.duplicateResponses} | ${token(row, 'inputTokens')} | ${token(row, 'outputTokens')} | ${cost(row.estimatedCostUsd)} | ${cost(row.knownEstimatedCostUsd)} |`);
+    }
   }
   lines.push('', 'Standard catalog rates per million tokens (uncached input / cached input / cache writes / output):', '');
   for (const [model, rates] of Object.entries(STANDARD_RATES)) lines.push(`- ${model}: ${rates.join(' / ')} USD.`);
@@ -308,16 +430,20 @@ function main(argv) {
     fs.writeFileSync(options['--output'], `${JSON.stringify(envelope)}\n`, { mode: 0o600 });
   } else {
     const privateKey = fs.readFileSync(options['--private-key'], 'utf8');
-    const reports = artifactFiles(options['--input-dir']).map(filename =>
+    const files = artifactFiles(options['--input-dir']);
+    const manifests = files.filter(filename => path.basename(filename) === 'usage-units.json');
+    if (manifests.length > 1) invalid();
+    const expectedUnits = manifests.length ? JSON.parse(fs.readFileSync(manifests[0], 'utf8')) : undefined;
+    const reports = files.filter(filename => filename !== manifests[0]).map(filename =>
       openReport(JSON.parse(fs.readFileSync(filename, 'utf8')), privateKey));
-    const summary = summarizeReports(reports);
+    const summary = summarizeReports(reports, { expectedUnits });
     const prefix = options['--output-prefix'];
     fs.writeFileSync(`${prefix}.private.json`, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
     fs.writeFileSync(`${prefix}.private.md`, markdown(summary), { mode: 0o600 });
   }
 }
 
-module.exports = { sealReport, openReport, summarizeReports };
+module.exports = { sealReport, openReport, summarizeReports, validateUsageUnits };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch { process.stderr.write('Private review usage command failed; check input, recipient key, and output paths.\n'); process.exitCode = 1; }

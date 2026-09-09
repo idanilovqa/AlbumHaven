@@ -10,9 +10,11 @@ function validateSelection({ repository, runId, attempt }) {
 }
 
 function verifyContext(report, expected) {
-  for (const key of ['runId', 'runAttempt', 'headSha', 'reviewer', 'repository']) {
+  for (const key of ['runId', 'runAttempt', 'headSha', 'reviewer', 'repository', 'reviewUnitId', 'manifestDigest']) {
     if (report.context?.[key] !== expected[key]) throw new Error('artifact-context-mismatch');
   }
+  if (report.context?.pullRequestNumber !== undefined && expected.pullRequestNumber !== undefined
+      && report.context.pullRequestNumber !== expected.pullRequestNumber) throw new Error('artifact-context-mismatch');
 }
 
 function github(args) {
@@ -22,16 +24,58 @@ function github(args) {
 }
 
 function downloadUsage({ repository, runId, attempt, headSha, staging, privateKey }, githubRead = github) {
-  const { openReport, sealReport } = require('./ci/private-review-usage.cjs');
+  validateSelection({ repository, runId, attempt });
+  if (!/^[a-f0-9]{40}$/.test(headSha || '')) throw new Error('invalid-run-metadata');
+  const { openReport, sealReport, validateUsageUnits } = require('./ci/private-review-usage.cjs');
   const publicKey = require('node:crypto').createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });
-  for (const reviewer of ['codex', 'pr-agent']) {
-    const directory = path.join(staging, reviewer);
+  // Inventory is required even for legacy runs: otherwise a failed manifest
+  // download could silently turn a batched run into a two-report summary.
+  const pages = JSON.parse(githubRead(['api', `repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`,
+    '--paginate', '--slurp']));
+  if (!Array.isArray(pages) || pages.some(page => !Array.isArray(page?.artifacts))) {
+    throw new Error('invalid-artifact-inventory');
+  }
+  const names = pages.flatMap(page => page.artifacts.map(artifact => artifact?.name));
+  if (names.some(name => typeof name !== 'string')) throw new Error('invalid-artifact-inventory');
+  const manifestName = `private-review-usage-units-${runId}-${attempt}`;
+  const stems = ['codex', 'pr-agent'].map(reviewer => `private-review-usage-${reviewer}-${runId}-${attempt}`);
+  const selectedNames = names.filter(name => name === manifestName
+    || stems.some(stem => name === stem || name.startsWith(stem + '-')));
+  if (new Set(selectedNames).size !== selectedNames.length) throw new Error('ambiguous-review-artifact');
+  let expectedUnits;
+  if (selectedNames.includes(manifestName)) {
+    const directory = path.join(staging, '_units');
     fs.mkdirSync(directory, { mode: 0o700 });
-    const artifact = 'private-review-usage-' + reviewer + '-' + runId + '-' + attempt;
+    try { githubRead(['run', 'download', runId, '--repo', repository, '--name', manifestName, '--dir', directory]); }
+    catch { throw new Error('missing-review-unit-manifest'); }
+    const files = fs.readdirSync(directory);
+    const filename = path.join(directory, 'usage-units.json');
+    if (files.length !== 1 || files[0] !== 'usage-units.json'
+        || !fs.lstatSync(filename).isFile() || fs.lstatSync(filename).isSymbolicLink()) {
+      throw new Error('ambiguous-review-artifact');
+    }
+    expectedUnits = validateUsageUnits(JSON.parse(fs.readFileSync(filename, 'utf8')),
+      { repository, runId, runAttempt: attempt, headSha });
+    const declared = new Set(expectedUnits.units.map(unit => unit.artifactName));
+    if (selectedNames.some(name => name !== manifestName && !declared.has(name))) {
+      throw new Error('unexpected-review-unit-artifact');
+    }
+  } else if (selectedNames.some(name => !stems.includes(name))) {
+    throw new Error('missing-review-unit-manifest');
+  }
+  const units = expectedUnits?.units || ['codex', 'pr-agent'].map(reviewer => ({
+    reviewer, artifactName: `private-review-usage-${reviewer}-${runId}-${attempt}`,
+  }));
+  for (const { reviewer, reviewUnitId, artifactName } of units) {
+    const directory = reviewUnitId ? path.join(staging, reviewer, reviewUnitId) : path.join(staging, reviewer);
+    fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(directory, { mode: 0o700 });
     let downloaded = true;
-    try { githubRead(['run', 'download', runId, '--repo', repository, '--name', artifact, '--dir', directory]); }
+    try { githubRead(['run', 'download', runId, '--repo', repository, '--name', artifactName, '--dir', directory]); }
     catch { downloaded = false; }
-    const context = { runId, runAttempt: attempt, headSha, reviewer, repository };
+    const context = { runId, runAttempt: attempt, headSha, reviewer, repository,
+      ...(expectedUnits ? { pullRequestNumber: expectedUnits.pullRequestNumber } : {}),
+      ...(reviewUnitId ? { reviewUnitId, manifestDigest: expectedUnits.manifestDigest } : {}) };
     const files = fs.readdirSync(directory);
     if (downloaded && files.length === 1 && files[0].endsWith('.enc.json')) {
       const filename = path.join(directory, files[0]);
@@ -76,7 +120,8 @@ function main() {
 if (require.main === module) {
   try { main(); } catch (error) {
     const known = new Set(['invalid-run-selection', 'invalid-run-metadata', 'artifact-context-mismatch',
-      'github-read-failed', 'ambiguous-review-artifact', 'private-report-failed']);
+      'github-read-failed', 'ambiguous-review-artifact', 'private-report-failed', 'invalid-artifact-inventory',
+      'missing-review-unit-manifest', 'unexpected-review-unit-artifact']);
     process.stderr.write((known.has(error.message) ? error.message : 'private-report-unavailable-check-key-and-artifacts') + '\n');
     process.exitCode = 1;
   }

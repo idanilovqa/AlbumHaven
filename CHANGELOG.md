@@ -31,6 +31,9 @@
   Files navigation so its active album remains visible after the sidebar opens.
 - Kept the required hosted AI review gate compatible with its pinned action's
   Chat Completions request contract and the available per-minute token budget.
+- Added complete Codex review assignments with bounded parallel batches,
+  explicit file-section and image coverage, an integration review, and private
+  per-review usage reporting. Incomplete reviews and findings hold test jobs.
 - Serialized watcher flush publication so rapid delete-and-recreate events keep
   their observed order, and moved watcher-health reads and synchronous mail
   delivery callbacks off the ASGI event loop.

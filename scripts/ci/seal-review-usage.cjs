@@ -52,6 +52,8 @@ function cli() {
   };
   const prNumber = Number(process.env.REVIEW_USAGE_PR_NUMBER);
   if (Number.isSafeInteger(prNumber) && prNumber > 0) context.pullRequestNumber = prNumber;
+  if (process.env.REVIEW_USAGE_UNIT_ID) context.reviewUnitId = process.env.REVIEW_USAGE_UNIT_ID;
+  if (process.env.REVIEW_USAGE_MANIFEST_DIGEST) context.manifestDigest = process.env.REVIEW_USAGE_MANIFEST_DIGEST;
   const report = prepareUsageReport({ reviewer: args['--reviewer'], inputPath: args['--input'],
     actionOutcome: process.env.REVIEW_USAGE_ACTION_OUTCOME, context });
   const envelope = sealReport(report, fs.readFileSync(args['--public-key'], 'utf8'));

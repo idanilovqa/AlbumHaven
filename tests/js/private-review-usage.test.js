@@ -56,6 +56,73 @@ function cli(args) {
   });
 }
 
+function unitManifest(ids = ['batch-001', 'batch-002', 'integration']) {
+  const context = report().context;
+  return { schemaVersion: 1, repository: context.repository, runId: context.runId,
+    runAttempt: context.runAttempt, headSha: context.headSha, pullRequestNumber: 1,
+    manifestDigest: 'd'.repeat(64), units: [
+      ...ids.map(reviewUnitId => ({ reviewer: 'codex', reviewUnitId,
+        artifactName: `private-review-usage-codex-${context.runId}-${context.runAttempt}-${reviewUnitId}` })),
+      { reviewer: 'pr-agent', artifactName: `private-review-usage-pr-agent-${context.runId}-${context.runAttempt}` },
+    ] };
+}
+function unitReport(reviewUnitId, overrides = {}) {
+  return report({ context: { ...report().context, reviewUnitId, manifestDigest: 'd'.repeat(64) }, ...overrides });
+}
+
+test('review units retain authenticated identity while invalid or unpaired metadata fails closed', () => {
+  const { sealReport, openReport } = helper();
+  const input = unitReport('batch-001');
+  assert.deepEqual(openReport(sealReport(input, keys().publicKey), keys().privateKey), input);
+  for (const change of [
+    { reviewUnitId: '../batch-001' }, { reviewUnitId: 'batch-0' },
+    { manifestDigest: 'D'.repeat(64) }, { manifestDigest: undefined },
+    { reviewUnitId: undefined }, { reviewer: 'pr-agent' },
+  ]) {
+    const context = { ...input.context, ...change };
+    const records = input.records.map(row => ({ ...row, reviewer: context.reviewer }));
+    assert.throws(() => sealReport({ ...input, context, records }, keys().publicKey));
+  }
+});
+
+test('review units deduplicate response IDs in manifest order without hiding independent local calls', () => {
+  const { summarizeReports } = helper();
+  const first = unitReport('batch-001', { records: [record(), record({ responseId: null, callId: 'local-call' })] });
+  const second = unitReport('batch-002', { records: [record(), record({ responseId: null, callId: 'local-call' })] });
+  const summary = summarizeReports([second, first], { expectedUnits: unitManifest() });
+  assert.equal(group(summary).responses.observed, 3);
+  assert.equal(group(summary).tokens.inputTokens.knownTotal, 3000);
+  const firstUnit = summary.units.find(unit => unit.reviewUnitId === 'batch-001');
+  const secondUnit = summary.units.find(unit => unit.reviewUnitId === 'batch-002');
+  assert.equal(firstUnit.totals.responses.observed, 2);
+  assert.equal(secondUnit.totals.responses.observed, 1);
+  assert.equal(secondUnit.duplicateResponses, 1);
+  assert.equal(summary.reviewerTotals.find(row => row.reviewer === 'codex').tokens.inputTokens.knownTotal, 3000);
+  assert.deepEqual(summary.coverage.missingUnits, [
+    { reviewer: 'codex', reviewUnitId: 'integration' }, { reviewer: 'pr-agent', reviewUnitId: null },
+  ]);
+  const missing = summary.units.find(unit => unit.reviewUnitId === 'integration');
+  assert.equal(missing.totals.estimatedCostUsd, null);
+  assert.equal(missing.totals.tokens.inputTokens.knownTotal, null);
+});
+
+test('review units reject missing manifests, foreign contexts and ambiguous expected identities', () => {
+  const { summarizeReports } = helper();
+  const input = unitReport('batch-001');
+  assert.throws(() => summarizeReports([input]));
+  for (const change of [{ runId: '99' }, { runAttempt: 2 }, { headSha: 'b'.repeat(40) },
+    { repository: 'other/repo' }, { manifestDigest: 'b'.repeat(64) }]) {
+    assert.throws(() => summarizeReports([input], { expectedUnits: { ...unitManifest(), ...change } }));
+  }
+  const duplicate = unitManifest();
+  duplicate.units.push({ ...duplicate.units[0] });
+  assert.throws(() => summarizeReports([input], { expectedUnits: duplicate }));
+  const wrongArtifact = unitManifest();
+  wrongArtifact.units[0].artifactName = '../private-artifact';
+  assert.throws(() => summarizeReports([input], { expectedUnits: wrongArtifact }));
+  assert.throws(() => summarizeReports([unitReport('batch-999')], { expectedUnits: unitManifest() }));
+});
+
 test('sealed usage contains only crypto fields and strips sensitive extra payload', () => {
   const { sealReport, openReport } = helper();
   const sensitive = report({ prompt: 'TOP_SECRET_PROMPT', localPath: 'PRIVATE_MEDIA_PATH' });
@@ -334,4 +401,34 @@ test('offline CLI seals nested artifacts and writes only local private summaries
   assert.notEqual(failed.status, 0);
   assert.ok(!fs.existsSync(`${failedPrefix}.private.json`));
   assert.ok(!fs.existsSync(`${failedPrefix}.private.md`));
+});
+
+test('review units offline CLI discovers the expected manifest and retains unknown missing jobs', t => {
+  const { sealReport } = helper();
+  const root = tempDirectory(t);
+  const artifacts = path.join(root, 'artifacts');
+  const nested = path.join(artifacts, 'codex', 'batch-001');
+  fs.mkdirSync(nested, { recursive: true });
+  fs.writeFileSync(path.join(artifacts, 'usage-units.json'), JSON.stringify(unitManifest()));
+  fs.writeFileSync(path.join(nested, 'usage.enc.json'), JSON.stringify(sealReport(unitReport('batch-001'), keys().publicKey)));
+  const privatePath = path.join(root, 'owner.pem');
+  fs.writeFileSync(privatePath, keys().privateKey, { mode: 0o600 });
+  const prefix = path.join(root, 'batched-run');
+  const args = ['report', '--input-dir', artifacts, '--private-key', privatePath, '--output-prefix', prefix];
+  const result = cli(args);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout + result.stderr, '');
+  const summary = JSON.parse(fs.readFileSync(`${prefix}.private.json`));
+  assert.equal(summary.units.length, 4);
+  assert.equal(summary.coverage.missingUnits.length, 3);
+  assert.equal(summary.reviewerTotals.find(row => row.reviewer === 'codex').estimatedCostUsd, null);
+  const markdown = fs.readFileSync(`${prefix}.private.md`, 'utf8');
+  for (const unit of ['batch-001', 'batch-002', 'integration']) assert.ok(markdown.includes(unit));
+  const duplicate = path.join(artifacts, 'duplicate');
+  fs.mkdirSync(duplicate);
+  fs.writeFileSync(path.join(duplicate, 'usage-units.json'), JSON.stringify(unitManifest()));
+  const failedPrefix = path.join(root, 'ambiguous');
+  const failed = cli([...args.slice(0, -1), failedPrefix]);
+  assert.notEqual(failed.status, 0);
+  assert.ok(!fs.existsSync(`${failedPrefix}.private.json`));
 });

@@ -1,7 +1,13 @@
 # Private PR review usage
 
-The two reviewers, Codex and PR Agent, retain encrypted usage artifacts for each
-GitHub Actions run and attempt. The readable report stays on the owner's machine.
+Codex execution output is captured in a runner-private temporary file. The
+workflow verifies the pinned official action before applying that single logging
+change. Public artifacts contain validated findings and coverage; raw transcripts
+and plaintext usage are not uploaded.
+
+Codex review batches, the integration review, and PR Agent retain encrypted
+usage artifacts for each GitHub Actions run and attempt. The readable report
+stays on the owner's machine.
 CI receives the public encryption key only. It does not receive a private
 decryption key or an OpenAI billing/admin key, and does not publish a cost table.
 
@@ -14,9 +20,12 @@ node scripts/report-pr-review-usage.cjs --run <GITHUB_RUN_ID>
 ```
 
 The command selects the latest attempt. Add `--attempt 1` for an earlier attempt.
-It downloads only that run's two encrypted artifacts and checks their repository,
-head commit, reviewer, and attempt before combining them. It prints the paths of
-the local Markdown and JSON reports. On Windows their default folder is
+For batched runs, it first reads the expected-unit manifest and checks the exact
+repository, run, attempt, and head commit. It downloads every declared encrypted
+artifact and verifies Codex unit IDs and manifest digests before combining them.
+Unexpected units or a missing manifest alongside batch artifacts stop the report.
+Legacy runs retain their two-reviewer artifact format. The command prints the
+paths of the local Markdown and JSON reports. On Windows their default folder is
 `%LOCALAPPDATA%\Album Haven\Review Usage`; on other systems it is
 `~/.local/share/Album Haven/Review Usage`.
 
@@ -32,6 +41,10 @@ Each reviewer/model row contains observed responses, failures, input tokens,
 cached input, cache writes, output tokens, reasoning tokens, an estimated USD
 amount when calculable, and the source of that estimate. Cached tokens are part
 of input; reasoning tokens are part of output. They are not added twice.
+Batched reports also include per-unit detail and reviewer totals. Repeated
+response IDs across units are counted once, attributed to the first unit in
+manifest order; excluded copies are identified in the unit detail. A missing
+unit makes the reviewer total unknown while preserving its known subtotal.
 
 Codex uses its native per-response records, including child-agent sessions.
 PR Agent uses a scoped LiteLLM callback. Repeated notifications with the same
@@ -58,11 +71,11 @@ not ensure the omitted files are examined. Codex also reports actual inspection
 limits separately from the requested scope. The successfully reviewed-head
 marker records passing review and CI results, not exhaustive file coverage.
 
-For a large PR, record an explicit inventory of changed subsystems, review each
-bounded group with its callers and tests, and collect the findings before the
-next paid run. Automated batching would need to record coverage for every
-batch, reject missing batches, and reconcile findings across subsystem
-boundaries. Increasing the context budget alone does not establish coverage.
+The batched Codex review assigns the full Git diff to bounded jobs and checks
+each unit's inspection attestations before an integration review. Missing,
+stale, duplicate, or malformed results block coverage. This establishes supplied
+content and completed attestations, not the quality of attention or the absence
+of bugs. The integration review reports its own limits.
 
 ## Privacy and operation
 
@@ -70,8 +83,9 @@ Only allowlisted usage and run metadata enter the report. Prompts, code, respons
 text, credentials, and exception messages are excluded. Temporary runner records
 are encrypted using AES-256-GCM with a random data key, wrapped for the committed
 RSA public key using OAEP-SHA256. Only the encrypted `.enc.json` files are
-uploaded. Telemetry failures do not change the reviewers' verdicts or release
-gate; the local report shows a gap.
+uploaded as usage records. The separate public expected-unit manifest contains
+only run and coverage identities, never tokens or costs. Telemetry failures do
+not change the reviewers' verdicts or release gate; the local report shows a gap.
 
 Keep a private backup of the decryption key. Losing it makes existing artifacts
 unreadable. To provision another recipient, generate a new key pair into new,

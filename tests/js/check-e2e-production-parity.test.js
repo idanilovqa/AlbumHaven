@@ -134,7 +134,7 @@ contractTest('portable JavaScript gate forwards the setup-python executable to p
 
 contractTest('hosted review gates fail closed without credentials and run their review actions when configured', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
-  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
+  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review_plan');
   const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
@@ -144,7 +144,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
   const prAgentAction = workflowStepSource(
     prAgentJob,
     'PR Agent action step',
-    'Require PR Agent review output',
+    'Encrypt private PR Agent usage',
   );
   const prAgentOutputGuard = workflowStepSource(prAgentJob, 'Require PR Agent review output');
   const codexCredentialGuard = workflowStepSource(
@@ -152,8 +152,8 @@ contractTest('hosted review gates fail closed without credentials and run their 
     'Require OpenAI credential for Codex review',
     'Checkout',
   );
-  const codexCheckout = workflowStepSource(codexJob, 'Checkout', 'Run Codex');
-  const codexAction = workflowStepSource(codexJob, 'Run Codex', 'Require Codex review output file');
+  const codexCheckout = workflowStepSource(codexJob, 'Checkout', 'Set up Node.js for review coverage');
+  const codexAction = workflowStepSource(codexJob, 'Run Codex', 'Collect private Codex usage');
   const codexOutputGuard = workflowStepSource(
     codexJob,
     'Require Codex review output file',
@@ -196,10 +196,12 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(codexCredentialGuard, /CODEX_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
   assert.match(codexCredentialGuard, /if \[\[ -z "\$\{CODEX_OPENAI_API_KEY:-\}" \]\]; then[\s\S]*?exit 1/);
   assert.doesNotMatch(codexCredentialGuard, /^        continue-on-error:/m);
-  assert.match(codexAction, /- name: Run Codex\r?\n\s+id: run_codex\r?\n\s+uses: openai\/codex-action@v1/);
+  assert.match(codexAction, /- name: Run Codex\r?\n\s+id: run_codex\r?\n\s+uses: \.\/\.tmp\/codex-action/);
   assert.doesNotMatch(codexAction, /^        (?:if|continue-on-error):/m);
   assert.match(codexAction, /openai-api-key: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
-  assert.match(codexAction, /output-file: codex-output\.md/);
+  assert.match(codexAction, /output-file: \.tmp\/codex-integration\/result\.json/);
+  assert.match(codexJob, /validate-codex-review-batches\.cjs final.*--output codex-output\.md/);
+  assert.match(codexCheckout, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(codexJob, /^      issues: write\r?\n      pull-requests: write$/m);
   assert.match(codexOutputGuard, /run: test -s codex-output\.md/);
   assert.match(codexArtifact, /if: \$\{\{ always\(\) \}\}/);
@@ -209,6 +211,8 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(codexArtifact, /if-no-files-found: error/);
   assert.match(codexComment, /uses: actions\/github-script@v7/);
   assert.match(codexComment, /fs\.readFileSync\('codex-output\.md', 'utf8'\)\.trim\(\)/);
+  assert.match(codexComment, /Buffer\.byteLength\(report, 'utf8'\) <= 60000/);
+  assert.match(codexComment, /codex-review-output artifact/);
   assert.match(codexComment, /body,/);
   for (const repositoryControlledStep of [codexCheckout, codexOutputGuard, codexArtifact, codexComment]) {
     assert.doesNotMatch(repositoryControlledStep, /OPENAI_API_KEY|CODEX_OPENAI_API_KEY/);
@@ -222,7 +226,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
 
 contractTest('hosted review jobs run after scope and before E2E without test dependencies', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
-  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
+  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review_plan');
   const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
 
   for (const reviewJob of [prAgentJob, codexJob]) {

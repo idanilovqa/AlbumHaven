@@ -62,9 +62,11 @@ test('CI sealing command emits only ciphertext and preserves each reviewer\'s ac
     if (reviewer === 'pr-agent') fs.writeFileSync(input + '.status.json', '{"schemaVersion":1,"state":"registered"}');
     const result = cp.spawnSync(process.execPath, [path.resolve(__dirname, '../../scripts/ci/seal-review-usage.cjs'),
       '--reviewer', reviewer, '--input', input, '--public-key', publicKey, '--output', output], {
-      encoding: 'utf8', windowsHide: true,
+      encoding: 'utf8', windowsHide: true, timeout: 15000,
       env: { ...process.env, GITHUB_RUN_ID: '42', GITHUB_RUN_ATTEMPT: '1',
-        GITHUB_REPOSITORY: 'owner/repo', REVIEW_USAGE_HEAD_SHA: 'a'.repeat(40), REVIEW_USAGE_ACTION_OUTCOME: 'success' },
+        GITHUB_REPOSITORY: 'owner/repo', REVIEW_USAGE_HEAD_SHA: 'a'.repeat(40), REVIEW_USAGE_ACTION_OUTCOME: 'success',
+        REVIEW_USAGE_UNIT_ID: reviewer === 'codex' ? 'batch-001' : '',
+        REVIEW_USAGE_MANIFEST_DIGEST: reviewer === 'codex' ? 'd'.repeat(64) : '' },
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout + result.stderr, '');
@@ -74,5 +76,21 @@ test('CI sealing command emits only ciphertext and preserves each reviewer\'s ac
     assert.equal(opened.telemetryStatus, 'available');
     assert.deepEqual(opened.records[0].usage, usage);
     assert.equal(Object.hasOwn(opened.records[0], 'prompt'), false);
+    if (reviewer === 'codex') {
+      assert.equal(opened.context.reviewUnitId, 'batch-001');
+      assert.equal(opened.context.manifestDigest, 'd'.repeat(64));
+    } else {
+      assert.equal(Object.hasOwn(opened.context, 'reviewUnitId'), false);
+      assert.equal(Object.hasOwn(opened.context, 'manifestDigest'), false);
+    }
   }
+});
+
+test('review unit capture keeps cancelled integration identity without inventing usage', () => {
+  const unitContext = { ...context, reviewUnitId: 'integration', manifestDigest: 'd'.repeat(64) };
+  const report = prepareUsageReport({ reviewer: 'codex', inputPath: 'absent',
+    context: unitContext, actionOutcome: 'cancelled' }, mockFiles({}));
+  assert.deepEqual(report.context, { ...unitContext, reviewer: 'codex' });
+  assert.equal(report.telemetryStatus, 'unavailable');
+  assert.deepEqual(report.records, []);
 });

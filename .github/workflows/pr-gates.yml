@@ -1317,17 +1317,217 @@ jobs:
           PR_AGENT_REVIEW_OUTPUT: ${{ steps.pr_agent.outputs.review }}
         run: node scripts/require-pr-agent-review-output.cjs
 
+  codex_review_plan:
+    name: Codex Review Plan
+    needs:
+      - review_scope
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      matrix_json: ${{ steps.plan.outputs.matrix_json }}
+      manifest_digest: ${{ steps.plan.outputs.manifest_digest }}
+    env:
+      BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
+      HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
+      REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+      REVIEW_CODEX_VERSION: "0.153.4"
+      REVIEW_ACTION_VERSION: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js for review coverage
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Plan complete Codex review
+        id: plan
+        run: node scripts/ci/plan-codex-review.cjs --output-dir .tmp/codex-review
+
+      - name: Verify generated runtime parity before review
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const { buildRuntimeBundle, outputPath } = require('./scripts/build-runtime-bundle.cjs');
+          const normalize = value => value.replace(/\r\n/g, '\n');
+          assert.equal(normalize(fs.readFileSync(outputPath, 'utf8')), normalize(buildRuntimeBundle()), 'Generated runtime bundle differs from its source modules');
+          NODE
+
+      - name: Retain expected private usage units
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-usage-units-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/codex-review/usage-units.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Retain exact review plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-review-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/codex-review/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  codex_review_batches:
+    name: Codex Review ${{ matrix.id }}
+    needs:
+      - review_scope
+      - codex_review_plan
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' && needs.codex_review_plan.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.codex_review_plan.outputs.matrix_json || '{"include":[{"id":"unavailable","codex_args":"[]"}]}') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
+      HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
+      REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+      REVIEW_CODEX_VERSION: "0.153.4"
+      REVIEW_ACTION_VERSION: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js for review coverage
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download exact review plan
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-review-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/codex-review
+
+      - name: Verify batch inputs against the event
+        env:
+          REVIEW_UNIT_ID: ${{ matrix.id }}
+          REVIEW_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+        run: node scripts/ci/validate-codex-review-batches.cjs preflight --plan-dir .tmp/codex-review --unit "$REVIEW_UNIT_ID" --manifest-digest "$REVIEW_MANIFEST_DIGEST"
+
+      - name: Require OpenAI credential for Codex review
+        shell: bash
+        env:
+          CODEX_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [[ -z "${CODEX_OPENAI_API_KEY:-}" ]]; then
+            echo "::error::Codex PR Review requires the OPENAI_API_KEY Actions secret. Publishing is blocked until the credential is configured."
+            exit 1
+          fi
+
+      - name: Checkout pinned Codex action
+        uses: actions/checkout@v5
+        with:
+          repository: openai/codex-action
+          ref: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+          path: .tmp/codex-action
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Protect private Codex console output
+        run: node scripts/ci/prepare-private-codex-action.cjs --action-dir .tmp/codex-action
+
+      - name: Run Codex
+        id: run_codex
+        uses: ./.tmp/codex-action
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          codex-version: "0.153.4"
+          prompt-file: .tmp/codex-review/${{ matrix.id }}.prompt.md
+          output-schema-file: .tmp/codex-review/${{ matrix.id }}.schema.json
+          codex-args: ${{ matrix.codex_args }}
+          output-file: .tmp/codex-result.json
+          codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+
+      - name: Collect private Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_CODEX_HOME: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+        run: node scripts/ci/collect-codex-review-usage.cjs --codex-home "$REVIEW_USAGE_CODEX_HOME" --output .tmp/private-review-usage/codex.json
+
+      - name: Encrypt private Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.run_codex.outcome }}
+          REVIEW_USAGE_UNIT_ID: ${{ matrix.id }}
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+        run: node scripts/ci/seal-review-usage.cjs --reviewer codex --input .tmp/private-review-usage/codex.json --public-key .github/review-usage-public-key.pem --output .tmp/private-review-usage/codex.enc.json
+
+      - name: Retain encrypted Codex usage
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-usage-codex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+          path: .tmp/private-review-usage/codex.enc.json
+          include-hidden-files: true
+          if-no-files-found: warn
+
+      - name: Validate complete batch result
+        env:
+          REVIEW_UNIT_ID: ${{ matrix.id }}
+        run: |
+          node scripts/ci/validate-codex-review-batches.cjs batch --plan-dir .tmp/codex-review --unit "$REVIEW_UNIT_ID" --input .tmp/codex-result.json
+          mkdir -p .tmp/codex-validated
+          cp .tmp/codex-result.json ".tmp/codex-validated/$REVIEW_UNIT_ID.json"
+
+      - name: Retain validated batch result
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-review-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+          path: .tmp/codex-validated/${{ matrix.id }}.json
+          include-hidden-files: true
+          if-no-files-found: error
+
   codex_review:
     name: Codex PR Review
     needs:
       - review_scope
-    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' }}
+      - codex_review_plan
+      - codex_review_batches
+    if: ${{ !cancelled() && !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && needs.review_scope.outputs.mode != 'none' && needs.codex_review_plan.result == 'success' && needs.codex_review_batches.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
       issues: write
       pull-requests: write
+    env:
+      BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
+      HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
+      REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+      REVIEW_CODEX_VERSION: "0.153.4"
+      REVIEW_ACTION_VERSION: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
     steps:
       - name: Require OpenAI credential for Codex review
         shell: bash
@@ -1342,30 +1542,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Node.js for review coverage
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download exact review plan
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-review-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .tmp/codex-review
+
+      - name: Download every validated batch
+        uses: actions/download-artifact@v4
+        with:
+          pattern: codex-review-result-${{ github.run_id }}-${{ github.run_attempt }}-batch-*
+          path: .tmp/codex-results
+          merge-multiple: true
+
+      - name: Prepare complete integration review
+        env:
+          REVIEW_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+        run: |
+          node scripts/ci/validate-codex-review-batches.cjs preflight --plan-dir .tmp/codex-review --unit integration --manifest-digest "$REVIEW_MANIFEST_DIGEST"
+          node scripts/ci/validate-codex-review-batches.cjs prepare --plan-dir .tmp/codex-review --results-dir .tmp/codex-results --output-dir .tmp/codex-integration
+
+      - name: Checkout pinned Codex action
+        uses: actions/checkout@v5
+        with:
+          repository: openai/codex-action
+          ref: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e
+          path: .tmp/codex-action
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Protect private Codex console output
+        run: node scripts/ci/prepare-private-codex-action.cjs --action-dir .tmp/codex-action
+
       - name: Run Codex
         id: run_codex
-        uses: openai/codex-action@v1
-        env:
-          BASE_SHA: ${{ needs.review_scope.outputs.base_sha }}
-          HEAD_SHA: ${{ needs.review_scope.outputs.head_sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          REVIEW_MODE: ${{ needs.review_scope.outputs.mode }}
+        uses: ./.tmp/codex-action
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           permission-profile: ":read-only"
-          prompt-file: .github/codex/prompts/review.md
-          output-file: codex-output.md
-          codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          safety-strategy: drop-sudo
+          codex-version: "0.153.4"
+          prompt-file: .tmp/codex-integration/prompt.md
+          output-schema-file: .tmp/codex-integration/schema.json
+          output-file: .tmp/codex-integration/result.json
+          codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-integration
 
       - name: Collect private Codex usage
         if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
         continue-on-error: true
         env:
-          REVIEW_USAGE_CODEX_HOME: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          REVIEW_USAGE_CODEX_HOME: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-integration
         run: node scripts/ci/collect-codex-review-usage.cjs --codex-home "$REVIEW_USAGE_CODEX_HOME" --output .tmp/private-review-usage/codex.json
 
       - name: Encrypt private Codex usage
@@ -1375,6 +1610,8 @@ jobs:
           REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.run_codex.outcome }}
+          REVIEW_USAGE_UNIT_ID: integration
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
         run: node scripts/ci/seal-review-usage.cjs --reviewer codex --input .tmp/private-review-usage/codex.json --public-key .github/review-usage-public-key.pem --output .tmp/private-review-usage/codex.enc.json
 
       - name: Retain encrypted Codex usage
@@ -1382,12 +1619,30 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: private-review-usage-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          name: private-review-usage-codex-${{ github.run_id }}-${{ github.run_attempt }}-integration
           path: .tmp/private-review-usage/codex.enc.json
           include-hidden-files: true
           if-no-files-found: warn
 
+      - name: Validate complete integration result
+        run: |
+          node scripts/ci/validate-codex-review-batches.cjs batch --plan-dir .tmp/codex-review --unit integration --input .tmp/codex-integration/result.json
+          cp .tmp/codex-integration/result.json .tmp/codex-integration/integration.json
+
+      - name: Retain validated integration result
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-review-result-${{ github.run_id }}-${{ github.run_attempt }}-integration
+          path: .tmp/codex-integration/integration.json
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Derive combined Codex review verdict
+        id: combined_verdict
+        run: node scripts/ci/validate-codex-review-batches.cjs final --plan-dir .tmp/codex-review --results-dir .tmp/codex-results --integration .tmp/codex-integration/result.json --output codex-output.md
+
       - name: Require Codex review output file
+        if: ${{ !cancelled() && steps.combined_verdict.outcome != '' && steps.combined_verdict.outcome != 'skipped' }}
         shell: bash
         run: test -s codex-output.md
 
@@ -1400,12 +1655,20 @@ jobs:
           if-no-files-found: error
 
       - name: Post Codex feedback
+        if: ${{ !cancelled() && steps.combined_verdict.outcome != '' && steps.combined_verdict.outcome != 'skipped' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
           script: |
             const fs = require('node:fs');
-            const body = fs.readFileSync('codex-output.md', 'utf8').trim();
+            const report = fs.readFileSync('codex-output.md', 'utf8').trim();
+            const reportUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = Buffer.byteLength(report, 'utf8') <= 60000 ? report : [
+              '# Codex PR Review', '',
+              'The complete combined report exceeds the comment size limit. Every finding is retained in the codex-review-output artifact.',
+              `[Read the full review artifact](${reportUrl})`, '',
+              report.split(/\r?\n/).at(-1),
+            ].join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -1414,6 +1677,7 @@ jobs:
             });
 
       - name: Enforce Codex review verdict
+        if: ${{ !cancelled() && steps.combined_verdict.outcome != '' && steps.combined_verdict.outcome != 'skipped' }}
         run: node scripts/ci/validate-codex-review-verdict.cjs codex-output.md
 
   review_prerequisites:

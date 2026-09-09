@@ -61,10 +61,11 @@ test('workflow holds every test family behind successful review prerequisites', 
   assert.match(workflow, /startedAt <= commentUpdatedAt/);
   assert.match(workflow, /commentUpdatedAt <= completedAt/);
 
-  const prAgent = workflow.slice(workflow.indexOf('  pr_agent_review:'), workflow.indexOf('  codex_review:'));
+  const prAgent = workflow.slice(workflow.indexOf('  pr_agent_review:'), workflow.indexOf('  codex_review_plan:'));
   const codex = workflow.slice(workflow.indexOf('  codex_review:'), workflow.indexOf('  review_prerequisites:'));
   assert.doesNotMatch(workflow, /ai_code_review|AI_CODE_REVIEW|deep-review\.md/);
-  assert.equal((workflow.match(/uses: openai\/codex-action@v1/g) || []).length, 1);
+  assert.equal((workflow.match(/uses: \.\/\.tmp\/codex-action/g) || []).length, 2);
+  assert.equal((workflow.match(/ref: 86365089eb2b84e0a8fb0717b304f8bdcb13b20e/g) || []).length, 2);
   for (const block of [prAgent, codex]) {
     assert.match(block, /needs\.review_scope\.result == 'success'/);
     assert.doesNotMatch(block, /needs\.(?:e2e_|review_prerequisites)/);

@@ -693,6 +693,30 @@ test('Album Details passes main and bonus group semantics into AlbumTrackTable',
   );
 });
 
+for (const scenario of [
+  { name: 'explicit bonus', discs: [['1', 180], ['Bonus Disc', 1350]], expected: ['180', '1350'] },
+  { name: 'multiple main and bonus discs', discs: [['1', 100], ['2', 80], ['Bonus Disc', 1000], ['Extras', 350]], expected: ['180', '1350'] },
+  { name: 'ordinary numbered discs', discs: [['1', 180], ['2', 1350]], expected: ['', ''] },
+  { name: 'bonus-only album', discs: [['Bonus Disc', 1350]], expected: ['', '1350'] },
+]) {
+  test(`Album Details supplies classified duration summaries for ${scenario.name}`, () => {
+    let renderedConfig;
+    const context = loadHelper([], {
+      state: { player: { current: null }, view: { query: '' } },
+      document: { documentElement: { getAttribute: () => null } },
+      getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+      formatTrackDuration: (seconds) => seconds > 0 ? String(seconds) : '',
+      buildAlbumTrackTableHtml(config) { renderedConfig = config; return '<div>table</div>'; },
+    });
+    context.buildTrackListHtml(scenario.discs.map(([label, seconds], index) => ({
+      path: `Bonus title/Extras folder/track-${index}.flac`, title: 'Bonus title',
+      disc_number: index + 1, disc_number_raw: label, track_number: 1, duration_seconds: seconds,
+    })), null, '25m 30s');
+    assert.deepEqual([renderedConfig.mainLength, renderedConfig.bonusLength], scenario.expected);
+    assert.equal(renderedConfig.totalLength, '25m 30s');
+  });
+}
+
 test('Album Details displays the physical track number, then filename number, before row position', () => {
   const context = loadHelper([]);
   const getDisplayNumber = context.getAlbumTrackDisplayNumber;

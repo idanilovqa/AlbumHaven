@@ -72,7 +72,14 @@ function buildAlbumTrackTableHtml(config = {}) {
     return `<section class="album-track-table__disc">${heading}${table}</section>`;
   }).join('');
   const totalLength = String(config.totalLength || '').trim();
-  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${totalLength ? `<div class="album-track-table__total">Total Length: ${escapeHtml(totalLength)}</div>` : ''}</div></div>`;
+  const mainLength = String(config.mainLength || '').trim();
+  const bonusLength = String(config.bonusLength || '').trim();
+  const summaries = [
+    totalLength ? `<div class="album-track-table__aggregate-total">Total Length: ${escapeHtml(totalLength)}</div>` : '',
+    mainLength ? `<div class="album-track-table__main-total">Total Main Album Length: ${escapeHtml(mainLength)}</div>` : '',
+    bonusLength ? `<div class="album-track-table__bonus-total">Bonus Disc Length: ${escapeHtml(bonusLength)}</div>` : '',
+  ].join('');
+  return `<div class="album-track-table" data-playing-animation="${config.playingAnimation === false ? 'disabled' : 'enabled'}"><div class="album-track-table__frame">${tableSections}${summaries ? `<div class="album-track-table__total">${summaries}</div>` : ''}</div></div>`;
 }
 
 function triggerAlbumTrackPlayActivation(button) {

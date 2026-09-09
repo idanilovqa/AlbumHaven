@@ -214,30 +214,29 @@ test("cache-first strategy", async ({ page }) => {
 
 ### Testing Cache Updates
 
+Serve both worker versions from the real test HTTP server. Playwright cannot
+route requests for an updated service-worker main script through `page.route`
+or `context.route` ([routing limitation](https://playwright.dev/docs/service-workers#known-limitations)).
+In this example, `workerScriptPath` is a project fixture: it supplies a unique
+temporary file served as `/sw.js`, initially containing the v1 worker, and
+removes that file and its server during teardown. It is not a built-in fixture.
+The server must serve fresh file bytes with `Cache-Control: no-store`.
+
 ```typescript
-test("cache updates on new version", async ({ page }) => {
+import { writeFile } from "node:fs/promises";
+
+test("cache updates on new version", async ({ page, workerScriptPath }) => {
   await page.goto("/pwa-app");
+  await page.evaluate(() => navigator.serviceWorker.ready);
 
-  // Get initial cache
-  const initialCacheKeys = await page.evaluate(async () => {
-    const cache = await caches.open("app-cache-v1");
-    const keys = await cache.keys();
-    return keys.map((r) => r.url);
-  });
+  expect(await page.evaluate(() => caches.has("app-cache-v1"))).toBe(true);
 
-  // Simulate app update by mocking SW response
-  await page.route("**/sw.js", (route) => {
-    route.fulfill({
-      contentType: "application/javascript",
-      body: `
-        const VERSION = 'v2';
-        self.addEventListener('install', (e) => {
-          e.waitUntil(caches.open('app-cache-v2'));
-          self.skipWaiting();
-        });
-      `,
+  // Change the actual response bytes before registration.update() fetches them.
+  await writeFile(workerScriptPath, `
+    self.addEventListener('install', (event) => {
+      event.waitUntil(caches.open('app-cache-v2').then(() => self.skipWaiting()));
     });
-  });
+  `);
 
   // Trigger update
   await page.evaluate(async () => {
@@ -363,45 +362,52 @@ test("handles push subscription", async ({ page, context }) => {
 
 ### Testing Push Message Handling
 
-```typescript
-test("handles push notification", async ({ context, page }) => {
-  await context.grantPermissions(["notifications"]);
-  await page.goto("/pwa-app");
+`PushEventInit.data` accepts a string or buffer; `PushMessageData` has no public
+constructor ([Push API](https://www.w3.org/TR/push-api/#pushevent-interface)).
+Synthetic dispatch can exercise synchronous parsing handlers, but it does not
+provide a browser-delivered push event's lifetime or delivery guarantees. For
+handlers using `waitUntil`, test the extracted asynchronous handler with an
+awaited unit-test dependency, and use real push delivery for end-to-end coverage.
 
-  // Wait for SW
+```typescript
+test("constructs and dispatches a synthetic push payload", async ({ context, page }) => {
+  await context.grantPermissions(["notifications"]);
+
+  // Subscribe before navigation can register the worker.
   const swPromise = context.waitForEvent("serviceworker");
+  await page.goto("/pwa-app");
   const sw = await swPromise;
+  await page.evaluate(() => navigator.serviceWorker.ready);
 
   // Simulate push message to service worker
-  await sw.evaluate(async () => {
+  const payload = await sw.evaluate(() => {
     // Dispatch push event
     const pushEvent = new PushEvent("push", {
-      data: new PushMessageData(
-        JSON.stringify({ title: "Test", body: "Push message" }),
-      ),
+      data: JSON.stringify({ title: "Test", body: "Push message" }),
     });
     self.dispatchEvent(pushEvent);
+    return pushEvent.data?.json();
   });
 
-  // Note: Actual notification display testing is limited in Playwright
-  // Focus on verifying the SW handles the push correctly
+  expect(payload).toEqual({ title: "Test", body: "Push message" });
+  // Add the synchronous handler's observable result for this application.
 });
 ```
 
 ### Testing Notification Click
 
+`NotificationEvent` requires a real `Notification`, such as one returned by
+`registration.getNotifications()` ([Notifications API](https://notifications.spec.whatwg.org/#notificationevent)).
+The synthetic event below can exercise a synchronous handler; it does not grant
+user activation for `clients.openWindow` or a trusted `waitUntil` lifetime.
+Verify real notification clicks through an environment that can activate the
+native notification. Test asynchronous routing decisions separately with an
+awaited handler unit test; do not claim a new-page E2E pass from synthetic dispatch.
+
 ```typescript
-test("notification click opens page", async ({ context, page }) => {
+test("constructs a synthetic click for a real notification", async ({ context, page }) => {
   await context.grantPermissions(["notifications"]);
   await page.goto("/pwa-app");
-
-  // Store notification URL target
-  let notificationUrl = "";
-
-  // Listen for new pages (notification click opens new page)
-  context.on("page", (newPage) => {
-    notificationUrl = newPage.url();
-  });
 
   // Trigger notification via SW
   await page.evaluate(async () => {
@@ -414,17 +420,20 @@ test("notification click opens page", async ({ context, page }) => {
 
   // Simulate clicking notification (via SW)
   const sw = context.serviceWorkers()[0];
-  await sw.evaluate(() => {
+  const notificationData = await sw.evaluate(async () => {
+    const [notification] = await self.registration.getNotifications();
+    if (!notification) throw new Error("Expected the notification created above");
     self.dispatchEvent(
       new NotificationEvent("notificationclick", {
-        notification: { data: { url: "/notification-target" } } as any,
+        notification,
       }),
     );
+    return notification.data;
   });
 
-  // Verify navigation occurred
-  await page.waitForTimeout(1000);
-  // Check if new page opened or current page navigated
+  expect(notificationData).toEqual({ url: "/notification-target" });
+  // Assert the synchronous handler's observable result for this application.
+  // This synthetic event is not proof that a native click opened a page.
 });
 ```
 

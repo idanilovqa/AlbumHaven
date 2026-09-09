@@ -2,6 +2,16 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Retried due welcome messages through a bounded background worker when delivery
+  is enabled, preserving uncertain delivery outcomes without automatic resend.
+- Restored separate main and bonus track durations inside the shared album
+  summary and covered saved motion preferences independently of OS settings.
+- Scoped missing-album aggregation to the selected artist and preserved complete
+  release dates and retained-track years during targeted reconciliation.
+- Reported native watcher callback failures, bounded watcher shutdown, and
+  reserved descendant track paths during subtree reconciliation.
+- Closed expired-throttle cleanup races in password-reset and administrator
+  mail actions, and isolated SMTP test doubles between delivery scenarios.
 - Preserved legacy selection accents during appearance upgrades and refreshed
   the saved appearance baseline after concurrent changes in another client.
   Kept unsaved colors inside previews while editor controls retain saved colors.

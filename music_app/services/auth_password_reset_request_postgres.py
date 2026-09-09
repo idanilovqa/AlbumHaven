@@ -289,6 +289,8 @@ class PostgresPasswordResetRequestService:
         buckets: list[tuple[str, bytes]],
         now: datetime,
     ) -> bool:
+        # Retain each conflicting bucket against expiry cleanup without
+        # replacing its current window, count or cooldown.
         for kind, digest in buckets:
             connection.execute(
                 """
@@ -296,7 +298,8 @@ class PostgresPasswordResetRequestService:
                   bucket_kind, bucket_hash, key_version, window_started_at,
                   window_expires_at, failure_count, updated_at
                 ) values (%s, %s, %s, %s, %s, 0, %s)
-                on conflict (bucket_kind, key_version, bucket_hash) do nothing
+                on conflict (bucket_kind, key_version, bucket_hash)
+                do update set updated_at = app.auth_throttles.updated_at
                 """,
                 (
                     kind,

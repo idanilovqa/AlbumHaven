@@ -123,6 +123,30 @@ class PostgresWelcomeOutboxService:
         self._connect = connect or _connect
         self._now = now or (lambda: datetime.now(timezone.utc))
 
+    def list_due_welcome_ids(self, *, limit: int) -> list[int]:
+        """Read a bounded candidate set; the existing claim remains authoritative."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("Welcome batch size must be between 1 and 100.")
+        now = _aware_utc(self._now())
+        with self._connect(self._database_url) as connection:
+            rows = connection.execute(
+                """
+                select id from app.mail_outbox
+                where message_category = 'welcome'
+                  and (
+                    (attempt_count < %s and (
+                        delivery_status = 'pending'
+                        or (delivery_status = 'failed' and next_attempt_at <= %s)
+                    ))
+                    or (delivery_status = 'sending' and claimed_at <= %s)
+                  )
+                order by coalesce(next_attempt_at, claimed_at, created_at), id
+                limit %s
+                """,
+                (_MAX_ATTEMPTS, now, now - _CLAIM_LEASE, limit),
+            ).fetchall()
+        return [_positive_integer(_row_mapping(row, ("id",)).get("id"), "outbox id") for row in rows]
+
     def claim_welcome(
         self, outbox_id: int
     ) -> WelcomeClaim | AmbiguousWelcomeClaim | None:
@@ -785,10 +809,11 @@ async def deliver_welcome(
     repository: PostgresWelcomeOutboxService,
     composer: Callable[..., Any] = compose_welcome_email,
     sender: Callable[..., Awaitable[DeliveryResult]] = send_auth_email,
+    run_repository: Callable[..., Awaitable[Any]] = run_in_threadpool,
 ) -> DeliveryResult:
     """Attempt one claimed welcome without changing account readiness."""
 
-    claim = await run_in_threadpool(repository.claim_welcome, outbox_id)
+    claim = await run_repository(repository.claim_welcome, outbox_id)
     if claim is None:
         return DeliveryResult(delivered=False, reason="not_eligible")
     if isinstance(claim, AmbiguousWelcomeClaim):
@@ -804,7 +829,7 @@ async def deliver_welcome(
             result = DeliveryResult(delivered=False, reason="failed")
     except Exception:
         result = DeliveryResult(delivered=False, reason="failed")
-    await run_in_threadpool(repository.finalize_welcome, claim, result)
+    await run_repository(repository.finalize_welcome, claim, result)
     return result
 
 

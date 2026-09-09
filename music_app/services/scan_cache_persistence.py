@@ -208,6 +208,24 @@ class PostgresScanCacheAdapter:
             _ensure_bootstrap_context(connection)
             return _load_inventory_mutation_revision(connection)
 
+    def load_targeted_subtree_track_paths(
+        self, subtrees_by_root: dict[str, set[str]],
+    ) -> tuple[str, ...]:
+        """Resolve source reservation keys, including retained stale members."""
+        subtrees = [
+            {"root_id": root_id, "path": path}
+            for root_id, paths in subtrees_by_root.items()
+            for path in sorted(paths)
+        ]
+        if not subtrees:
+            return ()
+        with self._connect_to_database() as connection:
+            rows = connection.execute(
+                _load_targeted_subtree_track_paths_sql(),
+                {"subtrees": _jsonb(subtrees), "source": _SOURCE},
+            ).fetchall()
+        return tuple(str(_row_mapping(row)["private_path"]) for row in rows)
+
     def persist_targeted_inventory_mutation(
         self,
         *,
@@ -398,6 +416,7 @@ class PostgresScanCacheAdapter:
                     cover_metadata = _jsonb_compatible(cover_row.get("metadata") or {})
                     aggregate_rows.append({
                         "album_key": album_key,
+                        "release_year": next((row["release_year"] for row in complete_album_rows if row.get("release_year") is not None), None),
                         "cover_path": cover_row.get("cover_path"),
                         "cover_metadata": _jsonb({
                             field: cover_metadata.get(field)
@@ -3943,7 +3962,10 @@ def _persist_structural_album_tag_edit_sql(
                   then jsonb_set(
                          coalesce(library.local_albums.metadata, '{}'::jsonb),
                          '{release_date}',
-                         to_jsonb(validated_source_album.release_year::text),
+                         to_jsonb(coalesce(
+                           nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                           validated_source_album.release_year::text
+                         )),
                          true
                        )
                   else library.local_albums.metadata
@@ -3955,7 +3977,10 @@ def _persist_structural_album_tag_edit_sql(
               then jsonb_set(
                      coalesce(validated_source_album.metadata, '{}'::jsonb),
                      '{release_date}',
-                     to_jsonb(validated_source_album.release_year::text),
+                     to_jsonb(coalesce(
+                       nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''),
+                       validated_source_album.release_year::text
+                     )),
                      true
                    )
               else validated_source_album.metadata
@@ -4191,7 +4216,10 @@ def _persist_structural_album_tag_edit_sql(
           set metadata = jsonb_set(
                 coalesce(library.local_albums.metadata, '{}'::jsonb),
                 '{release_date}',
-                to_jsonb(validated_source_album.release_year::text),
+                to_jsonb(coalesce(
+                  nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                  validated_source_album.release_year::text
+                )),
                 true
               )
           from validated_source_album
@@ -4207,6 +4235,7 @@ def _persist_structural_album_tag_edit_sql(
           set release_year = case
                 when not %(updates_release_year)s::boolean
                  and validated_source_album.has_display_year_override
+                 and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null
                 then validated_source_album.release_year
                 else library.local_albums.release_year
               end,
@@ -4216,7 +4245,11 @@ def _persist_structural_album_tag_edit_sql(
                 then jsonb_set(
                        coalesce(library.local_albums.metadata, '{}'::jsonb),
                        '{release_date}',
-                       to_jsonb(validated_source_album.release_year::text),
+                       to_jsonb(coalesce(
+                         nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''),
+                         nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''),
+                         validated_source_album.release_year::text
+                       )),
                        true
                      )
                 else library.local_albums.metadata
@@ -5206,7 +5239,10 @@ def _upsert_local_album_sql(
 def _update_targeted_album_aggregate_sql() -> str:
     return """
         update library.local_albums as album
-        set cover_path = case
+        set release_year = case
+              when nullif(album.metadata ->> 'release_date', '') is not null
+              then album.release_year else %(release_year)s end,
+            cover_path = case
               when album.metadata ->> 'cover_selection_origin' = 'user'
               then album.cover_path else %(cover_path)s end,
             metadata = album.metadata || %(metadata)s || case
@@ -5219,6 +5255,32 @@ def _update_targeted_album_aggregate_sql() -> str:
           and owned_library.library_kind = 'local'
           and owner.owner_key = 'local-bootstrap-owner'
           and album.album_key = %(album_key)s;
+    """
+
+
+def _load_targeted_subtree_track_paths_sql() -> str:
+    return """
+        select distinct file.private_path
+        from library.local_track_files as file
+        join library.local_tracks as track on track.id = file.track_id
+        join library.library_roots as root
+          on root.id = file.library_root_id and root.library_id = track.library_id
+        join library.libraries as owned_library on owned_library.id = track.library_id
+        join app.bootstrap_owners as owner on owner.account_id = owned_library.owner_account_id
+        where owner.owner_key = 'local-bootstrap-owner'
+          and owned_library.name = 'Local Library'
+          and owned_library.library_kind = 'local'
+          and file.metadata #>> '{scan_cache,source}' = %(source)s
+          and exists (
+            select 1
+            from jsonb_to_recordset(%(subtrees)s::jsonb) as subtree(root_id text, path text)
+            where subtree.root_id = coalesce(nullif(root.metadata ->> 'root_id', ''), file.metadata ->> 'library_root_id')
+              and starts_with(
+                replace(file.private_path, E'\\\\', '/'),
+                rtrim(replace(subtree.path, E'\\\\', '/'), '/') || '/'
+              )
+          )
+        order by file.private_path;
     """
 
 

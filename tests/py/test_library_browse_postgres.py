@@ -85,6 +85,27 @@ def test_missing_album_detail_scopes_candidate_query_before_loading_rows(default
     assert "local_albums.album_key = %(album_key)s" in candidate
 
 
+def test_missing_artist_query_scopes_candidates_without_filtering_member_files(
+    default_empty_missing_album_projection,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    calls = []
+    connection = type("Connection", (), {"execute": lambda self, sql, params=None: calls.append((sql, params)) or _InventoryCursor()})()
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"})
+    assert default_empty_missing_album_projection(
+        repository, artist_names=["Broadcast", "  Former   Name  "], connection=connection,
+    ) == []
+    assert calls[0][1]["artist_keys"] == ["broadcast", "former name"]
+    query = " ".join(calls[0][0].lower().split())
+    candidate = query.split("missing_albums as (", 1)[1].split("missing_album_featured_artists", 1)[0]
+    assert "artist_key = any(%(artist_keys)s::text[])" in candidate
+    assert "having bool_and(library.local_track_files.scan_cache_stale)" in candidate
+    predicate = candidate.split("where", 1)[1].split("group by", 1)[0]
+    assert "scan_cache_stale" not in predicate
+    assert "root_kind" not in predicate
+
+
 class _InventoryCursor:
     def __init__(self, *, row=None, rows=None):
         self._row = row
@@ -11408,6 +11429,25 @@ def test_exact_artist_search_sidebar_includes_other_missing_matches(
     assert payload["artist_count"] == 2
     assert payload["show_all_artists_sidebar_link"] is True
     assert payload["selected_artist"] == "Broadcast"
+
+
+def test_selected_artist_passes_expanded_owner_scope_to_missing_loader(
+    monkeypatch, missing_album_browse_repository,
+):
+    repository = missing_album_browse_repository
+    calls = []
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **kwargs: calls.append(kwargs) or [])
+    monkeypatch.setattr(repository, "_load_selected_artist_rows", lambda *_args, **_kwargs: [])
+    repository.build_selected_artist_payload(
+        query_params={"artist": "Broadcast", "omit_sidebar": "1"},
+        _relation_alias_maps={
+            "alias_to_canonical": {"Former Name": "Broadcast"},
+            "canonical_to_aliases": {"Broadcast": ["Former Name"]},
+        },
+    )
+    assert len(calls) == 1
+    assert set(calls[0].get("artist_names", [])) == {"Broadcast", "Former Name"}
+    assert calls[0]["connection"] is not None
 
 
 @pytest.mark.parametrize("category", ["main_library", "hoard", "new_arrivals"])

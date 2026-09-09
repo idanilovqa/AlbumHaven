@@ -274,20 +274,37 @@ class WatchdogLibraryEventSource:
         clock = self._clock or monotonic
         roots = self._roots
         self._stopping.clear()
+        stopping = self._stopping
+        resolved_roots = ()
 
         class Handler(FileSystemEventHandler):
             def on_any_event(self, event) -> None:
-                publish_watchdog_event(
-                    event,
-                    roots=roots,
-                    publish=publish,
-                    clock=clock,
-                )
+                if stopping.is_set():
+                    return
+                try:
+                    publish_watchdog_event(
+                        event, roots=roots, publish=publish, clock=clock,
+                    )
+                except Exception:
+                    # Normalization can fail before a root can be attributed.
+                    # Use the validated startup identities, not the failed path,
+                    # and keep the dispatcher alive for subsequent events.
+                    for root_id, root_path in resolved_roots:
+                        try:
+                            publish(LibraryEvent(
+                                LibraryEventKind.ROOT_UNAVAILABLE,
+                                root_id, root_path, observed_at=clock(), is_directory=True,
+                            ))
+                        except Exception:
+                            # Failed health writes are retained by the health
+                            # service; do not leave another root unprotected.
+                            continue
 
         handler = Handler()
         self._observer = observer
         try:
-            for root_id, root_path in _resolved_roots(roots):
+            resolved_roots = _resolved_roots(roots)
+            for root_id, root_path in resolved_roots:
                 if not root_path.is_dir():
                     publish(
                         LibraryEvent(
@@ -326,10 +343,34 @@ class WatchdogLibraryEventSource:
         observer = self._observer
         if observer is None:
             return
+        from queue import Full
+        from time import monotonic
+        from watchdog.observers.api import BaseObserver, EventDispatcher
+
+        deadline = monotonic() + max(0.0, timeout)
         self._stopping.set()
-        observer.stop()
-        if getattr(observer, "ident", None) is not None or observer.is_alive():
-            observer.join(timeout)
+        if isinstance(observer, BaseObserver):
+            # BaseObserver.stop() synchronously takes its dispatch lock and
+            # joins every producer without a timeout. Signal the same public
+            # stop events directly, preserving native emitter cancellation,
+            # then account for every owned thread under one deadline.
+            self._emitters = tuple(dict.fromkeys((*self._emitters, *observer.emitters)))
+            observer.stopped_event.set()
+            try:
+                observer.event_queue.put_nowait(EventDispatcher.stop_event)
+            except Full:
+                pass  # A queued event also wakes the stopped dispatcher.
+            for emitter in self._emitters:
+                if not emitter.stopped_event.is_set():
+                    emitter.stop()
+            for thread in (observer, *self._emitters):
+                if thread.ident is not None:
+                    thread.join(max(0.0, deadline - monotonic()))
+        else:
+            # Explicitly injected sources retain their stop/join interface.
+            observer.stop()
+            if getattr(observer, "ident", None) is not None or observer.is_alive():
+                observer.join(max(0.0, deadline - monotonic()))
         if observer.is_alive() or any(emitter.is_alive() for emitter in self._emitters):
             raise RuntimeError("Library event source did not stop before the deadline")
         self._observer = None

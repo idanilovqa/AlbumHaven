@@ -304,7 +304,8 @@ class PostgresAdminMailActionService:
               bucket_kind, bucket_hash, key_version, window_started_at,
               window_expires_at, failure_count, updated_at
             ) values (%s, %s, %s, %s, %s, 0, %s)
-            on conflict (bucket_kind, key_version, bucket_hash) do nothing
+            on conflict (bucket_kind, key_version, bucket_hash)
+            do update set updated_at = app.auth_throttles.updated_at
             """,
             (kind, digest, self._hmac_key_version, now, expires_at, now),
         )

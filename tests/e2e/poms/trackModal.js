@@ -228,7 +228,7 @@ export class TrackModal extends BasePage {
   }
 
   async readAlbumTrackTableTotal() {
-    return String(await this.albumTrackTable.total.textContent() || '').trim();
+    return String(await this.albumTrackTable.aggregateTotal.textContent() || '').trim();
   }
 
   problemButtonByTrackTitle(trackTitle) {

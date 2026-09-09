@@ -169,6 +169,81 @@ async function mountAlbumDetailsComponents(page) {
   });
 }
 
+for (const width of [960, 390]) {
+  test(`explicit bonus duration summaries remain visible in the shared frame at ${width}px`, async ({ page }, testInfo) => {
+    await mountAlbumDetailsComponents(page);
+    await page.setViewportSize({ width, height: 844 });
+    await page.locator('#table-host').evaluate((host) => {
+      host.innerHTML = buildAlbumTrackTableHtml({
+        groups: [
+          { discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: [{ path: 'main', title: 'Main track', duration: '3:00' }] },
+          { discNumber: 2, discLabel: 'Bonus Disc', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus track', duration: '22:30' }] },
+        ],
+        totalLength: '25m 30s', mainLength: '3:00', bonusLength: '22:30',
+      });
+    });
+    const frame = page.locator('.album-track-table__frame');
+    for (const text of ['Total Length: 25m 30s', 'Total Main Album Length: 3:00', 'Bonus Disc Length: 22:30']) {
+      const summary = frame.getByText(text, { exact: true });
+      await expect(summary).toBeVisible();
+      const bounds = await summary.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const textBox = range.getBoundingClientRect();
+        const frameBox = element.closest('.album-track-table__frame').getBoundingClientRect();
+        return { left: textBox.left, right: textBox.right, frameLeft: frameBox.left, frameRight: frameBox.right };
+      });
+      expect(bounds.left).toBeGreaterThanOrEqual(bounds.frameLeft);
+      expect(bounds.right).toBeLessThanOrEqual(bounds.frameRight);
+    }
+    await expect(frame.getByRole('table')).toHaveCount(2);
+    await expect(frame.locator('.compact-data-table-header')).toHaveCount(1);
+    await expect(frame.getByRole('heading')).toHaveText(['Bonus Disc']);
+    await frame.screenshot({ path: testInfo.outputPath('duration-summaries.png') });
+  });
+}
+
+for (const scenario of [
+  { setting: false, motion: 'no-preference' },
+  { setting: true, motion: 'reduce' },
+  { setting: false, motion: 'reduce' },
+  { setting: true, motion: 'no-preference' },
+]) {
+  test(`playing motion independently honors setting ${scenario.setting} and OS ${scenario.motion}`, async ({ page }) => {
+    await mountAlbumDetailsComponents(page);
+    await page.emulateMedia({ reducedMotion: scenario.motion });
+    await page.locator('#table-host').evaluate((host, setting) => {
+      host.innerHTML = buildAlbumTrackTableHtml({
+        groups: [{ tracks: [{ path: 'playing', title: 'Playing track', isCurrent: true, isPlaying: true }] }],
+        playingAnimation: setting,
+      });
+    }, scenario.setting);
+    const row = page.locator('.album-track-table__row');
+    await expect(row).toHaveClass(/album-track-table__row--playing/);
+    await expect(row).toHaveCSS('outline-style', 'solid');
+    await expect(row).toHaveCSS('outline-width', '1px');
+    const spectra = await row.evaluate(element => ['::before', '::after'].map(pseudo => {
+      const style = getComputedStyle(element, pseudo);
+      return { animation: style.animationName, display: style.display, opacity: style.opacity };
+    }));
+    for (const spectrum of spectra) {
+      if (scenario.setting && scenario.motion === 'no-preference') {
+        expect(spectrum.animation).toContain('album-track-perimeter-spectrum');
+      } else {
+        if (scenario.motion === 'reduce') expect(spectrum.display).toBe('none');
+        else {
+          expect(spectrum.animation).toBe('none');
+          expect(spectrum.opacity).toBe('0');
+        }
+      }
+    }
+    if (!scenario.setting || scenario.motion === 'reduce') {
+      expect(await row.evaluate(element => element.getAnimations({ subtree: true })
+        .filter(animation => animation.playState === 'running').length)).toBe(0);
+    }
+  });
+}
+
 test('long album track titles preserve all five usable columns inside a narrow dialog', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
   await page.setViewportSize({ width: 390, height: 844 });

@@ -342,7 +342,7 @@ def test_send_uses_verified_tls_credentials_timeouts_and_clean_quit(auth_mail, s
 def test_send_returns_generic_failure_and_closes_after_refusal_or_timeout(
     auth_mail, failure, reason
 ):
-    FakeSMTP.instances.clear()
+    _reset_fake()
     FakeSMTP.send_error = failure
     config = _config()
 

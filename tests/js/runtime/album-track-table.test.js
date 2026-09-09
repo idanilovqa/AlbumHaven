@@ -82,6 +82,31 @@ test('AlbumTrackTable splits a main disc and bonus disc into separate tables wit
   assert.match(html, /album-track-table__row--search-match/);
 });
 
+test('AlbumTrackTable retains aggregate and explicit main and bonus duration summaries in its shared frame', () => {
+  const html = loadTrackTable().buildAlbumTrackTableHtml({
+    groups: [
+      { discNumber: 1, discLabel: 'CD 1', isBonus: false, tracks: [{ path: 'main', title: 'Main' }] },
+      { discNumber: 2, discLabel: 'Bonus Disc', isBonus: true, tracks: [{ path: 'bonus', title: 'Bonus' }] },
+    ],
+    totalLength: '25m 30s', mainLength: '3:00', bonusLength: '22:30',
+  });
+  assert.match(html, /class="album-track-table__aggregate-total">Total Length: 25m 30s<\/div>/);
+  assert.match(html, /class="album-track-table__main-total">Total Main Album Length: 3:00<\/div>/);
+  assert.match(html, /class="album-track-table__bonus-total">Bonus Disc Length: 22:30<\/div>/);
+  assert.equal((html.match(/class="album-track-table__total"/g) || []).length, 1);
+  assert.doesNotMatch(html, /album-track-table__disc-heading[^>]*>CD 1/);
+  assert.equal((html.match(/class="compact-data-table-header"/g) || []).length, 1);
+});
+
+test('AlbumTrackTable escapes named duration summaries and omits absent summaries', () => {
+  const context = loadTrackTable();
+  const html = context.buildAlbumTrackTableHtml({ totalLength: '25m', bonusLength: '<img src=x>' });
+  assert.match(html, /Bonus Disc Length: &lt;img src=x&gt;/);
+  assert.doesNotMatch(html, /album-track-table__main-total/);
+  const ordinary = context.buildAlbumTrackTableHtml({ totalLength: '18m' });
+  assert.doesNotMatch(ordinary, /album-track-table__(?:main|bonus)-total/);
+});
+
 test('AlbumTrackTable labels every main disc outside its separately framed table', () => {
   const context = loadTrackTable();
   const html = context.buildAlbumTrackTableHtml({

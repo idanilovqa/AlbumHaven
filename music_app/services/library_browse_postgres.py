@@ -579,7 +579,9 @@ class PostgresLibraryBrowseRepository:
         missing_albums = [
             album
             for album in _missing_album_projection_payloads(
-                self._load_missing_album_rows(connection=_connection),
+                self._load_missing_album_rows(
+                    artist_names=selected_artist_scope, connection=_connection,
+                ),
                 view_state=view_state,
                 query=(
                     query
@@ -1988,11 +1990,16 @@ class PostgresLibraryBrowseRepository:
         self,
         album_key: str | None = None,
         *,
+        artist_names: list[str] | None = None,
         connection: Any | None = None,
     ) -> list[object]:
+        params = {"album_key": str(album_key or "").strip() or None}
+        if artist_names is not None:
+            params["artist_keys"] = [local_inventory_identity_key(artist) for artist in artist_names]
+
         def load_rows(active_connection: Any) -> list[object]:
             return list(active_connection.execute(
-                _missing_albums_sql(), {"album_key": str(album_key or "").strip() or None},
+                _missing_albums_sql(scoped_artists=artist_names is not None), params,
             ).fetchall())
 
         if connection is not None:
@@ -6794,7 +6801,15 @@ def _mojibake_candidate_fields_sql(text_expressions: Iterable[str]) -> str:
     ) + "\n        )"
 
 
-def _missing_albums_sql() -> str:
+def _missing_albums_sql(*, scoped_artists: bool = False) -> str:
+    artist_scope = """
+            and exists (
+              select 1 from library.local_artists candidate_artist
+              where candidate_artist.id = library.local_albums.artist_id
+                and candidate_artist.library_id = library.local_albums.library_id
+                and candidate_artist.artist_key = any(%(artist_keys)s::text[])
+            )
+    """ if scoped_artists else ""
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -6820,6 +6835,7 @@ def _missing_albums_sql() -> str:
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
           where (%(album_key)s::text is null or library.local_albums.album_key = %(album_key)s::text)
+          __ARTIST_SCOPE__
           group by library.local_albums.id
           having bool_and(library.local_track_files.scan_cache_stale)
         ),
@@ -6883,7 +6899,7 @@ def _missing_albums_sql() -> str:
           ''
         ))) <> 'non-album rarity'
         order by library.local_albums.album_key, library.local_tracks.id;
-    """
+    """.replace("__ARTIST_SCOPE__", artist_scope)
 
 
 def _problematic_files_sql(

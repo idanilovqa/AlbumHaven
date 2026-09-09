@@ -346,6 +346,8 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
     expect(groups.totals).toEqual([]);
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 25m 30s');
+    await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');
+    await expect(trackModalActions.trackModal.albumTrackTable.bonusTotal).toHaveText('Bonus Disc Length: 22:30');
     expect(await trackModalActions.readFooterLines()).toEqual([]);
   });
 });

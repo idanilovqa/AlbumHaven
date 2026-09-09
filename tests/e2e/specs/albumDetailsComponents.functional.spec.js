@@ -159,6 +159,7 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
   await galleryActions.waitForGalleryReady();
 
   await stepLogger.step('Enable persisted playing-row animation for this owned scenario', async () => {
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
     if (await utilityAppearanceActions.utilityAppearanceTab.albumPlayingRowAnimationButton('enabled').getAttribute('aria-pressed') !== 'true') {
       await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
@@ -243,7 +244,6 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
     await utilityAppearanceActions.setAlbumPlayingRowAnimation(false);
     await utilityAppearanceActions.save();
     await settingsModalAppBarActions.closeSettings();
-    await page.emulateMedia({ reducedMotion: 'reduce' });
     await galleryActions.waitForAlbumVisible(PLAYBACK_ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(PLAYBACK_ALBUM);
     await trackModalActions.waitForReady();
@@ -253,7 +253,37 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
     await expect(playingRow).not.toHaveClass(/album-track-table__row--animated/);
     await expect(playingRow).toHaveCSS('outline-style', 'solid');
     await expect(playingRow).toHaveCSS('outline-width', '1px');
+    // With ordinary OS motion, the saved preference alone must stop both spectra.
+    for (const spectrum of await trackModalActions.trackModal.albumTrackTable.readPlayingSpectra()) {
+      expect(spectrum.animation).toBe('none');
+      expect(spectrum.opacity).toBe('0');
+    }
+    expect(await trackModalActions.trackModal.albumTrackTable.readRunningAnimationCount()).toBe(0);
+    // Retain the original combined disabled-setting and reduced-motion check.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     // parity-check: allow-read-only-measurement-evaluate -- reduced motion must remove moving spectra while preserving the real row
     expect(await playingRow.evaluate((row) => getComputedStyle(row, '::before').display)).toBe('none');
+  });
+
+  await stepLogger.step('Honor OS reduced motion independently while the saved animation setting is enabled', async () => {
+    await trackModalActions.close();
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    await utilityAppearanceActions.setAlbumPlayingRowAnimation(true);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+    await galleryActions.waitForAlbumVisible(PLAYBACK_ALBUM);
+    await galleryActions.clickAlbumDetailsByAlbumName(PLAYBACK_ALBUM);
+    await trackModalActions.waitForReady();
+    const table = trackModalActions.trackModal.albumTrackTable;
+    const playingRow = table.rows.nth(0);
+    await expect(table.root).toHaveAttribute('data-playing-animation', 'enabled');
+    await expect(playingRow).toHaveClass(/album-track-table__row--playing/);
+    await expect(playingRow).toHaveClass(/album-track-table__row--animated/);
+    await expect(playingRow).toHaveCSS('outline-style', 'solid');
+    await expect(playingRow).toHaveCSS('outline-width', '1px');
+    for (const spectrum of await table.readPlayingSpectra()) {
+      expect(spectrum.display).toBe('none');
+    }
+    expect(await table.readRunningAnimationCount()).toBe(0);
   });
 });

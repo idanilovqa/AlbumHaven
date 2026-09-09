@@ -213,6 +213,7 @@ def create_asgi_app():
 
     from config import APP_NAME, APP_VERSION
     from music_app.services.lastfm_retry import start_lastfm_retry_worker, stop_lastfm_retry_worker
+    from music_app.services.auth_welcome_worker import start_welcome_retry_worker
     from music_app.services.library_reconciliation import (
         LibraryWatchService,
         WatchdogLibraryEventSource,
@@ -269,6 +270,7 @@ def create_asgi_app():
                 library_state["cold_scan_handoff_status"] = "pending"
                 library_state["cold_scan_handoff_error"] = ""
         lastfm_started = False
+        welcome_worker = None
         targeted_executor = None
         targeted_reconciler = None
         runtime.library_event_coordinator = None
@@ -278,6 +280,10 @@ def create_asgi_app():
             runtime.config.pop("_LIBRARY_WATCH_MANUAL_RECOVERY_CALLBACK", None)
             shutdown_errors: list[tuple[str, BaseException]] = []
             shutdown_stages = (
+                (
+                    "welcome mail retry worker",
+                    lambda: welcome_worker.stop() if welcome_worker is not None else None,
+                ),
                 (
                     "library filesystem watcher",
                     lambda: _stop_library_watch_runtime(
@@ -315,6 +321,7 @@ def create_asgi_app():
         lastfm_started = True
         try:
             start_lastfm_retry_worker(runtime)
+            welcome_worker = start_welcome_retry_worker(_app)
             targeted_executor = _BoundedExecutorAdmission(
                 create_daemon_executor(
                     max_workers=1,

@@ -214,6 +214,15 @@ invitation email** selected, and confirm the message arrives. Check the spam
 folder and the provider's delivery log if it does not. Keep SMTP credentials
 out of Git, terminal transcripts, screenshots, and support bundles.
 
+Welcome delivery is separately controlled by
+`ALBUM_HAVEN_WELCOME_EMAIL_ENABLED` and is disabled by default. When enabled,
+the running application processes queued welcome messages in bounded batches
+and retries eligible failures, up to five total attempts per message. Enabling
+it can deliver previously queued messages. An uncertain delivery is recorded
+as `unknown` and is not automatically resent; check the provider's delivery
+record before deciding whether another message is needed. This background
+worker does not retry password-reset or invitation messages.
+
 ## Create managed users
 
 Sign in as the bootstrap owner, open **Settings**, then **Users & access**, and choose

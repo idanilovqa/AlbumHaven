@@ -138,6 +138,7 @@ class TargetedLibraryReconciler:
                 )
 
         normalized_moves: list[dict[str, object]] = []
+        source_subtrees = {root_id: {str(path) for path in deleted_subtrees}}
         for move in moves:
             source = Path(getattr(move, "source"))
             destination = Path(getattr(move, "destination"))
@@ -157,6 +158,7 @@ class TargetedLibraryReconciler:
             is_directory = bool(getattr(move, "is_directory", False))
             if is_directory:
                 deleted_subtrees += (source,)
+                source_subtrees.setdefault(source_root_id, set()).add(str(source))
                 for media_path in self._supported_media_descendants(destination):
                     if self._belongs_to_root(media_path, destination_root):
                         active_targets.append((media_path, destination_root))
@@ -221,6 +223,10 @@ class TargetedLibraryReconciler:
         for move in normalized_moves:
             reservation_paths.add(str(move["source_path"]))
             reservation_paths.add(str(move["destination_path"]))
+        if self._reservation_acquirer is not None and deleted_subtrees:
+            reservation_paths.update(
+                self._repository.load_targeted_subtree_track_paths(source_subtrees)
+            )
         reservation = None
         if self._reservation_acquirer is not None and reservation_paths:
             reservation = self._reservation_acquirer(

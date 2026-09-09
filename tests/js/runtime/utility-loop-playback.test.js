@@ -2008,3 +2008,33 @@ test('loop progress updates preserve the play button content until playback chan
   assert.equal(writes, 2);
   assert.equal(text, '▶');
 });
+
+for (const failure of ['null', 'reject']) {
+  test(`saved loop retains regular seeking and retries a ${failure} waveform failure after backoff`, async () => {
+    let waveformMode = false;
+    const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle(_name, enabled) { waveformMode = enabled; } } } };
+    const audio = { duration: 20, currentTime: 5 };
+    const state = { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } };
+    const context = loadHelper({ state, document: { querySelector: () => canvas }, drawCombinedLoopWaveform() {} });
+    let now = 1000, loads = 0;
+    context.Date = { now: () => now };
+    context.loadSavedLoopWaveformPeaks = async () => {
+      loads++;
+      if (loads > 1) return { left: [0.5], right: [0.4] };
+      if (failure === 'reject') throw new Error('temporary network failure');
+      return null;
+    };
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(canvas.hidden, true);
+    assert.equal(waveformMode, false);
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    assert.equal(loads, 1);
+    now += 5000;
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(loads, 2);
+    assert.equal(canvas.hidden, false);
+    assert.equal(waveformMode, true);
+  });
+}

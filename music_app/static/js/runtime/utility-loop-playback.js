@@ -5,22 +5,25 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   if (!canvas || !audio) return;
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
-  canvas.hidden = !enabled || editing;
-  canvas.parentElement?.classList.toggle('is-stereo-waveform', enabled && !editing);
-  if (!enabled || editing) return;
   const cached = utilityLoopStereoLoads.get(canvas);
+  const ready = enabled && !editing && Boolean(cached?.peaks);
+  canvas.hidden = !ready;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
+  if (!enabled || editing) return;
   if (cached?.peaks) {
     const duration = Number(audio.duration) || 0;
     drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
     return;
   }
-  if (cached) return;
-  const entry = { peaks: null };
+  if (cached && (cached.loading || Date.now() < cached.retryAt)) return;
+  const entry = { peaks: null, loading: true, retryAt: 0 };
   utilityLoopStereoLoads.set(canvas, entry);
-  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).then(peaks => {
+  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
+    entry.loading = false;
     entry.peaks = peaks;
-    if (peaks && canvas.isConnected) updateUtilityLoopStereoWaveform(loopId, audio);
-  }).catch(() => {});
+    entry.retryAt = Date.now() + 5000;
+    if (canvas.isConnected) updateUtilityLoopStereoWaveform(loopId, audio);
+  });
 }
 
 function refreshUtilityLoopStereoWaveforms() {

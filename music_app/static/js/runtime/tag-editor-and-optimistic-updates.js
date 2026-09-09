@@ -1554,58 +1554,25 @@ const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalT
   const normalizedKey = String(albumKey || '').trim();
   if (!normalizedKey || !state?.view) return false;
   const groupFields = ['artist_groups', 'primary_artist_groups', 'family_artist_groups'];
-  const removedArtists = new Set();
-  const previousSidebarCount = Array.isArray(state.view.artists_sidebar)
-    ? state.view.artists_sidebar.length
-    : 0;
   groupFields.forEach((field) => {
     const groups = Array.isArray(state.view[field]) ? state.view[field] : [];
     state.view[field] = groups.flatMap((group) => {
       const albums = Array.isArray(group?.albums) ? group.albums : [];
       const retainedAlbums = albums.filter((album) => {
         const matches = String(getTrackModalAlbumRequestKey(album) || album?.key || '').trim() === normalizedKey;
-        if (matches) removedArtists.add(String(group?.artist || album?.album_artist || '').trim());
         return !matches;
       });
       return retainedAlbums.length ? [{ ...group, albums: retainedAlbums }] : [];
     });
   });
 
-  const remainingArtists = new Set(groupFields.flatMap((field) => (
-    (Array.isArray(state.view[field]) ? state.view[field] : [])
-      .map((group) => String(group?.artist || '').trim())
-      .filter(Boolean)
-  )));
-  if (Array.isArray(state.view.artists_sidebar)) {
-    state.view.artists_sidebar = state.view.artists_sidebar.filter((item) => {
-      const artist = String(item?.artist || item?.name || '').trim();
-      return !removedArtists.has(artist) || remainingArtists.has(artist);
-    });
-  }
+  // Mounted groups can be filtered or partial. The canonical view refresh owns
+  // whole-library sidebar membership and counts.
   if (Number.isFinite(Number(payload.album_count))) {
     state.view.album_count = Number(payload.album_count);
-  } else if (Number.isFinite(Number(state.view.album_count))) {
-    state.view.album_count = Math.max(0, Number(state.view.album_count) - 1);
-  } else {
-    state.view.album_count = (state.view.artist_groups || []).reduce(
-      (count, group) => count + (Array.isArray(group?.albums) ? group.albums.length : 0),
-      0,
-    );
   }
   if (Number.isFinite(Number(payload.artist_count))) {
     state.view.artist_count = Number(payload.artist_count);
-  } else if (Number.isFinite(Number(state.view.artist_count))) {
-    const currentSidebarCount = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : previousSidebarCount;
-    state.view.artist_count = Math.max(
-      0,
-      Number(state.view.artist_count) - Math.max(0, previousSidebarCount - currentSidebarCount),
-    );
-  } else {
-    state.view.artist_count = Array.isArray(state.view.artists_sidebar)
-      ? state.view.artists_sidebar.length
-      : (state.view.artist_groups || []).length;
   }
   if (state.gallery) {
     if (typeof rebuildAlbumIndex === 'function') rebuildAlbumIndex(state.view.artist_groups || []);
@@ -1672,8 +1639,22 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
     }
+    const refreshRequest = state.ui?.pendingViewRequest || (
+      state.busy && state.ui?.activeViewRequestUrl
+        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+        : { url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false }
+    );
+    if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
     applyMissingAlbumRemovalToView(albumKey, payload);
     if (typeof closeTrackModal === 'function') closeTrackModal();
+    if (refreshRequest.url && typeof fetchAndRender === 'function') {
+      await fetchAndRender(refreshRequest.url, Boolean(refreshRequest.push), {
+        ...refreshRequest.options,
+        preserveScroll: refreshRequest.options?.preserveScroll ?? true,
+        interruptCurrent: true,
+        restartIfSameUrl: true,
+      });
+    }
     if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
     if (typeof showToast === 'function') showToast('Album removed from Album Haven.', 'success', 3200);
     return true;

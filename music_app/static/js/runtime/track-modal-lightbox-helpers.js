@@ -425,9 +425,22 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
     trackModalSpeculativePrewarmControllers.delete(speculativeController);
     return existingLoad;
   }
+  const requestInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
+      if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
+        // Release only this request's aliases before joining or starting a load
+        // under the current revision. Foreground callers never receive stale data.
+        trackModalAlbumDetailsLoads.forEach((mappedLoad, alias) => {
+          if (mappedLoad === load) trackModalAlbumDetailsLoads.delete(alias);
+        });
+        const promotedToForeground = options.speculative === true
+          && options.controller
+          && !trackModalSpeculativeAlbumDetailsLoadControllers.has(load);
+        return loadTrackModalAlbumDetails(normalizedAlbumKey,
+          promotedToForeground ? { ...options, speculative: false } : options);
+      }
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);

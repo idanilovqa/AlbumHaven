@@ -298,11 +298,12 @@ expect(data.item).toBeDefined();
 
 ```typescript
 // Introspection query to debug schema
-const { data } = await request.post("/graphql", {
+const response = await request.post("/graphql", {
   data: {
     query: `{ __type(name: "Item") { fields { name type { name } } } }`,
   },
 });
+const { data } = await response.json();
 console.log(data.__type.fields);
 ```
 

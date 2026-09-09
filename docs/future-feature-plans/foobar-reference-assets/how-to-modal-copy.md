@@ -34,7 +34,7 @@ Choose `Library -> Playback Statistics -> Export statistics to XML...` to create
 
 Portable installations keep profile state beside `foobar2000.exe` when `portable_mode_enabled` is present. Review `foobar-internal-setup-summary-2026-05-28.md` for the sanitized observed file categories.
 
-The optional `backup_foobar_db.ps1` helper copies selected Foobar state into a new timestamped directory. It requires explicit source and destination paths and never deletes older backups. `register_foobar_db_task.ps1` can register that helper with Windows Task Scheduler after you review both files.
+The optional `backup_foobar_db.ps1` helper copies selected Foobar state into a new timestamped directory. It requires explicit source and destination paths and never deletes older backups. Keep Foobar2000 closed throughout the copy. The helper refuses a running Foobar process or non-empty SQLite WAL files; it does not stop Foobar or modify/checkpoint its databases. `register_foobar_db_task.ps1` can register that helper with Windows Task Scheduler after you review both files.
 
 ## Optional export normalizer
 

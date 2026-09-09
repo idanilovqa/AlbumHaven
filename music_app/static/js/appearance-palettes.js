@@ -453,17 +453,20 @@
       fill: source['waveform-fill'] || source['player-accent'] || source.accent || '#79B390',
       edge: source['waveform-edge'] || source['player-ink'] || '#DCEBE3',
     };
-    const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge };
+    const tokens = { ...baseTokens, ...source, 'waveform-fill': player.fill, 'waveform-edge': player.edge,
+      'player-surface-start': player.background, 'player-surface-end': player.background,
+      'player-surface-angle': '0deg', 'player-control-border': player.edge, 'player-handle': player.edge };
     if (override) {
       const style = player.style;
+      const controlFill = style?.controls.fill || contrastingInk(player.background);
       Object.assign(tokens, {
         player: player.background,
         'player-surface-start': style?.surface.start || player.background,
         'player-surface-end': (style?.surface.mode === 'solid' ? style.surface.start : style?.surface.end) || player.background,
         'player-surface-angle': style ? `${style.surface.angle}deg` : '0deg',
         'player-ink': contrastingInk(player.background),
-        play: style?.controls.fill || contrastingInk(player.background),
-        'play-ink': contrastingInk(style?.controls.fill || player.background),
+        play: controlFill,
+        'play-ink': contrastingInk(controlFill),
         'player-control-border': style?.controls.border || player.edge,
         'player-accent': player.fill,
         'player-handle': style?.handles.color || player.edge,

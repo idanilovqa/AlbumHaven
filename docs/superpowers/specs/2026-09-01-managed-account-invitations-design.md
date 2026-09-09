@@ -138,9 +138,14 @@ The email and copied URL use the same path, token format, and completion flow:
 
 1. `GET /accept-invitation?token=...&purpose=account-invitation` validates the
    token without consuming it.
-2. The server creates a short-lived, purpose-bound, `HttpOnly` invitation
-   transaction and redirects immediately to token-free
-   `/accept-invitation`.
+2. The server creates a short-lived, purpose-bound invitation transaction with
+   `Secure`, `HttpOnly`, and `SameSite=Strict`, then responds with `303` to
+   token-free `/accept-invitation/continue`. This static `200` page commits a
+   same-site document and immediately uses a meta refresh to `/accept-invitation`,
+   with a plain fallback link. It renders no token, cookie value, or query data,
+   invokes no authority or mutation, and uses no JavaScript. This lets emailed
+   links work without changing the Strict cookie policy. Missing or blocked
+   cookies terminate at the normal invalid form; the handoff never repeats.
 3. The acceptance page collects and confirms a new password using the existing
    Phase 7 password policy, breach checks, Argon2id configuration, one-time
    CSRF, and same-origin enforcement.

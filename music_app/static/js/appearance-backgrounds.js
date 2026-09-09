@@ -23,6 +23,7 @@
     if (typeof value !== 'string' || value.length !== 7 || !/^#[0-9a-f]{6}$/i.test(value)) throw new TypeError('Enter a color as #RRGGBB, for example #237A68.');
     return value.toUpperCase();
   }
+  const playerStyleColorPaths = ['surface.start', 'surface.end', 'controls.fill', 'controls.border', 'waveform.fill', 'waveform.edge', 'handles.color'];
   const playerColorPairs = Object.freeze({
     'controls.fill': Object.freeze({ role: 'waveform.fill', source: '#24B86B', target: '#387F68' }),
     'waveform.fill': Object.freeze({ role: 'controls.fill', source: '#387F68', target: '#24B86B' }),
@@ -262,8 +263,10 @@
       'item-action-hover-background': interactions.button_hover_background,
       'item-action-pressed': interactions.button_pressed,
     })) {
-      if (color) editor.style.setProperty('--appearance-' + token, color);
-      else editor.style.removeProperty('--appearance-' + token);
+      // A missing local token inherits the saved override from the document.
+      // Resolve the draft fallback here so resets remain isolated to the preview.
+      const fallback = ['item-hover', 'item-selected'].includes(token) ? effective.tokens.hover : effective.tokens.control;
+      editor.style.setProperty('--appearance-' + token, color || fallback);
     }
     if (value.interaction_overrides) editor.style.setProperty('--appearance-interaction-outline', resolveInteractionOutline(value, effective));
     else editor.style.removeProperty('--appearance-interaction-outline');
@@ -283,8 +286,10 @@
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
     const syncInputs = (preserveErrors = false) => {
       const next = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]]));
-      const player = resolveAppearance({ ...draft, player_override: draft.player_style_override || draft.player_override }).player;
-      for (const field of ['background', 'fill', 'edge']) next['player_' + field] = player[field];
+      const effective = resolveAppearance({ ...draft, player_override: draft.player_style_override || draft.player_override });
+      for (const field of ['background', 'fill', 'edge']) next['player_' + field] = effective.player[field];
+      const style = effectivePlayerStyle({ draft, effective });
+      for (const path of playerStyleColorPaths) { const [group, field] = path.split('.'); next['player_style_' + path] = style[group][field]; }
       if (preserveErrors) for (const key of Object.keys(errors)) next[key] = inputValues[key];
       inputValues = next;
     };
@@ -304,6 +309,7 @@
         footer: { dirty, canSave, canRetry: dirty && Boolean(error), status: dirty ? 'Unsaved appearance changes' : 'Saved to your account' } };
     };
     const notify = () => listeners.forEach(listener => listener(getState()));
+    const clearPlayerStyleErrors = () => { for (const path of playerStyleColorPaths) delete errors['player_style_' + path]; };
     const promote = () => {
       if (!isCanonical(saved)) saved = { ...canonicalEmpty(), ...saved };
       if (!isCanonical(draft)) draft = { ...canonicalEmpty(), ...draft };
@@ -345,6 +351,7 @@
       if (!['palette', 'custom'].includes(mode)) throw new TypeError('Unknown player mode.');
       if (busy()) return;
       promote();
+      if (mode === 'palette') clearPlayerStyleErrors();
       if (aggregate) {
         if (mode === 'custom') {
           if (activeSection === 'backgrounds') { activeSection = 'seekbar'; notify(); return; }
@@ -388,7 +395,12 @@
       promote(); const key = 'player_' + field; inputValues[key] = String(value);
       try {
         const color = normalizeColor(value); if (color === null) throw new TypeError('A player color is required.');
-        draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), [field]: color };
+        if (field === 'background' && draft.player_style_override) {
+          const style = copy(draft.player_style_override);
+          setPairedPlayerStyleColor(style, 'surface.start', color);
+          draft.player_style_override = normalizePlayerOverride(style); pendingPlayerSet = copy(draft.player_style_override);
+          delete errors['player_style_surface.start'];
+        } else draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), [field]: color };
         if (recordRecent && field !== 'background') rememberColor(color);
         delete errors[key]; error = ''; syncInputs(true);
       } catch (failure) { errors[key] = failure.message; }
@@ -428,11 +440,26 @@
       rememberColor(fill); rememberColor(edge); delete errors.player_fill; delete errors.player_edge;
       error = ''; syncInputs(true); notify();
     };
-    const setPlayerStyle = value => {
+    const setPlayerStyle = (value, { preserveColorErrors = false } = {}) => {
       if (busy()) return;
       const style = normalizePlayerOverride(value);
       if (!style || !Object.hasOwn(style, 'surface')) throw new TypeError('A complete player style is required.');
-      promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style); error = ''; syncInputs(true); notify();
+      promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style);
+      if (!preserveColorErrors) clearPlayerStyleErrors();
+      else if (style.surface.mode === 'solid') delete errors['player_style_surface.end'];
+      error = ''; syncInputs(true); notify();
+    };
+    const setPlayerStyleColor = (path, value) => {
+      if (!playerStyleColorPaths.includes(path)) throw new TypeError('Unknown player style color.');
+      if (busy()) return;
+      const key = 'player_style_' + path; inputValues[key] = String(value);
+      try {
+        const style = effectivePlayerStyle(getState());
+        setPairedPlayerStyleColor(style, path, value);
+        promoteAggregate(); draft.player_style_override = normalizePlayerOverride(style); pendingPlayerSet = copy(draft.player_style_override);
+        delete errors[key]; error = ''; syncInputs(true);
+      } catch (failure) { errors[key] = failure.message; }
+      notify();
     };
     const restorePlayerSet = value => setPlayerStyle(value);
     const setSelectionAccent = value => {
@@ -473,7 +500,7 @@
         Object.assign(draft, empty(), { palette_id: null, panel_index: 0 });
       } else if (section === 'seekbar') {
         draft.player_style_override = null; draft.player_override = null; draft.compact_player_style = 'docked'; pendingPlayerSet = null; waveformColorUpdates = [];
-        delete errors.player_background; delete errors.player_fill; delete errors.player_edge;
+        delete errors.player_background; delete errors.player_fill; delete errors.player_edge; clearPlayerStyleErrors();
       } else if (section === 'selection-accent') {
         const paletteAccent = palettes.find(palette => palette.id === draft.palette_id)?.selectionAccent;
         draft.selection_accent = { enabled: true, color: paletteAccent || defaultSelectionAccent.color };
@@ -534,7 +561,7 @@
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
     return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
-      setPlayerStyle, restorePlayerSet, setSelectionAccent, setInteractionOverrides, setItemOutline, useThemeInteractions, setActiveSection, cancel, reset, resetSection, load, save, clear,
+      setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setInteractionOverrides, setItemOutline, useThemeInteractions, setActiveSection, cancel, reset, resetSection, load, save, clear,
       subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
@@ -590,7 +617,8 @@
     return `<section class="appearance-interactions" aria-labelledby="appearance-interactions-title"><h4 id="appearance-interactions-title"><span>2</span>Hover &amp; interaction states</h4><p class="background-help">Each column is a coordinated color family. Override only the states you want.</p>${rows.map(([key, label]) => `<div class="appearance-interaction-row"><strong>${label}</strong><div class="appearance-interaction-options"><div class="appearance-muted-spectrum">${interactionColorFamilies.map(family => { const color = family.colors[key]; return key === 'item_outline' ? `<button type="button" data-item-outline-color data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>` : `<button type="button" data-interaction-color="${key}" data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>`; }).join('')}</div>${key === 'item_outline' ? '<button class="button button-secondary appearance-outline-source" type="button" data-item-outline-source="player" aria-pressed="false">Use player colors</button>' : ''}</div></div>`).join('')}</section>`;
   }
   function playerStyleField(path, label) {
-    return `<label class="player-style-field">${label}<span><input type="color" data-player-style-color="${path}"><input type="text" maxlength="7" data-player-style-hex="${path}" spellcheck="false"></span></label>`;
+    const id = 'player-style-' + path.replace('.', '-');
+    return `<label class="player-style-field">${label}<span><input type="color" data-player-style-color="${path}"><input type="text" maxlength="7" data-player-style-hex="${path}" spellcheck="false" aria-describedby="${id}-error"></span><small class="background-field-error" id="${id}-error" data-player-style-error="${path}" role="status"></small></label>`;
   }
   function effectivePlayerStyle(state) {
     return copy(state.draft.player_style_override) || {
@@ -601,9 +629,7 @@
     };
   }
   function setPlayerStylePath(controller, path, value) {
-    const style = effectivePlayerStyle(controller.getState());
-    setPairedPlayerStyleColor(style, path, value);
-    controller.setPlayerStyle(style);
+    controller.setPlayerStyleColor(path, value);
   }
   function editorMarkup() {
     const previewCancel = ButtonComponent.renderButton({ label: 'Cancel', variant: 'secondary', size: 'small', quiet: true, attributes: { 'data-background-preview-cancel': true, 'aria-describedby': 'appearance-button-preview-help' } });
@@ -998,8 +1024,13 @@
         const liveCover = document.getElementById?.('player-cover-button');
         if (liveCover?.style?.backgroundImage) find('[data-player-preview-cover]').style.backgroundImage = liveCover.style.backgroundImage;
         editor.querySelectorAll('[data-player-style-color],[data-player-style-hex]').forEach(input => {
-          const [group, field] = (input.getAttribute('data-player-style-color') || input.getAttribute('data-player-style-hex')).split('.');
-          if (document.activeElement !== input) input.value = style[group][field];
+          const path = input.getAttribute('data-player-style-color') || input.getAttribute('data-player-style-hex');
+          const [group, field] = path.split('.'), key = 'player_style_' + path;
+          const hexInput = Boolean(input.getAttribute('data-player-style-hex'));
+          const value = hexInput ? state.inputValues[key] : style[group][field];
+          if (input.value !== value) input.value = value;
+          if (hexInput) input.setAttribute('aria-invalid', String(Boolean(state.errors[key])));
+          const error = find(`[data-player-style-error="${path}"]`); if (error) error.textContent = state.errors[key] || '';
           input.disabled = disabled || (group === 'surface' && field === 'end' && style.surface.mode === 'solid');
         });
         const angle = find('[data-player-style-angle]'); if (angle) angle.value = String(style.surface.angle);
@@ -1024,8 +1055,8 @@
       };
       editor.addEventListener('input', event => {
         const stylePath = event.target.getAttribute('data-player-style-color') || event.target.getAttribute('data-player-style-hex');
-        if (stylePath) { try { setPlayerStylePath(controller, stylePath, normalizeColor(event.target.value)); } catch (_failure) {} return; }
-        if (event.target.hasAttribute('data-player-style-angle')) { const style = effectivePlayerStyle(controller.getState()); style.surface.angle = Number(event.target.value); controller.setPlayerStyle(style); return; }
+        if (stylePath) { controller.setPlayerStyleColor(stylePath, event.target.value); return; }
+        if (event.target.hasAttribute('data-player-style-angle')) { const style = effectivePlayerStyle(controller.getState()); style.surface.angle = Number(event.target.value); controller.setPlayerStyle(style, { preserveColorErrors: true }); return; }
         const field = event.target.getAttribute('data-player-picker') || event.target.getAttribute('data-player-hex');
         if (field) {
           recoveryMessage = '';
@@ -1046,7 +1077,7 @@
         else if (button.hasAttribute('data-waveform-recent')) { recoveryMessage = ''; controller.setWaveformColor(button.getAttribute('data-waveform-field'), button.getAttribute('data-waveform-recent')); }
         else if (button.hasAttribute('data-player-set-index')) controller.restorePlayerSet(controller.getState().playerRecentSets[Number(button.getAttribute('data-player-set-index'))]);
         else if (button.hasAttribute('data-player-theme')) { const theme = playerThemes.find(item => item.id === button.getAttribute('data-player-theme')); if (theme) controller.setPlayerStyle(theme.style); }
-            else if (button.hasAttribute('data-player-surface-mode')) { const style = effectivePlayerStyle(controller.getState()); style.surface.mode = button.getAttribute('data-player-surface-mode'); if (style.surface.mode === 'solid') style.surface.end = style.surface.start; controller.setPlayerStyle(style); }
+            else if (button.hasAttribute('data-player-surface-mode')) { const style = effectivePlayerStyle(controller.getState()); style.surface.mode = button.getAttribute('data-player-surface-mode'); if (style.surface.mode === 'solid') style.surface.end = style.surface.start; controller.setPlayerStyle(style, { preserveColorErrors: true }); }
             else if (button.hasAttribute('data-compact-player-style')) controller.setCompactPlayerStyle(button.getAttribute('data-compact-player-style'));
         else if (button.hasAttribute('data-background-player-mode')) { recoveryMessage = ''; controller.setPlayerMode(button.getAttribute('data-background-player-mode')); }
         else if (button.hasAttribute('data-waveform-restore')) {

@@ -11,6 +11,7 @@ from typing import Any, Iterator
 
 from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
+    lock_current_actor_session,
 )
 from music_app.services.auth_password_reset_request_postgres import (
     PasswordResetDelivery,
@@ -99,6 +100,7 @@ class PostgresAdminMailActionService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -116,6 +118,8 @@ class PostgresAdminMailActionService:
                 target = self._lock_authority_and_target(
                     connection, actor_id, current_library_id, target_id
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 if (
                     target.get("target_account_kind") != "bootstrap_owner"
                     or not _eligible(target)
@@ -150,6 +154,7 @@ class PostgresAdminMailActionService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -167,6 +172,8 @@ class PostgresAdminMailActionService:
                 target = self._lock_authority_and_target(
                     connection, actor_id, current_library_id, target_id
                 )
+                now = lock_current_actor_session(connection, actor_account_id=actor_id,
+                    actor_session_id=actor_session_id, clock=self._clock)
                 if not _eligible(target):
                     self._audit(connection, actor_id, target_id, "password_reset_ineligible", "invalid", reference, now)
                     return AdminMailActionResult()

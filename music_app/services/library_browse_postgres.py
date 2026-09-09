@@ -1976,16 +1976,9 @@ class PostgresLibraryBrowseRepository:
         connection: Any | None = None,
     ) -> list[object]:
         def load_rows(active_connection: Any) -> list[object]:
-            rows = list(active_connection.execute(_missing_albums_sql()).fetchall())
-            normalized_key = str(album_key or "").strip()
-            if not normalized_key:
-                return rows
-            return [
-                row
-                for row in rows
-                if str(_row_mapping(row).get("album_key") or "").strip()
-                == normalized_key
-            ]
+            return list(active_connection.execute(
+                _missing_albums_sql(), {"album_key": str(album_key or "").strip() or None},
+            ).fetchall())
 
         if connection is not None:
             return load_rows(connection)
@@ -6799,6 +6792,7 @@ def _missing_albums_sql() -> str:
            and library.local_tracks.library_id = bootstrap_context.library_id
           join library.local_track_files
             on library.local_track_files.track_id = library.local_tracks.id
+          where (%(album_key)s::text is null or library.local_albums.album_key = %(album_key)s::text)
           group by library.local_albums.id
           having bool_and(library.local_track_files.scan_cache_stale)
         ),
@@ -6845,6 +6839,22 @@ def _missing_albums_sql() -> str:
         join library.local_tracks on library.local_tracks.album_id = library.local_albums.id
         join library.local_track_files on library.local_track_files.track_id = library.local_tracks.id
         left join library.library_roots on library.library_roots.id = library.local_track_files.library_root_id
+        left join lateral (
+          select library.exception_overrides.override_payload
+          from library.exception_overrides
+          where library.exception_overrides.library_id = missing_albums.library_id
+            and (library.exception_overrides.track_key = library.local_track_files.private_path
+                 or library.exception_overrides.track_id = library.local_tracks.id)
+          order by case when library.exception_overrides.track_key = library.local_track_files.private_path then 0 else 1 end,
+                   library.exception_overrides.id
+          limit 1
+        ) exception_override on true
+        where lower(btrim(coalesce(
+          case when exception_override.override_payload ? 'exception_type'
+               then exception_override.override_payload ->> 'exception_type'
+               else library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}' end,
+          ''
+        ))) <> 'non-album rarity'
         order by library.local_albums.album_key, library.local_tracks.id;
     """
 

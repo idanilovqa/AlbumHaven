@@ -1,7 +1,20 @@
 # Changelog
 
-## 0.9.43 - 2026-09-08
+## 0.9.43 - 2026-09-09
 
+- Rechecked administrator sessions under mutation locks, shared credential
+  attempt and hashing limits across password entry points, and preserved lock
+  order and expiry checks during concurrent authentication operations.
+- Made external invitation links work with Strict transaction cookies through
+  a token-free continuation page. Rejected breached-password redirects and
+  preserved request credentials and same-origin CSRF behavior.
+- Preserved appearance fields and first-save defaults in Postgres, corrected
+  player contrast and background previews, and blocked invalid color saves.
+- Preserved current navigation and album-detail state across asynchronous
+  refreshes, whole-library counts after removal, and mobile track-table layout.
+- Restored appearance fixtures after unfiltered functional runs and stopped
+  subsequent tests when restoration or process cleanup could not be proven.
+  Tightened focused case selection and bounded application readiness probes.
 - Added local authentication and account administration, including secure owner
   bootstrap, sessions, password recovery, invitations, audit records, and
   policy enforcement for private routes and media.

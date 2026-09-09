@@ -39,6 +39,7 @@ class TargetedLibraryReconciler:
         ) = None,
         after_commit: Callable[[TargetedReconciliationResult], object] | None = None,
         reservation_acquirer: Callable[[set[str]], object] | None = None,
+        publication_guard: Callable | None = None,
         stat_path: Callable[[Path], object] | None = None,
         wait: Callable[[float], object] | None = None,
         max_stable_attempts: int = 4,
@@ -53,6 +54,7 @@ class TargetedLibraryReconciler:
         self._exception_overrides_provider = exception_overrides_provider
         self._after_commit = after_commit
         self._reservation_acquirer = reservation_acquirer
+        self._publication_guard = publication_guard
         self._stop_event = Event()
         self._stat_path = stat_path or Path.stat
         self._wait = wait or self._stop_event.wait
@@ -109,7 +111,13 @@ class TargetedLibraryReconciler:
             candidate = Path(path)
             if not self._belongs_to_root(candidate, primary_root):
                 return TargetedReconciliationResult(0, (), "invalid_path")
-            if is_supported_media(candidate):
+            if candidate.is_dir():
+                active_targets.extend(
+                    (media_path, primary_root)
+                    for media_path in self._supported_media_descendants(candidate)
+                    if self._belongs_to_root(media_path, primary_root)
+                )
+            elif is_supported_media(candidate):
                 active_targets.append((candidate, primary_root))
         if not all(self._belongs_to_root(path, primary_root) for path in deleted_paths):
             return TargetedReconciliationResult(0, (), "invalid_path")
@@ -254,6 +262,7 @@ class TargetedLibraryReconciler:
                 deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
                 deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
                 moves=tuple(normalized_moves),
+                **({"publication_guard": self._publication_guard} if self._publication_guard is not None else {}),
             )
             result = TargetedReconciliationResult(
                 int(persisted.get("inventory_mutation_revision") or 0),
@@ -270,6 +279,12 @@ class TargetedLibraryReconciler:
             if self._after_commit is not None:
                 self._after_commit(result)
             return result
+        except Exception as exc:
+            from music_app.services.library_watch_health import LibraryRootUnhealthyError
+
+            if isinstance(exc, LibraryRootUnhealthyError):
+                return TargetedReconciliationResult(0, (), "root_unhealthy")
+            raise
         finally:
             release = getattr(reservation, "release", None)
             if callable(release):

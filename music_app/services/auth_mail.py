@@ -209,7 +209,7 @@ async def send_auth_email(
     }
     if security in {"tls", "starttls"}:
         smtp_kwargs["tls_context"] = ssl.create_default_context()
-    if security == "starttls":
+    if security in {"starttls", "plaintext"}:
         smtp_kwargs["start_tls"] = False
 
     try:

@@ -2,6 +2,7 @@
   --album-track-accent: var(--appearance-waveform-edge, var(--appearance-accent, var(--accent, #55c7ff)));
   --album-track-play-hover: var(--appearance-play, var(--appearance-player-accent, var(--album-track-accent)));
   --album-track-playing-period: 3.6s;
+  --cdt-mobile-min-width: 0;
   min-width: 0;
 }
 
@@ -39,7 +40,7 @@
   background: color-mix(in srgb, var(--album-track-accent) 11%, transparent);
   box-shadow: inset 3px 0 0 var(--album-track-accent), inset 12px 0 18px -16px var(--album-track-accent);
 }
-.album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
+.album-track-table .album-track-table__row--search-match:hover { background: color-mix(in srgb, var(--album-track-accent) 15%, transparent); }
 .album-track-table__row--playing {
   border-radius: 8px;
   outline: 1px solid color-mix(in srgb, var(--album-track-accent) 86%, transparent);

@@ -158,6 +158,18 @@ def test_admin_account_route_creates_pending_account_without_password():
     assert deliveries == []
 
 
+def test_creation_rejects_requested_invitation_when_mail_is_disabled_before_persistence():
+    app, service, deliveries = _app(DELIVERY, invitation_enabled=False)
+    status, body = _request(app, {
+        "username": "member.one", "contact_email": "member+one@example.test",
+        "capability_keys": [], "send_invitation": True,
+    })
+    assert status == 409
+    assert service.calls == []
+    assert deliveries == []
+    assert b"invitation_queued" not in body
+
+
 def test_admin_invitation_actions_are_exposed_to_the_roster_policy_projection():
     from music_app.routes import admin_asgi
 
@@ -257,6 +269,7 @@ def test_copy_invitation_route_returns_exact_token_response_and_security_headers
     assert received_headers["referrer-policy"] == "no-referrer"
     assert invitation_service.copy_calls == [{
         "actor_account_id": 7,
+        "actor_session_id": 11,
         "actor_authenticated_at": datetime(2026, 9, 1, 12, 25, tzinfo=timezone.utc),
         "library_id": 9,
         "target_account_id": 41,

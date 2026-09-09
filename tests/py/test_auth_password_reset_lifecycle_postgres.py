@@ -150,7 +150,10 @@ def test_exchange_is_single_use_and_returns_redacted_clean_url_state():
         and "on conflict (reset_token_id) do nothing" in sql
         for sql in statements
     )
-    assert any("for update of reset_token, account, credential" in sql for sql in statements)
+    locks = [sql for sql in statements if "for update" in sql]
+    assert "from app.accounts" in locks[0]
+    assert "from app.account_credentials" in locks[1]
+    assert "for update of reset_token" in locks[2]
     assert not any("set consumed_at" in sql for sql in statements)
     assert RESET_RAW not in repr(connection.operations)
 

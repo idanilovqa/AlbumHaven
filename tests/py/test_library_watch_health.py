@@ -15,6 +15,28 @@ def _health_module():
     return importlib.import_module("music_app.services.library_watch_health")
 
 
+def test_destructive_publication_rejects_failed_pending_health_write():
+    from contextlib import nullcontext
+    health = _health_module()
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"}, connect=lambda _url: connection,
+    )
+    service = health.LibraryWatchHealthService(store)
+    store.upsert = lambda _problem: (_ for _ in ()).throw(OSError("store unavailable"))
+    with pytest.raises(OSError):
+        service.record_event(health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "destination", Path("C:/Music")))
+    # Missing boundary must fail the regression, without relying on a missing import.
+    guard = getattr(service, "publication_guard", lambda *_args: nullcontext())
+    entered = False
+    try:
+        with guard(connection, ("source", "destination")):
+            entered = True
+    except RuntimeError:
+        pass
+    assert not entered, "a pending failed health write must prevent destructive publication"
+
+
 def test_earlier_health_write_does_not_remove_later_failed_pending_event():
     health = _health_module()
     first_started = Event()
@@ -375,6 +397,10 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
         def root_allows_destructive_reconciliation(self, root_id):
             return root_id not in self._unhealthy_roots
 
+        def publication_guard(self, _connection, _root_ids):
+            from contextlib import nullcontext
+            return nullcontext()
+
     class CompletedFuture:
         def __init__(self, result=None, error=None):
             self._result = result
@@ -421,6 +447,8 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
             return True
 
         def replace_roots(self, _roots):
+            if any(root.get("id") == "attach-failed" for root in _roots):
+                raise OSError("watch attachment unavailable")
             return None
 
     class TargetedReconciler:
@@ -520,6 +548,11 @@ def test_app_wires_coordinator_and_reconciliation_problems_to_persistent_watcher
 
     async def exercise_problem_callback():
         async with app.router.lifespan_context(app):
+            with pytest.raises(OSError):
+                app.state.replace_library_watch_roots([{"id": "attach-failed", "path": "C:/Unattached"}])
+            assert recorded[-1].root_id == "attach-failed"
+            assert recorded[-1].code == "reconciliation_failed"
+            recorded.clear()
             callbacks["emit_problem"](problem)
             callbacks["emit_problem"](destination_problem)
             callbacks["emit_request"](

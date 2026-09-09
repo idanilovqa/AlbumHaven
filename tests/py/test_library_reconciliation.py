@@ -6,6 +6,32 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.mark.parametrize("is_directory", [False, True])
+@pytest.mark.parametrize("direction", ["enter", "leave"])
+def test_boundary_crossing_moves_preserve_the_configured_endpoint(tmp_path, is_directory, direction):
+    from music_app.services.library_watch import LibraryEventKind, publish_watchdog_event
+    from types import SimpleNamespace
+
+    root = tmp_path / "Music"
+    root.mkdir()
+    inside = root / ("Album" if is_directory else "track.flac")
+    outside = tmp_path / ("OutsideAlbum" if is_directory else "outside.flac")
+    source, destination = (outside, inside) if direction == "enter" else (inside, outside)
+    events = []
+    publish_watchdog_event(
+        SimpleNamespace(event_type="moved", src_path=str(source), dest_path=str(destination), is_directory=is_directory),
+        roots=[{"id": "main", "path": str(root)}], publish=events.append, clock=lambda: 12.0,
+    )
+    assert len(events) == 1
+    event = events[0]
+    assert event.kind is (LibraryEventKind.CREATED if direction == "enter" else LibraryEventKind.DELETED)
+    assert event.root_id == "main"
+    assert event.path == inside.resolve()
+    assert event.destination is None and event.destination_root_id is None
+    assert event.is_directory is is_directory
+    assert event.observed_at == 12.0
+
+
 def test_library_events_normalize_against_configured_root(tmp_path: Path):
     from music_app.services.library_reconciliation import (
         LibraryEventKind,

@@ -134,8 +134,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   const bounds = await cancel.boundingBox();
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
   await page.mouse.down();
-  const quietPressedBackground = await cancel.evaluate((element) => getComputedStyle(element).backgroundColor);
-  expect(quietPressedBackground).not.toBe(quietHoverBackground);
+  await expect(cancel).not.toHaveCSS('background-color', quietHoverBackground);
   await page.mouse.up();
 
   await page.locator('body').click({ position: { x: 1, y: 1 } });

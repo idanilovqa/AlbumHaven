@@ -227,6 +227,68 @@ def _reset_fake(*, phase_errors: dict[str, BaseException] | None = None):
     FakeSMTP.phase_errors = phase_errors or {}
 
 
+def test_plaintext_loopback_does_not_auto_upgrade_when_relay_advertises_starttls(auth_mail):
+    async def scenario():
+        commands = []
+        clients = set()
+
+        async def relay(reader, writer):
+            task = asyncio.current_task()
+            clients.add(task)
+            try:
+                writer.write(b"220 local.test ESMTP\r\n")
+                await writer.drain()
+                while line := await reader.readline():
+                    command = line.decode("ascii").strip()
+                    commands.append(command)
+                    if command.startswith("EHLO"):
+                        writer.write(b"250-local.test\r\n250 STARTTLS\r\n")
+                    elif command == "STARTTLS":
+                        writer.write(b"454 TLS unavailable\r\n")
+                    elif command == "DATA":
+                        writer.write(b"354 End with dot\r\n")
+                        await writer.drain()
+                        while await reader.readline() not in (b".\r\n", b""):
+                            pass
+                        writer.write(b"250 queued\r\n")
+                    elif command == "QUIT":
+                        writer.write(b"221 bye\r\n")
+                        await writer.drain()
+                        break
+                    else:
+                        writer.write(b"250 ok\r\n")
+                    await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+                clients.discard(task)
+
+        server = await asyncio.start_server(relay, "127.0.0.1", 0)
+        try:
+            config = _config(
+                security="plaintext", host="127.0.0.1",
+                port=server.sockets[0].getsockname()[1],
+                username=None, password=None,
+                connect_timeout_seconds=1, command_timeout_seconds=1,
+            )
+            result = await asyncio.wait_for(
+                auth_mail.send_auth_email(_welcome(auth_mail, config), config=config), 4,
+            )
+            assert result.delivered is True
+            assert "STARTTLS" not in commands
+            assert "DATA" in commands
+        finally:
+            server.close()
+            await server.wait_closed()
+            remaining = list(clients)
+            for task in remaining:
+                task.cancel()
+            await asyncio.gather(*remaining, return_exceptions=True)
+            assert not clients
+
+    asyncio.run(scenario())
+
+
 def _welcome(auth_mail, config: dict[str, Any]) -> EmailMessage:
     return auth_mail.compose_welcome_email(
         username="Rendref",
@@ -340,6 +402,7 @@ def test_validated_plaintext_loopback_uses_no_tls_or_starttls(auth_mail):
         "hostname": "127.0.0.1",
         "port": 1025,
         "use_tls": False,
+        "start_tls": False,
         "timeout": 5,
     }
     assert "starttls" not in [name for name, _ in smtp.calls]

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import import_module, util
+import threading
+import urllib.request
 
 import pytest
 
@@ -92,6 +95,55 @@ def test_checker_returns_false_for_a_strict_valid_nonmatch(breached_passwords):
     opener = RecordingOpener(f"{'A' * 35}:12\n{'B' * 35}:0\n".encode("ascii"))
 
     assert _checker(breached_passwords, opener)(PASSWORD) is False
+
+
+def test_default_transport_rejects_redirect_before_disclosing_prefix(breached_passwords, monkeypatch):
+    paths = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            paths.append(self.path)
+            if self.path.startswith("/range/"):
+                self.send_response(302)
+                self.send_header("Location", f"/unapproved/{PREFIX}")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(f"{'A' * 35}:0\n".encode("ascii"))
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    worker.start()
+    try:
+        # The global fixture blocks urlopen before this module's default argument
+        # is bound. Import a private copy with a real, proxy-free loopback opener.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        expected_url = f"http://127.0.0.1:{server.server_port}/range/{PREFIX}"
+
+        def owned_urlopen(request, **kwargs):
+            assert request.full_url == expected_url
+            return opener.open(request, **kwargs)
+
+        monkeypatch.setattr(urllib.request, "urlopen", owned_urlopen)
+        spec = util.spec_from_file_location("_owned_hibp_transport", breached_passwords.__file__)
+        transport = util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/range/{{}}",
+            timeout_seconds=1,
+        )
+        with pytest.raises(transport.BreachedPasswordCheckError):
+            checker(PASSWORD)
+        assert paths == [f"/range/{PREFIX}"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
 
 
 def test_checker_accepts_large_valid_padded_official_response(breached_passwords):

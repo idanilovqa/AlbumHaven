@@ -60,3 +60,38 @@ test('missing CSRF cookie does not synthesize a credential', async () => {
 
   assert.equal(calls[0][1].headers, undefined);
 });
+
+test('URL object mutation inputs never disclose CSRF across origins', async () => {
+  const { window, calls } = load();
+  const external = new URL('https://external.test/write');
+  const local = new URL('https://music.test/write');
+  await window.fetch(external, { method: 'POST' });
+  await window.fetch(local, { method: 'POST' });
+  assert.equal(calls[0][0], external);
+  assert.equal(calls[0][1].headers, undefined);
+  assert.equal(calls[1][1].headers.get('X-Album-Haven-CSRF'), 'csrf-value');
+});
+
+for (const credentials of ['omit', 'include', 'same-origin']) {
+  test(`Request mutation retains its ${credentials} credentials policy`, async () => {
+    const { window, calls } = load();
+    const request = new Request('https://music.test/write', { method: 'POST', credentials });
+    await window.fetch(request);
+    assert.equal(calls[0][0], request);
+    assert.equal(calls[0][1].credentials, credentials);
+    assert.equal(calls[0][1].headers.get('X-Album-Haven-CSRF'), 'csrf-value');
+    await window.fetch(request, { credentials: 'omit' });
+    assert.equal(calls[1][1].credentials, 'omit');
+  });
+}
+
+test('external Request preserves all original credentials and headers', async () => {
+  const { window, calls } = load();
+  const request = new Request('https://external.test/write', {
+    method: 'POST', credentials: 'omit', headers: { 'X-Caller': 'value' },
+  });
+  await window.fetch(request);
+  assert.equal(calls[0][0], request);
+  assert.equal(calls[0][1], undefined);
+  assert.equal(request.headers.has('X-Album-Haven-CSRF'), false);
+});

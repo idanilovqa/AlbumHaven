@@ -38,6 +38,54 @@ def _request(
     )
 
 
+@pytest.mark.parametrize("unstable", [False, True])
+def test_incoming_directory_move_reconciles_contained_descendants_atomically(tmp_path, unstable):
+    from music_app.services.library_watch import normalize_library_event
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    album = root / "Owner" / "Imported"
+    first = album / "01.flac"
+    second = album / "Disc 2" / "02.flac"
+    second.parent.mkdir(parents=True)
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+    outside = tmp_path / "private.flac"
+    outside.write_bytes(b"outside")
+    (album / "escape.flac").symlink_to(outside)
+    roots = [{"id": "main", "path": str(root), "category": "main_library_roots"}]
+    requests = []
+    coordinator = LibraryEventCoordinator(emit_request=requests.append, wait=lambda _seconds: None)
+    event = normalize_library_event("moved", tmp_path / "old-location", roots=roots, destination=album, is_directory=True)
+    assert event is not None
+    coordinator.accept(event)
+    coordinator.flush()
+    assert len(requests) == 1
+    repository = RecordingRepository()
+    parsed = []
+    samples = 0
+
+    def stat(path):
+        nonlocal samples
+        samples += 1
+        return SimpleNamespace(st_size=samples if unstable and path == second else path.stat().st_size, st_mtime_ns=1)
+
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}}, repository=repository, root_definitions=roots,
+        metadata_reader=lambda path: parsed.append(path) or {"path": str(path), "album": "Imported", "album_artist": "Owner", "artist": "Owner", "title": path.stem},
+        stat_path=stat, wait=lambda _seconds: None,
+    )
+    result = reconciler.reconcile(requests[0])
+    if unstable:
+        assert result.health == "stable_write_unavailable"
+        assert parsed == [] and repository.calls == []
+    else:
+        assert set(parsed) == {first, second}
+        assert len(repository.calls) == 1
+        assert set(repository.calls[0]["active_file_entries"]) == {str(first), str(second)}
+
+
 def test_targeted_reconciler_parses_only_requested_files_and_never_full_scans(
     tmp_path,
     monkeypatch,

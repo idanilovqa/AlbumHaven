@@ -61,6 +61,8 @@ class FakeConnection:
             self.pipeline_execute_counts[-1] += 1
         if "bootstrap_context_ready" in sql:
             return FakeCursor([{"bootstrap_context_ready": 1}] if self._bootstrap_ready else [])
+        if "watch_health_load" in sql:
+            return FakeCursor([{"library_watch_health": {}}])
         if "metadata -> 'scan_cache'" in sql:
             return FakeCursor(self._snapshot_rows)
         if "local_track_files.metadata #> '{scan_cache,file_entry}'" in sql:
@@ -151,6 +153,14 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
             normalized = _normalized_sql(sql)
             if "from library.separate_releases" in normalized:
                 return FakeCursor([{"release_key": "artist::new album"}])
+            if "as album_owner_key" in normalized:
+                return FakeCursor([{
+                    "private_path": active_path, "album_key": "artist::new album",
+                    "album_owner_key": "artist", "album_title": "New Album", "album_artist": "Artist",
+                    "file_entry": {"path": active_path, "mtime": 1.0, "size": 123,
+                                   "album": "New Album", "album_artist": "Artist", "artist": "Artist",
+                                   "title": "Track", "track_number": 1, "disc_number": 1},
+                }])
             if "as affected_album_key" in normalized:
                 return FakeCursor([{"affected_album_key": "artist::old album"}])
             if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
@@ -209,7 +219,7 @@ def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(m
         "inventory_mutation_revision": 7,
         "affected_album_keys": ["artist::new album", "artist::old album"],
     }
-    assert observed_separate_release_keys == [{"artist::new album"}]
+    assert observed_separate_release_keys == [{"artist::new album"}, {"artist::new album"}]
     normalized_calls = [_normalized_sql(sql) for sql, _ in connection.executed]
     lock_index = next(i for i, sql in enumerate(normalized_calls) if "pg_advisory_xact_lock" in sql)
     upsert_index = next(i for i, sql in enumerate(normalized_calls) if "insert into library.local_track_files" in sql)

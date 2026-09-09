@@ -2855,7 +2855,7 @@ test('missing album removal confirmation uses the approved destructive copy', ()
   );
 });
 
-test('confirmed missing album removal immediately updates gallery counts and removes an empty artist', () => {
+test('confirmed missing album removal drops the card and preserves authoritative sidebar membership until refresh', () => {
   const missingAlbum = {
     key: 'transatlantic-roine-stolt-mixes',
     name: 'SMPTe - The Roine Stolt Mixes',
@@ -2911,7 +2911,7 @@ test('confirmed missing album removal immediately updates gallery counts and rem
   );
   assert.deepEqual(
     Array.from(context.state.view.artists_sidebar, (artist) => artist.artist),
-    ['King Crimson'],
+    ['Transatlantic', 'King Crimson'],
   );
   assert.equal(context.state.view.album_count, 1);
   assert.equal(context.state.view.artist_count, 1);
@@ -2920,6 +2920,83 @@ test('confirmed missing album removal immediately updates gallery counts and rem
   assert.equal(context.state.utility.selectedProblematicKey, '');
   assert.deepEqual(renders, [{ preserveScroll: true }]);
 });
+
+for (const [name, libraryAlbumCount, mountedAlbumCount] of [
+  ['filtered one of many', 7, 1], ['multiple mounted', 3, 3], ['last album', 1, 1],
+]) {
+  test(`confirmed missing removal reconciles ${name} sidebar membership from the server`, async () => {
+    const album = { key: 'missing', name: 'Missing', album_artist: 'Owner', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const mounted = [album, ...Array.from({ length: mountedAlbumCount - 1 }, (_, index) => ({ key: `other-${index}`, album_artist: 'Owner' }))];
+    const sidebar = [{ artist: 'Owner', count: libraryAlbumCount }];
+    const canonicalSidebar = libraryAlbumCount > 1 ? [{ artist: 'Owner', count: libraryAlbumCount - 1 }] : [];
+    let refreshes = 0;
+    const context = loadHelper(mounted, {
+      state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: mounted }], artists_sidebar: sidebar, album_count: libraryAlbumCount, artist_count: 1 }, ui: {} },
+      async showAppConfirmDialog() { return true; },
+      async fetch() { return { ok: true, status: 200, json: async () => ({ removed_album_key: 'missing', library_revision: 9 }) }; },
+      buildUrl: () => '/?artist=Owner',
+      async fetchAndRender() {
+        refreshes += 1;
+        assert.deepEqual(Array.from(context.state.view.artists_sidebar), sidebar, 'a filtered gallery cannot decide whole-library membership');
+        context.state.view.artists_sidebar = canonicalSidebar;
+        context.state.view.album_count = libraryAlbumCount - 1;
+        context.state.view.artist_count = canonicalSidebar.length;
+        return true;
+      },
+      closeTrackModal() {}, async loadProblematicFiles() {}, showToast() {}, renderView() {},
+    });
+    assert.equal(await context.confirmMissingAlbumRemoval(album), true);
+    assert.equal(refreshes, 1);
+    assert.deepEqual(Array.from(context.state.view.artists_sidebar), canonicalSidebar);
+    assert.equal(context.state.view.album_count, libraryAlbumCount - 1);
+    assert.equal(context.state.view.artist_count, canonicalSidebar.length);
+  });
+}
+
+for (const queued of [false, true]) {
+test(`confirmed removal fences old view responses and restarts the latest ${queued ? 'queued' : 'active'} navigation target`, async () => {
+  const album = { key: 'missing', name: 'Missing', album_artist: 'Owner', inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+  let resolveRemoval;
+  const refreshes = [];
+  let aborts = 0;
+  const context = loadHelper([album], {
+    state: { view: { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }], artists_sidebar: [{ artist: 'Owner', count: 3 }], album_count: 3 },
+      ui: { viewStateRevision: 4, activeViewRequestId: 8, activeViewRequestUrl: '/view-data?artist=Later', activeViewRequestPush: true, activeViewRequestController: { abort() { aborts += 1; } } }, busy: true },
+    async showAppConfirmDialog() { return true; },
+    fetch: () => new Promise(resolve => { resolveRemoval = resolve; }),
+    buildUrl: view => `/?artist=${view.selected_artist}`,
+    closeTrackModal() {}, async loadProblematicFiles() {}, showToast() {}, renderView() {},
+  });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-refresh-and-status.js'), 'utf8'), context);
+  context.renderView = () => {};
+  context.fetchAndRender = async (url, push, options) => {
+    assert.equal(context.state.view.artist_groups.length, 0, 'the removed card disappears before canonical refresh');
+    refreshes.push({ url, push, options });
+    context.state.view = { selected_artist: 'Later', artist_groups: [], artists_sidebar: [{ artist: 'Owner', count: 2 }], album_count: 2 };
+    return true;
+  };
+  const removing = context.confirmMissingAlbumRemoval(album);
+  await new Promise(resolve => setImmediate(resolve));
+  if (queued) context.state.ui.pendingViewRequest = { url: '/?artist=Later', push: true, options: { preserveScroll: false } };
+  resolveRemoval({ ok: true, status: 200, json: async () => ({ removed_album_key: 'missing', library_revision: 9 }) });
+  assert.equal(await removing, true);
+  if (context.requestOwnsCurrentViewState(8, 4)) {
+    context.state.view = { selected_artist: 'Owner', artist_groups: [{ artist: 'Owner', albums: [album] }], album_count: 3 };
+  }
+  assert.equal(context.state.view.selected_artist, 'Later');
+  assert.equal(context.state.view.album_count, 2);
+  assert.equal(aborts, 1);
+  assert.equal(refreshes.length, 1);
+  assert.equal(refreshes[0].url, queued ? '/?artist=Later' : '/view-data?artist=Later');
+  assert.equal(refreshes[0].push, true);
+  assert.equal(refreshes[0].options.preserveScroll, !queued);
+  assert.equal(refreshes[0].options.restartIfSameUrl, true);
+  // A later user navigation still becomes the current owner normally.
+  context.claimLocalViewStateNavigation();
+  context.state.ui.activeViewRequestId = 9;
+  assert.equal(context.requestOwnsCurrentViewState(9, context.readViewStateRevision()), true);
+});
+}
 
 test('missing album conflict keeps the card and refreshes both server-owned surfaces', async () => {
   const album = {

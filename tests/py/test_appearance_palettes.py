@@ -133,7 +133,7 @@ def test_repository_persists_full_player_group_and_palette_in_one_account_owned_
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "on conflict (account_id, client_profile)" in sql
-    assert tuple(params) == (52, "desktop", None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [], "docked")
+    assert tuple(params) == (52, "desktop", None, None, "steelblue", 2, PLAYER["background"], PLAYER["fill"], PLAYER["edge"], [], "docked", "classic_bar", "enabled", "ember")
     assert connection.closed
 
 

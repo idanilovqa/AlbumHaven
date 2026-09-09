@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import socketserver
+import sys
 import tempfile
 import threading
 from typing import Any, Callable
@@ -404,13 +405,18 @@ def main() -> None:
     temp_root = Path(tempfile.mkdtemp(prefix="album-haven-phase7-e2e-"))
     database_lock = IsolatedDatabaseOwnershipLock()
     state = CaptureState()
-    smtp_server = _SMTPServer(("127.0.0.1", args.smtp_port), state)
-    control_server = _ControlServer(("127.0.0.1", args.control_port), state)
+    database_owned = False
+    created_servers: list[Any] = []
     started_servers: list[Any] = []
     application_servers: list[tuple[Any, threading.Thread]] = []
     original_failure: BaseException | None = None
     try:
         database_lock.acquire()
+        database_owned = True
+        smtp_server = _SMTPServer(("127.0.0.1", args.smtp_port), state)
+        created_servers.append(smtp_server)
+        control_server = _ControlServer(("127.0.0.1", args.control_port), state)
+        created_servers.append(control_server)
         _configure_environment(
             temp_root,
             runtime_database_url,
@@ -485,21 +491,44 @@ def main() -> None:
         original_failure = exc
         raise
     finally:
+        application_shutdown_proven = True
         for server, thread in reversed(application_servers):
             server.should_exit = True
             thread.join(timeout=10)
-        for server in reversed(started_servers):
+            if thread.is_alive():
+                application_shutdown_proven = False
+        capture_cleanup_failures: list[Exception] = []
+        for server in reversed(created_servers):
+            if server in started_servers:
+                try:
+                    server.shutdown()
+                except Exception as exc:
+                    capture_cleanup_failures.append(exc)
             try:
-                server.shutdown()
                 server.server_close()
-            except Exception:
-                if original_failure is not None:
-                    pass
+            except Exception as exc:
+                capture_cleanup_failures.append(exc)
+        if capture_cleanup_failures:
+            application_shutdown_proven = False
+        if not application_shutdown_proven:
+            message = "Application or capture-server shutdown is unproven; database, fixture, and ownership retained."
+            if capture_cleanup_failures:
+                message += " " + "; ".join(repr(failure) for failure in capture_cleanup_failures)
+            if original_failure is not None:
+                original_failure.cleanup_failures = tuple(capture_cleanup_failures)
+                print(message, file=sys.stderr, flush=True)
+            else:
+                cleanup_failure = RuntimeError(message)
+                cleanup_failure.cleanup_failures = tuple(capture_cleanup_failures)
+                raise cleanup_failure
         try:
-            reset_application_tables(setup_database_url)
+            if database_owned and application_shutdown_proven:
+                reset_application_tables(setup_database_url)
         finally:
-            database_lock.release()
-            shutil.rmtree(temp_root, ignore_errors=True)
+            if application_shutdown_proven:
+                if database_owned:
+                    database_lock.release()
+                shutil.rmtree(temp_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

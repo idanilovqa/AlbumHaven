@@ -261,6 +261,8 @@ def _redact_lifecycle_link_query(request: Request) -> None:
 
 def _is_public(method: str, path: str) -> bool:
     normalized_method = method.upper()
+    if path == "/accept-invitation/continue":
+        return normalized_method in {"GET", "HEAD"}
     if path in _PUBLIC_AUTH_PATHS:
         return normalized_method in {"GET", "HEAD", "POST"}
     if path in {"/health", "/favicon.ico"}:

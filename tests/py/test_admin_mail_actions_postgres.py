@@ -47,6 +47,10 @@ class Connection:
     def execute(self, sql, params=()):
         statement = " ".join(sql.casefold().split())
         self.operations.append((statement, params))
+        if "from app.account_sessions" in statement and "for update" in statement:
+            return Cursor(({"id": 11, "account_id": 7, "authenticated_at": NOW,
+                "revoked_at": None, "idle_expires_at": NOW + timedelta(hours=1),
+                "absolute_expires_at": NOW + timedelta(days=1)},))
         if "with locked_accounts" in statement:
             return Cursor(({
                 "actor_account_id": 7,
@@ -100,6 +104,7 @@ def test_welcome_resend_is_recent_authenticated_durably_throttled_and_audited():
 
     result = _service(connection).queue_welcome(
         actor_account_id=7,
+        actor_session_id=11,
         actor_authenticated_at=NOW - timedelta(minutes=2),
         library_id=9,
         target_account_id=41,
@@ -120,6 +125,7 @@ def test_welcome_throttle_is_ambiguous_and_does_not_queue_another_message():
 
     result = _service(connection).queue_welcome(
         actor_account_id=7,
+        actor_session_id=11,
         actor_authenticated_at=NOW,
         library_id=9,
         target_account_id=41,
@@ -137,6 +143,7 @@ def test_welcome_resend_remains_bootstrap_owner_only_for_managed_accounts():
 
     result = _service(connection).queue_welcome(
         actor_account_id=7,
+        actor_session_id=11,
         actor_authenticated_at=NOW,
         library_id=9,
         target_account_id=41,
@@ -160,6 +167,7 @@ def test_admin_password_reset_returns_only_a_redacted_internal_delivery():
 
     result = _service(connection).queue_password_reset(
         actor_account_id=7,
+        actor_session_id=11,
         actor_authenticated_at=NOW,
         library_id=9,
         target_account_id=41,
@@ -189,6 +197,7 @@ def test_mail_actions_reject_stale_authentication_before_database_work():
     try:
         _service(connection).queue_welcome(
             actor_account_id=7,
+            actor_session_id=11,
             actor_authenticated_at=NOW - timedelta(minutes=11),
             library_id=9,
             target_account_id=41,
@@ -206,6 +215,7 @@ def test_inactive_target_has_ambiguous_success_without_issuing_mail_or_token():
 
     result = _service(connection).queue_password_reset(
         actor_account_id=7,
+        actor_session_id=11,
         actor_authenticated_at=NOW,
         library_id=9,
         target_account_id=41,

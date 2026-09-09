@@ -183,6 +183,7 @@ async def update_managed_account(request: Request, account_id: int) -> Response:
         await run_in_threadpool(
             _mutation_service(request).update_account,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,
@@ -218,6 +219,7 @@ async def revoke_managed_account_sessions(request: Request, account_id: int) -> 
         await run_in_threadpool(
             _mutation_service(request).revoke_sessions,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,
@@ -283,6 +285,7 @@ async def copy_managed_account_invitation(
         copied = await run_in_threadpool(
             _invitation_service(request).issue_copy,
             actor_account_id=request.state.current_actor.account_id,
+            actor_session_id=request.state.current_actor.session_id,
             actor_authenticated_at=request.state.current_actor.authenticated_at,
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
@@ -332,6 +335,7 @@ async def send_managed_account_invitation(
         delivery = await run_in_threadpool(
             _invitation_service(request).queue_email,
             actor_account_id=request.state.current_actor.account_id,
+            actor_session_id=request.state.current_actor.session_id,
             actor_authenticated_at=request.state.current_actor.authenticated_at,
             library_id=request.state.current_actor.current_library_id,
             target_account_id=account_id,
@@ -388,6 +392,17 @@ async def create_managed_account(request: Request, background_tasks: BackgroundT
     payload = await _json_payload(request)
     if payload is None:
         return _invalid()
+    if payload["send_invitation"]:
+        try:
+            invitation_enabled = _mail_config(request.app).get("invitation_enabled")
+        except Exception:
+            return JSONResponse(
+                {"detail": "Invitation email is temporarily unavailable."}, status_code=503
+            )
+        if invitation_enabled is not True:
+            return JSONResponse(
+                {"detail": "Invitation email is not configured."}, status_code=409
+            )
     try:
         service = _service(request)
         result = await run_in_threadpool(
@@ -521,6 +536,7 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
         return await run_in_threadpool(
             method,
             actor_account_id=actor.account_id,
+            actor_session_id=actor.session_id,
             actor_authenticated_at=actor.authenticated_at,
             library_id=actor.current_library_id,
             target_account_id=account_id,

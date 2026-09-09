@@ -72,6 +72,19 @@ def default_empty_missing_album_projection(monkeypatch):
     return original_loader
 
 
+def test_missing_album_detail_scopes_candidate_query_before_loading_rows(default_empty_missing_album_projection):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    calls = []
+    connection = type("Connection", (), {"execute": lambda self, sql, params=None: calls.append((sql, params)) or _InventoryCursor()})()
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"})
+    assert default_empty_missing_album_projection(repository, "owner::selected", connection=connection) == []
+    assert calls[0][1] == {"album_key": "owner::selected"}
+    query = " ".join(calls[0][0].lower().split())
+    candidate = query.split("missing_albums as (", 1)[1].split("missing_album_featured_artists", 1)[0]
+    assert "local_albums.album_key = %(album_key)s" in candidate
+
+
 class _InventoryCursor:
     def __init__(self, *, row=None, rows=None):
         self._row = row

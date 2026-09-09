@@ -261,11 +261,12 @@ test("focus trapped in modal", async ({ page }) => {
   );
   const count = await focusableElements.count();
 
-  // Tab through all elements, should stay in modal
-  for (let i = 0; i < count + 1; i++) {
-    await page.keyboard.press("Tab");
-    const focused = page.locator(":focus");
-    await expect(modal).toContainText((await focused.textContent()) || "");
+  // Check containment when tabbing in either direction, including wraparound.
+  for (const key of ["Tab", "Shift+Tab"]) {
+    for (let i = 0; i < count + 1; i++) {
+      await page.keyboard.press(key);
+      await expect(modal.locator(":focus")).toHaveCount(1);
+    }
   }
 });
 ```

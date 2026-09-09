@@ -624,9 +624,15 @@ function main(argv = process.argv.slice(2)) {
       const selectedShard = selected.shards.find((shard) => (
         shard.name === shardArgument.slice('--run-shard='.length)
       ));
-      focusedCases = (selectedShard?.invocations || []).flatMap((invocation) => (
+      const shardCaseNames = (selectedShard?.invocations || []).flatMap((invocation) => (
         invocation.cases.map((ownedCase) => ownedCase.case)
       ));
+      if (!selectedShard || focusedCases.some((selector) => !shardCaseNames.some((caseName) => (
+        caseName === String(selector).trim() || caseName.startsWith(`${String(selector).trim()} `)
+      )))) {
+        throw new Error(`Focused selection contains cases not owned by functional shard ${shardArgument.slice('--run-shard='.length)}.`);
+      }
+      focusedCases = shardCaseNames;
     }
     const result = runFunctionalShard(contract, shardArgument.slice('--run-shard='.length), {
       repoRoot,

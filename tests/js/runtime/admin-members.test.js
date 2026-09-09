@@ -124,6 +124,7 @@ function loadRosterRuntime({
   });
   const copyInvite = element({ dataset: { copyInvitation: '41' } });
   const sendInvite = element({ dataset: { sendInvitation: '41' } });
+  const sendOtherInvite = element({ dataset: { sendInvitation: '42' } });
   const edit = element();
   const menu = element({
     dataset: { memberMenu: '41' },
@@ -203,7 +204,7 @@ function loadRosterRuntime({
         if (selector === '[data-password-toggle]') return [];
         if (selector === '[data-member-menu-trigger]') return [menuButton];
         if (selector === '[data-copy-invitation]') return [copyInvite];
-        if (selector === '[data-send-invitation]') return [sendInvite];
+        if (selector === '[data-send-invitation]') return [sendInvite, sendOtherInvite];
         if (selector === '[data-member-menu]:not([hidden])') {
           return menu.hidden ? [] : [menu];
         }
@@ -221,7 +222,7 @@ function loadRosterRuntime({
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   return {
-    row: { menuButton, menu, copyInvite, sendInvite },
+    row: { menuButton, menu, copyInvite, sendInvite, sendOtherInvite },
     status,
     error,
     fallback: { panel: fallback, input: fallbackInput, manual: fallbackManual, dismiss: fallbackDismiss },
@@ -231,6 +232,29 @@ function loadRosterRuntime({
     documentListeners,
     outside: element(),
   };
+}
+
+for (const outcome of ['same-account', 'other-account', 'failed-send']) {
+  test(`invitation fallback follows successful token rotation: ${outcome}`, async () => {
+    const invitationUrl = 'https://example.test/accept-invitation?purpose=account-invitation&token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    const runtime = loadRosterRuntime({
+      clipboardReject: true,
+      request: async (url) => ({
+        ok: !(outcome === 'failed-send' && url.endsWith('/invitation/send')),
+        status: outcome === 'failed-send' && url.endsWith('/invitation/send') ? 503 : 200,
+        json: async () => ({ invitation_url: invitationUrl }),
+      }),
+    });
+    await runtime.row.copyInvite.click();
+    assert.equal(runtime.fallback.panel.hidden, false);
+    assert.equal(runtime.fallback.input.value, invitationUrl);
+
+    await (outcome === 'other-account' ? runtime.row.sendOtherInvite : runtime.row.sendInvite).click();
+
+    assert.equal(runtime.fallback.panel.hidden, outcome === 'same-account');
+    assert.equal(runtime.fallback.input.value, outcome === 'same-account' ? '' : invitationUrl);
+    if (outcome === 'failed-send') assert.equal(runtime.error.hidden, false);
+  });
 }
 
 test('admin add-user password toggle preserves accessible pressed state', () => {

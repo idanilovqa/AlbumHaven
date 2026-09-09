@@ -10,7 +10,6 @@ from enum import Enum
 import hashlib
 import hmac
 import re
-import threading
 from typing import Any
 import unicodedata
 
@@ -24,6 +23,7 @@ from music_app.services.auth_passwords import (
     rehash_verified_password,
     verify_password,
 )
+from music_app.services.auth_credential_attempts_postgres import shared_verification_capacity
 from music_app.services.auth_audit_postgres import (
     LoginAuditReason,
     SecurityAuditCategory,
@@ -187,11 +187,7 @@ class PostgresLoginAuthService:
         self._connect = connect or _connect
         self._verifier = verifier
         self._rehasher = rehasher or rehash_verified_password
-        self._semaphore = verification_semaphore or threading.BoundedSemaphore(
-            _positive_integer(
-                payload.get("verification_semaphore"), "verification capacity"
-            )
-        )
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         if not callable(getattr(session_service, "prepare_session", None)) or not callable(
             getattr(session_service, "persist_prepared_for_locked_account", None)
@@ -256,6 +252,8 @@ class PostgresLoginAuthService:
         used_real_credential = False
         verification_failure = False
         operation_failure = False
+        replacement: PasswordCredential | None = None
+        post_verification_failure = False
         try:
             if lookup_allowed:
                 try:
@@ -294,6 +292,16 @@ class PostgresLoginAuthService:
                         verification_failure = True
                 except Exception:
                     verification_failure = True
+                if used_real_credential and verification.valid and verification.needs_rehash:
+                    try:
+                        replacement = self._rehasher(
+                            verification_password,
+                            argon2=self._argon2,
+                            policy_version=self._argon2_policy_version,
+                        )
+                    except Exception:
+                        replacement = None
+                    post_verification_failure = not isinstance(replacement, PasswordCredential)
         finally:
             try:
                 self._semaphore.release()
@@ -318,27 +326,15 @@ class PostgresLoginAuthService:
             and credential is not None
             and _account_is_active(account)
             and verification.valid
+            and not post_verification_failure
         )
-        replacement: PasswordCredential | None = None
-        post_verification_failure = False
-        if succeeded and verification.needs_rehash:
-            try:
-                replacement = self._rehasher(
-                    verification_password,
-                    argon2=self._argon2,
-                    policy_version=self._argon2_policy_version,
-                )
-            except Exception:
-                replacement = None
-            if not isinstance(replacement, PasswordCredential):
-                succeeded = False
-                post_verification_failure = True
 
         if succeeded:
             # Token generation and validation deliberately happen before the final
             # persistence transaction; the prepared token is not usable unless that
             # transaction commits its session row.
             try:
+                now = _aware_now(self._clock)
                 prepared = self._session_service.prepare_session(
                     _positive_integer(account.get("id"), "account id"),
                     user_agent=user_agent,
@@ -397,6 +393,7 @@ class PostgresLoginAuthService:
     def _verification_password(self, value: object) -> tuple[str, bool]:
         if not isinstance(value, str):
             return "invalid-login-password", False
+        value = unicodedata.normalize("NFC", value)
         try:
             encoded = value.encode("utf-8")
         except UnicodeEncodeError:
@@ -716,6 +713,8 @@ class PostgresLoginAuthService:
         rows = self._lock_reserved_throttles(connection, reservation)
         for raw_row, reserved in zip(rows, reservation, strict=True):
             row = _row(raw_row, _THROTTLE_COLUMNS)
+            if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
+                continue
             count = _nonnegative_integer(row.get("failure_count"), "failure count")
             if count >= self._limits[reserved.kind]:
                 cursor = _execute(
@@ -743,8 +742,11 @@ class PostgresLoginAuthService:
         reservation: tuple[_ReservedBucket, ...],
         now: datetime,
     ) -> None:
-        self._lock_reserved_throttles(connection, reservation)
-        for reserved in reservation:
+        rows = self._lock_reserved_throttles(connection, reservation)
+        for raw_row, reserved in zip(rows, reservation, strict=True):
+            row = _row(raw_row, _THROTTLE_COLUMNS)
+            if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
+                continue
             cursor = _execute(
                 connection,
                 """

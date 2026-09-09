@@ -189,6 +189,28 @@ def test_invalid_or_overposting_save_is_rejected_before_either_color_changes(pay
     assert repository.rows == {41: CUSTOM}
 
 
+@pytest.mark.parametrize("shape", ["nesting", "integer"])
+def test_deeply_nested_bounded_json_is_rejected_without_mutation(shape):
+    app, repository, _resolver = _app()
+    repository.rows[41] = CUSTOM
+    token = issue_session_csrf(SESSION, app.state.auth_policy_config)
+    body = (b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}'
+            if shape == "nesting" else b'{"integer":' + b'9' * 5000 + b'}')
+    assert len(body) < 16_384
+    status, _headers, response = run_asgi_request(
+        app, "PUT", "/account/appearance", body=body,
+        headers={
+            "cookie": f"__Host-album_haven_session={SESSION}; __Host-album_haven_csrf={token}",
+            "origin": "http://testserver", "x-album-haven-csrf": token,
+            "content-type": "application/json",
+        },
+    )
+    assert status == 400
+    assert decode_json(response) == {"error": "invalid_appearance"}
+    assert repository.writes == []
+    assert repository.rows == {41: CUSTOM}
+
+
 def test_save_rejects_an_oversized_declared_json_body_before_parsing_or_storage():
     app, repository, _resolver = _app()
     token = issue_session_csrf(SESSION, app.state.auth_policy_config)

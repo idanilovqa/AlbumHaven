@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -118,6 +119,7 @@ class ScanCacheAdapter(Protocol):
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
+        publication_guard: Callable | None = None,
     ) -> dict[str, object]:
         ...
 
@@ -206,6 +208,7 @@ class PostgresScanCacheAdapter:
         deleted_paths: tuple[str, ...] = (),
         deleted_subtrees: tuple[str, ...] = (),
         moves: tuple[dict[str, object], ...] = (),
+        publication_guard: Callable | None = None,
     ) -> dict[str, object]:
         normalized_root_id = str(root_id or "").strip()
         if not normalized_root_id:
@@ -244,9 +247,20 @@ class PostgresScanCacheAdapter:
                 source_path
             )
 
-        with self._connect_to_database() as connection:
+        with self._connect_to_database() as connection, ExitStack() as publication_stack:
             connection.execute(_inventory_publication_advisory_lock_sql())
             _ensure_bootstrap_context(connection)
+            if any(target["paths"] or target["subtrees"] for target in stale_by_root.values()):
+                from music_app.services.library_watch_health import guard_destructive_library_publication
+
+                affected_roots = set(stale_by_root) | set(active_paths_by_root)
+                affected_roots.update(
+                    str(move.get("destination_root_id") or normalized_root_id)
+                    for move in moves
+                )
+                publication_stack.enter_context(
+                    (publication_guard or guard_destructive_library_publication)(connection, sorted(affected_roots))
+                )
             separate_release_keys = _load_separate_release_keys(connection)
             existing_memberships = [
                 _row_mapping(row)
@@ -277,7 +291,6 @@ class PostgresScanCacheAdapter:
                 for row in album_rows
                 if str(row.get("album_key") or "").strip()
             }
-            synchronized_featured_album_keys = sorted(affected_album_keys)
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)
             _execute_pipeline_batches(
                 connection,
@@ -319,6 +332,41 @@ class PostgresScanCacheAdapter:
                         _row_mapping(row).get("affected_album_key") or ""
                     ).strip()
                 )
+            # A logical album can span different containers and configured
+            # roots. Replace scan-owned credits using all its retained active
+            # members, not just the paths selected by this watcher event.
+            synchronized_featured_album_keys = []
+            if affected_album_keys:
+                complete_rows = connection.execute(
+                    _load_file_entries_sql(targeted_albums=True),
+                    {"source": _SOURCE, "album_keys": sorted(affected_album_keys)},
+                ).fetchall()
+                files_by_album: dict[str, dict[str, dict[str, object]]] = {}
+                owner_keys: dict[str, str] = {}
+                for raw_row in complete_rows:
+                    row = _row_mapping(raw_row)
+                    file_entry = _fallback_file_entry(row)
+                    if file_entry is None:
+                        continue
+                    file_entry.update(row.get("file_entry") or {})
+                    files_by_album.setdefault(str(row["album_key"]), {})[str(row["private_path"])] = file_entry
+                    owner_keys[str(row["album_key"])] = str(row.get("album_owner_key") or "")
+                # Entirely missing albums retain their historical credits.
+                # A deletion that leaves active members reconciles those members.
+                synchronized_featured_album_keys = sorted(files_by_album)
+                featured_artist_rows = []
+                for album_key, complete_cache in files_by_album.items():
+                    complete_albums = self._build_albums(
+                        _file_cache_with_inferred_blank_album_memberships(complete_cache), separate_release_keys,
+                    )
+                    complete_artists, _, complete_featured, _, _ = _inventory_rows_from_albums(complete_cache, complete_albums)
+                    _execute_pipeline_batches(connection, _upsert_local_artist_sql(), complete_artists)
+                    for featured_row in complete_featured:
+                        featured_row["album_key"] = album_key
+                        if featured_row["featured_kind"] == "owner" and owner_keys[album_key]:
+                            featured_row["artist_key"] = owner_keys[album_key]
+                    featured_artist_rows.extend(complete_featured)
+                _execute_pipeline_batches(connection, _upsert_local_album_featured_artist_sql(), featured_artist_rows)
             connection.execute(
                 _synchronize_targeted_local_album_featured_artists_sql(),
                 {
@@ -4926,7 +4974,8 @@ def _load_targeted_album_memberships_sql() -> str:
     """
 
 
-def _load_file_entries_sql() -> str:
+def _load_file_entries_sql(*, targeted_albums: bool = False) -> str:
+    album_filter = "and library.local_albums.album_key = any(%(album_keys)s::text[])" if targeted_albums else ""
     return """
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -4941,6 +4990,8 @@ def _load_file_entries_sql() -> str:
         select
           library.local_track_files.private_path,
           library.local_albums.id as album_id,
+          library.local_albums.album_key,
+          album_owner.artist_key as album_owner_key,
           library.local_track_files.file_size_bytes,
           extract(epoch from library.local_track_files.modified_at) as modified_at_epoch,
           library.local_track_files.metadata #> '{scan_cache,file_entry}' as file_entry,
@@ -4979,11 +5030,13 @@ def _load_file_entries_sql() -> str:
          and library.library_roots.library_id = library.local_tracks.library_id
          and library.library_roots.is_active is true
         left join library.local_albums on library.local_albums.id = library.local_tracks.album_id
+        left join library.local_artists album_owner on album_owner.id = library.local_albums.artist_id
         left join library.local_artists track_artists on track_artists.id = library.local_tracks.artist_id
         where library.local_track_files.metadata #>> '{scan_cache,source}' = %(source)s
           and coalesce((library.local_track_files.metadata #>> '{scan_cache,stale}')::boolean, false) is false
+          __TARGETED_ALBUM_FILTER__
         order by library.local_track_files.private_path;
-    """
+    """.replace("__TARGETED_ALBUM_FILTER__", album_filter)
 
 
 def _save_scan_snapshot_sql() -> str:

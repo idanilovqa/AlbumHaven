@@ -169,6 +169,46 @@ async function mountAlbumDetailsComponents(page) {
   });
 }
 
+test('long album track titles preserve all five usable columns inside a narrow dialog', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const row = page.locator('[data-track-row-path="two.flac"]');
+  await row.locator('.album-track-table__title').evaluate(element => { element.textContent = 'A very long album track title that must yield to the duration and problem controls '.repeat(4); });
+  const table = page.getByRole('table', { name: /Album tracks/ });
+  const dialog = page.locator('.track-modal-dialog');
+  const [tableBox, dialogBox, rowBox] = await Promise.all([table.boundingBox(), dialog.boundingBox(), row.boundingBox()]);
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+  expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
+  await expect(row.locator('[role="cell"]')).toHaveCount(5);
+  for (const name of ['Play track', 'Open this track in Problematic Files']) {
+    const button = row.getByRole('button', { name, exact: true });
+    await expect(button).toBeVisible();
+    const box = await button.boundingBox();
+    expect(box.x + box.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+    await button.click();
+  }
+  const duration = await row.locator('[data-cdt-column="duration"]').boundingBox();
+  expect(duration.x + duration.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
+  const title = row.locator('.album-track-table__title');
+  await expect(title).toHaveCSS('text-overflow', 'ellipsis');
+  expect(await title.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+});
+
+test('search-match hover retains its accent treatment through the table cascade', async ({ page }) => {
+  await mountAlbumDetailsComponents(page);
+  const row = page.locator('[data-track-row-path="two.flac"]');
+  await row.evaluate(element => {
+    element.classList.add('album-track-table__row--search-match');
+    const expected = document.createElement('div');
+    expected.id = 'expected-match-hover';
+    expected.style.background = 'color-mix(in srgb, var(--album-track-accent) 15%, transparent)';
+    element.parentElement.appendChild(expected);
+  });
+  const expected = await page.locator('#expected-match-hover').evaluate(element => getComputedStyle(element).backgroundColor);
+  await row.hover();
+  await expect(row).toHaveCSS('background-color', expected);
+});
+
 test('per-track Play hover uses the player Play color without shifting layout', async ({ page }) => {
   await mountAlbumTrackTable(page);
 

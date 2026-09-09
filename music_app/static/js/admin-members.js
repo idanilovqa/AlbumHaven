@@ -37,6 +37,7 @@
   const rosterReauthPassword = roster?.querySelector('[data-roster-reauth-password]');
   let rosterRetry = null;
   let rosterRetryAccountId = null;
+  let fallbackAccountId = null;
   const pendingInvitationAccounts = new Set();
 
   const setInvitationBusy = (accountId, busy) => {
@@ -77,12 +78,14 @@
   };
 
   const clearInvitationFallback = () => {
+    fallbackAccountId = null;
     if (fallbackValue) fallbackValue.value = '';
     if (fallback) fallback.hidden = true;
   };
 
-  const showInvitationFallback = (url) => {
+  const showInvitationFallback = (url, accountId) => {
     if (!fallback || !fallbackValue) return;
+    fallbackAccountId = accountId;
     fallbackValue.value = url;
     fallback.hidden = false;
     fallbackValue.focus();
@@ -216,7 +219,7 @@
       await navigator.clipboard.writeText(invitationUrl);
       announceRoster('Invitation link copied. Older links no longer work.');
     } catch {
-      showInvitationFallback(invitationUrl);
+      showInvitationFallback(invitationUrl, accountId);
     }
   };
 
@@ -229,6 +232,7 @@
       return false;
     }
     if (!response.ok) throw new Error('Invitation email could not be queued.');
+    if (fallbackAccountId === accountId) clearInvitationFallback();
     announceRoster('Invitation email queued. Older invitation links no longer work.');
   };
 

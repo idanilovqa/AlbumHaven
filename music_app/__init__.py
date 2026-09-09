@@ -336,6 +336,7 @@ def create_asgi_app():
                     affected_album_keys=result.affected_album_keys,
                 ),
                 reservation_acquirer=acquire_structural_tag_edit_reservation,
+                publication_guard=runtime.library_watch_health_service.publication_guard,
             )
         except BaseException:
             await shutdown_resources()
@@ -429,7 +430,12 @@ def create_asgi_app():
         def replace_live_library_roots(roots) -> None:
             root_definitions = tuple(dict(root) for root in roots)
             targeted_reconciler.replace_roots(root_definitions)
-            runtime.library_watch_service.replace_roots(root_definitions)
+            try:
+                runtime.library_watch_service.replace_roots(root_definitions)
+            except Exception:
+                for root in root_definitions:
+                    persist_library_watch_problem(CoordinatorProblem("reconciliation_failed", str(root.get("id") or "")))
+                raise
 
         runtime.replace_library_watch_roots = replace_live_library_roots
         _app.state.replace_library_watch_roots = replace_live_library_roots

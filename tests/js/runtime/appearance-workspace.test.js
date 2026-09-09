@@ -604,3 +604,23 @@ test('interaction normalization accepts only the current closed shape or the exa
     { ...interactionOverrides(), item_outline: itemOutline('custom') },
   ]) assert.throws(() => normalize(invalid), TypeError);
 });
+
+
+for (const mode of ['gradient', 'layered_gradient', 'solid']) {
+  test(`Main player background edit updates and saves the active ${mode} structured style`, async () => {
+    const initial = initialAppearance();
+    initial.player_style_override.surface.mode = mode;
+    if (mode === 'solid') initial.player_style_override.surface.end = initial.player_style_override.surface.start;
+    const { controller, requests } = setup({ initial });
+    controller.setPlayerColor('background', '#345678');
+    const expected = structuredClone(initial.player_style_override);
+    expected.surface.start = '#345678';
+    if (mode === 'solid') expected.surface.end = '#345678';
+    assert.deepEqual(controller.getState().draft.player_style_override, expected);
+    assert.equal(controller.getState().effective.player.background, '#345678');
+    assert.equal(await controller.save(), true);
+    assert.deepEqual(requests[0].payload.player_style_override, expected);
+    const reloaded = setup({ initial: { ...controller.getState().saved, revision: 8, player_recent_sets: [expected] } }).controller;
+    assert.deepEqual(reloaded.getState().draft.player_style_override, expected);
+  });
+}

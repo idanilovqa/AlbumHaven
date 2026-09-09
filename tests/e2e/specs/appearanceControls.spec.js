@@ -1,10 +1,20 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
 import { SettingsModalAppBarActions } from '../actions/settingsModalAppBarActions.js';
 import { UtilityAppearanceActions } from '../actions/utilityAppearanceActions.js';
 import { UtilityTabBarActions } from '../actions/utilityTabBarActions.js';
 import { SettingsModalAppBar } from '../poms/settingsModalAppBar.js';
 import { UtilityAppearanceTab } from '../poms/utilityAppearanceTab.js';
 import { UtilityTabBar } from '../poms/utilityTabBar.js';
+
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({
+      username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle,
+    }, use);
+  }, { auto: true }],
+});
 
 const CASE_ID = 'FTC-APPEARANCE-001';
 const PLAYER_COLORS = Object.freeze({

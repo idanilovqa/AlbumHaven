@@ -765,6 +765,18 @@ def _generic_reset_unavailable() -> HTMLResponse:
     return _no_store(response)
 
 
+@router.get("/accept-invitation/continue", response_class=HTMLResponse)
+async def accept_invitation_continue() -> Response:
+    # A committed same-site document lets the next navigation send the Strict
+    # lifecycle cookie after an invitation was opened on an external site.
+    return _invitation_headers(HTMLResponse(
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta http-equiv="refresh" content="0;url=/accept-invitation">'
+        '<title>Continue invitation</title></head><body>'
+        '<a href="/accept-invitation">Continue invitation</a></body></html>'
+    ))
+
+
 @router.get("/accept-invitation", response_class=HTMLResponse)
 async def accept_invitation_get(request: Request) -> Response:
     try:
@@ -826,7 +838,7 @@ async def accept_invitation_get(request: Request) -> Response:
                 except Exception:
                     return _generic_invitation_unavailable()
         response = RedirectResponse(
-            "/accept-invitation",
+            "/accept-invitation/continue" if issued is not None else "/accept-invitation",
             status_code=303,
             headers=INVITATION_HEADERS,
         )

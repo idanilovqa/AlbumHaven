@@ -17,6 +17,7 @@ from music_app.services.auth_audit_postgres import (
     SecurityAuditOutcome,
 )
 from music_app.services.auth_passwords import PasswordCredential, hash_password
+from music_app.services.auth_credential_attempts_postgres import shared_verification_capacity
 from music_app.services.auth_tokens import (
     IssuedOpaqueToken,
     hash_opaque_token,
@@ -80,6 +81,7 @@ class PostgresPasswordResetLifecycleService:
         password_hasher: Callable[..., PasswordCredential] = hash_password,
         breached_checker: Callable[[str], bool],
         audit_repository: Any,
+        verification_semaphore: Any = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -110,6 +112,7 @@ class PostgresPasswordResetLifecycleService:
         self._password_hasher = password_hasher
         self._breached_checker = breached_checker
         self._audit = audit_repository
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
 
     def exchange_reset_token(
         self,
@@ -122,10 +125,37 @@ class PostgresPasswordResetLifecycleService:
         if digest is None:
             return None
         issued = _issued_token(self._token_issuer)
-        now = _aware_utc(self._clock())
-        expires_at = now + timedelta(seconds=_LIFECYCLE_SECONDS)
         try:
             with self._operation() as connection:
+                candidates = connection.execute(
+                    """
+                    select reset_token.account_id
+                    from app.password_reset_tokens reset_token
+                    where reset_token.purpose = 'password_reset'
+                      and reset_token.token_hash = %s
+                    """,
+                    (digest,),
+                ).fetchall()
+                if len(candidates) != 1:
+                    return None
+                account_id = _positive_integer(
+                    _row(candidates[0], ("account_id",)).get("account_id"), "account id"
+                )
+                # Finish the account wait before taking any token lock. Reset
+                # completion and revocation use this same account-first order.
+                accounts = connection.execute(
+                    "select id from app.accounts where id = %s for update",
+                    (account_id,),
+                ).fetchall()
+                if len(accounts) != 1:
+                    return None
+                credentials = connection.execute(
+                    "select account_id from app.account_credentials where account_id = %s for update",
+                    (account_id,),
+                ).fetchall()
+                if len(credentials) != 1:
+                    return None
+                now = _aware_utc(self._clock())
                 rows = connection.execute(
                     """
                     select null::bigint as transaction_id,
@@ -152,13 +182,17 @@ class PostgresPasswordResetLifecycleService:
                       and reset_token.expires_at > %s
                       and account.is_active is true
                       and account.disabled_at is null
-                    for update of reset_token, account, credential
+                    for update of reset_token
                     """,
                     (digest, now),
                 ).fetchall()
                 if len(rows) != 1:
                     return None
                 context = _row(rows[0], _CONTEXT_COLUMNS)
+                now = _aware_utc(self._clock())
+                if _aware_utc(context.get("reset_expires_at")) <= now:
+                    return None
+                expires_at = now + timedelta(seconds=_LIFECYCLE_SECONDS)
                 reset_token_id = _positive_integer(
                     context.get("reset_token_id"), "reset token id"
                 )
@@ -215,15 +249,20 @@ class PostgresPasswordResetLifecycleService:
             credential_version = _positive_integer(
                 snapshot.get("credential_version"), "credential version"
             )
-            credential = self._password_hasher(
-                new_password,
-                username=_required_text(snapshot.get("username_display"), "username"),
-                email=_required_text(snapshot.get("contact_email"), "contact email"),
-                breached_checker=self._breached_checker,
-                argon2=self._argon2,
-                policy_version=self._policy_version,
-                password_policy=self._password_policy,
-            )
+            if not self._semaphore.acquire(blocking=False):
+                raise RuntimeError("Password verification capacity is unavailable.")
+            try:
+                credential = self._password_hasher(
+                    new_password,
+                    username=_required_text(snapshot.get("username_display"), "username"),
+                    email=_required_text(snapshot.get("contact_email"), "contact email"),
+                    breached_checker=self._breached_checker,
+                    argon2=self._argon2,
+                    policy_version=self._policy_version,
+                    password_policy=self._password_policy,
+                )
+            finally:
+                self._semaphore.release()
             if not isinstance(credential, PasswordCredential):
                 raise RuntimeError
 

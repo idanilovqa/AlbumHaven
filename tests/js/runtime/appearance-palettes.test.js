@@ -325,3 +325,22 @@ test('saved theme application publishes the resolved player-aware interaction ou
 
   assert.equal(properties.get('--appearance-interaction-outline'), customPlayer.controls.border);
 });
+
+
+for (const paletteId of [null, ...runtime().palettes.map(palette => palette.id)]) {
+  test(`resolved player palette ${paletteId || 'default'} supplies every CSS player token`, () => {
+    const { tokens } = runtime().resolveAppearance({ ...defaults(), palette_id: paletteId });
+    for (const key of ['player', 'player-surface-start', 'player-surface-end', 'player-ink', 'play', 'play-ink', 'player-control-border', 'player-handle']) {
+      assert.match(tokens[key] || '', /^#[0-9A-F]{6}$/i, key);
+    }
+    assert.match(tokens['player-surface-angle'] || '', /^\d+(?:\.\d+)?deg$/);
+  });
+}
+
+for (const background of ['#101820', '#F0F4F8']) {
+  test(`legacy player control ink contrasts with the resolved ${background} control fill`, () => {
+    const api = runtime();
+    const { tokens } = api.resolveAppearance({ ...defaults(), player_override: { background, fill: '#4D8D70', edge: '#9DCEB2' } });
+    assert.ok(api.contrastRatio(tokens['play'], tokens['play-ink']) >= 4.5);
+  });
+}

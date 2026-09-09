@@ -157,7 +157,7 @@ def _validated_https_url(value: str, key: str, *, origin_only: bool) -> str:
         raise ValueError(f"{key} must be a valid HTTPS URL") from exc
     if ":" in host:
         host = f"[{host}]"
-    authority = host if port is None else f"{host}:{port}"
+    authority = host if port in (None, 443) else f"{host}:{port}"
     if origin_only:
         return f"https://{authority}"
     path = parsed.path.rstrip("/")

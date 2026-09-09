@@ -21,6 +21,7 @@ from music_app.services.auth_invitation_models import (
     validated_issued_invitation_token,
 )
 from music_app.services.auth_passwords import PasswordCredential, hash_password
+from music_app.services.auth_credential_attempts_postgres import shared_verification_capacity
 from music_app.services.auth_tokens import hash_opaque_token, issue_opaque_token
 
 try:  # pragma: no cover - exercised when the optional runtime driver is present.
@@ -60,6 +61,7 @@ class PostgresInvitationLifecycleService:
         password_hasher: Callable[..., PasswordCredential] = hash_password,
         breached_checker: Callable[[str], bool],
         audit_repository: Any,
+        verification_semaphore: Any = None,
     ) -> None:
         payload = config if isinstance(config, Mapping) else {}
         self._database_url = str(payload.get(_DATABASE_URL_KEY) or "").strip()
@@ -90,6 +92,7 @@ class PostgresInvitationLifecycleService:
         self._password_hasher = password_hasher
         self._breached_checker = breached_checker
         self._audit = audit_repository
+        self._semaphore = verification_semaphore or shared_verification_capacity(payload)
 
     def exchange_invitation_token(
         self,
@@ -237,15 +240,20 @@ class PostgresInvitationLifecycleService:
             transaction_id = _positive_integer(
                 snapshot.get("transaction_id"), "transaction id"
             )
-            credential = self._password_hasher(
-                new_password,
-                username=_required_text(snapshot.get("username_display"), "username"),
-                email=_required_text(snapshot.get("contact_email"), "contact email"),
-                breached_checker=self._breached_checker,
-                argon2=self._argon2,
-                policy_version=self._policy_version,
-                password_policy=self._password_policy,
-            )
+            if not self._semaphore.acquire(blocking=False):
+                raise RuntimeError("Password verification capacity is unavailable.")
+            try:
+                credential = self._password_hasher(
+                    new_password,
+                    username=_required_text(snapshot.get("username_display"), "username"),
+                    email=_required_text(snapshot.get("contact_email"), "contact email"),
+                    breached_checker=self._breached_checker,
+                    argon2=self._argon2,
+                    policy_version=self._policy_version,
+                    password_policy=self._password_policy,
+                )
+            finally:
+                self._semaphore.release()
             if not isinstance(credential, PasswordCredential):
                 raise RuntimeError
 

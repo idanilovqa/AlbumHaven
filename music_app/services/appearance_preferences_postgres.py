@@ -477,14 +477,17 @@ class PostgresAppearancePreferencesRepository:
                             %s::text as panel_background_color, %s::text as palette_id,
                             %s::smallint as panel_index, %s::text as player_background_color,
                             %s::text as player_waveform_fill_color, %s::text as player_waveform_edge_color,
-                            %s::text[] as updates, %s::text as compact_player_style
+                            %s::text[] as updates, %s::text as compact_player_style,
+                            %s::text as album_details_layout, %s::text as album_playing_row_animation,
+                            %s::text as alert_family
                    )
                    insert into app.user_appearance_preferences as saved
-                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)}, revision)
+                     (account_id, client_profile, {", ".join(_STORAGE_FIELDS)}, album_details_layout, album_playing_row_animation, alert_family, revision)
                    select account_id, client_profile, main_surface_color, panel_background_color, palette_id, panel_index,
                           player_background_color, player_waveform_fill_color, player_waveform_edge_color,
                           app.merge_waveform_recent_colors(updates || array[player_waveform_fill_color, player_waveform_edge_color]),
-                          coalesce(compact_player_style, 'docked'), 1
+                          coalesce(compact_player_style, 'docked'), coalesce(album_details_layout, 'classic_bar'),
+                          coalesce(album_playing_row_animation, 'enabled'), coalesce(alert_family, 'ember'), 1
                      from incoming where true
                    on conflict (account_id, client_profile) do update
                      set main_surface_color = excluded.main_surface_color,
@@ -495,6 +498,9 @@ class PostgresAppearancePreferencesRepository:
                          player_waveform_fill_color = excluded.player_waveform_fill_color,
                          player_waveform_edge_color = excluded.player_waveform_edge_color,
                          compact_player_style = coalesce((select compact_player_style from incoming), saved.compact_player_style),
+                         album_details_layout = coalesce((select album_details_layout from incoming), saved.album_details_layout),
+                         album_playing_row_animation = coalesce((select album_playing_row_animation from incoming), saved.album_playing_row_animation),
+                         alert_family = coalesce((select alert_family from incoming), saved.alert_family),
                          revision = saved.revision + 1,
                          waveform_recent_colors = app.merge_waveform_recent_colors(
                            (select updates from incoming)
@@ -515,7 +521,8 @@ class PostgresAppearancePreferencesRepository:
             params = (owner, profile, colors["main_surface_color"], colors["panel_background_color"],
                       colors["palette_id"], colors["panel_index"],
                       player["background"], player["fill"], player["edge"], updates,
-                      colors.get("compact_player_style"))
+                      colors.get("compact_player_style"), colors.get("album_details_layout"),
+                      colors.get("album_playing_row_animation"), colors.get("alert_family"))
         with self._connection() as connection:
             row = connection.execute(sql, params).fetchone()
             if row is None:

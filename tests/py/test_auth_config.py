@@ -84,6 +84,17 @@ def _mail_env(**overrides: str) -> dict[str, str]:
     return env
 
 
+@pytest.mark.parametrize("host", ["music.example.test", "[::1]"])
+def test_default_https_port_matches_browser_serialized_origin(contracts, host):
+    auth_config, _ = contracts
+    config = auth_config.build_auth_config(_auth_env(
+        ALBUM_HAVEN_PUBLIC_BASE_URL=f"https://{host}:443",
+        ALBUM_HAVEN_TRUSTED_ORIGINS=f"https://{host}:443,https://{host}:8443",
+    ))
+    assert config["public_base_url"] == f"https://{host}"
+    assert config["trusted_origins"] == (f"https://{host}", f"https://{host}:8443")
+
+
 def test_auth_defaults_normalize_bootstrap_identity_and_lock_security_policy(contracts):
     auth_config, _ = contracts
 

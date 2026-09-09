@@ -23,7 +23,7 @@
     const method = String(requestInit?.method || input?.method || 'GET').toUpperCase();
     let url;
     try {
-      url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+      url = new URL(input?.url ?? input, window.location.href);
     } catch (_error) {
       return originalFetch(input, init);
     }
@@ -38,7 +38,7 @@
     headers.set('X-Album-Haven-CSRF', csrfToken);
     return originalFetch(input, {
       ...(requestInit || {}),
-      credentials: requestInit?.credentials || 'same-origin',
+      credentials: requestInit?.credentials ?? input?.credentials ?? 'same-origin',
       headers,
     });
   };

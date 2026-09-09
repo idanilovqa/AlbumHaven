@@ -48,9 +48,11 @@ class PostgresSelectionAccentStore:
         with self._connection() as connection:
             row = connection.execute(
                 """
-                select account_id, selection_accent
-                from app.user_appearance_preferences
-                where account_id = %s and client_profile = 'desktop'
+                select account.id as account_id, saved.selection_accent
+                from app.accounts as account
+                left join app.user_appearance_preferences as saved
+                  on saved.account_id = account.id and saved.client_profile = 'desktop'
+                where account.id = %s
                 """,
                 (account_id,),
             ).fetchone()
@@ -62,17 +64,21 @@ class PostgresSelectionAccentStore:
     def save(self, account_id: int, payload: object) -> dict[str, object]:
         account_id = _account_id(account_id)
         normalized = normalize_selection_accent(payload)
+        stored = {**normalized, 'color': str(normalized['color']).upper()}
         with self._connection() as connection:
             row = connection.execute(
                 """
-                update app.user_appearance_preferences
-                set selection_accent = %s::jsonb,
-                    revision = revision + 1,
-                    updated_at = now()
-                where account_id = %s and client_profile = 'desktop'
+                insert into app.user_appearance_preferences as saved
+                  (selection_accent, account_id, client_profile, revision)
+                select %s::jsonb, account.id, 'desktop', 1
+                from app.accounts as account where account.id = %s
+                on conflict (account_id, client_profile) do update
+                  set selection_accent = excluded.selection_accent,
+                      revision = saved.revision + 1,
+                      updated_at = now()
                 returning selection_accent
                 """,
-                (Jsonb(normalized) if Jsonb is not None else normalized, account_id),
+                (Jsonb(stored) if Jsonb is not None else stored, account_id),
             ).fetchone()
             if row is None:
                 raise RuntimeError("Selection accent account is unavailable.")

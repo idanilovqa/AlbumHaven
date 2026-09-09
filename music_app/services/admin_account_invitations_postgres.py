@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from music_app.services.admin_member_mutation_postgres import (
     RecentAuthenticationRequired,
+    lock_current_actor_session,
 )
 from music_app.services.auth_audit_postgres import (
     InvitationAuditReason,
@@ -97,6 +98,7 @@ class PostgresAdminAccountInvitationService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -104,6 +106,7 @@ class PostgresAdminAccountInvitationService:
     ) -> CopiedInvitation:
         delivery = self._issue(
             actor_account_id=actor_account_id,
+            actor_session_id=actor_session_id,
             actor_authenticated_at=actor_authenticated_at,
             library_id=library_id,
             target_account_id=target_account_id,
@@ -122,6 +125,7 @@ class PostgresAdminAccountInvitationService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -129,6 +133,7 @@ class PostgresAdminAccountInvitationService:
     ) -> InvitationDelivery:
         issued = self._issue(
             actor_account_id=actor_account_id,
+            actor_session_id=actor_session_id,
             actor_authenticated_at=actor_authenticated_at,
             library_id=library_id,
             target_account_id=target_account_id,
@@ -151,6 +156,7 @@ class PostgresAdminAccountInvitationService:
         self,
         *,
         actor_account_id: object,
+        actor_session_id: object,
         actor_authenticated_at: object,
         library_id: object,
         target_account_id: object,
@@ -172,6 +178,8 @@ class PostgresAdminAccountInvitationService:
                 return _rotate_invitation_in_transaction(
                     connection=connection,
                     actor_account_id=actor_id,
+                    actor_session_id=actor_session_id,
+                    clock=self._clock,
                     library_id=current_library_id,
                     target_account_id=target_id,
                     request_ref=reference,
@@ -202,6 +210,8 @@ def _rotate_invitation_in_transaction(
     *,
     connection: Any,
     actor_account_id: int,
+    actor_session_id: object,
+    clock: Callable[[], datetime],
     library_id: int,
     target_account_id: int,
     request_ref: str,
@@ -211,6 +221,12 @@ def _rotate_invitation_in_transaction(
     invitation_token_seconds: int,
     audit_repository: Any,
 ) -> _RotatedInvitation:
+    # A lock wait must finish before the statement that checks credentials.
+    # Invitation completion inserts credentials without changing the account row.
+    connection.execute(
+        "select id from app.accounts where id in (%s, %s) order by id for update",
+        (actor_account_id, target_account_id),
+    ).fetchall()
     rows = connection.execute(
         """
         with locked_accounts as (
@@ -258,6 +274,8 @@ def _rotate_invitation_in_transaction(
     ).fetchall()
     if len(rows) != 1 or not isinstance(rows[0], Mapping):
         raise PermissionError("Managed account invitation is not permitted.")
+    now = lock_current_actor_session(connection, actor_account_id=actor_account_id,
+        actor_session_id=actor_session_id, clock=clock)
     account = rows[0]
     recipient = _required_text(account.get("contact_email"))
     username = _required_text(account.get("username_display"))

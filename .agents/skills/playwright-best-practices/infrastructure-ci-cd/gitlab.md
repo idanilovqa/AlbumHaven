@@ -123,7 +123,11 @@ e2e:
 combine-reports:
   stage: report
   needs: [e2e]
-  when: always
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: always
   script:
     - npx playwright merge-reports --reporter=html ./blob-report
   artifacts:

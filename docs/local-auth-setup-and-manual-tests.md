@@ -95,6 +95,15 @@ switching hosts changes the browser origin and cookie scope.
 
 ### Session lifetime
 
+Password checks at sign-in, administrator reauthentication, and Profile password
+change share the existing durable per-account guess budget: five attempts in
+15 minutes, with a 15-minute cooldown when exhausted. Sign-in also retains its
+separate source-address budget. Successful checks release only their own
+reservation; they do not clear another request's attempts or a newer window.
+Password verification, rehashing, and invitation/reset password hashing share
+the configured process-wide CPU capacity (at most two concurrent operations).
+Token-authorized invitation and reset flows retain their existing attempt rules.
+
 New logins have a **30-day idle timeout** and a **90-day absolute lifetime**.
 Authenticated activity renews the idle window, but it cannot extend the session
 beyond 90 days from login. Background authenticated requests can count as activity.

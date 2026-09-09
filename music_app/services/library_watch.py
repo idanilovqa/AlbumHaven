@@ -86,8 +86,6 @@ def normalize_library_event(
     source_path = Path(path).resolve(strict=False)
     root_definitions = _resolved_roots(roots)
     source_root = _root_for_path(source_path, root_definitions)
-    if source_root is None:
-        return None
     destination_path = (
         Path(destination).resolve(strict=False)
         if destination is not None
@@ -97,10 +95,19 @@ def normalize_library_event(
         if destination_path is None:
             return None
         destination_root = _root_for_path(destination_path, root_definitions)
-        if destination_root is None:
+        if source_root is None and destination_root is None:
             return None
+        if source_root is None:
+            normalized_kind = LibraryEventKind.CREATED
+            source_path, source_root = destination_path, destination_root
+            destination_path = destination_root = None
+        elif destination_root is None:
+            normalized_kind = LibraryEventKind.DELETED
+            destination_path = None
     else:
         destination_root = None
+    if source_root is None:
+        return None
     return LibraryEvent(
         normalized_kind,
         source_root[0],

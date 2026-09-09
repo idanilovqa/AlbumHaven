@@ -247,7 +247,7 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
-test('non-album tracks use search gallery artists and keep the broad library list', () => {
+test('backend-scoped non-album search matches survive an empty album gallery', () => {
   const { context } = loadHelper();
   const tracks = [
     { artist: 'Flying Colors', title: 'Family track' },
@@ -255,10 +255,13 @@ test('non-album tracks use search gallery artists and keep the broad library lis
   ];
   context.state.view = { non_album_tracks: tracks, artist_groups: [{ artist: 'Neal Morse' }] };
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks);
-  context.state.view.query = 'Neal Morse';
+  context.state.view.query = 'Family';
+  context.state.view.non_album_tracks = [tracks[0]];
   context.state.view.artist_groups.push({ artist: 'Flying Colors' });
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
   context.state.view.artist_groups = [];
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  context.state.view.selected_artist = 'Unrelated Artist';
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 

@@ -74,6 +74,28 @@ function loadQueueController(t, initialIndex = 0) {
   return { context, tracks, starts, controls, errors, settle };
 }
 
+for (const savedMode of [null, 'expanded', 'compact']) {
+  test(`desktop return restores compact-player controls with ${savedMode || 'absent'} saved mode`, t => {
+    const { context, controls } = loadQueueController(t);
+    const events = new Map();
+    const element = () => ({ dataset: {}, hidden: false, style: { setProperty() {} }, classList: { toggle() {}, add() {}, remove() {} }, setAttribute() {}, addEventListener() {} });
+    Object.assign(controls, { player: element(), expanded: element(), compact: element(), collapse: element(), expand: element() });
+    controls.previous.addEventListener = () => {};
+    controls.next.addEventListener = () => {};
+    const writes = [];
+    context.document = { documentElement: { ...element(), getAttribute: () => 'docked' }, getElementById: () => null };
+    context.window = { innerWidth: 600, innerHeight: 800, localStorage: { getItem: () => savedMode, setItem: (...args) => writes.push(args) }, addEventListener: (name, callback) => events.set(name, callback) };
+    context.initCompactPlayer();
+    assert.equal(controls.collapse.hidden, true);
+    context.window.innerWidth = 1200;
+    events.get('resize')();
+    assert.equal(controls.collapse.hidden, false);
+    assert.equal(controls.expand.hidden, false);
+    assert.equal(controls.expanded.inert, savedMode === 'compact');
+    assert.deepEqual(writes, [], 'responsive changes do not overwrite the saved preference');
+  });
+}
+
 for (const [name, initialIndex, offsets, expected] of [
   ['next', 0, [1, 1], ['B.flac', 'C.flac']],
   ['previous', 3, [-1, -1], ['C.flac', 'B.flac']],

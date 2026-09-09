@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 _RANGE_URL = "https://api.pwnedpasswords.com/range/{}"
@@ -24,13 +24,18 @@ class BreachedPasswordCheckError(RuntimeError):
     """Password screening could not produce a trustworthy answer."""
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise BreachedPasswordCheckError("Breached-password screening unavailable.")
+
+
 class HibpRangePasswordChecker:
     """Check Pwned Passwords without transmitting a password or full digest."""
 
     def __init__(
         self,
         *,
-        opener: Callable[..., Any] = urlopen,
+        opener: Callable[..., Any] | None = None,
         timeout_seconds: float = 3.0,
         range_url_template: str | None = None,
     ) -> None:
@@ -40,7 +45,7 @@ class HibpRangePasswordChecker:
             or not 0 < timeout_seconds <= 5
         ):
             raise ValueError("Breached-password checker configuration is invalid.")
-        self._opener = opener
+        self._opener = opener if opener is not None else build_opener(_RejectRedirects()).open
         self._timeout_seconds = float(timeout_seconds)
         self._range_url_template = _validate_range_url_template(
             range_url_template

@@ -249,7 +249,7 @@ function initCompactPlayer() {
     else if (compactPlayerMode === 'expanded') {
       let savedMode = 'expanded';
       try { savedMode = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
-      if (savedMode === 'compact') applyCompactPlayerMode(savedMode, { persist: false });
+      applyCompactPlayerMode(savedMode, { persist: false });
     } else if (compactPlayerStyle === 'floating' && compactPlayerPosition) {
       compactPlayerPosition = clampCompactPlayerPosition({ ...compactPlayerPosition, playerWidth: 96, playerHeight: 96,
         viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, margin: FLOATING_COMPACT_PLAYER_MARGIN,

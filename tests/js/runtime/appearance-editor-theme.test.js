@@ -49,7 +49,7 @@ async function mounted(method, initial = preference(), saveResponse) {
   assert.match(host.innerHTML, /class="appearance-background-editor /);
   const editor = host.querySelector('.appearance-background-editor');
   const previewSelector = method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]';
-  return { instance, root, host, preview: editor.querySelector(previewSelector) };
+  return { instance, root, host, editor, preview: editor.querySelector(previewSelector) };
 }
 
 function assertPreviewTheme(preview, draft) {
@@ -116,5 +116,60 @@ for (const method of ['mount', 'mountSeekbar']) {
     assert.equal(root.styles.get('--appearance-main-surface'), api.resolveAppearance(draft).main);
     assert.equal(root.styles.get('--appearance-panel-background'), api.resolveAppearance(draft).panel);
     assert.equal(root.getAttribute('data-appearance-palette'), 'black');
+  });
+}
+
+
+for (const stylePath of ['surface.start', 'controls.fill', 'handles.color']) {
+  test(`mounted structured HEX ${stylePath} retains invalid text and prevents saving until corrected`, async () => {
+    let saves = 0;
+    const { instance, editor } = await mounted('mountSeekbar', preference(), () => { saves += 1; return preference(); });
+    const input = element();
+    input.setAttribute('data-player-style-hex', stylePath);
+    input.value = '#BADHEX';
+    editor.listeners.get('input')({ target: input });
+    assert.equal(instance.controller.getState().dirty, true);
+    assert.equal(instance.controller.getState().canSave, false);
+    assert.ok(Object.values(instance.controller.getState().inputValues).includes('#BADHEX'));
+    assert.ok(Object.keys(instance.controller.getState().errors).length > 0);
+    assert.equal(instance.allowLeave(() => false), false);
+    instance.controller.setPalette('paper');
+    editor.listeners.get('input')({ target: { value: '45', getAttribute: () => null, hasAttribute: name => name === 'data-player-style-angle' } });
+    assert.ok(Object.keys(instance.controller.getState().errors).length > 0, 'valid angle changes must retain invalid color input');
+    assert.equal(await instance.controller.save(), false);
+    assert.equal(saves, 0);
+    input.value = '#345678';
+    editor.listeners.get('input')({ target: input });
+    assert.deepEqual(instance.controller.getState().errors, {});
+    assert.equal(instance.controller.getState().canSave, true);
+    instance.controller.cancel();
+    assert.equal(instance.controller.getState().dirty, false);
+    assert.equal(Object.values(instance.controller.getState().inputValues).includes('#BADHEX'), false);
+  });
+}
+
+for (const otherInvalid of [null, 'surface.start', 'controls.fill']) {
+  test(`Solid replaces invalid gradient End while retaining ${otherInvalid || 'no other'} errors`, async () => {
+    const { instance, editor } = await mounted('mountSeekbar');
+    for (const stylePath of ['surface.end', ...(otherInvalid ? [otherInvalid] : [])]) {
+      const input = element();
+      input.setAttribute('data-player-style-hex', stylePath);
+      input.value = '#BADHEX';
+      editor.listeners.get('input')({ target: input });
+    }
+    assert.equal(instance.controller.getState().canSave, false);
+    const modeButton = {
+      hasAttribute: name => name === 'data-player-surface-mode',
+      getAttribute: name => name === 'data-player-surface-mode' ? 'solid' : null,
+    };
+    editor.listeners.get('click')({ target: { closest: () => modeButton } });
+    const state = instance.controller.getState();
+    assert.equal(state.draft.player_style_override.surface.mode, 'solid');
+    assert.equal(state.draft.player_style_override.surface.end, state.draft.player_style_override.surface.start);
+    assert.equal(state.errors['player_style_surface.end'], undefined);
+    assert.equal(state.inputValues['player_style_surface.end'], state.draft.player_style_override.surface.start);
+    assert.deepEqual(Object.keys(state.errors), otherInvalid ? ['player_style_' + otherInvalid] : []);
+    assert.equal(state.canSave, otherInvalid === null);
+    if (otherInvalid) assert.equal(state.inputValues['player_style_' + otherInvalid], '#BADHEX');
   });
 }

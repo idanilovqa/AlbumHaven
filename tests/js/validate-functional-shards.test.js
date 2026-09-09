@@ -1192,3 +1192,64 @@ test('functional workflow retains blobs always and debug evidence only for faile
   assert.match(byKind.blob, /retention-days:\s*14\b/);
   assert.match(byKind.debug, /retention-days:\s*7\b/);
 });
+
+const coverCaseId = readJson(shardContractPath).shards.find((shard) => shard.name === 'cover-providers')
+  .invocations[0].cases[0].case.split(' ')[0];
+for (const selector of [
+  ['--run-case=FTC-UTIL-PROBLEMS-007'],
+  ['--run-area=problematic-files'],
+  [`--run-case=${coverCaseId}`, '--run-case=FTC-UTIL-PROBLEMS-007'],
+]) {
+  validatorTest(`functional CLI rejects a wrong-shard focused selection ${selector}`, () => {
+    const vm = require('node:vm');
+    const { createRequire } = require('node:module');
+    const nativeRequire = createRequire(validatorPath);
+    const contract = readJson(shardContractPath);
+    const moduleObject = { exports: {} };
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wrong-shard-fixture-'));
+    const workRoot = path.join(fixtureRoot, 'work');
+    const sourceRoot = path.join(fixtureRoot, 'source');
+    fs.mkdirSync(path.join(workRoot, 'shared', 'media'), { recursive: true });
+    fs.mkdirSync(path.join(sourceRoot, 'media'), { recursive: true });
+    const env = {
+      RUNNER_TEMP: fixtureRoot,
+      ALBUM_HAVEN_FUNCTIONAL_OUTPUT_ROOT: path.join(fixtureRoot, 'output'),
+      ALBUM_HAVEN_FUNCTIONAL_BLOB_ROOT: path.join(fixtureRoot, 'blobs'),
+      ALBUM_HAVEN_FUNCTIONAL_FIXTURE_WORK_ROOT: workRoot,
+      ALBUM_HAVEN_FUNCTIONAL_SOURCE_FIXTURE_ROOT: sourceRoot,
+      ALBUM_HAVEN_FIXTURE_ROOT: path.join(workRoot, 'shared'),
+      DATABASE_MIGRATOR_URL: 'postgresql://fixture-setup@127.0.0.1/album_haven_e2e',
+      PLAYWRIGHT_PYTHON: 'fixture-python-never-launched',
+      ALBUM_HAVEN_FUNCTIONAL_PORT_BASE: '17201',
+    };
+    const discoveryCalls = [];
+    const spawnCalls = [];
+    const localRequire = (name) => name === 'node:child_process' ? {
+      spawnSync(_executable, args) {
+        if (args.includes('--list')) {
+          discoveryCalls.push(args);
+          const config = args.find((arg) => arg.startsWith('--config=')).slice(9);
+          const cases = ownedCases(contract).filter((ownedCase) => ownedCase.config === config);
+          return { status: 0, stdout: cases.map((ownedCase) => `ALBUM_HAVEN_FUNCTIONAL_CASE=${JSON.stringify(ownedCase)}`).join('\n') };
+        }
+        spawnCalls.push(args);
+        throw new Error('Unexpected fixture or test subprocess');
+      },
+    } : nativeRequire(name);
+    localRequire.main = moduleObject;
+    const output = { write() {} };
+    try {
+      assert.throws(() => vm.runInNewContext(fs.readFileSync(validatorPath, 'utf8'), {
+        require: localRequire, module: moduleObject, __dirname: path.dirname(validatorPath),
+        process: {
+          argv: [process.execPath, validatorPath, '--run-shard=cover-providers', ...selector],
+          execPath: process.execPath, env, stdout: output, stderr: output,
+        },
+      }, { filename: validatorPath }), /focused.*(?:not owned|does not belong|no cases|did not match).*cover-providers/i);
+      assert.equal(discoveryCalls.length, EXPECTED_FUNCTIONAL_CONFIGS.length);
+      assert.deepEqual(spawnCalls, [], 'wrong-shard selection must fail before any fixture or test launch');
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+}

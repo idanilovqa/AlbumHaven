@@ -72,6 +72,10 @@ class Connection:
     def execute(self, sql, params=()):
         statement = " ".join(sql.casefold().split())
         self.operations.append((statement, params))
+        if "from app.account_sessions" in statement and "for update" in statement:
+            return Cursor(({"id": 11, "account_id": OWNER_ID, "authenticated_at": NOW,
+                "revoked_at": None, "idle_expires_at": NOW + timedelta(hours=1),
+                "absolute_expires_at": NOW + timedelta(days=1)},))
         if "with locked_accounts" in statement:
             rows = ({
                 "id": PENDING_ID,
@@ -138,6 +142,7 @@ def _service(module, connection, audit=None, **overrides):
 def _issue(service, *, request_ref="a" * 32, authenticated_at=NOW):
     return service.issue_copy(
         actor_account_id=OWNER_ID,
+        actor_session_id=11,
         actor_authenticated_at=authenticated_at,
         library_id=LIBRARY_ID,
         target_account_id=PENDING_ID,
@@ -178,6 +183,7 @@ def test_email_rotation_links_outbox_to_new_token_and_returns_redacting_delivery
 
     delivery = _service(invitations, connection, audit).queue_email(
         actor_account_id=OWNER_ID,
+        actor_session_id=11,
         actor_authenticated_at=NOW,
         library_id=LIBRARY_ID,
         target_account_id=PENDING_ID,

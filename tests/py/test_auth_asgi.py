@@ -841,7 +841,7 @@ def test_invitation_link_exchanges_to_strict_httponly_clean_url_transaction(
 
     response_headers = dict(headers)
     assert status == 303 and body == b""
-    assert response_headers["location"] == "/accept-invitation"
+    assert response_headers["location"] == "/accept-invitation/continue"
     assert response_headers["cache-control"] == "no-store, max-age=0"
     assert response_headers["referrer-policy"] == "no-referrer"
     invitation_cookies = [
@@ -1661,3 +1661,35 @@ def test_trusted_proxy_selects_nearest_untrusted_forwarded_hop(auth_asgi):
     assert status == 303
     assert login.calls[0]["source_key"] == "198.51.100.7"
     assert login.calls[0]["source_class"] == "trusted_proxy"
+
+
+def test_invitation_handoff_is_static_token_free_and_does_not_resolve_authority(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+
+    class UnusedLifecycle:
+        def __getattr__(self, _name):
+            raise AssertionError("The handoff must not call a lifecycle service")
+
+    app.state.invitation_lifecycle_service = UnusedLifecycle()
+    status, headers, body = _request(app, "GET", path="/accept-invitation/continue",
+        query="token=" + INVITATION_RAW,
+        headers={"cookie": f"{INVITATION_COOKIE}={INVITATION_TRANSACTION}"})
+    assert status == 200
+    assert dict(headers)["cache-control"] == "no-store, max-age=0"
+    assert dict(headers)["referrer-policy"] == "no-referrer"
+    assert _set_cookies(headers) == []
+    assert b'http-equiv="refresh" content="0;url=/accept-invitation"' in body
+    assert b'<a href="/accept-invitation">' in body
+    assert b"<script" not in body
+    assert INVITATION_RAW.encode() not in body and INVITATION_TRANSACTION.encode() not in body
+
+
+def test_invitation_handoff_without_cookie_terminates_at_normal_invalid_form(auth_asgi):
+    app, _, _ = _app(auth_asgi)
+    app.state.invitation_lifecycle_service = FakeInvitationLifecycle()
+    status, _, _ = _request(app, "GET", path="/accept-invitation/continue")
+    assert status == 200
+    status, headers, body = _request(app, "GET", path="/accept-invitation")
+    assert status == 400 and "location" not in dict(headers)
+    assert b'http-equiv="refresh"' not in body
+    assert b'name="new_password"' not in body

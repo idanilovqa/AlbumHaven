@@ -3,27 +3,42 @@ const SIDEBAR_VIEW_PATH = '/view-data?surface=albums&payload_tier=sidebar';
 
 async function readJsonResponse(probePage, path, requestTimeoutMs) {
   const startedAt = Date.now();
-  const response = await probePage.goto(path, {
-    waitUntil: 'commit',
-    timeout: requestTimeoutMs,
-  });
-  if (!response || !response.ok()) {
-    const status = response ? response.status() : 0;
-    throw new Error(`Production liveness request ${path} returned HTTP ${status}.`);
-  }
-  const text = await response.text();
-  let payload = null;
+  let deadline;
   try {
-    payload = JSON.parse(text);
-  } catch (error) {
-    throw new Error(
-      `Production liveness request ${path} did not return JSON: ${String(error?.message || error)}`,
-    );
+    return await Promise.race([
+      (async () => {
+        const response = await probePage.goto(path, {
+          waitUntil: 'commit',
+          timeout: requestTimeoutMs,
+        });
+        if (!response || !response.ok()) {
+          const status = response ? response.status() : 0;
+          throw new Error(`Production liveness request ${path} returned HTTP ${status}.`);
+        }
+        const text = await response.text();
+        let payload = null;
+        try {
+          payload = JSON.parse(text);
+        } catch (error) {
+          throw new Error(
+            `Production liveness request ${path} did not return JSON: ${String(error?.message || error)}`,
+          );
+        }
+        const elapsedMs = Date.now() - startedAt;
+        if (elapsedMs > requestTimeoutMs) {
+          throw new Error(`Production liveness request ${path} exceeded its ${requestTimeoutMs}ms deadline.`);
+        }
+        return { elapsedMs, payload };
+      })(),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error(
+          `Production liveness request ${path} exceeded its ${requestTimeoutMs}ms deadline.`,
+        )), requestTimeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(deadline);
   }
-  return {
-    elapsedMs: Date.now() - startedAt,
-    payload,
-  };
 }
 
 function assertStatusPayload(payload) {

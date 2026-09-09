@@ -42,6 +42,6 @@ async def read_bounded_json_object(
         return None
     try:
         payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None

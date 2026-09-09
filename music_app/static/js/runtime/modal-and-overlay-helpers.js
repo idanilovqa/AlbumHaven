@@ -159,7 +159,7 @@ function getVisibleNonAlbumTracks() {
   const view = state.view;
   const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
   const selectedArtist = String(view.selected_artist || '').trim();
-  if (!selectedArtist && !String(view.query || '').trim()) return tracks;
+  if (!selectedArtist) return tracks;
   const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
   const artists = new Set([
     selectedArtist,

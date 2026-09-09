@@ -8,6 +8,19 @@
 
 **Tech Stack:** Python 3.13, FastAPI/Starlette, psycopg/Postgres migrations, Jinja, browser JavaScript, aiosmtplib, Node test runner, Playwright 1.61.1, GitHub Actions.
 
+## September 9 transport correction
+
+A successful exchange uses `303 /accept-invitation/continue`, then a static
+`200` document with immediate meta refresh and a plain fallback link to the
+existing `/accept-invitation` form. The continuation route is public only for
+GET/HEAD, renders no token/query/cookie values, performs no authority operation,
+and sets no cookie. Both documents retain no-store and no-referrer headers.
+Keep `Secure`, `HttpOnly`, `SameSite=Strict`, the host-only lifecycle cookie,
+transaction CSRF, and same-origin POST validation. Invalid exchanges keep their
+existing clean redirect; missing/blocked cookies finish at the invalid form.
+The pinned Chrome external-link regression must cover same-site and cross-site
+clicks plus missing/blocked cookies without a navigation loop.
+
 ## Global Constraints
 
 - Managed account creation is invitation-only; the administrator never chooses or sees the recipient's password.
@@ -1329,7 +1342,7 @@ response = client.get(
     follow_redirects=False,
 )
 assert response.status_code == 303
-assert response.headers["location"] == "/accept-invitation"
+assert response.headers["location"] == "/accept-invitation/continue"
 assert response.headers["cache-control"] == "no-store, max-age=0"
 assert response.headers["referrer-policy"] == "no-referrer"
 cookie = response.cookies["__Host-album_haven_invitation"]
@@ -1623,7 +1636,7 @@ async def accept_invitation_get(request: Request) -> Response:
                 _invitation_lifecycle(request).exchange_invitation_token,
                 raw, request_ref=uuid4().hex,
             )
-        response = RedirectResponse("/accept-invitation", status_code=303,
+        response = RedirectResponse("/accept-invitation/continue" if issued is not None else "/accept-invitation", status_code=303,
                                     headers=INVITATION_HEADERS)
         if issued is not None:
             response.set_cookie(

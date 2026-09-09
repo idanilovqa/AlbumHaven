@@ -258,6 +258,7 @@ function finalizeMainResult(result, options = {}) {
       'managed-scan-cleanup-error',
       'managed-isolated-app-cleanup-error',
       'owned-process-cleanup-error',
+      'fake-database-cleanup-error',
     ].includes(lifecycle.exitReason);
   const exitCode = processCleanupUnproven
     || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
@@ -1566,7 +1567,9 @@ function createManagedIsolatedAppRestartController(options = {}) {
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
-    return { nonce };
+    const operation = request.operation ?? 'restart';
+    if (!['restart', 'report-failure'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    return { nonce, operation };
   };
 
   const processPendingRequest = async () => {
@@ -1581,6 +1584,16 @@ function createManagedIsolatedAppRestartController(options = {}) {
         if (!request || request.nonce === lastProcessedNonce) return false;
         lastProcessedNonce = request.nonce;
         fs.rmSync(ackPath, { force: true });
+
+        if (request.operation === 'report-failure') {
+          phase = 'fixture-cleanup';
+          const error = new Error('Managed fixture cleanup failed; database and fixture evidence retained.');
+          error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+          error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+            fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+          // The catch records the terminal failure before publishing its acknowledgment.
+          throw error;
+        }
 
         if (currentChild) {
           phase = 'stop-current';
@@ -3065,20 +3078,46 @@ async function runManagedPlaywrightAttempt(options = {}) {
     );
     const managedIsolatedAppFailureSignal = managedIsolatedRestartController
       ?.getFailureSignal?.();
-    result = managedIsolatedAppFailureSignal
-      ? await Promise.race([
-        playwrightRunPromise,
-        managedIsolatedAppFailureSignal.then(async (failureError) => {
-          playwrightAbortController.abort(failureError);
-          try {
-            await playwrightRunPromise;
-          } catch (_error) {
-            // The managed-app failure remains authoritative after the owned runner settles.
-          }
-          throw failureError;
-        }),
-      ])
-      : await playwrightRunPromise;
+    let managedAppFailure = null;
+    const preserveManagedAppFailure = (runnerOutcome) => {
+      if (runnerOutcome?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+        || runnerOutcome?.lifecycle?.exitReason === 'owned-process-cleanup-error') {
+        managedAppFailure.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+        managedAppFailure.lifecycle = {
+          ...(managedAppFailure.lifecycle || {}),
+          ...(runnerOutcome.lifecycle || {}),
+          exitReason: 'owned-process-cleanup-error',
+        };
+      }
+      if (runnerOutcome instanceof Error && runnerOutcome !== managedAppFailure) {
+        managedAppFailure.cause = runnerOutcome;
+      }
+      return managedAppFailure;
+    };
+    try {
+      result = managedIsolatedAppFailureSignal
+        ? await Promise.race([
+          playwrightRunPromise,
+          managedIsolatedAppFailureSignal.then(async (failureError) => {
+            managedAppFailure = failureError;
+            playwrightAbortController.abort(failureError);
+            let runnerOutcome;
+            try {
+              runnerOutcome = await playwrightRunPromise;
+            } catch (error) {
+              runnerOutcome = error;
+            }
+            throw preserveManagedAppFailure(runnerOutcome);
+          }),
+        ])
+        : await playwrightRunPromise;
+    } catch (error) {
+      if (managedAppFailure) throw preserveManagedAppFailure(error);
+      throw error;
+    }
+    // Both race branches await the same child. Its settlement may win after the
+    // failure signal; retain the primary app failure and the child's cleanup proof.
+    if (managedAppFailure) throw preserveManagedAppFailure(result);
     if (managedIsolatedRestartController) {
       await managedIsolatedRestartController.close();
       const restartFailure = managedIsolatedRestartController.getFailure?.();
@@ -3142,7 +3181,18 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managedIsolatedAppStarted && !managedIsolatedChild && !isolatedCleanupError) {
       managedAttempt.isolatedAppCleanup.status = 'completed';
     }
-    if (managedIsolatedAppStarted && !isolatedCleanupError && !preservesPreloadedDatabase) {
+    if (restartControllerCleanupError && !isolatedCleanupError) {
+      managedAttempt.isolatedAppCleanup.status = 'failed';
+      managedAttempt.isolatedAppCleanup.error = safeErrorSummary(restartControllerCleanupError);
+      isolatedCleanupError = restartControllerCleanupError;
+    }
+    const processCleanupUnproven = Boolean(
+      scanCleanupError || isolatedCleanupError
+      || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || attemptError?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || (result?.lifecycle || attemptError?.lifecycle)?.exitReason === 'owned-process-cleanup-error',
+    );
+    if (managedIsolatedAppStarted && !processCleanupUnproven && !preservesPreloadedDatabase) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
       try {
         cleanupIsolatedLibraryDatabaseFn(childEnv);
@@ -3152,27 +3202,26 @@ async function runManagedPlaywrightAttempt(options = {}) {
         databaseCleanupError = error instanceof Error ? error : new Error(String(error));
       }
     }
-    if (restartControllerCleanupError && !isolatedCleanupError) {
-      managedAttempt.isolatedAppCleanup.status = 'failed';
-      managedAttempt.isolatedAppCleanup.error = safeErrorSummary(restartControllerCleanupError);
-      isolatedCleanupError = restartControllerCleanupError;
-    }
-    try {
-      const removedRoots = cleanupIsolatedE2ETempRootsFn(
-        os.tmpdir(),
-        ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
-      );
-      managedAttempt.tempCleanup.status = 'completed';
-      managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
-    } catch (error) {
-      managedAttempt.tempCleanup.status = 'failed';
-      managedAttempt.tempCleanup.error = safeErrorSummary(error);
-      if (ownedIsolatedTempRoot) {
-        const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
-        lifecycle.exitReason = 'owned-temp-cleanup-error';
-        if (result) {
-          result.exitCode = 1;
-          result.lifecycle = lifecycle;
+    // No retained/skipped lifecycle status exists: pending means intentionally
+    // unperformed here, with the cleanup exit reason preserving the cause.
+    if (!processCleanupUnproven) {
+      try {
+        const removedRoots = cleanupIsolatedE2ETempRootsFn(
+          os.tmpdir(),
+          ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
+        );
+        managedAttempt.tempCleanup.status = 'completed';
+        managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
+      } catch (error) {
+        managedAttempt.tempCleanup.status = 'failed';
+        managedAttempt.tempCleanup.error = safeErrorSummary(error);
+        if (ownedIsolatedTempRoot) {
+          const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+          lifecycle.exitReason = 'owned-temp-cleanup-error';
+          if (result) {
+            result.exitCode = 1;
+            result.lifecycle = lifecycle;
+          }
         }
       }
     }

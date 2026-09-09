@@ -433,3 +433,23 @@ def test_repository_validates_expected_revision_before_opening_database():
             )
 
     assert opened == []
+
+
+@pytest.mark.parametrize("include_alert", [False, True])
+def test_compatibility_palette_save_binds_requested_album_and_alert_fields(include_alert):
+    requested = {
+        **DEFAULTS, "palette_id": "steelblue", "panel_index": 0,
+        "player_override": None, "compact_player_style": "floating",
+        "album_details_layout": "editorial_canvas", "album_playing_row_animation": "disabled",
+    }
+    if include_alert:
+        requested["alert_family"] = "quiet"
+    connection = Connection({**AGGREGATE_APPEARANCE, **requested})
+    _repository(connection).save_preferences(account_id=41, preferences=requested)
+    sql, params = connection.operations[0]
+    assert "editorial_canvas" in params
+    assert "disabled" in params
+    if include_alert:
+        assert "quiet" in params
+    for field in ("album_details_layout", "album_playing_row_animation", "alert_family"):
+        assert f"{field} = coalesce" in sql

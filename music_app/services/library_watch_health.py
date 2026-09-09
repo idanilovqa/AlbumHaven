@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -85,6 +86,25 @@ select coalesce(
 from library.libraries
 join bootstrap_library on bootstrap_library.id = library.libraries.id;
 """
+
+
+class LibraryRootUnhealthyError(RuntimeError):
+    """A destructive publication cannot establish healthy affected roots."""
+
+
+@contextmanager
+def guard_destructive_library_publication(connection, root_ids):
+    # Use the publisher's transaction and a fresh statement after its advisory
+    # lock. Health upserts/clears update this same row, serializing the decision
+    # with other processes until inventory publication commits.
+    row = connection.execute(
+        _LOAD_LIBRARY_WATCH_HEALTH_SQL.rstrip().rstrip(";")
+        + " for update of libraries;"
+    ).fetchone()
+    payload = _row_value(row, "library_watch_health")
+    if not isinstance(payload, Mapping) or any(str(root_id) in payload for root_id in root_ids):
+        raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
+    yield
 
 _CLEAR_LIBRARY_WATCH_HEALTH_SQL = _BOOTSTRAP_LIBRARY_SQL + """
 /* watch_health_clear */
@@ -292,6 +312,17 @@ class LibraryWatchHealthService:
         except Exception:
             # A health-store outage must fail closed for destructive changes.
             return False
+
+    @contextmanager
+    def publication_guard(self, connection, root_ids):
+        roots = tuple(str(root_id) for root_id in root_ids)
+        # Keep failed/not-yet-persisted warnings in the same decision as the
+        # database check. New local warnings linearize after this publication.
+        with self._lock:
+            if any(root_id in self._pending for root_id in roots):
+                raise LibraryRootUnhealthyError(WATCH_HEALTH_MESSAGE)
+            with guard_destructive_library_publication(connection, roots):
+                yield
 
     def clear_after_scan(
         self,

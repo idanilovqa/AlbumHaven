@@ -464,6 +464,80 @@ function createCoverSuspensionHarness(initialTokens = []) {
   };
 }
 
+for (const speculative of [false, true]) {
+  test(`in-flight ${speculative ? 'speculative' : 'foreground'} details cannot publish across inventory revisions`, async () => {
+    const preview = { key: 'revision-album', request_key: 'revision-album', name: 'Revision Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'one', title: 'Old title' }] };
+    const fresh = { ...stale, tracks: [{ path: 'one', title: 'Fresh title' }] };
+    const responses = [];
+    const { context } = loadHelper({
+      initialAlbums: [preview], inventoryMutationRevision: 7,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    await flushMicrotasks();
+    assert.notEqual(context.state.gallery.albumIndex.get(preview.key), stale);
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const freshLoad = context.loadTrackModalAlbumDetails(preview.key);
+    assert.equal(responses.length, 2, 'a request captured under the new revision must run');
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: fresh }) });
+    assert.equal(await freshLoad, fresh);
+    assert.equal(await pending, fresh, 'the original caller also receives current details');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), fresh);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), fresh);
+  });
+}
+
+test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
+  const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
+  const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+  const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+  const claim = { generation: 1 };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.state.status.inventory_mutation_revision = 8;
+  context.invalidateAllHydratedTrackModalAlbumDetails();
+  responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+  assert.equal(await pending, optimistic);
+  assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+  assert.equal(responses.length, 1, 'an active mutation owns its membership');
+  context.activeTagEditMutationClaim = null;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+  const settledLoad = context.loadTrackModalAlbumDetails(preview.key);
+  const canonical = { ...optimistic, name: 'Canonical Album' };
+  responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await settledLoad, canonical);
+});
+
+test('revision reload preserves a speculative detail request promoted to foreground', async () => {
+  const preview = { key: 'promoted-album', name: 'Promoted Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    onFetchAlbumDetails: ({ requestOptions }) => new Promise(resolve => responses.push({ requestOptions, resolve })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  assert.equal(responses[0].requestOptions.priority, 'low');
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  context.state.status.inventory_mutation_revision = 8;
+  responses[0].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  await flushMicrotasks();
+  assert.equal(responses.length, 2);
+  assert.equal(responses[1].requestOptions.priority, 'high');
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  assert.equal(responses[1].requestOptions.signal.aborted, false);
+  responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  assert.equal(await foreground, album);
+});
+
 async function run() {
   {
     const { context, trackModal } = loadHelper();

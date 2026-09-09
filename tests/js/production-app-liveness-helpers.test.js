@@ -134,3 +134,57 @@ test('production liveness observer rejects a non-Postgres or reduced view path',
     /must use Postgres library_browse authority/,
   );
 });
+
+for (const stalledRoute of ['status', 'sidebar']) {
+  test(`production liveness deadline includes the ${stalledRoute} response body`, async () => {
+    const { observeProductionAppLiveness } = await import(helperUrl);
+    let releaseBody;
+    const blockedResponse = {
+      ok: () => true,
+      async text() {
+        await new Promise((resolve) => { releaseBody = resolve; });
+        return JSON.stringify(stalledRoute === 'status' ? statusPayload() : sidebarPayload());
+      },
+    };
+    const responses = [
+      stalledRoute === 'status' ? blockedResponse : jsonResponse(statusPayload()),
+      stalledRoute === 'sidebar' ? blockedResponse : jsonResponse(sidebarPayload()),
+      jsonResponse(statusPayload()), jsonResponse(sidebarPayload()),
+    ];
+    const page = createPage(responses);
+    const observation = observeProductionAppLiveness(page, {
+      sampleCount: 2, intervalMs: 0, requestTimeoutMs: 20,
+    });
+    let watchdog;
+    try {
+      const outcome = await Promise.race([
+        observation.then(() => ({ kind: 'passed' }), (error) => ({ kind: 'failed', error })),
+        new Promise((resolve) => { watchdog = setTimeout(() => resolve({ kind: 'unbounded' }), 100); }),
+      ]);
+      assert.equal(outcome.kind, 'failed', 'a stalled body must fail within the request deadline');
+      assert.match(outcome.error.message, /liveness.*(?:deadline|timed out|exceeded)/i);
+      assert.deepEqual(page.calls.at(-1), ['close'], 'deadline failure must close its owned probe page');
+    } finally {
+      clearTimeout(watchdog);
+      releaseBody?.();
+      await observation.catch(() => {});
+    }
+  });
+}
+test('production liveness deadline rejects late body completion before timer dispatch', async () => {
+  const { observeProductionAppLiveness } = await import(helperUrl);
+  const originalNow = Date.now;
+  let now = 0;
+  const page = createPage([
+    { ok: () => true, async text() { now = 25; return JSON.stringify(statusPayload()); } },
+    jsonResponse(sidebarPayload()), jsonResponse(statusPayload()), jsonResponse(sidebarPayload()),
+  ]);
+  Date.now = () => now;
+  try {
+    await assert.rejects(observeProductionAppLiveness(page, {
+      sampleCount: 2, intervalMs: 0, requestTimeoutMs: 20,
+    }), /liveness.*deadline/i);
+  } finally {
+    Date.now = originalNow;
+  }
+});

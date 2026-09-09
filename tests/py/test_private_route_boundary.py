@@ -43,6 +43,7 @@ def test_private_routes_have_explicit_action_classification():
                 "/forgot-password",
                 "/reset-password",
                 "/accept-invitation",
+                "/accept-invitation/continue",
                 "/favicon.ico",
                 "/static",
             }:
@@ -641,3 +642,14 @@ def test_loop_resource_reference_uses_policy_grammar(reference, route):
     else:
         assert scope.resource_ref.startswith("hmac:v7:")
         assert reference not in scope.resource_ref
+
+
+@pytest.mark.parametrize("method, path, allowed", [
+    ("GET", "/accept-invitation/continue", True),
+    ("HEAD", "/accept-invitation/continue", True),
+    ("POST", "/accept-invitation/continue", False),
+    ("GET", "/accept-invitation/continue/extra", False),
+])
+def test_only_exact_readonly_invitation_handoff_is_public(method, path, allowed):
+    from music_app.services.private_route_boundary import _is_public
+    assert _is_public(method, path) is allowed

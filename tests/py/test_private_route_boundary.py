@@ -1,6 +1,7 @@
 import asyncio
 import base64
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI, Request
@@ -192,7 +193,7 @@ async def _request_async(app, path, *, method="GET", cookie=None, query="", head
             "method": method,
             "scheme": "https",
             "path": path,
-            "raw_path": path.encode("ascii"),
+            "raw_path": quote(path).encode("ascii"),
             "query_string": query.encode("ascii"),
             "headers": request_headers,
             "client": ("127.0.0.1", 50000),
@@ -563,3 +564,80 @@ def test_authenticated_get_refreshes_stale_session_csrf_cookie_after_key_rotatio
     assert status == 200
     assert any(cookie.startswith(f"__Host-album_haven_csrf={expected}") for cookie in cookies)
     assert all(stale not in cookie for cookie in cookies)
+
+@pytest.mark.parametrize("authenticated", [False, True])
+@pytest.mark.parametrize("path, query", [
+    ("/track", "path=C%3A%5CMusic%5Cprivate.mp3"),
+    ("/utilities/cover-lookup/remote-image", "url=https%3A%2F%2Fprivate.test%2Fcover.jpg"),
+])
+def test_cold_private_resource_initializes_auth_before_hashing(monkeypatch, authenticated, path, query):
+    from music_app.services import current_actor_asgi
+    from music_app.services.current_actor import ActorState
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
+    actor = CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        username_display="Rendref", is_bootstrap_owner=True,
+    ) if authenticated else CurrentActor.anonymous()
+    app, resolver = _app(actor)
+    del app.state.auth_policy_config
+    del app.state.current_actor_resolver
+    app.add_api_route("/utilities/cover-lookup/remote-image", lambda: {"cover": True})
+    for key, value in {
+        "ALBUM_HAVEN_AUTH_HMAC_SECRET": "a" * 32,
+        "ALBUM_HAVEN_BOOTSTRAP_USERNAME": "Rendref",
+        "ALBUM_HAVEN_BOOTSTRAP_EMAIL": "owner@example.test",
+        "ALBUM_HAVEN_PUBLIC_BASE_URL": "https://music.test",
+    }.items():
+        monkeypatch.setenv(key, value)
+    created = []
+    monkeypatch.setattr(current_actor_asgi, "PostgresAuthSessionService", lambda config: object())
+
+    def create_resolver(config, *, session_service):
+        created.append(config)
+        return resolver
+
+    monkeypatch.setattr(current_actor_asgi, "PostgresCurrentActorResolver", create_resolver)
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context) or PolicyEvaluationConstraints()
+    )
+
+    status, _ = _request(app, path, query=query)
+
+    assert status == (200 if authenticated else 401)
+    assert len(created) == 1
+    assert resolver.calls == [None]
+    assert contexts[0].resource.resource_ref.startswith("hmac:v")
+    assert "private" not in contexts[0].resource.resource_ref
+
+
+@pytest.mark.parametrize("reference", ["é", "_", "valid-loop:1"])
+@pytest.mark.parametrize("route", ["query", "path"])
+def test_loop_resource_reference_uses_policy_grammar(reference, route):
+    from urllib.parse import quote
+    from music_app.services.current_actor import ActorState
+    from music_app.services.policy_evaluator import PolicyEvaluationConstraints
+
+    app, _ = _app(CurrentActor(
+        state=ActorState.ACTIVE, account_id=7, session_id=11,
+        username_display="Rendref", is_bootstrap_owner=True,
+    ))
+    app.add_api_route("/loops/media/{loop_id}", lambda loop_id: {"loop": True})
+    contexts = []
+    app.state.policy_constraint_resolver = lambda context: (
+        contexts.append(context) or PolicyEvaluationConstraints()
+    )
+    path = "/track" if route == "query" else f"/loops/media/{reference}"
+    query = f"loop_id={quote(reference)}" if route == "query" else ""
+
+    status, _ = _request(app, path, query=query)
+
+    assert status == 200
+    scope = contexts[0].resource
+    assert scope.resource_kind == "loop"
+    if reference == "valid-loop:1":
+        assert scope.resource_ref == reference
+    else:
+        assert scope.resource_ref.startswith("hmac:v7:")
+        assert reference not in scope.resource_ref

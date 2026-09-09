@@ -517,3 +517,35 @@ def test_concurrent_completion_has_exactly_one_successful_credential_winner():
 
     assert results.count(InvitationCompletionOutcome.SUCCESS) == 1
     assert results.count(InvitationCompletionOutcome.INVALID) == 1
+
+
+@pytest.mark.parametrize("expiry_phase", ["hash", "final_lock"])
+def test_invitation_completion_rechecks_expiry_after_password_work_and_final_lock(expiry_phase):
+    clock = [NOW]
+
+    class ExpiringConnection(Connection):
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            if expiry_phase == "final_lock" and "from app.account_sessions" in sql:
+                clock[0] = NOW + timedelta(days=2)
+            return result
+
+    connection = ExpiringConnection()
+
+    def hasher(*_args, **_kwargs):
+        assert connection.transaction_depth == 0
+        if expiry_phase == "hash":
+            clock[0] = NOW + timedelta(days=2)
+        return PasswordCredential("$argon2id$invited", 4)
+
+    service = PostgresInvitationLifecycleService(
+        _config(), connect=lambda _url: connection, clock=lambda: clock[0],
+        password_hasher=hasher, breached_checker=lambda _password: False,
+        audit_repository=Audit(),
+    )
+    result = service.complete_invitation(
+        TRANSACTION_RAW, new_password=PASSWORD, request_ref="expired-during-work",
+    )
+
+    assert result is InvitationCompletionOutcome.INVALID
+    assert not any(sql.startswith(("insert ", "update ", "delete ")) for sql in _statements(connection))

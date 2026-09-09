@@ -12,6 +12,7 @@ from starlette.datastructures import QueryParams
 from starlette.responses import Response
 from starlette.routing import Match
 
+from music_app.services.current_actor_asgi import current_actor_from_request
 from music_app.services.policy_asgi import require_action
 from music_app.services.policy import ResourceScope
 from music_app.services.auth_session_csrf import issue_session_csrf, matches_session_csrf
@@ -176,6 +177,7 @@ def install_private_route_boundary(app: FastAPI) -> None:
             {"Cache-Control": "no-store, max-age=0"}
             if route_path in {"/account/appearance", "/api/account/appearance/selection-accent"} else {}
         )
+        await current_actor_from_request(request)
         resource = _private_resource(request, route_path)
         try:
             await require_action(action, resource=resource)(request)
@@ -318,9 +320,10 @@ def _private_resource(request: Request, route_path: str) -> ResourceScope | None
 
 
 def _safe_reference(value: str, request: Request) -> str:
-    if value and all(character.isalnum() or character in "-_.:" for character in value):
-        return value[:256]
-    return _privacy_reference(value, request)
+    try:
+        return ResourceScope("loop", value).resource_ref
+    except ValueError:
+        return _privacy_reference(value, request)
 
 
 def _privacy_reference(value: str, request: Request) -> str:

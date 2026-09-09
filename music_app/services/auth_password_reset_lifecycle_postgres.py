@@ -228,12 +228,8 @@ class PostgresPasswordResetLifecycleService:
                 raise RuntimeError
 
             with self._operation() as connection:
-                if not self._lock_current_context(
-                    connection,
-                    snapshot,
-                    digest,
-                    now,
-                ):
+                current, now = self._lock_current_context(connection, snapshot, digest)
+                if not current:
                     self._append_audit(
                         connection,
                         outcome=SecurityAuditOutcome.INVALID,
@@ -362,8 +358,7 @@ class PostgresPasswordResetLifecycleService:
         connection: Any,
         snapshot: Mapping[str, object],
         digest: bytes,
-        now: datetime,
-    ) -> bool:
+    ) -> tuple[bool, datetime]:
         account_id = _positive_integer(snapshot.get("account_id"), "account id")
         reset_id = _positive_integer(snapshot.get("reset_token_id"), "reset token id")
         transaction_id = _positive_integer(
@@ -410,8 +405,9 @@ class PostgresPasswordResetLifecycleService:
             """,
             (account_id,),
         ).fetchall()
+        now = _aware_utc(self._clock())
         if not all(len(rows) == 1 for rows in (accounts, credentials, resets, transactions)):
-            return False
+            return False, now
         account = _row(accounts[0], ("id", "is_active", "disabled_at"))
         stored_credential = _row(credentials[0], ("account_id", "credential_version"))
         reset = _row(
@@ -431,7 +427,7 @@ class PostgresPasswordResetLifecycleService:
             and _timestamp(reset.get("expires_at")) > now
             and transaction.get("consumed_at") is None
             and _timestamp(transaction.get("expires_at")) > now
-        )
+        ), now
 
     def _append_audit(
         self,

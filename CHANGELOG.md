@@ -49,6 +49,11 @@
 - Preserved valid invitation transactions when an invitation link is revisited.
 - Redirected malformed reset links to a clean invalid page and moved synchronous
   reset-delivery callbacks off the ASGI event loop.
+- Initialized private media policy before the first request, handled malformed
+  loop references through the existing private identifier path, and rechecked
+  reset and invitation expiry after final transaction locks. Kept SMTP
+  disconnects during submission as unknown delivery outcomes to prevent retries
+  after an unconfirmed acceptance.
 - Restored the browser history position when unsaved appearance changes cancel
   Settings navigation.
 - Preserved every rapid compact-player queue advance while streaming starts,

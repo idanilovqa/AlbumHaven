@@ -296,6 +296,7 @@ class PostgresInvitationLifecycleService:
                     (account_id,),
                 ).fetchall()
 
+                now = _aware_utc(self._clock())
                 if not (
                     len(accounts) == len(invitations) == len(transactions) == 1
                 ):

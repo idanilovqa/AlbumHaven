@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 
+import pytest
+
 from music_app.services.auth_passwords import PasswordCredential
 from music_app.services.auth_tokens import IssuedOpaqueToken
 
@@ -214,3 +216,37 @@ def test_invalid_or_replayed_lifecycle_state_is_one_safe_result():
 
     assert result.value == "invalid"
     assert not any("update app.account_credentials" in sql for sql, _ in connection.operations)
+
+
+@pytest.mark.parametrize("expiry_phase", ["hash", "final_lock"] )
+def test_reset_completion_rechecks_expiry_after_password_work_and_final_lock(expiry_phase):
+    from music_app.services.auth_password_reset_lifecycle_postgres import PostgresPasswordResetLifecycleService
+
+
+    clock = [NOW]
+
+    class ExpiringConnection(Connection):
+        def execute(self, sql, params=()):
+            result = super().execute(sql, params)
+            if expiry_phase == "final_lock" and "from app.account_sessions" in sql:
+                clock[0] = NOW + timedelta(days=1)
+            return result
+
+    connection = ExpiringConnection()
+
+    def hasher(*_args, **_kwargs):
+        if expiry_phase == "hash":
+            clock[0] = NOW + timedelta(days=1)
+        return PasswordCredential("$argon2id$replacement", 4)
+
+    service = PostgresPasswordResetLifecycleService(
+        _config(), connect=lambda _url: connection, clock=lambda: clock[0],
+        password_hasher=hasher, breached_checker=lambda _password: False,
+        audit_repository=Audit(),
+    )
+    result = service.complete_reset(
+        LIFECYCLE_RAW, new_password="a sufficiently private replacement", request_ref="expired-during-work",
+    )
+
+    assert result.value == "invalid", expiry_phase
+    assert not any(sql.startswith(("update ", "delete ")) for sql, _ in connection.operations)

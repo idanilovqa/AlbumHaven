@@ -1648,7 +1648,7 @@ jobs:
         with:
           script: |
             const markerPattern = /<!-- album-haven-reviewed-head:([0-9a-f]{40}) -->/i;
-            const body = `<!-- album-haven-reviewed-head:${context.payload.pull_request.head.sha} -->\nAutomated review coverage is current through this commit.`;
+            const body = `<!-- album-haven-reviewed-head:${context.payload.pull_request.head.sha} -->\nThe applicable automated reviews and full CI passed for this commit. See each review for its inspection scope and omissions; this baseline is not proof that every file was examined.`;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,

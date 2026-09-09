@@ -51,6 +51,19 @@ This measures API usage, not review coverage: it does not prove every file or
 line of a PR was examined. PR Agent can clip a large diff even when full review
 was requested.
 
+The current PR Agent `/review` path makes one prediction from a diff that fits
+its token budget. Its coverage footer lists omitted files; it does not schedule
+another prediction for those files. Repeating the same oversized review does
+not ensure the omitted files are examined. Codex also reports actual inspection
+limits separately from the requested scope. The successfully reviewed-head
+marker records passing review and CI results, not exhaustive file coverage.
+
+For a large PR, record an explicit inventory of changed subsystems, review each
+bounded group with its callers and tests, and collect the findings before the
+next paid run. Automated batching would need to record coverage for every
+batch, reject missing batches, and reconcile findings across subsystem
+boundaries. Increasing the context budget alone does not establish coverage.
+
 ## Privacy and operation
 
 Only allowlisted usage and run metadata enter the report. Prompts, code, response

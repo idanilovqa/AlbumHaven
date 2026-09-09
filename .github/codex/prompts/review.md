@@ -7,6 +7,8 @@ Review scope:
 - In `full` mode, review the complete pull request delta.
 - If those variables are unavailable, derive the PR delta from the merge commit parents and review only the incoming branch diff, not the whole repository state.
 - Keep findings scoped to the selected delta.
+- Start from a changed-file inventory and inspect related callers and tests by subsystem. Collect the actionable findings across those subsystems before returning; do not stop at the first finding.
+- In Residual risks, distinguish requested scope from actual inspection. Report the subsystems inspected and any files or areas omitted because of time, context, or unavailable dependencies. A `full` scope label alone is not evidence that every changed file was examined.
 
 Focus on:
 - correctness bugs

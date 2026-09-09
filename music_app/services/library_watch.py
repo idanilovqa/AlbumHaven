@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock
 from typing import Protocol
 
 
@@ -184,10 +184,69 @@ class WatchdogLibraryEventSource:
         self._observer_factory = observer_factory
         self._clock = clock
         self._observer: object | None = None
+        self._emitters: tuple[object, ...] = ()
+        self._stopping = Event()
 
     @property
     def is_alive(self) -> bool:
-        return bool(self._observer is not None and self._observer.is_alive())
+        return bool(
+            self._observer is not None
+            and self._observer.is_alive()
+            and all(emitter.is_alive() for emitter in self._emitters)
+        )
+
+    def _instrument_emitter(self, emitter, *, publish, clock) -> None:
+        """Bridge failures before Watchdog discards their native evidence."""
+        import os
+
+        watch_path = Path(emitter.watch.path).resolve(strict=False)
+        watched_roots = tuple(
+            (root_id, root_path)
+            for root_id, root_path in _resolved_roots(self._roots)
+            if root_path == watch_path
+        )
+
+        def report(kind):
+            if self._stopping.is_set():
+                return
+            observed_at = clock()
+            for root_id, root_path in watched_roots:
+                publish(LibraryEvent(
+                    kind, root_id, root_path,
+                    observed_at=observed_at, is_directory=True,
+                ))
+
+        run = emitter.run
+
+        def run_with_health():
+            try:
+                run()
+            finally:
+                # The dispatcher can outlive a failed or self-stopped producer.
+                report(LibraryEventKind.ROOT_UNAVAILABLE)
+
+        emitter.run = run_with_health
+        if os.name == "nt":
+            from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+            if isinstance(emitter, WindowsApiEmitter):
+                read_events = emitter._read_events
+
+                def read_events_with_health():
+                    try:
+                        events = read_events()
+                    except OSError as exc:
+                        if getattr(exc, "winerror", None) != 1022:  # ERROR_NOTIFY_ENUM_DIR
+                            raise
+                        events = []
+                    if not events:
+                        # Watchdog 4–6 converts the native zero-byte overflow
+                        # indication to []. Source shutdown also returns [],
+                        # but report() excludes that intentional cancellation.
+                        report(LibraryEventKind.OVERFLOW)
+                    return events
+
+                emitter._read_events = read_events_with_health
 
     def start(self, publish: Callable[[LibraryEvent], None]) -> None:
         if self._observer is not None:
@@ -199,6 +258,7 @@ class WatchdogLibraryEventSource:
         observer = self._observer_factory() if self._observer_factory else Observer()
         clock = self._clock or monotonic
         roots = self._roots
+        self._stopping.clear()
 
         class Handler(FileSystemEventHandler):
             def on_any_event(self, event) -> None:
@@ -210,30 +270,55 @@ class WatchdogLibraryEventSource:
                 )
 
         handler = Handler()
-        for root_id, root_path in _resolved_roots(roots):
-            if not root_path.is_dir():
-                publish(
-                    LibraryEvent(
-                        LibraryEventKind.ROOT_UNAVAILABLE,
-                        root_id,
-                        root_path,
-                        observed_at=clock(),
-                    )
-                )
-                continue
-            observer.schedule(handler, str(root_path), recursive=True)
         self._observer = observer
-        observer.start()
+        try:
+            for root_id, root_path in _resolved_roots(roots):
+                if not root_path.is_dir():
+                    publish(
+                        LibraryEvent(
+                            LibraryEventKind.ROOT_UNAVAILABLE,
+                            root_id,
+                            root_path,
+                            observed_at=clock(),
+                        )
+                    )
+                    continue
+                observer.schedule(handler, str(root_path), recursive=True)
+            self._emitters = tuple(getattr(observer, "emitters", ()))
+            for emitter in self._emitters:
+                self._instrument_emitter(emitter, publish=publish, clock=clock)
+            observer.start()
+        except Exception:
+            # on_thread_start runs before run(), so its failures cannot reach
+            # the producer's finally bridge. The whole aborted source is lost.
+            self._stopping.set()
+            try:
+                for root_id, root_path in _resolved_roots(roots):
+                    try:
+                        publish(LibraryEvent(
+                            LibraryEventKind.ROOT_UNAVAILABLE,
+                            root_id, root_path, observed_at=clock(), is_directory=True,
+                        ))
+                    except Exception:
+                        # The health service retains failed writes in memory;
+                        # continue blocking the remaining affected roots too.
+                        continue
+            finally:
+                self.stop(timeout=5.0)
+            raise
 
     def stop(self, *, timeout: float) -> None:
         observer = self._observer
         if observer is None:
             return
+        self._stopping.set()
         observer.stop()
-        observer.join(timeout)
-        if observer.is_alive():
+        if getattr(observer, "ident", None) is not None or observer.is_alive():
+            observer.join(timeout)
+        if observer.is_alive() or any(emitter.is_alive() for emitter in self._emitters):
             raise RuntimeError("Library event source did not stop before the deadline")
         self._observer = None
+        self._emitters = ()
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> None:
         if self._observer is not None:

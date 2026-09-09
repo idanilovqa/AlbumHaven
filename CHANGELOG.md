@@ -2,6 +2,8 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Retained encrypted review diagnostics for private failure investigation, with
+  run and review-unit binding and no plaintext log upload.
 - Reported fixed CI review failure categories without exposing console text or
   private usage data, while retaining complete review and test gates.
 - Retried due welcome messages through a bounded background worker when delivery

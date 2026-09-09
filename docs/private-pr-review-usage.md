@@ -3,8 +3,9 @@
 Codex execution output is captured in a runner-private temporary file. The
 workflow verifies the pinned official action before applying private output routing
 and selecting JSONL output with `--json`; every other review argument is preserved.
-Public artifacts contain validated findings and coverage; raw transcripts
-and plaintext usage are not uploaded.
+Public review artifacts contain validated findings and coverage. Separate private
+usage and diagnostic artifacts contain ciphertext only; plaintext transcripts
+and usage are not uploaded.
 
 Failed executions print only a fixed diagnostic category: `provider_quota_reported`,
 `authentication_failed`, `rate_limited`, `context_limit`, `transport_failure`, or
@@ -13,8 +14,44 @@ ignores agent/tool message content and the action's console preamble or footer.
 Unrecognized, conflicting, malformed, or oversized captures remain `unknown`;
 the maximum classified capture is 16 MiB, without truncation. Categories report
 what the error indicates, not an independently verified billing or account state.
-Classifier failure preserves the original review exit code. Raw console output
-remains ephemeral on the runner and is never added to an artifact or usage envelope.
+Classifier failure preserves the original review exit code. The raw console stays
+in a runner-private file and is encrypted separately for the existing owner key.
+It never enters the usage envelope or the public console.
+
+## Read encrypted execution diagnostics
+
+Each attempted Codex batch or integration action registers its capture before
+argument normalization. A runner-private 0600 sidecar binds the capture to the
+repository, PR, run, attempt, head, unit, and manifest. Completion records the
+original exit code; interrupted capture has an unknown exit and is marked
+incomplete. Diagnostic capture and upload failures do not turn a failed review
+into a success. A cancelled runner may terminate before it can upload anything.
+
+The separate artifact is named
+`private-review-diagnostic-codex-RUN-ATTEMPT-UNIT` and retains only
+`codex.enc.json` for seven days. It uses the same AES-256-GCM/RSA-OAEP-SHA256
+envelope and recipient key as usage, with a mandatory diagnostic payload type.
+The plaintext cap is 16 MiB: larger, changing, missing, or invalid captures fail
+explicitly without truncation or an artifact. These encrypted logs can contain
+prompts, source excerpts, provider errors, paths, and response content. Only the
+existing local private key can decrypt them.
+
+Download that exact artifact into the existing owner-private directory. Set the
+following environment variables from the verified run and review manifest before
+opening it: `GITHUB_REPOSITORY`, `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`,
+`REVIEW_USAGE_HEAD_SHA`, `REVIEW_USAGE_PR_NUMBER`, `REVIEW_USAGE_UNIT_ID`, and
+`REVIEW_USAGE_MANIFEST_DIGEST`. Then run:
+
+```powershell
+node scripts/ci/private-codex-diagnostic.cjs open --input <CIPHERTEXT_PATH> --private-key <EXISTING_PRIVATE_KEY_PATH> --output <NEW_OWNER_PRIVATE_JSON_PATH>
+```
+
+Opening rejects a mismatched context or key, tampering, symbolic-link or junction
+parents, and an existing output file. The output parent must already exist and be
+owner-private. Files are created with mode 0600 on POSIX; Windows relies on the
+existing directory's restricted inherited ACL. The command prints no plaintext.
+The local JSON contains exact console bytes in `consoleBase64`, alongside the
+execution status and context; decode or inspect them only in that private folder.
 
 Codex review batches, the integration review, and PR Agent retain encrypted
 usage artifacts for each GitHub Actions run and attempt. The readable report

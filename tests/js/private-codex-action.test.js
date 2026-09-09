@@ -94,10 +94,11 @@ test('private action rejects wrong pins dirty checkouts and repository-root mism
 
 for (const scenario of [{ exitCode: 0 }, { exitCode: 37 }, { exitCode: 0, captureUnavailable: true },
   { exitCode: 37, nativeError: 'unexpected status 401 Unauthorized' }, { exitCode: 37, removeClassifier: true },
-  { exitCode: 0, emptyArgs: true }]) {
-  const { exitCode, captureUnavailable = false, nativeError = '', removeClassifier = false, emptyArgs = false } = scenario;
+  { exitCode: 0, emptyArgs: true }, { exitCode: 37, finishFailure: true }, { exitCode: 1, invalidArgs: true }]) {
+  const { exitCode, captureUnavailable = false, nativeError = '', removeClassifier = false, emptyArgs = false,
+    finishFailure = false, invalidArgs = false } = scenario;
   test(captureUnavailable ? 'private action never launches the child when private capture cannot be created'
-    : `private action retains stdout stderr and original exit ${exitCode} without publishing usage ${nativeError ? 'native category' : removeClassifier ? 'classifier failure' : emptyArgs ? 'integration defaults' : ''}`, t => {
+    : `private action retains stdout stderr and original exit ${exitCode} without publishing usage ${nativeError ? 'native category' : removeClassifier ? 'classifier failure' : emptyArgs ? 'integration defaults' : finishFailure ? 'diagnostic failure' : invalidArgs ? 'early normalization failure' : ''}`, t => {
     const { prepareActionSource } = helper();
     const directory = temporary(t);
     const actionDirectory = path.join(directory, 'action with spaces');
@@ -111,6 +112,10 @@ for (const scenario of [{ exitCode: 0 }, { exitCode: 37 }, { exitCode: 0, captur
     const classifier = path.join(workspace, 'scripts/ci/codex-failure-category.cjs');
     fs.mkdirSync(path.dirname(classifier), { recursive: true });
     fs.copyFileSync(path.resolve(__dirname, '../../scripts/ci/codex-failure-category.cjs'), classifier);
+    for (const name of ['private-codex-diagnostic.cjs', 'private-review-usage.cjs']) {
+      fs.copyFileSync(path.resolve(__dirname, '../../scripts/ci', name), path.join(path.dirname(classifier), name));
+    }
+    const sidecar = path.join(runnerTemp, 'album-haven-codex-diagnostic.json');
     fs.writeFileSync(path.join(actionDirectory, 'dist', 'main.js'), `
 const fs = require('node:fs');
 fs.writeFileSync(process.env.OBSERVED_ARGS, JSON.stringify({ args: process.argv.slice(2), nodeOptions: process.env.NODE_OPTIONS }));
@@ -118,6 +123,7 @@ console.log('PRIVATE_TRANSCRIPT_MARKER tokens used 123456');
 console.error('PRIVATE_USAGE_MARKER model gpt-6-astra input_tokens 123456');
 if (process.env.FIXTURE_NATIVE_ERROR) console.error(JSON.stringify({ type: 'turn.failed', error: { message: process.env.FIXTURE_NATIVE_ERROR } }));
 if (process.env.FIXTURE_REMOVE_CLASSIFIER) fs.unlinkSync(process.env.FIXTURE_CLASSIFIER);
+if (process.env.FIXTURE_FINISH_FAILURE) fs.writeFileSync(process.env.FIXTURE_SIDECAR, '{malformed');
 fs.writeFileSync(process.env.CODEX_OUTPUT_FILE, '{"structured":"result"}');
 fs.appendFileSync(process.env.GITHUB_OUTPUT, 'final-message=fixture-result\\n');
 process.exit(Number(process.env.FIXTURE_EXIT));
@@ -132,11 +138,15 @@ process.exit(Number(process.env.FIXTURE_EXIT));
     const env = { ...process.env, PATH: commandPath,
       RUNNER_TEMP: posixPath(runnerTemp), ACTION_PATH: posixPath(actionDirectory),
       GITHUB_WORKSPACE: workspace, FIXTURE_CLASSIFIER: classifier,
+      GITHUB_RUN_ID: '123', GITHUB_RUN_ATTEMPT: '2', GITHUB_REPOSITORY: 'example/repository',
+      REVIEW_USAGE_HEAD_SHA: 'a'.repeat(40), REVIEW_USAGE_PR_NUMBER: '1', REVIEW_USAGE_UNIT_ID: 'batch-001',
+      REVIEW_USAGE_MANIFEST_DIGEST: 'b'.repeat(64), FIXTURE_SIDECAR: sidecar,
+      FIXTURE_FINISH_FAILURE: finishFailure ? '1' : '',
       FIXTURE_REMOVE_CLASSIFIER: removeClassifier ? '1' : '', FIXTURE_NATIVE_ERROR: nativeError,
       OBSERVED_ARGS: observed, FIXTURE_EXIT: String(exitCode), GITHUB_OUTPUT: githubOutput,
       NODE_OPTIONS: '--no-warnings', CODEX_PROMPT: 'fixture prompt', CODEX_PROMPT_FILE: 'prompt file.md',
       CODEX_OUTPUT_FILE: output, CODEX_HOME: 'fixture-home', CODEX_WORKING_DIRECTORY: 'fixture-workspace',
-      CODEX_ARGS: emptyArgs ? '' : '["--image","image with spaces.png"]', CODEX_OUTPUT_SCHEMA: '', CODEX_OUTPUT_SCHEMA_FILE: 'schema.json',
+      CODEX_ARGS: invalidArgs ? '{invalid' : emptyArgs ? '' : '["--image","image with spaces.png"]', CODEX_OUTPUT_SCHEMA: '', CODEX_OUTPUT_SCHEMA_FILE: 'schema.json',
       CODEX_SANDBOX: '', CODEX_PERMISSION_PROFILE: ':read-only', CODEX_MODEL: 'fixture-model',
       CODEX_EFFORT: 'high', CODEX_SAFETY_STRATEGY: 'drop-sudo', CODEX_USER: '' };
     const result = cp.spawnSync(bash, [posixPath(shellScript)], { env, encoding: 'utf8', windowsHide: true, timeout: 10000 });
@@ -149,12 +159,24 @@ process.exit(Number(process.env.FIXTURE_EXIT));
     }
     assert.equal(result.status, exitCode, result.stderr);
     assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_|123456|gpt-6-astra|input_tokens|fixture prompt/);
+    assert.ok(fs.existsSync(sidecar), 'capture registration must precede normalization and execution');
+    if (invalidArgs) {
+      assert.ok(!fs.existsSync(observed), 'invalid arguments cannot launch the reviewer');
+      const state = JSON.parse(fs.readFileSync(sidecar));
+      assert.equal(state.status, 'complete'); assert.equal(state.exitCode, 1);
+      return;
+    }
     if (exitCode === 0) assert.equal(result.stdout + result.stderr, '');
-    const captures = fs.readdirSync(runnerTemp);
+    const captures = fs.readdirSync(runnerTemp).filter(name => name.startsWith('album-haven-codex-output.'));
     assert.equal(captures.length, 1);
     assert.match(captures[0], /^album-haven-codex-output\./);
     const capturePath = path.join(runnerTemp, captures[0]);
     const capture = fs.readFileSync(capturePath, 'utf8');
+    if (!finishFailure) {
+      const state = JSON.parse(fs.readFileSync(sidecar));
+      assert.equal(state.status, 'complete'); assert.equal(state.exitCode, exitCode);
+      assert.equal(state.capturePath, capturePath);
+    }
     assert.match(capture, /PRIVATE_TRANSCRIPT_MARKER tokens used 123456/);
     assert.match(capture, /PRIVATE_USAGE_MARKER/);
     if (exitCode !== 0) assert.equal(result.stderr, `Codex review failed: ${nativeError ? 'authentication_failed' : 'unknown'}\n`);

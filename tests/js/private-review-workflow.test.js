@@ -68,11 +68,42 @@ test('every Codex unit uses the immutable event merge, pinned tooling and a sepa
 test('private usage uploads select encrypted files only, including the hidden staging directory', () => {
   for (const [name, reviewer] of [['codex_review_batches', 'codex'], ['codex_review', 'codex'], ['pr_agent_review', 'pr-agent']]) {
     const section = job(name);
-    const step = section.split('uses: actions/upload-artifact@v4')[1].split(/\n      - name:/)[0];
+    const uploads = section.split(/\n      - name:/).filter(step => step.includes('uses: actions/upload-artifact@v4')
+      && step.includes(`name: private-review-usage-${reviewer}-`));
+    assert.equal(uploads.length, 1);
+    const step = uploads[0];
     assert.match(step, new RegExp(`name: private-review-usage-${reviewer}-`));
     assert.match(step, new RegExp(`path: \\.tmp/private-review-usage/${reviewer}\\.enc\\.json\\s`));
     assert.match(step, /include-hidden-files: true/);
     assert.doesNotMatch(step, /path:.*\*/);
+  }
+});
+
+test('attempted Codex units retain only separately encrypted context-bound diagnostics', () => {
+  for (const name of ['codex_review_batches', 'codex_review']) {
+    const section = job(name);
+    const steps = section.split(/\n      - name:/);
+    const action = steps.find(step => step.includes('id: run_codex'));
+    const seal = steps.find(step => step.includes('private-codex-diagnostic.cjs seal'));
+    const upload = steps.find(step => step.includes('name: private-review-diagnostic-codex-'));
+    for (const step of [action, seal]) {
+      assert.match(step, /REVIEW_USAGE_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/);
+      assert.match(step, /REVIEW_USAGE_PR_NUMBER: \$\{\{ github\.event\.pull_request\.number \}\}/);
+      assert.match(step, /REVIEW_USAGE_MANIFEST_DIGEST: \$\{\{ needs\.codex_review_plan\.outputs\.manifest_digest \}\}/);
+      assert.match(step, name === 'codex_review_batches' ? /REVIEW_USAGE_UNIT_ID: \$\{\{ matrix\.id \}\}/ : /REVIEW_USAGE_UNIT_ID: integration/);
+    }
+    for (const step of [seal, upload]) {
+      assert.match(step, /always\(\) && steps\.run_codex\.outcome != '' && steps\.run_codex\.outcome != 'skipped'/);
+      assert.match(step, /continue-on-error: true/);
+    }
+    assert.match(seal, /REVIEW_USAGE_ACTION_OUTCOME: \$\{\{ steps\.run_codex\.outcome \}\}/);
+    assert.match(seal, /--runner-temp "\$RUNNER_TEMP" --public-key \.github\/review-usage-public-key\.pem --output \.tmp\/private-review-diagnostics\/codex\.enc\.json/);
+    assert.match(upload, /path: \.tmp\/private-review-diagnostics\/codex\.enc\.json\s/);
+    assert.match(upload, /retention-days: 7/);
+    assert.match(upload, /include-hidden-files: true/);
+    assert.doesNotMatch(upload, /path:.*(?:\*|RUNNER_TEMP|\.log)/);
+    assert.ok(section.indexOf('private-codex-diagnostic.cjs seal') < section.indexOf('seal-review-usage.cjs'));
+    assert.doesNotMatch(action, /continue-on-error:/);
   }
 });
 

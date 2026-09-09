@@ -1462,6 +1462,35 @@ jobs:
           codex-args: ${{ matrix.codex_args }}
           output-file: .tmp/codex-result.json
           codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_UNIT_ID: ${{ matrix.id }}
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+
+      - name: Encrypt private Codex diagnostics
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_UNIT_ID: ${{ matrix.id }}
+          REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.run_codex.outcome }}
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+        run: |
+          mkdir -p .tmp/private-review-diagnostics
+          node scripts/ci/private-codex-diagnostic.cjs seal --runner-temp "$RUNNER_TEMP" --public-key .github/review-usage-public-key.pem --output .tmp/private-review-diagnostics/codex.enc.json
+
+      - name: Retain encrypted Codex diagnostics
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-diagnostic-codex-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.id }}
+          path: .tmp/private-review-diagnostics/codex.enc.json
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Collect private Codex usage
         if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
@@ -1595,6 +1624,35 @@ jobs:
           output-schema-file: .tmp/codex-integration/schema.json
           output-file: .tmp/codex-integration/result.json
           codex-home: ${{ runner.temp }}/album-haven-codex-${{ github.run_id }}-${{ github.run_attempt }}-integration
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_UNIT_ID: integration
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+
+      - name: Encrypt private Codex diagnostics
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        env:
+          REVIEW_USAGE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_USAGE_PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEW_USAGE_UNIT_ID: integration
+          REVIEW_USAGE_ACTION_OUTCOME: ${{ steps.run_codex.outcome }}
+          REVIEW_USAGE_MANIFEST_DIGEST: ${{ needs.codex_review_plan.outputs.manifest_digest }}
+        run: |
+          mkdir -p .tmp/private-review-diagnostics
+          node scripts/ci/private-codex-diagnostic.cjs seal --runner-temp "$RUNNER_TEMP" --public-key .github/review-usage-public-key.pem --output .tmp/private-review-diagnostics/codex.enc.json
+
+      - name: Retain encrypted Codex diagnostics
+        if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-review-diagnostic-codex-${{ github.run_id }}-${{ github.run_attempt }}-integration
+          path: .tmp/private-review-diagnostics/codex.enc.json
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: warn
 
       - name: Collect private Codex usage
         if: ${{ always() && steps.run_codex.outcome != '' && steps.run_codex.outcome != 'skipped' }}

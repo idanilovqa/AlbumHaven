@@ -151,8 +151,7 @@ function keyId(publicKey) {
 function aad(envelope) {
   return Buffer.from(JSON.stringify({ version: envelope.version, keyId: envelope.keyId }));
 }
-function sealReport(report, publicKeyPem) {
-  const sanitized = normalizeReport(report);
+function sealPayload(sanitized, publicKeyPem) {
   const publicKey = requireRsa(crypto.createPublicKey(publicKeyPem));
   const dataKey = crypto.randomBytes(32);
   const iv = crypto.randomBytes(12);
@@ -176,7 +175,7 @@ function base64(value, length) {
   if (bytes.toString('base64') !== value || (length !== undefined && bytes.length !== length)) invalid();
   return bytes;
 }
-function openReport(envelope, privateKeyPem) {
+function openPayload(envelope, privateKeyPem) {
   object(envelope);
   if (Object.keys(envelope).length !== ENVELOPE_FIELDS.length
     || !ENVELOPE_FIELDS.every(field => Object.hasOwn(envelope, field))
@@ -196,8 +195,58 @@ function openReport(envelope, privateKeyPem) {
     decipher.setAAD(aad(envelope));
     decipher.setAuthTag(tag);
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    return normalizeReport(JSON.parse(plaintext.toString('utf8')));
+    return JSON.parse(plaintext.toString('utf8'));
   } finally { dataKey.fill(0); if (plaintext) plaintext.fill(0); }
+}
+
+function sealReport(report, publicKeyPem) {
+  return sealPayload(normalizeReport(report), publicKeyPem);
+}
+function openReport(envelope, privateKeyPem) {
+  return normalizeReport(openPayload(envelope, privateKeyPem));
+}
+const DIAGNOSTIC_MAX_BYTES = 16 * 1024 * 1024;
+const DIAGNOSTIC_CONTEXT_FIELDS = ['repository', 'pullRequestNumber', 'runId', 'runAttempt',
+  'headSha', 'reviewer', 'reviewUnitId', 'manifestDigest'];
+function diagnosticContext(value) {
+  object(value);
+  if (Object.keys(value).length !== DIAGNOSTIC_CONTEXT_FIELDS.length
+      || !DIAGNOSTIC_CONTEXT_FIELDS.every(field => Object.hasOwn(value, field))
+      || value.reviewer !== 'codex') invalid();
+  const normalized = normalizeReport({ schemaVersion: 1, context: value,
+    telemetryStatus: 'unavailable', records: [] }).context;
+  if (DIAGNOSTIC_CONTEXT_FIELDS.some(field => normalized[field] !== value[field])) invalid();
+  return normalized;
+}
+function normalizeDiagnostic(value) {
+  object(value);
+  const fields = ['schemaVersion', 'type', 'context', 'execution', 'consoleBase64'];
+  if (Object.keys(value).length !== fields.length || !fields.every(field => Object.hasOwn(value, field))
+      || value.schemaVersion !== 1 || value.type !== 'codex-execution-diagnostic') invalid();
+  const context = diagnosticContext(value.context);
+  const execution = object(value.execution);
+  if (Object.keys(execution).length !== 3
+      || !['status', 'exitCode', 'actionOutcome'].every(field => Object.hasOwn(execution, field))) invalid();
+  choice(execution.status, ['complete', 'incomplete']);
+  choice(execution.actionOutcome, ['success', 'failure', 'cancelled', 'unknown']);
+  if (execution.status === 'complete') {
+    if (count(execution.exitCode, false) > 255) invalid();
+  } else if (execution.exitCode !== null) invalid();
+  if (typeof value.consoleBase64 !== 'string'
+      || value.consoleBase64.length > Math.ceil(DIAGNOSTIC_MAX_BYTES / 3) * 4) invalid();
+  const bytes = Buffer.from(value.consoleBase64, 'base64');
+  if (bytes.length > DIAGNOSTIC_MAX_BYTES || bytes.toString('base64') !== value.consoleBase64) invalid();
+  return { schemaVersion: 1, type: 'codex-execution-diagnostic', context,
+    execution: { ...execution }, consoleBase64: value.consoleBase64 };
+}
+function sealDiagnostic(report, publicKeyPem) {
+  return sealPayload(normalizeDiagnostic(report), publicKeyPem);
+}
+function openDiagnostic(envelope, privateKeyPem, expectedContext) {
+  const expected = diagnosticContext(expectedContext);
+  const report = normalizeDiagnostic(openPayload(envelope, privateKeyPem));
+  if (DIAGNOSTIC_CONTEXT_FIELDS.some(field => report.context[field] !== expected[field])) invalid();
+  return report;
 }
 
 function estimate(record) {
@@ -443,7 +492,8 @@ function main(argv) {
   }
 }
 
-module.exports = { sealReport, openReport, summarizeReports, validateUsageUnits };
+module.exports = { sealReport, openReport, summarizeReports, validateUsageUnits,
+  sealDiagnostic, openDiagnostic, diagnosticContext, DIAGNOSTIC_MAX_BYTES };
 if (require.main === module) {
   try { main(process.argv.slice(2)); }
   catch { process.stderr.write('Private review usage command failed; check input, recipient key, and output paths.\n'); process.exitCode = 1; }

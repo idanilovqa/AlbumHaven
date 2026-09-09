@@ -24,12 +24,21 @@
   box-shadow: 0 24px 64px rgba(0,0,0,0.36);
 }
 .utility-modal-header {
+  position: relative;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 12px;
-  padding: 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 16px 0;
+  min-height: 58px;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  border: 0;
+  --utility-tab-accent: var(--appearance-waveform-edge, var(--accent));
+  background-image: linear-gradient(var(--border), var(--border));
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
 }
 .utility-modal-title {
   margin: 0;
@@ -42,9 +51,14 @@
 }
 .utility-modal-tabs {
   display: flex;
-  gap: 10px;
-  padding: 12px 16px 0;
-  border-bottom: 1px solid var(--border);
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding: 0;
+  border: 0;
 }
 .utility-tab {
   border: 1px solid var(--border);
@@ -52,20 +66,42 @@
   background: rgba(255,255,255,0.03);
   color: var(--muted);
   border-radius: 12px 12px 0 0;
-  padding: 10px 16px;
-  font-size: 0.84rem;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex: 0 0 auto;
   font-weight: 700;
   cursor: pointer;
   position: relative;
-  bottom: -1px;
+  bottom: 0;
   text-decoration: none;
 }
-.utility-tab.is-active {
+#utility-modal .utility-tab.is-active {
   color: var(--text);
-  background: var(--panel);
-  border-color: rgba(96,165,250,0.35);
-  box-shadow: inset 0 3px 0 rgba(96,165,250,0.7);
+  z-index: 1;
+  border: 1px solid transparent;
+  border-top-width: 2px;
+  border-bottom-color: var(--appearance-panel-background, var(--panel));
+  background: linear-gradient(var(--appearance-panel-background, var(--panel)), var(--appearance-panel-background, var(--panel))) padding-box,
+    linear-gradient(to bottom, var(--utility-tab-accent), color-mix(in srgb, var(--utility-tab-accent) 48%, transparent) 28%, transparent) border-box;
+  box-shadow: 0 -3px 10px color-mix(in srgb, var(--utility-tab-accent) 10%, transparent);
 }
+.utility-modal-header::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  inset: auto 0 0;
+  height: 1px;
+  background: linear-gradient(to right,
+    transparent calc(var(--active-tab-left, 0px) - 100px),
+    var(--utility-tab-accent) var(--active-tab-left, 0px),
+    transparent var(--active-tab-left, 0px), transparent var(--active-tab-right, 0px),
+    var(--utility-tab-accent) var(--active-tab-right, 0px),
+    transparent calc(var(--active-tab-right, 0px) + 100px));
+}
+#utility-modal .utility-tab:hover { outline: none; }
+#utility-modal .utility-tab:focus-visible { outline: 2px solid var(--utility-tab-accent); outline-offset: -4px; }
+#utility-modal .utility-modal-close { align-self: flex-start; flex: 0 0 34px; width: 34px; height: 34px; min-height: 34px; }
 .utility-modal-body {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -96,7 +132,7 @@
 .utility-search-row {
   display: flex;
   align-items: stretch;
-  gap: 6px;
+  gap: 0;
   min-width: 0;
 }
 .utility-search-input {
@@ -113,7 +149,7 @@
 }
 .utility-problem-filter {
   position: relative;
-  flex: 0 0 auto;
+  width: 100%;
 }
 .utility-problem-filter-button {
   height: 100%;
@@ -131,6 +167,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+#utility-modal .search-field { --search-field-height: 38px; --search-field-background: var(--appearance-control, var(--panel-2)); }
+#utility-modal .search-field-action > .utility-problem-filter-button { border: 0; background: transparent; max-width: none; font-size: 0.78rem; }
+#utility-modal .search-field-action > .utility-problem-filter-button[hidden],
+#utility-modal .search-field-action:has(> .utility-problem-filter-button[hidden]) { display: none; }
+#utility-modal .search-field-action > .utility-problem-filter-button:hover:not(:disabled) { background: var(--appearance-item-hover, var(--panel-2)); }
 .utility-problem-filter-button:hover,
 .utility-problem-filter-button.is-active {
   color: var(--text);
@@ -176,10 +217,12 @@
 }
 .utility-problem-filter-option:hover,
 .utility-problem-filter-option.is-selected {
-  background: rgba(96,165,250,0.12);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
+.utility-problem-filter-option:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+#utility-modal .utility-problem-filter-option:hover { border: 0; outline: none; box-shadow: none; }
 .utility-problem-filter-check {
-  color: #93c5fd;
+  color: var(--muted);
   font-weight: 800;
   line-height: 1.2;
 }
@@ -247,7 +290,79 @@
   background: rgba(96,165,250,0.1);
 }
 .utility-list-item[draggable="true"] {
-  user-select: none;
+  user-select: text;
+}
+/* Wide is an additive NavigationTree presentation, with the same shared identity. */
+#utility-modal .navigation-tree-item--wide {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 60px;
+  padding: 9px 10px;
+  text-decoration: none;
+  font: inherit;
+  text-align: left;
+  border-radius: 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+#utility-modal .navigation-tree-item--wide .navigation-tree-label { flex: 1; width: auto; text-align: left; }
+#utility-modal .navigation-tree-item--wide .utility-list-item-title { font-size: 0.88rem; font-weight: 500; overflow-wrap: anywhere; }
+#utility-modal .navigation-tree-item--wide .utility-list-item-meta { font-size: 0.75rem; font-weight: 400; overflow-wrap: anywhere; }
+#utility-modal .navigation-tree-item--wide:is(:hover, .is-selected) { border-color: var(--border); background: var(--appearance-item-hover, var(--panel-2)); }
+#utility-modal .navigation-tree-item--wide.is-selected { background: var(--selection-body-background, var(--panel-2)); }
+#utility-modal .navigation-tree-item--wide:focus-visible { outline: 2px solid var(--muted); outline-offset: -2px; }
+.navigation-tree-artwork { display: block; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 7px; overflow: hidden; }
+.navigation-tree-artwork > .album-artbox { height: 100%; }
+#utility-modal :is(.utility-detail-header, .utility-loop-detail-header) { grid-template-columns: 88px minmax(0, 1fr); gap: 16px; }
+#utility-modal .utility-detail-cover { width: 88px; height: 88px; flex: 0 0 88px; border-radius: 9px; overflow: visible; background: transparent; }
+#utility-modal .utility-detail-cover > .album-artbox { height: 100%; }
+#utility-modal .utility-artbox-trigger,
+#utility-modal .utility-artbox-trigger:is(:hover, :active) {
+  display: block; width: 100%; height: 100%; padding: 0; border: 0;
+  background: transparent; border-radius: inherit; box-shadow: none; outline: none; cursor: zoom-in;
+}
+#utility-modal .utility-artbox-trigger:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+#utility-modal .utility-artbox-trigger > .album-artbox { height: 100%; }
+#utility-modal, #utility-modal * { caret-color: transparent !important; }
+#utility-modal .utility-modal-header {
+  background-color: var(--appearance-panel-background, var(--panel));
+  background-image: linear-gradient(var(--border), var(--border));
+  background-position: bottom; background-repeat: no-repeat; background-size: 100% 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  #utility-modal .navigation-tree-item--wide, #utility-modal .utility-tab { transition: none; scroll-behavior: auto; }
+}
+@media (max-width: 900px) {
+  #utility-modal[data-active-tab="appearance"] .utility-modal-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+  #utility-modal[data-active-tab="appearance"] .utility-modal-body > .utility-sidebar {
+    min-height: max-content;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  #utility-modal[data-active-tab="appearance"] .utility-sidebar .utility-list {
+    flex-direction: row;
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    overflow: visible;
+    gap: 8px;
+  }
+  #utility-modal[data-active-tab="appearance"] .utility-list > .navigation-tree-item {
+    flex: 1 1 140px;
+    width: auto;
+    min-height: 40px;
+  }
+  #utility-modal[data-active-tab="appearance"] .utility-modal-body > .utility-detail {
+    min-height: 0;
+    overflow: auto;
+  }
 }
 .utility-list-item.is-dragging {
   opacity: 0.55;

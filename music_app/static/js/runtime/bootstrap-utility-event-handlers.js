@@ -34,7 +34,7 @@
 
   if (!event.target.closest('.utility-problem-filter, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
-    renderUtilityModalContent();
+    renderProblemFilterControls(getUtilityModalElements());
   }
   if (
     !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox')
@@ -140,6 +140,7 @@
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
+      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
     return;
   }
@@ -161,7 +162,10 @@
   const problematicAlbumButton = event.target.closest('[data-problematic-album-key]');
   if (problematicAlbumButton) {
     event.preventDefault();
-    state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+    state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
@@ -170,10 +174,10 @@
     state.utility.separateReleaseSelections = {};
     const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && !selectedAlbum.detail_loaded) {
+      selectedAlbum.detail_load_failed = false;
       void loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true);
-      return;
     }
-    renderUtilityModalContent();
+    renderUtilityModalContent({ preserveProblematicTree: true });
     return;
   }
 
@@ -1039,6 +1043,48 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const tab = event.target?.closest?.('[data-utility-tab]');
+  if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    const tabs = getUtilityModalElements().tabs.filter(item => !item.disabled && !item.hidden);
+    const current = tabs.indexOf(tab);
+    if (current < 0 || !tabs.length) return false;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+    tabs[next].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+  const filterTarget = event.target?.closest?.('#utility-problem-filter-button, #utility-problem-filter-menu');
+  const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
+  if (filterTarget && !filterInput) {
+    const els = getUtilityModalElements();
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      state.utility.problemDropdownOpen = false;
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterButton.setAttribute('aria-expanded', 'false');
+      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      els.problemFilterButton.focus();
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
+      event.preventDefault();
+      if (!state.utility.problemDropdownOpen) {
+        state.utility.problemDropdownOpen = true;
+        renderProblemFilterControls(els);
+      }
+      const options = Array.from(els.problemFilterMenu.querySelectorAll?.('[data-problem-filter-value]') || []);
+      const current = options.indexOf(event.target);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+        : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      options[next]?.focus();
+      return true;
+    }
   }
   if (typeof handleSavedLoopEditKeydown === 'function' && handleSavedLoopEditKeydown(event)) {
     return true;

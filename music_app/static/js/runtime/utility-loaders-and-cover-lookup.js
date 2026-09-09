@@ -186,7 +186,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent();
+        renderUtilityModalContent({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }
@@ -1244,6 +1244,13 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  state.utility.problemDropdownOpen = false;
+  if (els.problemFilterMenu) {
+    els.problemFilterMenu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+  }
+  els.problemFilterButton?.setAttribute?.('aria-expanded', 'false');
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationActiveToken = 0;
   if (typeof clearUtilityLoopSpaceOwner === 'function') {

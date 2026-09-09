@@ -263,20 +263,24 @@ function parseLoopTime(value) {
   return (hours * 3600) + (minutes * 60) + seconds;
 }
 
-function buildProblematicAlbumListItem(album, selected) {
+function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
   const displayYear = String(album.year || '').trim();
-  const displayTitle = displayYear ? `${displayName} / ${displayYear}` : displayName;
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-problematic-album-key="${escapeHtml(album.key)}">
-      <span class="utility-list-item-title">${escapeHtml(displayTitle)}</span>
-      <span class="utility-list-item-meta">${escapeHtml(displayArtist)}</span>
-      <span class="utility-list-item-issues">${escapeHtml(getProblematicAlbumIssueLabel(album))}</span>
-      ${album.has_encoding_repairs ? '<span class="utility-list-item-badge">Converted display</span>' : ''}
-    </button>
-  `;
+  const artworkSource = buildAlbumDisplayCoverUrl(album);
+  const artworkLabel = `Artwork for ${displayName}`;
+  const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
+  return {
+      variant: 'wide', action: true, key: album.key, selected, label: displayName,
+      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+  };
+}
+
+function buildProblematicAlbumListItem(album, selected) {
+  return window.NavigationTree.renderItem(getProblematicAlbumNavigationOptions(album, selected));
 }
 
 function buildUtilityRuleListItem(rule, selected) {
@@ -335,6 +339,7 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   const groupKey = String(group?.key || '');
   const collapsed = isUtilityLoopGroupCollapsed(groupKey);
   const groupSelected = groupKey && groupKey === String(selectedGroupKey || '');
+  const artworkHtml = buildUtilityAlbumArtbox(representative, { label: `Artwork for ${title}` });
   const loopsHtml = collapsed
     ? ''
     : `
@@ -351,19 +356,14 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
       <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
-        <button class="utility-list-item utility-loop-group-list-item ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-          <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-          <span class="utility-loop-tree-row-main">
-            <span class="utility-loop-tree-song-copy">
-              <span class="utility-list-item-title">${escapeHtml(title)}</span>
-              <span class="utility-list-item-meta">${escapeHtml(subtitle)}</span>
-              <span class="utility-loop-group-count">${escapeHtml(loopCount > 1 ? `${loopCount} loops` : '1 loop')}</span>
-            </span>
-          </span>
-          <span class="utility-loop-collapse-toggle-wrap">
-            <span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span>
-          </span>
-        </button>
+        ${window.NavigationTree.renderItem({
+          variant: 'wide', action: true, key: groupKey, draggable: true, className: 'utility-loop-group-list-item',
+          selected: groupSelected && state.utility.selectedLoopDetailMode !== 'loop',
+          label: title, subtitle, year: representative?.year || '', artworkHtml,
+          count: loopCount, countHidden: true,
+          attributes: { 'data-utility-loop-group-key': groupKey },
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span></span>`,
+        })}
       </div>
       ${loopsHtml}
     </div>

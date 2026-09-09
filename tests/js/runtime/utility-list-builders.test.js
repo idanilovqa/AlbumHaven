@@ -6126,6 +6126,11 @@ test('problem exclusion selection stays independent from Suggested Edits Apply o
 
 test('Problematic Files detail renders the approved album-first compact table contract', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.coverLookup = { optimisticAlbumCovers: {} };
+  for (const file of ['modal-and-overlay-helpers.js', 'album-artbox.js']) {
+    const sourcePath = path.join(__dirname, '../../../music_app/static/js/runtime', file);
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  }
   context.getProblematicAlbumDisplayValue = (album, field) => (
     field === 'album' ? album.name : album.album_artist
   );

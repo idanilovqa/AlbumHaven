@@ -3487,6 +3487,36 @@ function buildAlbumArtboxHtml(config = {}) {
   return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
 
+function buildUtilityAlbumArtbox(album, { label = 'Album artwork', interactive = false, source = '' } = {}) {
+  const preview = source || buildAlbumDisplayCoverUrl(album);
+  const fullSource = buildAlbumLightboxCoverUrl(album) || preview;
+  const artbox = buildAlbumArtboxHtml({
+    state: preview ? 'ready' : 'missing', label,
+    coverHtml: preview ? `<img class="utility-detail-cover-image" src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
+  });
+  return interactive && preview
+    ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1" data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
+    : artbox;
+}
+
+function handleUtilityAlbumArtboxError(image) {
+  if (!image) return;
+  const fallback = String(image.getAttribute('data-remote-cover-url') || '').trim();
+  if (fallback && image.dataset.remoteCoverTried !== '1') {
+    image.dataset.remoteCoverTried = '1';
+    image.src = fallback;
+    const trigger = image.closest('[data-open-lightbox]');
+    trigger?.setAttribute('data-cover-src', fallback);
+    return;
+  }
+  const artbox = image.closest('.album-artbox');
+  if (!artbox) return;
+  const label = artbox.getAttribute('aria-label') || 'Album artwork';
+  const trigger = artbox.closest('.utility-artbox-trigger');
+  const target = trigger || artbox;
+  target.outerHTML = buildAlbumArtboxHtml({ state: 'missing', label });
+}
+
 // END js/runtime/album-artbox.js
 
 // BEGIN js/runtime/gallery-main-components.js
@@ -10737,9 +10767,12 @@ function getTrackModalLightboxSourceAlbumKey(button) {
   return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
 }
 
+let imageLightboxReturnFocus = null;
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
+  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -10769,7 +10802,11 @@ function openImageLightbox(src, alt, options = {}) {
     updateLightboxNavState();
   }
   els.overlay.hidden = false;
+  els.overlay.setAttribute?.('role', 'dialog');
+  els.overlay.setAttribute?.('aria-modal', 'true');
+  els.overlay.setAttribute?.('aria-label', 'Full-size album cover');
   document.body.classList.add('modal-open');
+  els.close?.focus?.();
 }
 
 function closeImageLightbox() {
@@ -10807,6 +10844,9 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const returnFocus = imageLightboxReturnFocus;
+  imageLightboxReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
@@ -10905,6 +10945,20 @@ function attachModalEvents() {
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const controls = Array.from(lightboxEls.overlay.querySelectorAll?.('button, [href], input, select, textarea, [tabindex]') || [])
+        .filter(control => !control.hidden && !control.disabled && control.tabIndex >= 0
+          && !control.closest?.('[hidden], [inert]') && control.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) return;
+      const outside = !lightboxEls.overlay.contains(document.activeElement);
+      if (outside || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+      return;
+    }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
       stepLightbox(-1);
@@ -12154,20 +12208,24 @@ function parseLoopTime(value) {
   return (hours * 3600) + (minutes * 60) + seconds;
 }
 
-function buildProblematicAlbumListItem(album, selected) {
+function getProblematicAlbumNavigationOptions(album, selected) {
   const showConverted = !album.has_encoding_repairs || !selected || state.utility.showRepairedDisplay;
   const displayName = getProblematicAlbumDisplayValue(album, 'album', showConverted) || 'Unknown Album';
   const displayArtist = getProblematicAlbumDisplayValue(album, 'album_artist', showConverted) || 'Unknown Artist';
   const displayYear = String(album.year || '').trim();
-  const displayTitle = displayYear ? `${displayName} / ${displayYear}` : displayName;
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-problematic-album-key="${escapeHtml(album.key)}">
-      <span class="utility-list-item-title">${escapeHtml(displayTitle)}</span>
-      <span class="utility-list-item-meta">${escapeHtml(displayArtist)}</span>
-      <span class="utility-list-item-issues">${escapeHtml(getProblematicAlbumIssueLabel(album))}</span>
-      ${album.has_encoding_repairs ? '<span class="utility-list-item-badge">Converted display</span>' : ''}
-    </button>
-  `;
+  const artworkSource = buildAlbumDisplayCoverUrl(album);
+  const artworkLabel = `Artwork for ${displayName}`;
+  const artworkHtml = buildUtilityAlbumArtbox(album, { label: artworkLabel, source: artworkSource });
+  return {
+      variant: 'wide', action: true, key: album.key, selected, label: displayName,
+      subtitle: displayArtist, year: displayYear, artworkHtml, artworkSource, artworkLabel,
+      count: album.track_count ?? (Array.isArray(album.tracks) ? album.tracks.length : null), countHidden: true,
+      attributes: { 'data-problematic-album-key': album.key },
+  };
+}
+
+function buildProblematicAlbumListItem(album, selected) {
+  return window.NavigationTree.renderItem(getProblematicAlbumNavigationOptions(album, selected));
 }
 
 function buildUtilityRuleListItem(rule, selected) {
@@ -12226,6 +12284,7 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   const groupKey = String(group?.key || '');
   const collapsed = isUtilityLoopGroupCollapsed(groupKey);
   const groupSelected = groupKey && groupKey === String(selectedGroupKey || '');
+  const artworkHtml = buildUtilityAlbumArtbox(representative, { label: `Artwork for ${title}` });
   const loopsHtml = collapsed
     ? ''
     : `
@@ -12242,19 +12301,14 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
       <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
-        <button class="utility-list-item utility-loop-group-list-item ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-          <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-          <span class="utility-loop-tree-row-main">
-            <span class="utility-loop-tree-song-copy">
-              <span class="utility-list-item-title">${escapeHtml(title)}</span>
-              <span class="utility-list-item-meta">${escapeHtml(subtitle)}</span>
-              <span class="utility-loop-group-count">${escapeHtml(loopCount > 1 ? `${loopCount} loops` : '1 loop')}</span>
-            </span>
-          </span>
-          <span class="utility-loop-collapse-toggle-wrap">
-            <span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span>
-          </span>
-        </button>
+        ${window.NavigationTree.renderItem({
+          variant: 'wide', action: true, key: groupKey, draggable: true, className: 'utility-loop-group-list-item',
+          selected: groupSelected && state.utility.selectedLoopDetailMode !== 'loop',
+          label: title, subtitle, year: representative?.year || '', artworkHtml,
+          count: loopCount, countHidden: true,
+          attributes: { 'data-utility-loop-group-key': groupKey },
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span></span>`,
+        })}
       </div>
       ${loopsHtml}
     </div>
@@ -14631,9 +14685,9 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
     return '<div class="utility-empty-state">Select a saved song to inspect its loops.</div>';
   }
   const representative = group.representativeLoop || group.loops[0];
-  const coverHtml = representative.cover_path
-    ? `<img class="utility-detail-cover-image" src="/cover?path=${encodeURIComponent(representative.cover_path)}" alt="Artwork for ${escapeHtml(representative.title || representative.name || 'loop')}">`
-    : '<div class="utility-detail-cover-placeholder">No artwork</div>';
+  const coverHtml = buildUtilityAlbumArtbox(representative, {
+    label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
+  });
   const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
@@ -15194,9 +15248,7 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = coverSrc
-    ? `<img class="utility-detail-cover-image" src="${coverSrc}" alt="Album cover for ${escapeHtml(displayName)}" data-cover-path="${escapeHtml(String(album?.cover_path || '').trim())}" data-remote-cover-url="${escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim())}" onerror="handleAlbumDisplayCoverImageError(this)">`
-    : '<div class="utility-detail-cover-placeholder">No cover art</div>';
+  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
@@ -17311,7 +17363,7 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Problems${countSuffix}`;
+    els.problemFilterButton.textContent = `Filters${countSuffix}`;
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
@@ -18852,7 +18904,9 @@ function mountAlertsAppearanceEditor(detail) {
 
 // BEGIN js/runtime/utility-renderers-and-actions.js
 
-﻿function renderProblematicFiles() {
+﻿const problematicNavigationRowContent = new WeakMap();
+
+function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   bindProblematicFocusUserInput(els);
@@ -18869,13 +18923,38 @@ function mountAlertsAppearanceEditor(detail) {
     }
   };
 
-  const items = getFilteredProblematicAlbums();
+  const mountedRows = preserveProblematicTree
+    ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
+  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
+  const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
+  const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
   const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
     ? state.utility.libraryWatchHealthProblems
     : [];
   const operationalHtml = operationalItems
     .map((problem) => buildLibraryWatchHealthProblemRow(problem))
     .join('');
+  const renderTree = selectedKey => {
+    if (!retainTree) {
+      els.list.innerHTML = operationalHtml + items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('');
+    }
+    Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
+      const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
+      if (!album) return;
+      const selected = album.key === selectedKey;
+      const content = getProblematicAlbumNavigationOptions(album, selected);
+      if (retainTree) {
+        const previous = problematicNavigationRowContent.get(row);
+        window.NavigationTree.updateItem(row, {
+          ...content,
+          artworkHtml: previous && previous.artworkSource === content.artworkSource ? undefined : content.artworkHtml,
+        });
+        window.NavigationTree.setItemSelected(row, selected);
+      }
+      problematicNavigationRowContent.set(row, content);
+    });
+  };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
   els.count.textContent = String(items.length + operationalItems.length);
   if (els.search) {
@@ -18919,7 +18998,7 @@ function mountAlertsAppearanceEditor(detail) {
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join(''));
+    renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -18946,7 +19025,7 @@ function mountAlertsAppearanceEditor(detail) {
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join(''));
+  renderTree(state.utility.selectedProblematicKey);
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;
@@ -19438,7 +19517,7 @@ function renderUtilityLogHistory() {
   els.detail.innerHTML = `${storageWarning}${buildUtilityLogHistoryDetail(selectedItem)}`;
 }
 
-function renderUtilityModalContent() {
+function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
@@ -19448,7 +19527,16 @@ function renderUtilityModalContent() {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;
     tab.classList.toggle('is-active', selected);
     tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('tabindex', selected ? '0' : '-1');
+    tab.setAttribute('aria-controls', 'utility-problematic-detail');
   });
+  const selectedTab = els.tabs.find(tab => tab.getAttribute('data-utility-tab') === activeTab);
+  if (selectedTab?.id) {
+    els.detail?.setAttribute('role', 'tabpanel');
+    els.detail?.setAttribute('aria-labelledby', selectedTab.id);
+  }
+  syncUtilityTabAlignment(els);
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -19460,8 +19548,54 @@ function renderUtilityModalContent() {
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
   } else {
-    renderProblematicFiles();
+    renderProblematicFiles(options);
   }
+}
+
+const utilityTabAlignmentObservers = new WeakMap();
+function syncUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  const header = els.overlay?.querySelector?.('.utility-modal-header');
+  if (!strip || !header) return;
+  const update = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (!active || els.overlay.hidden) return;
+    const outer = header.getBoundingClientRect();
+    const rect = active.getBoundingClientRect();
+    header.style.setProperty('--active-tab-left', `${Math.max(0, rect.left - outer.left)}px`);
+    header.style.setProperty('--active-tab-right', `${Math.min(outer.width, rect.right - outer.left)}px`);
+  };
+  const revealAndUpdate = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (active && !els.overlay.hidden && strip.getBoundingClientRect) {
+      const visible = strip.getBoundingClientRect();
+      const rect = active.getBoundingClientRect();
+      const availableWidth = visible.right - visible.left;
+      const delta = rect.right - rect.left > availableWidth || rect.left < visible.left
+        ? rect.left - visible.left : rect.right > visible.right ? rect.right - visible.right : 0;
+      if (delta) strip.scrollLeft += delta;
+    }
+    update();
+  };
+  revealAndUpdate();
+  if (!utilityTabAlignmentObservers.has(strip)) {
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(revealAndUpdate) : null;
+    observer?.observe(header);
+    observer?.observe(strip);
+    els.tabs.forEach(tab => observer?.observe(tab));
+    strip.addEventListener('scroll', update, { passive: true });
+    utilityTabAlignmentObservers.set(strip, { observer, update });
+  }
+}
+
+function disposeUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  if (!strip) return;
+  const binding = utilityTabAlignmentObservers.get(strip);
+  if (!binding) return;
+  binding.observer?.disconnect();
+  strip.removeEventListener('scroll', binding.update);
+  utilityTabAlignmentObservers.delete(strip);
 }
 
 // END js/runtime/utility-renderers-and-actions.js
@@ -20566,7 +20700,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent();
+        renderUtilityModalContent({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }
@@ -21624,6 +21758,13 @@ function closeUtilityModal(skipAppearanceGuard = false) {
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  state.utility.problemDropdownOpen = false;
+  if (els.problemFilterMenu) {
+    els.problemFilterMenu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+  }
+  els.problemFilterButton?.setAttribute?.('aria-expanded', 'false');
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationActiveToken = 0;
   if (typeof clearUtilityLoopSpaceOwner === 'function') {
@@ -32456,7 +32597,7 @@ function attachRepairConfirmEvents() {
 
   if (!event.target.closest('.utility-problem-filter, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
-    renderUtilityModalContent();
+    renderProblemFilterControls(getUtilityModalElements());
   }
   if (
     !event.target.closest('#cover-lookup-drawer, [data-toggle-cover-lookup-drawer="1"], #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #image-lightbox')
@@ -32562,6 +32703,7 @@ function attachRepairConfirmEvents() {
       state.utility.problemDropdownOpen = false;
       state.utility.showRepairedDisplay = true;
       renderUtilityModalContent();
+      if (event.detail === 0) getUtilityModalElements().problemFilterButton?.focus();
     }
     return;
   }
@@ -32583,7 +32725,10 @@ function attachRepairConfirmEvents() {
   const problematicAlbumButton = event.target.closest('[data-problematic-album-key]');
   if (problematicAlbumButton) {
     event.preventDefault();
-    state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    const selectedKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    if (state.utility.selectedProblematicKey === selectedKey && getSelectedProblematicAlbum()?.detail_loaded
+        && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
+    state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
@@ -32592,10 +32737,10 @@ function attachRepairConfirmEvents() {
     state.utility.separateReleaseSelections = {};
     const selectedAlbum = getSelectedProblematicAlbum();
     if (selectedAlbum && !selectedAlbum.detail_loaded) {
+      selectedAlbum.detail_load_failed = false;
       void loadProblematicAlbumDetail(state.utility.selectedProblematicKey, true);
-      return;
     }
-    renderUtilityModalContent();
+    renderUtilityModalContent({ preserveProblematicTree: true });
     return;
   }
 
@@ -33461,6 +33606,48 @@ function handleUtilityBootstrapKeyDown(event) {
     || event.metaKey
   ) {
     return false;
+  }
+  const tab = event.target?.closest?.('[data-utility-tab]');
+  if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    const tabs = getUtilityModalElements().tabs.filter(item => !item.disabled && !item.hidden);
+    const current = tabs.indexOf(tab);
+    if (current < 0 || !tabs.length) return false;
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    event.preventDefault();
+    tabs[next].focus();
+    tabs[next].click();
+    tabs[next].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+  const filterTarget = event.target?.closest?.('#utility-problem-filter-button, #utility-problem-filter-menu');
+  const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
+  if (filterTarget && !filterInput) {
+    const els = getUtilityModalElements();
+    if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
+      event.preventDefault();
+      event.stopPropagation?.();
+      state.utility.problemDropdownOpen = false;
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterButton.setAttribute('aria-expanded', 'false');
+      if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+      els.problemFilterButton.focus();
+      return true;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && !els.problemFilterButton.disabled) {
+      event.preventDefault();
+      if (!state.utility.problemDropdownOpen) {
+        state.utility.problemDropdownOpen = true;
+        renderProblemFilterControls(els);
+      }
+      const options = Array.from(els.problemFilterMenu.querySelectorAll?.('[data-problem-filter-value]') || []);
+      const current = options.indexOf(event.target);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1
+        : current < 0 ? (event.key === 'ArrowUp' ? options.length - 1 : 0)
+          : (current + (event.key === 'ArrowDown' ? 1 : -1) + options.length) % options.length;
+      options[next]?.focus();
+      return true;
+    }
   }
   if (typeof handleSavedLoopEditKeydown === 'function' && handleSavedLoopEditKeydown(event)) {
     return true;

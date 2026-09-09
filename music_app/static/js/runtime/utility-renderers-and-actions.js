@@ -1,4 +1,6 @@
-﻿function renderProblematicFiles() {
+﻿const problematicNavigationRowContent = new WeakMap();
+
+function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   bindProblematicFocusUserInput(els);
@@ -15,13 +17,38 @@
     }
   };
 
-  const items = getFilteredProblematicAlbums();
+  const mountedRows = preserveProblematicTree
+    ? Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []) : [];
+  const albumsByKey = new Map((state.utility.problematicFiles || []).map(album => [String(album.key), album]));
+  const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
+  const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
+  const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
   const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
     ? state.utility.libraryWatchHealthProblems
     : [];
   const operationalHtml = operationalItems
     .map((problem) => buildLibraryWatchHealthProblemRow(problem))
     .join('');
+  const renderTree = selectedKey => {
+    if (!retainTree) {
+      els.list.innerHTML = operationalHtml + items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('');
+    }
+    Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
+      const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
+      if (!album) return;
+      const selected = album.key === selectedKey;
+      const content = getProblematicAlbumNavigationOptions(album, selected);
+      if (retainTree) {
+        const previous = problematicNavigationRowContent.get(row);
+        window.NavigationTree.updateItem(row, {
+          ...content,
+          artworkHtml: previous && previous.artworkSource === content.artworkSource ? undefined : content.artworkHtml,
+        });
+        window.NavigationTree.setItemSelected(row, selected);
+      }
+      problematicNavigationRowContent.set(row, content);
+    });
+  };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
   els.count.textContent = String(items.length + operationalItems.length);
   if (els.search) {
@@ -65,7 +92,7 @@
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join(''));
+    renderTree('');
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -92,7 +119,7 @@
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join(''));
+  renderTree(state.utility.selectedProblematicKey);
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;
@@ -584,7 +611,7 @@ function renderUtilityLogHistory() {
   els.detail.innerHTML = `${storageWarning}${buildUtilityLogHistoryDetail(selectedItem)}`;
 }
 
-function renderUtilityModalContent() {
+function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
@@ -594,7 +621,16 @@ function renderUtilityModalContent() {
     const selected = tab.getAttribute('data-utility-tab') === activeTab;
     tab.classList.toggle('is-active', selected);
     tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('tabindex', selected ? '0' : '-1');
+    tab.setAttribute('aria-controls', 'utility-problematic-detail');
   });
+  const selectedTab = els.tabs.find(tab => tab.getAttribute('data-utility-tab') === activeTab);
+  if (selectedTab?.id) {
+    els.detail?.setAttribute('role', 'tabpanel');
+    els.detail?.setAttribute('aria-labelledby', selectedTab.id);
+  }
+  syncUtilityTabAlignment(els);
   if (activeTab === 'rules') {
     renderUtilityRules();
   } else if (activeTab === 'loops') {
@@ -606,7 +642,53 @@ function renderUtilityModalContent() {
   } else if (activeTab === 'appearance') {
     renderUtilityAppearance();
   } else {
-    renderProblematicFiles();
+    renderProblematicFiles(options);
   }
+}
+
+const utilityTabAlignmentObservers = new WeakMap();
+function syncUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  const header = els.overlay?.querySelector?.('.utility-modal-header');
+  if (!strip || !header) return;
+  const update = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (!active || els.overlay.hidden) return;
+    const outer = header.getBoundingClientRect();
+    const rect = active.getBoundingClientRect();
+    header.style.setProperty('--active-tab-left', `${Math.max(0, rect.left - outer.left)}px`);
+    header.style.setProperty('--active-tab-right', `${Math.min(outer.width, rect.right - outer.left)}px`);
+  };
+  const revealAndUpdate = () => {
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (active && !els.overlay.hidden && strip.getBoundingClientRect) {
+      const visible = strip.getBoundingClientRect();
+      const rect = active.getBoundingClientRect();
+      const availableWidth = visible.right - visible.left;
+      const delta = rect.right - rect.left > availableWidth || rect.left < visible.left
+        ? rect.left - visible.left : rect.right > visible.right ? rect.right - visible.right : 0;
+      if (delta) strip.scrollLeft += delta;
+    }
+    update();
+  };
+  revealAndUpdate();
+  if (!utilityTabAlignmentObservers.has(strip)) {
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(revealAndUpdate) : null;
+    observer?.observe(header);
+    observer?.observe(strip);
+    els.tabs.forEach(tab => observer?.observe(tab));
+    strip.addEventListener('scroll', update, { passive: true });
+    utilityTabAlignmentObservers.set(strip, { observer, update });
+  }
+}
+
+function disposeUtilityTabAlignment(els = getUtilityModalElements()) {
+  const strip = els.overlay?.querySelector?.('.utility-modal-tabs');
+  if (!strip) return;
+  const binding = utilityTabAlignmentObservers.get(strip);
+  if (!binding) return;
+  binding.observer?.disconnect();
+  strip.removeEventListener('scroll', binding.update);
+  utilityTabAlignmentObservers.delete(strip);
 }
 

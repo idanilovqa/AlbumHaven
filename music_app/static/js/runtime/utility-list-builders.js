@@ -140,9 +140,9 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
     return '<div class="utility-empty-state">Select a saved song to inspect its loops.</div>';
   }
   const representative = group.representativeLoop || group.loops[0];
-  const coverHtml = representative.cover_path
-    ? `<img class="utility-detail-cover-image" src="/cover?path=${encodeURIComponent(representative.cover_path)}" alt="Artwork for ${escapeHtml(representative.title || representative.name || 'loop')}">`
-    : '<div class="utility-detail-cover-placeholder">No artwork</div>';
+  const coverHtml = buildUtilityAlbumArtbox(representative, {
+    label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
+  });
   const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
@@ -703,9 +703,7 @@ function buildProblematicAlbumDetail(album) {
       </div>
     `
     : '';
-  const cover = coverSrc
-    ? `<img class="utility-detail-cover-image" src="${coverSrc}" alt="Album cover for ${escapeHtml(displayName)}" data-cover-path="${escapeHtml(String(album?.cover_path || '').trim())}" data-remote-cover-url="${escapeHtml(String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim())}" onerror="handleAlbumDisplayCoverImageError(this)">`
-    : '<div class="utility-detail-cover-placeholder">No cover art</div>';
+  const cover = buildUtilityAlbumArtbox(album, { label: `Album cover for ${displayName}`, interactive: true, source: coverSrc });
   return `
     <div class="utility-detail-header">
       <div class="utility-detail-cover">${cover}</div>
@@ -2820,7 +2818,7 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Problems${countSuffix}`;
+    els.problemFilterButton.textContent = `Filters${countSuffix}`;
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;

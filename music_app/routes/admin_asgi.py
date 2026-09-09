@@ -459,7 +459,7 @@ async def _json_payload(request: Request) -> dict[str, object] | None:
         return None
     try:
         payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         return None
     if not isinstance(payload, dict) or set(payload) != _FIELDS:
         return None
@@ -570,7 +570,7 @@ async def _bounded_json_object(request: Request) -> dict[str, object] | None:
         return None
     try:
         payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (ValueError, RecursionError):
         return None
     return payload if isinstance(payload, dict) else None
 

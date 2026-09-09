@@ -902,7 +902,9 @@ async function startManagedScanApp(childEnv, options = {}) {
   child.once('error', (error) => {
     launchError = error;
   });
+  let spawnHandedOff = false;
   try {
+    if (options.onSpawnFn) { options.onSpawnFn(child); spawnHandedOff = true; }
     child.albumHavenCreationIdentity = readProcessCreationIdentityFn(child.pid);
     if (!child.albumHavenCreationIdentity) {
       throw new Error('Managed scan app process had no creation identity after launch.');
@@ -913,10 +915,14 @@ async function startManagedScanApp(childEnv, options = {}) {
     });
     return child;
   } catch (error) {
-    try {
-      await stopManagedScanApp(child, port, options);
-    } catch (_cleanupError) {
-      // Preserve the startup error after best-effort cleanup.
+    if (!spawnHandedOff) {
+      try {
+        await stopManagedScanApp(child, port, options);
+      } catch (cleanupError) {
+        const failure = new AggregateError([error, cleanupError], 'Managed scan startup failed and shutdown was not proven.');
+        failure.lifecycle = { exitReason: 'managed-scan-cleanup-error' };
+        throw failure;
+      }
     }
     throw error;
   }
@@ -3002,6 +3008,7 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managesScanApp) {
       managedScanChild = await startManagedScanAppFn(childEnv, {
         port: supportAppPort,
+        onSpawnFn: child => { managedScanChild = child; },
       });
     }
     if (managesIsolatedApp) {
@@ -3246,8 +3253,11 @@ async function runManagedPlaywrightAttempt(options = {}) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
       lifecycle.managedAttempt = managedAttempt;
       lifecycle.exitReason = 'managed-scan-cleanup-error';
-      scanCleanupError.lifecycle = lifecycle;
-      throw scanCleanupError;
+      const failure = attemptError && attemptError !== scanCleanupError
+        ? new AggregateError([attemptError, scanCleanupError], 'Managed scan attempt failed and shutdown was not proven.')
+        : scanCleanupError;
+      failure.lifecycle = lifecycle;
+      throw failure;
     }
     if (isolatedCleanupError) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};

@@ -143,11 +143,10 @@ test("launch packaged app", async () => {
 test("handle multiple windows", async ({ electronApp }) => {
   const mainWindow = await electronApp.firstWindow();
 
-  // Trigger new window
+  // Register before the action: a fast window can open before click resolves.
+  const settingsWindowPromise = electronApp.waitForEvent("window");
   await mainWindow.getByRole("button", { name: "Open Settings" }).click();
-
-  // Wait for new window
-  const settingsWindow = await electronApp.waitForEvent("window");
+  const settingsWindow = await settingsWindowPromise;
 
   // Both windows are now accessible
   await expect(settingsWindow.locator("h1")).toHaveText("Settings");

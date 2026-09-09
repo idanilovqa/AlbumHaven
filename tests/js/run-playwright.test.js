@@ -6358,3 +6358,48 @@ test('fixture cleanup channel aborts the managed attempt and retains its databas
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test('scan startup direct cleanup failure retains both readiness and cleanup errors', async () => {
+  const child = createFakeChildProcess(7851);
+  const readiness = new Error('scan readiness rejected'), cleanup = new Error('scan stop rejected');
+  await assert.rejects(_private.startManagedScanApp({}, {
+    spawnFn: () => child, readProcessCreationIdentityFn: () => 'owned-scan',
+    probeHttpStatusReadyFn: async () => { throw readiness; },
+    stopProcessTreeFn: () => { throw cleanup; }, stdout: { write() {} }, stderr: { write() {} },
+  }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [readiness, cleanup]);
+    assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: error.lifecycle }, { processObject: {}, stderr: { write() {} } }), 2);
+    return true;
+  });
+});
+
+test('scan startup hands child ownership to the attempt before readiness fails', async () => {
+  const child = createFakeChildProcess(7852);
+  const readiness = new Error('scan readiness rejected'), cleanup = new Error('scan stop rejected');
+  let outerStops = 0, rootCleanup = 0, browserRuns = 0;
+  await assert.rejects(_private.runManagedPlaywrightAttempt({
+    passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+    managesScanApp: true, managesIsolatedApp: false, servesRealApp: false,
+    supportAppPort: 4325, realAppPort: 5001, managedPorts: [], ownedIsolatedTempRoot: '',
+    isHeadless: true, browserName: 'chromium',
+    async startManagedScanAppFn(env, options) {
+      return _private.startManagedScanApp(env, { ...options,
+        spawnFn: () => child, readProcessCreationIdentityFn: () => 'owned-scan',
+        probeHttpStatusReadyFn: async () => { throw readiness; },
+        stopProcessTreeFn: () => { throw cleanup; }, stdout: { write() {} }, stderr: { write() {} },
+      });
+    },
+    async stopManagedScanAppFn(owned) { assert.equal(owned, child); outerStops += 1; throw cleanup; },
+    async runPlaywrightProcessFn() { browserRuns += 1; },
+    cleanupIsolatedE2ETempRootsFn() { rootCleanup += 1; return []; },
+    reportManagedPortOwnersFn() { return []; },
+  }), error => {
+    assert.equal(outerStops, 1, 'the owning attempt must retain and stop the spawned child');
+    assert.equal(rootCleanup, 0); assert.equal(browserRuns, 0);
+    assert.ok(error instanceof AggregateError); assert.deepEqual(error.errors, [readiness, cleanup]);
+    assert.equal(error.lifecycle.exitReason, 'managed-scan-cleanup-error');
+    assert.equal(_private.finalizeMainResult({ exitCode: 1, lifecycle: error.lifecycle }, { processObject: {}, stderr: { write() {} } }), 2);
+    return true;
+  });
+});

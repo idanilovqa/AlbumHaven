@@ -20716,9 +20716,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         const key = artist.toLocaleLowerCase();
         if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
       });
-      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const destinationAlbumArtistKey = String(bucket.album_artist || '').trim().toLocaleLowerCase();
       const promotesSoleCompilationArtist = (
-        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(destinationAlbumArtistKey)
         && distinctTrackArtists.size === 1
       );
       const promotedAlbumArtist = promotesSoleCompilationArtist
@@ -24697,6 +24697,19 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
         await fetchAndRender(buildUrl(state.view), false, refreshOptions);
       }
       if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+      if (modal?.overlay && !modal.overlay.hidden
+        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+        const loadToken = invalidatePendingTrackModalLoad();
+        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+        if (refreshedAlbum && !modal.overlay.hidden
+          && loadToken === state.ui.pendingTrackModalLoadToken
+          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+        }
+      }
       const conflictMessage = String(
         payload.error || payload.detail || 'Album Haven found this album again.'
       ).trim() || 'Album Haven found this album again.';
@@ -30631,6 +30644,8 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
   compactPlayerMode = next;
   compactPlayerStyle = getCompactPlayerStyle();
   const compact = next === 'compact';
+  const outgoing = compact ? els.expanded : els.compact;
+  const transferFocus = outgoing?.contains?.(document.activeElement);
   document.documentElement.classList.toggle('has-compact-player', compact);
   document.documentElement.classList.toggle('has-docked-compact-player', compact && compactPlayerStyle === 'docked');
   document.documentElement.classList.toggle('has-floating-compact-player', compact && compactPlayerStyle === 'floating');
@@ -30662,6 +30677,18 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
   }
   if (persist) persistCompactPlayerMode(window.localStorage, next);
   syncCompactPlayerUi();
+  if (transferFocus) {
+    const incoming = compact ? els.compact : els.expanded;
+    const modeControl = compact ? els.expand : els.collapse;
+    const focusTarget = modeControl && !modeControl.hidden && !modeControl.disabled
+      ? modeControl : incoming?.querySelector('[data-playback-control-action="play-pause"]');
+    if (focusTarget && !focusTarget.hidden && !focusTarget.disabled) {
+      focusTarget.focus({ preventScroll: true });
+    } else if (incoming) {
+      incoming.setAttribute('tabindex', '-1');
+      incoming.focus({ preventScroll: true });
+    }
+  }
 }
 
 function resetCompactPlayerPosition() {

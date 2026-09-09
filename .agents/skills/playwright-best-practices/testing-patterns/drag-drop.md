@@ -156,11 +156,11 @@ test('reorder persists after reload', async ({ page }) => {
   const priorityC = list.getByRole('listitem').filter({ hasText: 'Priority C' });
   const priorityA = list.getByRole('listitem').filter({ hasText: 'Priority A' });
 
-  await priorityC.dragTo(priorityA);
-
-  await page.waitForResponse((response) =>
+  const saved = page.waitForResponse((response) =>
     response.url().includes('/api/priorities/reorder') && response.status() === 200
   );
+  await priorityC.dragTo(priorityA);
+  await saved;
 
   await page.reload();
 
@@ -295,16 +295,23 @@ test('simulates drag-over visual feedback', async ({ page }) => {
 
   const dropZone = page.locator('[data-testid="file-drop-zone"]');
 
-  await dropZone.dispatchEvent('dragenter', {
-    dataTransfer: { types: ['Files'] },
+  const dataTransfer = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['fixture'], 'report.pdf', { type: 'application/pdf' }));
+    return transfer;
   });
+  try {
+    await dropZone.dispatchEvent('dragenter', { dataTransfer });
 
-  await expect(dropZone).toHaveClass(/drag-active|drop-highlight/);
-  await expect(dropZone).toContainText(/drop.*here|release.*upload/i);
+    await expect(dropZone).toHaveClass(/drag-active|drop-highlight/);
+    await expect(dropZone).toContainText(/drop.*here|release.*upload/i);
 
-  await dropZone.dispatchEvent('dragleave');
+    await dropZone.dispatchEvent('dragleave', { dataTransfer });
 
-  await expect(dropZone).not.toHaveClass(/drag-active|drop-highlight/);
+    await expect(dropZone).not.toHaveClass(/drag-active|drop-highlight/);
+  } finally {
+    await dataTransfer.dispose();
+  }
 });
 
 test('rejects invalid file types', async ({ page }) => {

@@ -40,7 +40,7 @@ class CoordinatorProblem:
 class _PendingGroup:
     root_id: str
     directory: Path
-    active_paths: set[Path] = field(default_factory=set)
+    active_paths: dict[Path, bool] = field(default_factory=dict)
     deleted_paths: set[Path] = field(default_factory=set)
     deleted_subtrees: set[Path] = field(default_factory=set)
     moves: dict[tuple[Path, Path], TargetedMove] = field(default_factory=dict)
@@ -59,10 +59,15 @@ class _PendingGroupUpdate:
 
     group: _PendingGroup
     path_updates: dict[str, dict[Path, bool]] = field(default_factory=dict)
+    active_directory_updates: dict[Path, bool] = field(default_factory=dict)
     moves: dict[tuple[Path, Path], TargetedMove] = field(default_factory=dict)
 
     def set_path(self, collection: str, path: Path, present: bool) -> None:
         self.path_updates.setdefault(collection, {})[path] = present
+
+    def set_active_path(self, path: Path, *, is_directory: bool) -> None:
+        self.set_path("active_paths", path, True)
+        self.active_directory_updates[path] = is_directory
 
     @property
     def entry_delta(self) -> int:
@@ -76,7 +81,12 @@ class _PendingGroupUpdate:
         for collection, paths in self.path_updates.items():
             target = getattr(self.group, collection)
             for path, present in paths.items():
-                if present:
+                if collection == "active_paths":
+                    if present:
+                        target[path] = self.active_directory_updates[path]
+                    else:
+                        target.pop(path, None)
+                elif present:
                     target.add(path)
                 else:
                     target.discard(path)
@@ -149,9 +159,12 @@ class LibraryEventCoordinator:
                     event.destination_root_id or event.root_id,
                     event.destination,
                     updates,
+                    is_directory=event.is_directory,
                 )
             elif event.kind is not LibraryEventKind.DELETED:
-                self._clear_superseded_deletions(event.root_id, event.path, updates)
+                self._clear_superseded_deletions(
+                    event.root_id, event.path, updates, is_directory=event.is_directory,
+                )
             self._coalesce(
                 self._group_update(updates, event.root_id, event.path.parent), event,
             )
@@ -201,7 +214,9 @@ class LibraryEventCoordinator:
             )
         return updates[group_key]
 
-    def _clear_superseded_deletions(self, root_id: str, live_path: Path, updates) -> None:
+    def _clear_superseded_deletions(
+        self, root_id: str, live_path: Path, updates, *, is_directory: bool,
+    ) -> None:
         for group in self._pending.values():
             if group.root_id != root_id:
                 continue
@@ -210,8 +225,8 @@ class LibraryEventCoordinator:
                 update.set_path("deleted_subtrees", live_path, False)
                 update.set_path("deleted_paths", live_path, False)
             if any(parent in group.deleted_subtrees for parent in live_path.parents):
-                self._group_update(updates, root_id, group.directory).set_path(
-                    "active_paths", live_path, True,
+                self._group_update(updates, root_id, group.directory).set_active_path(
+                    live_path, is_directory=is_directory,
                 )
 
     def _coalesce(self, update: _PendingGroupUpdate, event: LibraryEvent) -> None:
@@ -242,7 +257,7 @@ class LibraryEventCoordinator:
             return
         update.set_path("deleted_paths", event.path, False)
         update.set_path("deleted_subtrees", event.path, False)
-        update.set_path("active_paths", event.path, True)
+        update.set_active_path(event.path, is_directory=event.is_directory)
 
     def _schedule_flush_locked(self) -> None:
         if self._stopped or self._scheduled_flush_running:
@@ -298,9 +313,10 @@ class LibraryEventCoordinator:
             dispositions = self._stable_dispositions(pending)
             live_targets: dict[str, dict[Path, bool]] = {}
             for group in pending:
-                for path in group.active_paths:
+                for path, is_directory in group.active_paths.items():
                     if dispositions.get(path) != "deleted":
-                        live_targets.setdefault(group.root_id, {}).setdefault(path, False)
+                        targets = live_targets.setdefault(group.root_id, {})
+                        targets[path] = targets.get(path, False) or is_directory
                 for move in group.moves.values():
                     if dispositions.get(move.destination) != "deleted":
                         targets = live_targets.setdefault(move.destination_root_id, {})

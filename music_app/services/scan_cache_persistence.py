@@ -288,7 +288,7 @@ class PostgresScanCacheAdapter:
             )
             affected_album_keys = {
                 str(row.get("album_key") or "").strip()
-                for row in album_rows
+                for row in (*album_rows, *existing_memberships)
                 if str(row.get("album_key") or "").strip()
             }
             _execute_pipeline_batches(connection, _upsert_local_artist_sql(), artist_rows)

@@ -3,11 +3,11 @@
 ## Table of Contents
 
 1. [Core Principle](#core-principle)
-2. [Decision Matrix](#decision-matrix)
+2. [Decision Matrix for E2E](#decision-matrix-for-e2e)
 3. [Decision Flowchart](#decision-flowchart)
 4. [Mocking Techniques](#mocking-techniques)
 5. [Real Service Strategies](#real-service-strategies)
-6. [Hybrid Approach: Fixture-Based Mock Control](#hybrid-approach-fixture-based-mock-control)
+6. [Isolated Frontend Response Fixtures](#isolated-frontend-response-fixtures)
 7. [Validating Mock Accuracy](#validating-mock-accuracy)
 8. [Anti-Patterns](#anti-patterns)
 
@@ -15,16 +15,25 @@
 
 ## Core Principle
 
-**Mock at the boundary, test your stack end-to-end.** Mock third-party services you don't own (payment gateways, email providers, OAuth). Never mock your own frontend-to-backend communication. Tests should prove YOUR code works, not that third-party APIs are available.
+**For end-to-end tests, mock external providers and keep your application stack real.**
+Do not replace your own frontend-to-backend responses in an E2E acceptance test.
+Separate frontend tests may supply those responses to exercise rendering and error
+states; they do not prove backend behavior or provider delivery.
 
-## Decision Matrix
+Browser routing intercepts requests made by the browser. A payment or email call
+made by your backend requires a provider sandbox or a test-owned stub server,
+configured through the backend's normal provider settings before startup.
+Keep the application's billing/notification endpoints real and assert the stub's
+received request when testing provider integration.
+
+## Decision Matrix for E2E
 
 | Scenario | Mock? | Strategy |
 | --- | --- | --- |
 | Your own REST/GraphQL API | Never | Hit real API against staging or local dev |
 | Your database (through your API) | Never | Seed via API or fixtures |
 | Authentication (your auth system) | Mostly no | Use `storageState` to skip login in most tests |
-| Stripe / payment gateway | Always | `route.fulfill()` with expected responses |
+| Stripe / payment gateway | Always | Provider sandbox/stub for backend calls; browser route only for direct provider requests |
 | SendGrid / email service | Always | Mock the API call, verify request payload |
 | OAuth providers (Google, GitHub) | Always | Mock token exchange, test your callback handler |
 | Analytics (Segment, Mixpanel) | Always | `route.abort()` or `route.fulfill()` |
@@ -69,7 +78,7 @@ test('dashboard renders without tracking scripts', async ({ page }) => {
 
 ### Full Mock (route.fulfill)
 
-Completely replace a third-party API response:
+These isolated frontend examples replace application responses to test UI rendering. They do not cover payment processing or the backend.
 
 ```typescript
 test('order flow with mocked payment service', async ({ page }) => {
@@ -108,7 +117,7 @@ test('display error on payment decline', async ({ page }) => {
 
 ### Partial Mock (Modify Responses)
 
-Let the real API call happen but tweak the response:
+In an isolated frontend test, fetch then modify a response to exercise a rendering state. Use seeded real data instead for an E2E acceptance test.
 
 ```typescript
 test('display low inventory warning', async ({ page }) => {
@@ -153,7 +162,7 @@ test('inject test notification into real response', async ({ page }) => {
 
 ### Record and Replay (HAR Files)
 
-For complex API sequences (OAuth flows, multi-step wizards):
+HAR replay of application endpoints is useful for isolated frontend scenarios. It does not verify the live backend or an OAuth token exchange performed by that backend.
 
 **Recording:**
 
@@ -249,12 +258,12 @@ export default function globalTeardown() {
 }
 ```
 
-## Hybrid Approach: Fixture-Based Mock Control
+## Isolated Frontend Response Fixtures
 
-Create fixtures that let individual tests opt into mocking specific services:
+Keep these fixtures in a separate frontend test project. They replace application responses and must not be imported by the E2E integration suite:
 
 ```typescript
-// tests/fixtures/service-mocks.ts
+// tests/frontend/fixtures/service-mocks.ts
 import { test as base } from '@playwright/test';
 
 type MockConfig = {
@@ -303,25 +312,20 @@ export { expect } from '@playwright/test';
 ```
 
 ```typescript
-// tests/billing.spec.ts
+// tests/frontend/billing-rendering.spec.ts
 import { test, expect } from './fixtures/service-mocks';
 
-test('subscription renewal sends notification', async ({ page }) => {
+test('renders a successful subscription renewal response', async ({ page }) => {
   await page.goto('/account/billing');
   await page.getByRole('button', { name: 'Renew Now' }).click();
   await expect(page.getByText('Subscription renewed')).toBeVisible();
 });
-
-test.describe('integration suite', () => {
-  test.use({ mockPayments: false });
-
-  test('real billing flow against test gateway', async ({ page }) => {
-    await page.goto('/account/billing');
-    await page.getByRole('button', { name: 'Renew Now' }).click();
-    await expect(page.getByText('Subscription renewed')).toBeVisible();
-  });
-});
 ```
+
+For a real billing integration test, import the ordinary application fixture,
+configure the backend to call the owned provider stub, and drive the same Renew
+action without these browser routes. Verify persisted subscription state and the
+stub's notification request; a success message alone does not prove delivery.
 
 ### Environment-Based Test Projects
 
@@ -330,12 +334,12 @@ test.describe('integration suite', () => {
 export default defineConfig({
   projects: [
     {
-      name: 'ci-fast',
-      testMatch: '**/*.spec.ts',
+      name: 'frontend',
+      testMatch: '**/frontend/*.spec.ts',
       use: { baseURL: 'http://localhost:3000' },
     },
     {
-      name: 'nightly-full',
+      name: 'integration',
       testMatch: '**/*.integration.spec.ts',
       use: { baseURL: 'https://staging.example.com' },
       timeout: 120_000,
@@ -343,6 +347,8 @@ export default defineConfig({
   ],
 });
 ```
+
+See [Playwright network interception](https://playwright.dev/docs/network#network-mocking) for the browser boundary.
 
 ## Validating Mock Accuracy
 

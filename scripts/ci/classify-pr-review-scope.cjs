@@ -300,7 +300,11 @@ function runCli(env = process.env) {
   }
   const focusedRequest = parseFocusedE2eRequest(env.PR_BODY || '');
   const pipeline = classifyPipelineLabels(labels, focusedRequest, action, headSha);
-  const diffBase = selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview: pipeline.forceFullReview });
+  const selectedBase = selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullReview: pipeline.forceFullReview });
+  // Whole-PR scope excludes commits added only to the target branch.
+  const diffBase = selectedBase === baseSha
+    ? requireSha(execFileSync('git', ['merge-base', baseSha, headSha], { encoding: 'utf8' }).trim(), 'merge base')
+    : selectedBase;
   const numstat = execFileSync(
     'git',
     ['diff', '--numstat', '--no-renames', diffBase, headSha],

@@ -55,6 +55,8 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
   compactPlayerMode = next;
   compactPlayerStyle = getCompactPlayerStyle();
   const compact = next === 'compact';
+  const outgoing = compact ? els.expanded : els.compact;
+  const transferFocus = outgoing?.contains?.(document.activeElement);
   document.documentElement.classList.toggle('has-compact-player', compact);
   document.documentElement.classList.toggle('has-docked-compact-player', compact && compactPlayerStyle === 'docked');
   document.documentElement.classList.toggle('has-floating-compact-player', compact && compactPlayerStyle === 'floating');
@@ -86,6 +88,18 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
   }
   if (persist) persistCompactPlayerMode(window.localStorage, next);
   syncCompactPlayerUi();
+  if (transferFocus) {
+    const incoming = compact ? els.compact : els.expanded;
+    const modeControl = compact ? els.expand : els.collapse;
+    const focusTarget = modeControl && !modeControl.hidden && !modeControl.disabled
+      ? modeControl : incoming?.querySelector('[data-playback-control-action="play-pause"]');
+    if (focusTarget && !focusTarget.hidden && !focusTarget.disabled) {
+      focusTarget.focus({ preventScroll: true });
+    } else if (incoming) {
+      incoming.setAttribute('tabindex', '-1');
+      incoming.focus({ preventScroll: true });
+    }
+  }
 }
 
 function resetCompactPlayerPosition() {

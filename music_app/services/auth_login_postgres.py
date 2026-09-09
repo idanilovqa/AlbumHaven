@@ -105,6 +105,7 @@ class _ReservedBucket:
     kind: str
     digest: bytes
     window_started_at: datetime
+    window_expires_at: datetime
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(kind={self.kind!r}, digest=<redacted>, window_started_at=<redacted>)"
@@ -507,6 +508,7 @@ class PostgresLoginAuthService:
                 if now >= expires:
                     count = 0
                     window_started_at = now
+                    expires = now + timedelta(seconds=self._windows[kind])
                     _execute(
                         connection,
                         """
@@ -517,7 +519,7 @@ class PostgresLoginAuthService:
                         """,
                         (
                             now,
-                            now + timedelta(seconds=self._windows[kind]),
+                            expires,
                             now,
                             kind,
                             self._hmac_key_version,
@@ -531,6 +533,7 @@ class PostgresLoginAuthService:
                         kind=kind,
                         digest=dict(buckets)[kind],
                         window_started_at=window_started_at,
+                        window_expires_at=expires,
                     )
                 )
             for kind, digest in buckets:
@@ -711,12 +714,18 @@ class PostgresLoginAuthService:
         now: datetime,
     ) -> None:
         rows = self._lock_reserved_throttles(connection, reservation)
+        now = _aware_now(self._clock)
         for raw_row, reserved in zip(rows, reservation, strict=True):
+            if raw_row is None:
+                continue
             row = _row(raw_row, _THROTTLE_COLUMNS)
             if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
                 continue
             count = _nonnegative_integer(row.get("failure_count"), "failure count")
             if count >= self._limits[reserved.kind]:
+                blocked_until = now + timedelta(seconds=self._cooldown_seconds)
+                if row.get("blocked_until") is not None:
+                    blocked_until = max(blocked_until, _timestamp(row["blocked_until"]))
                 cursor = _execute(
                     connection,
                     """
@@ -726,7 +735,7 @@ class PostgresLoginAuthService:
                       and bucket_hash = %s and window_started_at = %s
                     """,
                     (
-                        now + timedelta(seconds=self._cooldown_seconds),
+                        blocked_until,
                         now,
                         reserved.kind,
                         self._hmac_key_version,
@@ -743,7 +752,10 @@ class PostgresLoginAuthService:
         now: datetime,
     ) -> None:
         rows = self._lock_reserved_throttles(connection, reservation)
+        now = _aware_now(self._clock)
         for raw_row, reserved in zip(rows, reservation, strict=True):
+            if raw_row is None:
+                continue
             row = _row(raw_row, _THROTTLE_COLUMNS)
             if _timestamp(row.get("window_started_at")) != reserved.window_started_at:
                 continue
@@ -829,9 +841,24 @@ class PostgresLoginAuthService:
                 reservation[1].digest,
             ),
         )
-        if len(rows) != len(reservation):
-            raise RuntimeError("Login throttle state is unavailable.")
-        return rows
+        now = _aware_now(self._clock)
+        by_kind: dict[str, Mapping[str, object]] = {}
+        expected = {reserved.kind for reserved in reservation}
+        for raw_row in rows:
+            row = _row(raw_row, _THROTTLE_COLUMNS)
+            kind = str(row.get("bucket_kind") or "")
+            if kind not in expected or kind in by_kind:
+                raise RuntimeError("Login throttle state is unavailable.")
+            by_kind[kind] = row
+        ordered: list[object] = []
+        for reserved in reservation:
+            row = by_kind.get(reserved.kind)
+            # Cleanup can retire each bucket independently after its captured
+            # expiry. Preserve the other bucket and any newer generation.
+            if row is None and now < reserved.window_expires_at:
+                raise RuntimeError("Login throttle state is unavailable.")
+            ordered.append(row)
+        return ordered
 
     @contextmanager
     def _operation(self) -> Iterator[Any]:

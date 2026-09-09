@@ -1760,9 +1760,9 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         const key = artist.toLocaleLowerCase();
         if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
       });
-      const sourceAlbumArtistKey = String(album?.album_artist || '').trim().toLocaleLowerCase();
+      const destinationAlbumArtistKey = String(bucket.album_artist || '').trim().toLocaleLowerCase();
       const promotesSoleCompilationArtist = (
-        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(sourceAlbumArtistKey)
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(destinationAlbumArtistKey)
         && distinctTrackArtists.size === 1
       );
       const promotedAlbumArtist = promotesSoleCompilationArtist

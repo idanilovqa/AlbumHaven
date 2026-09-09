@@ -7,12 +7,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$source = [IO.Path]::GetFullPath($FoobarRoot)
-$destination = [IO.Path]::GetFullPath($DestinationRoot)
+function Get-NormalizedDirectoryPath([string]$Value) {
+    $absolute = [IO.Path]::GetFullPath($Value)
+    $root = [IO.Path]::GetPathRoot($absolute)
+    $trimmed = $absolute.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    if ($trimmed.Length -lt $root.Length) { return $root }
+    return $trimmed
+}
+$source = Get-NormalizedDirectoryPath $FoobarRoot
+$destination = Get-NormalizedDirectoryPath $DestinationRoot
+$sourcePrefix = $source.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not (Test-Path -LiteralPath $source -PathType Container)) {
     throw "Foobar root not found: $source"
 }
-if ($destination -eq $source -or $destination.StartsWith($source + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+if ($destination -eq $source -or $destination.StartsWith($sourcePrefix, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'DestinationRoot must be outside FoobarRoot.'
 }
 

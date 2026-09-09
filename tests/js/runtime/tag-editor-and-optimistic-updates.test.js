@@ -3064,6 +3064,47 @@ test('missing album conflict keeps the card and refreshes both server-owned surf
   ]]);
 });
 
+for (const navigation of ['stay', 'closed', 'other-album', 'changed-during-load']) {
+  test(`removal conflict refreshes only the still-owned album details (${navigation})`, async () => {
+    const missing = { key: 'artist::returned', name: 'Returned', album_artist: 'Artist',
+      inventory_status: 'missing', allowed_actions: { 'library.inventory.manage': true } };
+    const active = { ...missing, inventory_status: 'active', tracks: [{ path: 'owned.flac' }] };
+    const other = { key: 'other::album' };
+    let current = navigation === 'other-album' ? other : missing;
+    const overlay = { hidden: navigation === 'closed' };
+    const loaded = [], invalidated = [], rendered = [];
+    const context = loadHelper([missing], {
+      showAppConfirmDialog: async () => true,
+      fetch: async () => ({ ok: false, status: 409, json: async () => ({}) }),
+      buildUrl: () => '/view-data', fetchAndRender: async () => {},
+      loadProblematicFiles: async () => {}, showToast() {},
+      getTrackModalElements: () => ({ overlay }),
+      getCurrentTrackModalAlbum: () => current,
+      invalidateHydratedTrackModalAlbumDetails: albums => invalidated.push(albums),
+      invalidatePendingTrackModalLoad: () => ++context.state.ui.pendingTrackModalLoadToken,
+      loadTrackModalAlbumDetails: async key => {
+        loaded.push(key);
+        if (navigation === 'changed-during-load') {
+          current = other;
+          ++context.state.ui.pendingTrackModalLoadToken;
+        }
+        return active;
+      },
+      openTrackModal: album => { current = album; rendered.push(album); },
+    });
+    context.state.ui = { pendingTrackModalLoadToken: 0, trackModalCoverLightboxGallery: false };
+    assert.equal(await context.confirmMissingAlbumRemoval(missing), false);
+    if (navigation === 'stay' || navigation === 'changed-during-load') {
+      assert.deepEqual(loaded, [missing.key]);
+      assert.equal(invalidated[0][0], missing);
+    } else assert.deepEqual(loaded, []);
+    if (navigation === 'stay') {
+      assert.equal(current.inventory_status, 'active');
+      assert.deepEqual(rendered, [active]);
+    } else assert.deepEqual(rendered, []);
+  });
+}
+
 test('successful missing album confirmation closes details and refreshes Problematic Files', async () => {
   const album = {
     key: 'transatlantic-roine-stolt-mixes',

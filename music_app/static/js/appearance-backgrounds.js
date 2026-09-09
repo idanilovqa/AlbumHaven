@@ -256,6 +256,8 @@
     editor.style.setProperty('--appearance-main-surface', effective.main);
     editor.style.setProperty('--appearance-panel-background', effective.panel);
     for (const [token, color] of Object.entries(effective.tokens)) editor.style.setProperty('--appearance-' + token, color);
+    editor.style.setProperty('--appearance-primary-button', effective.tokens.control);
+    editor.style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
     const interactions = value.interaction_overrides || {};
     for (const [token, color] of Object.entries({
       'item-hover': interactions.item_hover,
@@ -445,7 +447,10 @@
       const style = normalizePlayerOverride(value);
       if (!style || !Object.hasOwn(style, 'surface')) throw new TypeError('A complete player style is required.');
       promoteAggregate(); draft.player_style_override = style; pendingPlayerSet = copy(style);
-      if (!preserveColorErrors) clearPlayerStyleErrors();
+      if (!preserveColorErrors) {
+        clearPlayerStyleErrors();
+        delete errors.player_fill; delete errors.player_edge;
+      }
       else if (style.surface.mode === 'solid') delete errors['player_style_surface.end'];
       error = ''; syncInputs(true); notify();
     };
@@ -741,17 +746,26 @@
     };
     const controller = createController({ initial, request, apply: applySavedTheme });
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
-    let footerDispose = null, mountedFooter = null;
+    let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
       footerDispose?.(); footerDispose = null;
       const dialogHost = document.getElementById?.('utility-modal-footer');
       mountedFooter = window.EditorPage?.mountFooter && dialogHost ? dialogHost : localHost;
-      if (mountedFooter === dialogHost) { localHost.hidden = true; dialogHost.hidden = false; }
+      if (mountedFooter === dialogHost) {
+        const previousTheme = ['style', 'data-appearance-mode', 'data-appearance-palette', 'data-alert-family']
+          .map(name => [name, dialogHost.getAttribute(name)]);
+        restoreFooterTheme = () => previousTheme.forEach(([name, value]) => {
+          if (value === null) dialogHost.removeAttribute(name);
+          else dialogHost.setAttribute(name, value);
+        });
+        localHost.hidden = true; dialogHost.hidden = false;
+      }
       footerDispose = window.EditorPage?.mountFooter?.(mountedFooter, { status: 'Saved to your account', ...options }) || null;
       return mountedFooter;
     };
     const unmount = () => {
       unsubscribe?.(); unsubscribe = null; footerDispose?.(); footerDispose = null; mounted = null;
+      restoreFooterTheme?.(); restoreFooterTheme = null;
       if (mountedFooter?.id === 'utility-modal-footer') { mountedFooter.innerHTML = ''; mountedFooter.hidden = true; }
       mountedFooter = null;
     };
@@ -782,6 +796,8 @@
         find('[data-background-pair-title]').textContent = palette ? palette.name + ' + ' + panel[0] : legacy ? 'Current custom colors' : 'Theme defaults';
         find('[data-background-pair-description]').textContent = panel?.[2] || 'Saved backgrounds remain unchanged until Save.';
         const preview = find('[data-background-preview]');
+        applyDraftEditorTheme(state.draft, editor);
+        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
         preview.style.setProperty('--preview-floating', !palette && !preference.panel_background_color ? '#1F2937' : effective.panel);
@@ -847,6 +863,8 @@
         editor.querySelectorAll('.appearance-alert-family-card').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-family') === state.draft.alert_family)));
         editor.querySelectorAll('[data-alert-preview-severity]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-preview-severity') === previewSeverity)));
         const preview = find('[data-alert-live-preview]');
+        applyDraftEditorTheme(state.draft, editor);
+        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-alert-family', state.draft.alert_family || 'ember');
         preview.setAttribute('data-alert-preview-active-severity', previewSeverity);
@@ -895,6 +913,8 @@
         editor.querySelectorAll('[data-album-playing-row-animation]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-playing-row-animation') === state.draft.album_playing_row_animation)));
         editor.querySelectorAll('[data-album-preview-state]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-preview-state') === previewState)));
         const preview = editor.querySelector('[data-album-page-live-preview]');
+        applyDraftEditorTheme(state.draft, editor);
+        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-layout', state.draft.album_details_layout || 'classic_bar');
         preview.setAttribute('data-preview-state', previewState);
@@ -944,6 +964,8 @@
         editor.querySelectorAll('[data-item-outline-color]').forEach(button => button.setAttribute('aria-pressed', String(outline.source === 'custom' && outline.color === button.getAttribute('data-color'))));
         find('[data-item-outline-source="player"]').setAttribute('aria-pressed', String(outline.source === 'player'));
         const preview = find('.selection-hover-preview');
+        applyDraftEditorTheme(state.draft, editor);
+        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--navigation-tree-selection-accent-color', accent.color);
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
@@ -1010,6 +1032,8 @@
         }
         const style = effectivePlayerStyle(state);
         const preview = find('[data-player-live-preview]');
+        applyDraftEditorTheme(state.draft, editor);
+        applyDraftEditorTheme(state.draft, footerHost);
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--preview-player-start', style.surface.start); preview.style.setProperty('--preview-player-end', style.surface.mode === 'solid' ? style.surface.start : style.surface.end); preview.style.setProperty('--preview-player-angle', `${style.surface.angle}deg`);
         preview.style.setProperty('--preview-control-fill', style.controls.fill); preview.style.setProperty('--preview-control-border', style.controls.border);

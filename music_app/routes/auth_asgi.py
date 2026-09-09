@@ -827,9 +827,12 @@ async def accept_invitation_get(request: Request) -> Response:
             except Exception:
                 issued = None
         preserve_transaction = False
+        existing_transaction = request.cookies.get(INVITATION_COOKIE)
+        # A cross-site navigation can withhold an existing Strict cookie. Let
+        # the token-free same-site continuation validate it before changing it.
+        defer_validation = issued is None and existing_transaction is None
         if issued is None:
-            existing_transaction = request.cookies.get(INVITATION_COOKIE)
-            if existing_transaction:
+            if existing_transaction is not None:
                 try:
                     preserve_transaction = await run_in_threadpool(
                         _invitation_lifecycle(request).validate_transaction,
@@ -838,11 +841,11 @@ async def accept_invitation_get(request: Request) -> Response:
                 except Exception:
                     return _generic_invitation_unavailable()
         response = RedirectResponse(
-            "/accept-invitation/continue" if issued is not None else "/accept-invitation",
+            "/accept-invitation/continue" if issued is not None or defer_validation else "/accept-invitation",
             status_code=303,
             headers=INVITATION_HEADERS,
         )
-        if not preserve_transaction:
+        if not preserve_transaction and not defer_validation:
             response.delete_cookie(
                 INVITATION_COOKIE,
                 path="/",

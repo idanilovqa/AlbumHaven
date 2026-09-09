@@ -166,12 +166,11 @@ test("mocks based on request", async ({ page }) => {
 
 // Mock with delay (simulate slow network)
 test("handles slow API", async ({ page }) => {
-  await page.route("**/api/data", (route) =>
-    route.fulfill({
-      json: { data: "test" },
-      delay: 2000, // 2 second delay
-    })
-  );
+  await page.route("**/api/data", async (route) => {
+    // Deliberately delay the response; fulfill has no delay option.
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    await route.fulfill({ json: { data: "test" } });
+  });
 
   await page.goto("/dashboard");
   await expect(page.getByText("Loading...")).toBeVisible();

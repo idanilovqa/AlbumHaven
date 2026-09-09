@@ -26,7 +26,7 @@ def convert(source: Path, destination: Path) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
     row_count = 0
     with source.open("r", encoding="utf-8-sig", newline="") as input_stream:
-        reader = csv.DictReader(input_stream, delimiter="\t")
+        reader = csv.DictReader(input_stream, delimiter="\t", quoting=csv.QUOTE_NONE)
         if not reader.fieldnames or "path" not in reader.fieldnames:
             raise ValueError("Expected a tab-separated Text Tools export with a path column.")
         with destination.open("x", encoding="utf-8", newline="\n") as output_stream:

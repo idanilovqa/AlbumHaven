@@ -50,3 +50,19 @@ for (const scenario of ['closed', 'running', 'root-wal', 'nested-wal']) {
     }
   });
 }
+test('Foobar backup rejects nested destination with a trailing source separator', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-foobar-containment-'));
+  const source = path.join(root, 'source'), destination = path.join(source, 'configuration', 'backups');
+  fs.mkdirSync(path.join(source, 'configuration'), { recursive: true });
+  const launcher = path.join(root, 'invoke.ps1');
+  fs.writeFileSync(launcher, ["$ErrorActionPreference = 'Stop'", 'function Get-Process {}',
+    "function Copy-Item { throw 'UNSAFE_COPY_REACHED' }",
+    `& ${psQuote(helperPath)} -FoobarRoot ${psQuote(source + path.sep)} -DestinationRoot ${psQuote(destination)}`].join('\n'));
+  try {
+    const result = spawnSync(process.platform === 'win32' ? 'powershell.exe' : 'pwsh', ['-NoProfile', '-NonInteractive', '-File', launcher],
+      { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    assert.ifError(result.error); assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /DestinationRoot must be outside FoobarRoot/);
+    assert.equal(fs.existsSync(destination), false, 'unsafe output must not be created');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

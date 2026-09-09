@@ -45,8 +45,8 @@
           <span role="columnheader">Actions</span>
         </div>
         {% for member in roster.members %}
-        {% set can_copy_invitation = member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
-        {% set can_send_invitation = member.account_status == 'Pending invitation' and invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}
+        {% set can_copy_invitation = member.membership_role and member.account_status == 'Pending invitation' and allowed_actions.allows('accounts.invitation.copy') %}
+        {% set can_send_invitation = member.membership_role and member.account_status == 'Pending invitation' and invitation_email_enabled and allowed_actions.allows('accounts.invitation.send') %}
         {% set can_edit_member = allowed_actions.allows('accounts.manage') %}
         <article class="members-row" role="row">
           <div class="member-identity" role="cell">

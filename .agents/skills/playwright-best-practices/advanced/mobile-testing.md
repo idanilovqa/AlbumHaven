@@ -82,25 +82,58 @@ test("tap to interact", async ({ page }) => {
 
 ### Swipe
 
+A tap ends the touch contact. Mouse movement afterward does not make a swipe.
+This helper uses a continuous native touch contact through a
+[Chromium CDP session](https://playwright.dev/docs/api/class-cdpsession).
+Run these gesture examples in a Chromium project with hasTouch enabled.
+For applications that consume legacy TouchEvents on other engines, see
+[Playwright's touch-event guide](https://playwright.dev/docs/touch-events);
+synthetic events do not prove native gesture behavior.
+
 ```typescript
+// fixtures/touch-gesture.ts
+import type { Page } from "@playwright/test";
+
+export async function touchSwipe(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+) {
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart", touchPoints: [{ ...from, id: 0 }],
+    });
+    for (let step = 1; step <= 10; step++) {
+      await session.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{
+          x: from.x + (to.x - from.x) * step / 10,
+          y: from.y + (to.y - from.y) * step / 10,
+          id: 0,
+        }],
+      });
+    }
+  } finally {
+    try {
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally {
+      await session.detach();
+    }
+  }
+}
+```
+
+```typescript
+import { touchSwipe } from "./fixtures/touch-gesture";
+
 test("swipe carousel", async ({ page }) => {
   await page.goto("/carousel");
-
-  const carousel = page.getByTestId("carousel");
-  const box = await carousel.boundingBox();
-
-  if (box) {
-    // Swipe left
-    await page.touchscreen.tap(box.x + box.width - 50, box.y + box.height / 2);
-    await page.mouse.move(box.x + 50, box.y + box.height / 2);
-
-    // Or use drag
-    await carousel.dragTo(carousel, {
-      sourcePosition: { x: box.width - 50, y: box.height / 2 },
-      targetPosition: { x: 50, y: box.height / 2 },
-    });
-  }
-
+  const box = await page.getByTestId("carousel").boundingBox();
+  if (!box) throw new Error("Carousel is not visible");
+  await touchSwipe(page,
+    { x: box.x + box.width - 50, y: box.y + box.height / 2 },
+    { x: box.x + 50, y: box.y + box.height / 2 });
   await expect(page.getByText("Slide 2")).toBeVisible();
 });
 ```
@@ -109,65 +142,31 @@ test("swipe carousel", async ({ page }) => {
 
 ```typescript
 // fixtures/touch.fixture.ts
-import { test as base, Page } from "@playwright/test";
+import { test as base, expect, type Locator } from "@playwright/test";
+import { touchSwipe } from "./touch-gesture";
 
-type TouchFixtures = {
-  swipe: (
-    element: Locator,
-    direction: "left" | "right" | "up" | "down",
-  ) => Promise<void>;
-};
-
-export const test = base.extend<TouchFixtures>({
+export const test = base.extend<{
+  swipe: (element: Locator, direction: "left" | "right" | "up" | "down") => Promise<void>;
+}>({
   swipe: async ({ page }, use) => {
     await use(async (element, direction) => {
       const box = await element.boundingBox();
-      if (!box) throw new Error("Element not visible");
-
-      const centerX = box.x + box.width / 2;
-      const centerY = box.y + box.height / 2;
-      const distance = 100;
-
-      const moves = {
-        left: {
-          startX: centerX + distance,
-          endX: centerX - distance,
-          y: centerY,
-        },
-        right: {
-          startX: centerX - distance,
-          endX: centerX + distance,
-          y: centerY,
-        },
-        up: {
-          startX: centerX,
-          endX: centerX,
-          startY: centerY + distance,
-          endY: centerY - distance,
-        },
-        down: {
-          startX: centerX,
-          endX: centerX,
-          startY: centerY - distance,
-          endY: centerY + distance,
-        },
-      };
-
-      const move = moves[direction];
-      await page.touchscreen.tap(move.startX, move.startY ?? move.y);
-      await page.mouse.move(move.endX, move.endY ?? move.y, { steps: 10 });
-      await page.mouse.up();
+      if (!box) throw new Error("Element is not visible");
+      const x = box.x + box.width / 2, y = box.y + box.height / 2;
+      const horizontal = direction === "left" || direction === "right";
+      const distance = Math.min(100, (horizontal ? box.width : box.height) / 3);
+      const delta = direction === "left" || direction === "up" ? -distance : distance;
+      await touchSwipe(page, { x, y },
+        { x: x + (horizontal ? delta : 0), y: y + (horizontal ? 0 : delta) });
     });
   },
 });
+export { expect };
 
-// Usage
+// Usage in a spec importing this fixture:
 test("swipe to delete", async ({ page, swipe }) => {
   await page.goto("/inbox");
-
-  const message = page.getByTestId("message-1");
-  await swipe(message, "left");
-
+  await swipe(page.getByTestId("message-1"), "left");
   await expect(page.getByRole("button", { name: "Delete" })).toBeVisible();
 });
 ```
@@ -181,15 +180,21 @@ test("long press for context menu", async ({ page }) => {
   const file = page.getByText("document.pdf");
   const box = await file.boundingBox();
 
-  if (box) {
-    // Touch down
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
-
-    // Hold for 500ms
-    await page.waitForTimeout(500);
-
-    // Context menu should appear
+  if (!box) throw new Error("File is not visible");
+  const session = await page.context().newCDPSession(page);
+  try {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: box.x + box.width / 2, y: box.y + box.height / 2, id: 0 }],
+    });
+    // Keep contact down until the application's long-press timer opens the menu.
     await expect(page.getByRole("menu")).toBeVisible();
+  } finally {
+    try {
+      await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } finally {
+      await session.detach();
+    }
   }
 });
 ```
@@ -317,20 +322,20 @@ test("bottom sheet interaction", async ({ page }) => {
 ### Pull to Refresh
 
 ```typescript
+import { touchSwipe } from "./fixtures/touch-gesture";
+
 test("pull to refresh", async ({ page }) => {
   await page.goto("/feed");
 
   const feed = page.getByTestId("feed");
   const initialFirstItem = await feed.locator("> *").first().textContent();
 
-  // Simulate pull down
+  // Reuse touchSwipe from fixtures/touch-gesture in the Chromium touch project.
   const box = await feed.boundingBox();
-  if (box) {
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + 50);
-    await page.mouse.move(box.x + box.width / 2, box.y + 200, { steps: 20 });
-    await page.mouse.up();
-  }
-
+  if (!box) throw new Error("Feed is not visible");
+  await touchSwipe(page,
+    { x: box.x + box.width / 2, y: box.y + 50 },
+    { x: box.x + box.width / 2, y: box.y + 200 });
   // Wait for refresh
   await expect(page.getByTestId("loading")).toBeVisible();
   await expect(page.getByTestId("loading")).toBeHidden();

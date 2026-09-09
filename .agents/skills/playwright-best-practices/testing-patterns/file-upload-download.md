@@ -267,15 +267,22 @@ test('shows visual feedback on drag-over', async ({ page }) => {
 
   const dropZone = page.locator('[data-testid="drop-zone"]');
 
-  await dropZone.dispatchEvent('dragenter', {
-    dataTransfer: { types: ['Files'], files: [] },
+  const dataTransfer = await page.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['fixture'], 'report.pdf', { type: 'application/pdf' }));
+    return transfer;
   });
+  try {
+    await dropZone.dispatchEvent('dragenter', { dataTransfer });
 
-  await expect(dropZone).toHaveClass(/active|highlight|drag-over/);
-  await expect(dropZone).toContainText(/release|drop now/i);
+    await expect(dropZone).toHaveClass(/active|highlight|drag-over/);
+    await expect(dropZone).toContainText(/release|drop now/i);
 
-  await dropZone.dispatchEvent('dragleave');
-  await expect(dropZone).not.toHaveClass(/active|highlight|drag-over/);
+    await dropZone.dispatchEvent('dragleave', { dataTransfer });
+    await expect(dropZone).not.toHaveClass(/active|highlight|drag-over/);
+  } finally {
+    await dataTransfer.dispose();
+  }
 });
 ```
 

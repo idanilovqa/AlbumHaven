@@ -2,6 +2,26 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Retained watcher restart intent after failed root replacement, preserved
+  directory identity during reconciliation, and refreshed old album credits
+  when retagged tracks move to another album.
+- Refreshed open album details after a removal conflict and preserved an
+  explicitly edited album artist when splitting compilation tracks.
+- Kept keyboard focus in the active player when switching layouts, including
+  responsive expansion while playback controls are disabled.
+- Rejected oversized JSON numbers and excessive nesting in bounded administrator
+  requests, kept account enable/disable actions aligned with their labels, and
+  limited invitation and reset controls to accounts with current library access.
+- Rechecked session expiry after lock waits, retained later authentication
+  cooldown deadlines, and allowed expired throttle cleanup to finish without
+  breaking in-flight password verification. Preserved valid invitation cookies
+  when external invalid or replayed links temporarily withhold them.
+- Resolved default appearance editor colors, restored shared footer styles on
+  exit, applied saved navigation interaction colors, and cleared replaced
+  waveform validation errors when choosing a complete player style.
+- Classified whole-PR review changes from the merge base, corrected provider
+  port allocation, and preserved scan startup errors and process ownership
+  when cleanup fails. Fixed Foobar backup containment and literal TSV quotes.
 - Rechecked administrator sessions under mutation locks, shared credential
   attempt and hashing limits across password entry points, and preserved lock
   order and expiry checks during concurrent authentication operations.

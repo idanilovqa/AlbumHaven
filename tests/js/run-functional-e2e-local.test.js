@@ -149,3 +149,20 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.match(guide, /fixtures-v1\.0\.22/);
   assert.match(guide, /Do not[^.]*run-playwright\.cjs/is);
 });
+
+test('port allocation rejects a candidate whose provider port alone is occupied', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const start = source.indexOf('function Get-FreePortBase {');
+  const end = source.indexOf('\nfunction ', start + 1);
+  assert.ok(start >= 0 && end > start);
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-Command', `
+$ErrorActionPreference = 'Stop'
+$script:requests = 0
+function Get-Random { param($Minimum, $Maximum) $script:requests += 1; return (41000 + (($script:requests - 1) * 1000)) }
+function Get-NetTCPConnection { param($State, $ErrorAction) [pscustomobject]@{ LocalPort = 41002 } }
+${source.slice(start, end)}
+Get-FreePortBase
+`], { cwd: repoRoot, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), '42000');
+});

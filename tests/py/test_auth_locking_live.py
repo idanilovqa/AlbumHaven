@@ -238,3 +238,102 @@ def test_live_admin_route_rejects_actor_session_revoked_during_authority_lock(au
     with isolatedPostgres._connect(fixture.setup_url) as connection:
         assert connection.execute("select is_active from app.accounts where id = %s",
             (fixture.target_id,)).fetchone()["is_active"] is True
+
+
+
+def test_live_reset_completion_rolls_back_all_mutations_when_final_audit_fails(auth_lock_inventory):
+    from music_app.services.auth_password_reset_lifecycle_postgres import PostgresPasswordResetLifecycleService
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    fixture = auth_lock_inventory
+    tokens = [issue_opaque_token(), issue_opaque_token()]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_credentials
+            (account_id, encoded_hash, hash_policy_version, credential_version, administrator_set)
+            values (%s, '$argon2id$before-reset', 1, 7, true)""", (fixture.target_id,))
+    sessions = PostgresAuthSessionService(fixture.config)
+    issued_session = sessions.issue_session(fixture.target_id)
+    observed = []
+    class FailingFinalAudit(PostgresSecurityAuditRepository):
+        def append_in_transaction(self, connection, **kwargs):
+            observed.append(connection.execute("""select credential_version from app.account_credentials
+                where account_id = %s""", (fixture.target_id,)).fetchone()["credential_version"])
+            super().append_in_transaction(connection, **kwargs)
+            raise RuntimeError("injected final audit failure")
+    service = PostgresPasswordResetLifecycleService(fixture.config, breached_checker=lambda _password: False,
+        audit_repository=FailingFinalAudit(), password_hasher=lambda *_a, **_kw: PasswordCredential("$argon2id$after-reset", 1))
+    transactions = []
+    for token in tokens:
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            # Issuing a replacement reset link revokes the preceding active
+            # token; its transaction remains as history for the rollback check.
+            connection.execute("""update app.password_reset_tokens set revoked_at = %s
+                where account_id = %s and consumed_at is null and revoked_at is null""",
+                (fixture.now, fixture.target_id))
+            connection.execute("""insert into app.password_reset_tokens
+                (account_id, token_hash, credential_version, created_at, expires_at, request_ref)
+                values (%s, %s, 7, %s, %s, 'rollback-fixture')""",
+                (fixture.target_id, token.digest, fixture.now, fixture.now + timedelta(minutes=20)))
+        transactions.append(service.exchange_reset_token(token.raw, request_ref="rollback-exchange"))
+    assert all(transactions)
+    def snapshot():
+        with isolatedPostgres._connect(fixture.setup_url) as connection:
+            return {
+                "credential": connection.execute("select * from app.account_credentials where account_id = %s", (fixture.target_id,)).fetchall(),
+                "tokens": connection.execute("select * from app.password_reset_tokens where account_id = %s order by id", (fixture.target_id,)).fetchall(),
+                "transactions": connection.execute("""select transaction.* from app.password_reset_transactions transaction
+                    join app.password_reset_tokens token on token.id = transaction.reset_token_id
+                    where token.account_id = %s order by transaction.id""", (fixture.target_id,)).fetchall(),
+                "sessions": connection.execute("select * from app.account_sessions where account_id = %s order by id", (fixture.target_id,)).fetchall(),
+                "audit": connection.execute("select count(*) as n from app.security_audit_events").fetchone()["n"],
+            }
+    before = snapshot()
+    with pytest.raises(RuntimeError, match="Password reset completion failed"):
+        service.complete_reset(transactions[-1].raw_token, new_password="new sufficiently private password", request_ref="rollback-complete")
+    assert observed == [8], "The injected failure must occur after the credential mutation"
+    assert snapshot() == before
+    assert sessions.resolve_session(issued_session.raw_token) is not None
+    assert service.validate_transaction(transactions[-1].raw_token)
+
+
+@pytest.mark.parametrize("route", ["login", "profile"])
+@pytest.mark.parametrize("successful", [True, False], ids=["valid-password", "invalid-password"])
+def test_live_expired_throttle_cleanup_during_verification_preserves_auth_result(auth_lock_inventory, route, successful):
+    from music_app.services.auth_login_postgres import PostgresLoginAuthService
+    from music_app.services.auth_profile_password_postgres import PostgresProfilePasswordService
+    from music_app.services.auth_sessions_postgres import PostgresAuthSessionService
+    from music_app.services.auth_throttle_cleanup_postgres import PostgresAuthThrottleCleanupService
+    from music_app.services.auth_passwords import PasswordVerification
+    from tests.py.test_auth_login_postgres import _config, DUMMY_HASH
+    fixture = auth_lock_inventory
+    config = {**_config(), "ALBUM_HAVEN_APP_DATABASE_URL": fixture.runtime_url}
+    clock = [fixture.now]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_credentials
+            (account_id, encoded_hash, hash_policy_version, credential_version)
+            values (%s, '$argon2id$current', 1, 1)""", (fixture.target_id,))
+    sessions = PostgresAuthSessionService(config, clock=lambda: clock[0])
+    session = sessions.issue_session(fixture.target_id)
+    cleanup = PostgresAuthThrottleCleanupService(config, clock=lambda: clock[0])
+    cleaned = []
+    def verify(*_a, **_kw):
+        clock[0] += timedelta(seconds=901)
+        cleaned.append(cleanup.cleanup(batch_size=20))
+        return PasswordVerification(successful, False)
+    common = dict(clock=lambda: clock[0], verifier=verify, audit_repository=PostgresSecurityAuditRepository())
+    if route == "login":
+        service = PostgresLoginAuthService(config, dummy_encoded_hash=DUMMY_HASH, session_service=sessions, **common)
+        result = service.authenticate(entered_username="auth.race", password="known sufficiently private password", source_key="198.51.100.22")
+        outcome = result.outcome.value
+        assert outcome == ("success" if successful else "invalid")
+        assert cleaned == [2]
+    else:
+        service = PostgresProfilePasswordService(config, password_hasher=lambda *_a, **_kw: PasswordCredential("$argon2id$new", 1),
+            breached_checker=lambda _password: False, **common)
+        result = service.change_password(account_id=fixture.target_id, current_session_id=session.session_id,
+            current_password="known sufficiently private password", new_password="new sufficiently private password", request_ref="cleanup-overlap")
+        assert result.value == ("success" if successful else "current_password_invalid")
+        assert cleaned == [1]
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert connection.execute("select count(*) as n from app.auth_throttles").fetchone()["n"] == 0
+        version = connection.execute("select credential_version from app.account_credentials where account_id = %s", (fixture.target_id,)).fetchone()["credential_version"]
+        assert version == (2 if route == "profile" and successful else 1)

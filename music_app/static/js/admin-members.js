@@ -441,7 +441,7 @@
       const action = button.dataset.adminAction;
       if (action === 'toggle-active') {
         const checkbox = form.querySelector('[name="is_active"]');
-        if (checkbox) checkbox.checked = !checkbox.checked;
+        if (checkbox) checkbox.checked = form.dataset.initialActive !== 'true';
         form.requestSubmit();
         return;
       }

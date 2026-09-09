@@ -23,7 +23,7 @@ test("chat connects via websocket", async ({ page }) => {
   expect(ws.url()).toContain("/ws/chat");
 
   // Wait for connection to be established
-  await ws.waitForEvent("framesent");
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
 });
 ```
 
@@ -362,28 +362,26 @@ test("handles connection loss gracefully", async ({ page }) => {
 
 ```typescript
 test("reconnects after connection loss", async ({ page }) => {
+  const connections: import("@playwright/test").WebSocketRoute[] = [];
+  await page.routeWebSocket("**/ws/chat", socket => {
+    connections.push(socket);
+    // Keep a real browser WebSocket and its normal application listeners.
+    socket.onMessage(message => {
+      const payload = JSON.parse(String(message));
+      socket.send(JSON.stringify({ type: "message", from: "You", content: payload.content }));
+    });
+  });
   await page.goto("/chat");
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  expect(connections).toHaveLength(1);
 
-  // Simulate disconnect
-  await page.evaluate(() => {
-    (window as any).chatSocket.close();
-  });
-
-  await expect(page.getByText("Reconnecting...")).toBeVisible();
-
-  // Simulate reconnection
-  await page.evaluate(() => {
-    const event = new Event("open");
-    (window as any).chatSocket = { readyState: 1 };
-    (window as any).chatSocket.dispatchEvent?.(event);
-  });
-
-  // Force component to re-check connection
-  await page.evaluate(() => {
-    window.dispatchEvent(new Event("online"));
-  });
-
-  await expect(page.getByText("Connected")).toBeVisible();
+  // A server-side close exercises the application's real reconnect loop.
+  await connections[0].close({ code: 1012, reason: "Service restart" });
+  await expect.poll(() => connections.length).toBe(2);
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  await page.getByRole("textbox", { name: "Message" }).fill("After reconnect");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("You: After reconnect")).toBeVisible();
 });
 ```
 

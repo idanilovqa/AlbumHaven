@@ -173,3 +173,20 @@ for (const otherInvalid of [null, 'surface.start', 'controls.fill']) {
     if (otherInvalid) assert.equal(state.inputValues['player_style_' + otherInvalid], '#BADHEX');
   });
 }
+for (const field of ['fill', 'edge']) for (const replacement of ['theme', 'history']) {
+  test(`complete player ${replacement} replaces invalid waveform ${field}`, async () => {
+    const style = api.playerThemes[0].style;
+    const { instance, editor } = await mounted('mountSeekbar', preference({ revision: 7, interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null, button_pressed: null, item_outline: { source: 'automatic', color: null } }, selection_accent: { enabled: true, color: '#34CA78' }, player_recent_sets: [style] }));
+    instance.controller.setWaveformColor(field, '#BADHEX');
+    assert.equal(instance.controller.getState().canSave, false);
+    const attribute = replacement === 'theme' ? 'data-player-theme' : 'data-player-set-index';
+    const value = replacement === 'theme' ? api.playerThemes[0].id : '0';
+    const button = { hasAttribute: name => name === attribute, getAttribute: name => name === attribute ? value : null };
+    editor.listeners.get('click')({ target: { closest: () => button } });
+    const state = instance.controller.getState();
+    assert.deepEqual(state.draft.player_style_override.waveform, style.waveform);
+    assert.equal(state.errors['player_' + field], undefined);
+    assert.equal(state.inputValues['player_' + field], style.waveform[field]);
+    assert.equal(state.canSave, true);
+  });
+}

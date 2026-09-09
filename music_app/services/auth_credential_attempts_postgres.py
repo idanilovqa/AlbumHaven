@@ -44,6 +44,7 @@ def shared_verification_capacity(config: Mapping[str, object]):
 class _Reservation:
     digest: bytes
     window_started_at: datetime
+    window_expires_at: datetime
 
 
 def _utc(value):
@@ -95,21 +96,28 @@ class PostgresCredentialAttempts:
             started = _utc(row.get("window_started_at"))
             if now >= expires:
                 started = now
+                expires = now + timedelta(seconds=self._window)
                 self._updated(connection.execute("""update app.auth_throttles
                     set window_started_at = %s, window_expires_at = %s, failure_count = 0,
                         blocked_until = null, updated_at = %s
                     where bucket_kind = 'login_account' and key_version = %s and bucket_hash = %s""",
-                    (now, now + timedelta(seconds=self._window), now, self._version, digest)))
+                    (now, expires, now, self._version, digest)))
             self._updated(connection.execute("""update app.auth_throttles
                 set failure_count = failure_count + 1, updated_at = %s
                 where bucket_kind = 'login_account' and key_version = %s and bucket_hash = %s""",
                 (now, self._version, digest)))
-        return _Reservation(digest, started)
+        return _Reservation(digest, started, expires)
 
     def finalize(self, reservation, *, successful: bool):
-        now = _utc(self._clock())
         with self._connect(self._database_url) as connection, connection.transaction():
-            row = self._locked(connection, reservation.digest)
+            row = self._locked(connection, reservation.digest, allow_missing=True)
+            now = _utc(self._clock())
+            if row is None:
+                # Cleanup may retire an expired window while password work is
+                # outside its transaction. An unexpired missing row is unsafe.
+                if now >= reservation.window_expires_at:
+                    return
+                raise RuntimeError("Credential attempt state is unavailable.")
             if _utc(row.get("window_started_at")) != reservation.window_started_at:
                 return
             count = self._count(row)
@@ -122,18 +130,23 @@ class PostgresCredentialAttempts:
                         and window_started_at = %s""",
                     (self._limit, now, self._version, reservation.digest, reservation.window_started_at)))
             elif count >= self._limit:
+                blocked_until = now + timedelta(seconds=self._cooldown)
+                if row.get("blocked_until") is not None:
+                    blocked_until = max(blocked_until, _utc(row["blocked_until"]))
                 self._updated(connection.execute("""update app.auth_throttles
                     set blocked_until = %s, updated_at = %s
                     where bucket_kind = 'login_account' and key_version = %s and bucket_hash = %s
                         and window_started_at = %s""",
-                    (now + timedelta(seconds=self._cooldown), now, self._version,
+                    (blocked_until, now, self._version,
                      reservation.digest, reservation.window_started_at)))
 
-    def _locked(self, connection, digest):
+    def _locked(self, connection, digest, *, allow_missing=False):
         rows = connection.execute("""select window_started_at, window_expires_at,
                 failure_count, blocked_until from app.auth_throttles
             where bucket_kind = 'login_account' and key_version = %s and bucket_hash = %s
             for update""", (self._version, digest)).fetchall()
+        if not rows and allow_missing:
+            return None
         if len(rows) != 1 or not isinstance(rows[0], Mapping):
             raise RuntimeError("Credential attempt state is unavailable.")
         return rows[0]

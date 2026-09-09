@@ -158,7 +158,12 @@ The email and copied URL use the same path, token format, and completion flow:
 
 Malformed, wrong-purpose, expired, revoked, consumed, concurrently consumed,
 already-accepted, and disabled-account links render the same safe invalid-link
-result. Successful acceptance and all failure pages are token-free and use
+result unless the browser already has an independently valid invitation
+transaction. A failed exchange with no cookie on the request uses the same
+token-free continuation before validating any Strict cookie withheld by the
+cross-site navigation. Present invalid cookies are cleared; a missing or blocked
+cookie still terminates at the invalid form without a loop.
+Successful acceptance and all failure pages are token-free and use
 `Cache-Control: no-store` plus `Referrer-Policy: no-referrer`.
 
 ## Administration UI

@@ -347,3 +347,29 @@ test('full mode is the default and accepts the explicit full-review label', () =
   });
   assert.equal(classifyPipelineLabels(['ci:full-review']).forceFullReview, true);
 });
+
+for (const forceFull of [false, true]) {
+  test(`whole-PR classification excludes advanced-base changes (forced=${forceFull})`, () => {
+    const fs = require('node:fs'), os = require('node:os');
+    const { execFileSync, spawnSync } = require('node:child_process');
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-review-base-'));
+    const git = (...args) => execFileSync('git', args, { cwd: fixture, encoding: 'utf8', windowsHide: true }).trim();
+    try {
+      git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+      fs.writeFileSync(path.join(fixture, 'base.txt'), 'common\n'); git('add', '.'); git('commit', '-qm', 'common');
+      const common = git('rev-parse', 'HEAD');
+      git('checkout', '-qb', 'feature'); fs.writeFileSync(path.join(fixture, 'README.md'), 'docs only\n');
+      git('add', '.'); git('commit', '-qm', 'documentation'); const head = git('rev-parse', 'HEAD');
+      git('checkout', '-qb', 'advanced-base', common); fs.writeFileSync(path.join(fixture, 'runtime.js'), 'new base feature\n');
+      git('add', '.'); git('commit', '-qm', 'base feature'); const base = git('rev-parse', 'HEAD');
+      const result = spawnSync(process.execPath, [classifierPath], { cwd: fixture, encoding: 'utf8', windowsHide: true,
+        env: { ...process.env, PR_EVENT_ACTION: 'synchronize', PR_BASE_SHA: base, PR_HEAD_SHA: head,
+          PR_LAST_REVIEWED_SHA: '', PR_BODY: '', PR_LABELS_JSON: JSON.stringify(forceFull ? ['ci:full-review'] : []),
+          GITHUB_OUTPUT: path.join(fixture, 'outputs.txt') } });
+      assert.equal(result.status, 0, result.stderr);
+      const scope = JSON.parse(result.stdout);
+      assert.equal(scope.mode, 'none'); assert.equal(scope.functionalChange, false);
+      assert.equal(scope.functionalLines, 0); assert.equal(scope.baseSha, base);
+    } finally { fs.rmSync(fixture, { recursive: true, force: true }); }
+  });
+}

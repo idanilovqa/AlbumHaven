@@ -85,7 +85,7 @@ function Resolve-Executable([string]$Requested, [string[]]$Fallbacks, [string]$L
 function Get-FreePortBase {
     for ($attempt = 0; $attempt -lt 100; $attempt += 1) {
         $candidate = Get-Random -Minimum 20000 -Maximum 60000
-        $ports = @($candidate, $candidate + 2)
+        $ports = @($candidate, ($candidate + 2))
         $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {
             $_.LocalPort -in $ports
         })

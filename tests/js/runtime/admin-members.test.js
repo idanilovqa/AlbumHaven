@@ -26,19 +26,21 @@ function element(initial = {}) {
   };
 }
 
-function loadRuntime({ mode = 'create', active = true, libraryAccess = true, navigate } = {}) {
+function loadRuntime({ mode = 'create', active = true, initialActive = true, libraryAccess = true, navigate, confirm = () => true } = {}) {
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false, textContent: mode === 'create' ? 'Create user' : 'Save changes' });
   const error = element({ hidden: true, textContent: '' });
   const status = element({ hidden: true, textContent: '' });
+  const activeControl = element({ checked: active });
+  const activeAction = element({ dataset: { adminAction: 'toggle-active' } });
   const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
   const welcome = element({ dataset: { adminAction: 'welcome' }, disabled: false });
   const revoke = element({ dataset: { adminAction: 'revoke' }, disabled: false, textContent: 'Revoke sessions' });
   const form = element({
     dataset: {
       mode,
-      initialActive: 'true',
+      initialActive: String(initialActive),
       initialLibraryAccess: 'true',
     },
     checkValidity: () => true,
@@ -50,11 +52,11 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
     },
     querySelector: (selector) => {
       if (selector === 'button[type="submit"]') return submit;
-      if (selector === '[name="is_active"]') return { checked: active };
+      if (selector === '[name="is_active"]') return activeControl;
       return null;
     },
     querySelectorAll: (selector) => (
-      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke] : []
+      selector === '[data-admin-action]' && mode === 'edit' ? [reset, welcome, revoke, activeAction] : []
     ),
     parentElement: {
       querySelector: (selector) => (
@@ -75,7 +77,7 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
   const confirmations = [];
   let assigned = '';
   class FakeFormData {
-    get(key) { return values.get(key) || null; }
+    get(key) { return key === 'is_active' ? (activeControl.checked ? 'on' : null) : (values.get(key) || null); }
     getAll(key) {
       return key === 'capability_keys'
         ? (mode === 'create'
@@ -91,7 +93,7 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
       return { ok: true, json: async () => ({ account_id: 42 }) };
     },
     window: {
-      confirm: (message) => { confirmations.push(message); return true; },
+      confirm: (message) => { confirmations.push(message); return confirm(message); },
       location: { assign: (value) => { assigned = value; } },
     },
     document: {
@@ -104,10 +106,11 @@ function loadRuntime({ mode = 'create', active = true, libraryAccess = true, nav
       },
     },
   });
+  form.requestSubmit = () => { form.submission = form.listeners.get('submit')({ preventDefault() {} }); };
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
-    password, toggle, submit, error, status, reset, welcome, revoke, form, fetches, confirmations,
+    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, form, fetches, confirmations,
     assigned: () => assigned,
   };
 }
@@ -552,4 +555,32 @@ test('admin roster empty reauthentication stays local and returns focus with an 
   assert.equal(runtime.reauth.password.focused, true);
   assert.equal(runtime.error.hidden, false);
   assert.match(runtime.error.textContent, /password/i);
+});
+
+
+for (const initialActive of [true, false]) {
+  test(`labeled account action respects persisted state after edited checkbox: ${initialActive}`, async () => {
+    const runtime = loadRuntime({ mode: 'edit', initialActive, active: !initialActive });
+    await runtime.activeAction.click();
+    await runtime.form.submission;
+    assert.equal(runtime.fetches.length, 1);
+    const payload = JSON.parse(runtime.fetches[0][1].body);
+    assert.equal(payload.is_active, !initialActive);
+    assert.equal(payload.confirm_disable, initialActive);
+  });
+}
+
+test('labeled disable remains disable after cancelling its first confirmation', async () => {
+  let confirmations = 0;
+  const runtime = loadRuntime({ mode: 'edit', confirm: () => ++confirmations > 1 });
+  await runtime.activeAction.click();
+  await runtime.form.submission;
+  assert.equal(runtime.fetches.length, 0);
+  await runtime.activeAction.click();
+  await runtime.form.submission;
+  assert.equal(confirmations, 2);
+  assert.equal(runtime.fetches.length, 1);
+  const payload = JSON.parse(runtime.fetches[0][1].body);
+  assert.equal(payload.is_active, false);
+  assert.equal(payload.confirm_disable, true);
 });

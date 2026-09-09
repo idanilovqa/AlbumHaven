@@ -136,6 +136,8 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] :is(.account-menu-item, .account-menu-icon, .utility-modal-title, .utility-tab, .utility-list-item, .track-modal-title, .gallery-options-menu, .status-context-menu, .album-card-context-menu, .recent-search-popover) { color: var(--appearance-ink); }
 :root[data-appearance-palette] :is(.account-menu-item:hover, .utility-list-item:hover, .app-bar .button:hover:not(:disabled), .app-bar .icon-button:hover:not(:disabled)) { background: var(--appearance-item-hover, var(--appearance-hover)); color: var(--appearance-ink); }
 :root[data-appearance-palette] :is(.utility-list-item.is-active, .navigation-tree-item.is-selected) { background: var(--appearance-item-selected, var(--appearance-hover)); color: var(--appearance-ink); }
+.shell-navigation-rail .artist-link.navigation-tree-item:hover { background: var(--appearance-item-hover, var(--appearance-hover, #ffffff07)); }
+.shell-navigation-rail .artist-link.navigation-tree-item.is-selected { background: var(--appearance-item-selected, var(--appearance-hover, var(--app-active))); }
 :root :is(button, .button, [role='button'], [data-actionable]):not(.navigation-tree-item):not(.global-player *):hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
   outline: 2px solid var(--appearance-interaction-outline, var(--appearance-accent));

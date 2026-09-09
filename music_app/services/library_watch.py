@@ -354,6 +354,7 @@ class LibraryWatchService:
         self._stop_timeout = float(stop_timeout)
         self._lock = Lock()
         self._started = False
+        self._start_requested = False
 
     @property
     def is_alive(self) -> bool:
@@ -361,6 +362,7 @@ class LibraryWatchService:
 
     def start(self) -> bool:
         with self._lock:
+            self._start_requested = True
             if self._started:
                 return False
             self._event_source.start(self._on_event)
@@ -369,23 +371,24 @@ class LibraryWatchService:
 
     def stop(self) -> bool:
         with self._lock:
+            self._start_requested = False
             if not self._started:
                 return False
+            self._event_source.stop(timeout=self._stop_timeout)
             self._started = False
-        self._event_source.stop(timeout=self._stop_timeout)
         return True
 
     def replace_roots(self, roots: Iterable[Mapping[str, object]]) -> bool:
         with self._lock:
-            was_started = self._started
-        if was_started:
-            self.stop()
-        replace_roots = getattr(self._event_source, "replace_roots", None)
-        if not callable(replace_roots):
-            if was_started:
-                self.start()
-            return False
-        replace_roots(roots)
-        if was_started:
-            self.start()
-        return True
+            if self._started:
+                self._event_source.stop(timeout=self._stop_timeout)
+                self._started = False
+            replace_roots = getattr(self._event_source, "replace_roots", None)
+            if callable(replace_roots):
+                replace_roots(roots)
+            # Failed attachment must not cancel recovery intent. Only an
+            # explicit stop cancels it; subsequent root recovery retries start.
+            if self._start_requested:
+                self._event_source.start(self._on_event)
+                self._started = True
+            return callable(replace_roots)

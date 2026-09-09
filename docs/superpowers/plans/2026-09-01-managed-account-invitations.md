@@ -16,10 +16,14 @@ existing `/accept-invitation` form. The continuation route is public only for
 GET/HEAD, renders no token/query/cookie values, performs no authority operation,
 and sets no cookie. Both documents retain no-store and no-referrer headers.
 Keep `Secure`, `HttpOnly`, `SameSite=Strict`, the host-only lifecycle cookie,
-transaction CSRF, and same-origin POST validation. Invalid exchanges keep their
-existing clean redirect; missing/blocked cookies finish at the invalid form.
+transaction CSRF, and same-origin POST validation. Failed exchanges preserve an
+independently valid transaction. When the request has no cookie, reuse the
+continuation to validate any Strict cookie withheld by the external navigation;
+present invalid cookies are still cleared. Missing/blocked cookies finish at the
+invalid form.
 The pinned Chrome external-link regression must cover same-site and cross-site
-clicks plus missing/blocked cookies without a navigation loop.
+clicks, external replay/invalid links with an existing transaction, and
+missing/blocked cookies without a navigation loop.
 
 ## Global Constraints
 

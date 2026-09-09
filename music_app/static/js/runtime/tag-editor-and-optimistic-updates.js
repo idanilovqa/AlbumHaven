@@ -1630,6 +1630,19 @@ async function confirmMissingAlbumRemoval(album, options = {}) {
         await fetchAndRender(buildUrl(state.view), false, refreshOptions);
       }
       if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+      if (modal?.overlay && !modal.overlay.hidden
+        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+        const loadToken = invalidatePendingTrackModalLoad();
+        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+        if (refreshedAlbum && !modal.overlay.hidden
+          && loadToken === state.ui.pendingTrackModalLoadToken
+          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+        }
+      }
       const conflictMessage = String(
         payload.error || payload.detail || 'Album Haven found this album again.'
       ).trim() || 'Album Haven found this album again.';

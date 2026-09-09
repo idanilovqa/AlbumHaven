@@ -91,6 +91,14 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   }
 
   await stepLogger.step('Keep Editorial Canvas usable at a narrow web width', async () => {
+    await openAppearanceAlbumPage({
+      settingsModalAppBarActions,
+      utilityAppearanceActions,
+      utilityTabBarActions,
+    });
+    await utilityAppearanceActions.selectAlbumLayout('editorial_canvas');
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
     await page.setViewportSize({ width: 390, height: 844 });
     await galleryActions.waitForAlbumVisible(MULTI_DISC_ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(MULTI_DISC_ALBUM);

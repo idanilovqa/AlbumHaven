@@ -459,7 +459,7 @@
       Object.assign(tokens, {
         player: player.background,
         'player-surface-start': style?.surface.start || player.background,
-        'player-surface-end': style?.surface.end || player.background,
+        'player-surface-end': (style?.surface.mode === 'solid' ? style.surface.start : style?.surface.end) || player.background,
         'player-surface-angle': style ? `${style.surface.angle}deg` : '0deg',
         'player-ink': contrastingInk(player.background),
         play: style?.controls.fill || contrastingInk(player.background),

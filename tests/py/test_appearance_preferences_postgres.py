@@ -1,5 +1,7 @@
 """Validation and SQL ownership contracts for per-account appearance preferences."""
 
+import re
+
 import pytest
 
 from tests.py.test_account_appearance_asgi import (
@@ -386,6 +388,30 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
     assert 7 in params
     assert ["#123456"] in params
     assert connection.closed
+
+
+@pytest.mark.parametrize("legacy", [None, {"background": "#123456", "fill": "#345678", "edge": "#567890"}])
+def test_aggregate_save_persists_explicit_legacy_player_values_and_clears_null(legacy):
+    connection = Connection({**AGGREGATE_APPEARANCE, "revision": 8})
+    _repository(connection).save_preferences(
+        account_id=41, preferences=aggregate_write(player_override=legacy, player_style_override=None),
+        expected_revision=7,
+    )
+    sql, params = connection.operations[0]
+    incoming = sql.split("), updated as (")[0]
+    updated = sql.split("), updated as (")[1].split("returning")[0]
+    for field, target_column in (
+        ("background", "player_background_color"),
+        ("fill", "player_waveform_fill_color"),
+        ("edge", "player_waveform_edge_color"),
+    ):
+        column = f"player_{field}"
+        match = re.search(r"%s::text " + column + r"\b", incoming)
+        assert match, f"the aggregate snapshot must carry {column}, including explicit null"
+        assert params[incoming[:match.start()].count("%s")] == (legacy[field] if legacy else None)
+        assert f"{target_column} = incoming.{column}" in updated
+    assert "saved.revision = incoming.expected_revision" in updated
+    assert len(connection.operations) == 1
 
 
 def test_repository_validates_expected_revision_before_opening_database():

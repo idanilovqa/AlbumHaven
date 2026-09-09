@@ -3240,6 +3240,54 @@ test('pollStatus defers an inventory refresh while a tag edit owns gallery resou
   assert.equal(context.state.view.artist_groups[0].albums[0].key, 'optimistic-merge');
 });
 
+test('pollStatus preserves mutation-owned hydrated membership and reconciles it after settlement', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const albumKey = 'pending-split';
+  const preview = { key: albumKey, name: 'Split', album_artist: 'Artist', preview_only: true, track_count_preview: 18, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, track_count_preview: 17, tracks: Array.from({ length: 17 }, (_, index) => ({ path: `track-${index + 2}` })) };
+  const claim = {};
+  let pending = true;
+  context.Map = Map;
+  context.getAlbumRequestKey = album => album?.key || '';
+  context.getAlbumIdentity = context.getAlbumRequestKey;
+  context.attachGalleryPlaybackContextToAlbum = album => album;
+  context.getTrackModalElements = () => ({});
+  context.state.gallery = { albumIndex: new Map([[albumKey, preview]]) };
+  context.getIndexedAlbum = key => context.state.gallery.albumIndex.get(key);
+  context.tagEditViewMutationStillOwnsResources = candidate => pending && candidate === claim;
+  context.hasPendingTagEditViewMutations = () => pending;
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimistic] }];
+  const status = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false, inventory_mutation_revision: 12 };
+  context.state.status = { ...status };
+  const cachePath = path.join(path.dirname(helperPath), 'track-modal-lightbox-helpers.js');
+  vm.runInContext(fs.readFileSync(cachePath, 'utf8'), context, { filename: cachePath });
+  context.cacheHydratedTrackModalAlbum(albumKey, optimistic, { aliases: [albumKey], tagEditMutationClaim: claim });
+  context.cacheHydratedTrackModalAlbum('unclaimed', { key: 'unclaimed', tracks: [] });
+
+  const first = context.pollStatus();
+  pendingRequests[0].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  await first;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), optimistic);
+  assert.equal(context.getIndexedAlbum(albumKey), optimistic);
+  assert.equal(context.getCachedHydratedTrackModalAlbum('unclaimed'), null);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(calls.fetchRequests.length, 1);
+
+  pending = false;
+  const second = context.pollStatus();
+  pendingRequests[1].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 3; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 3);
+  const canonical = { ...optimistic, name: 'Canonical split' };
+  pendingRequests[2].resolveWith({ ...context.state.view, artist_groups: [{ artist: 'Artist', albums: [canonical] }] });
+  await second;
+  assert.deepEqual(calls.consoleErrors.map(args => args.map(value => String(value))), []);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Canonical split');
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), null);
+});
+
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

@@ -272,7 +272,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
 }
 
 function invalidateAllHydratedTrackModalAlbumDetails() {
-  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
+    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    return !(claim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(claim));
+  });
   if (!cachedAlbums.length) return 0;
   return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
 }

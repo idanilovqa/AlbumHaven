@@ -72,6 +72,41 @@ function setup(options = {}) {
   return { controller, requests, applied, initial };
 }
 
+for (const action of ['match', 'reset']) {
+  test(`migrated aggregate player ${action} clears legacy colors through save and reload`, async () => {
+    const initial = { ...initialAppearance(), player_style_override: null,
+      player_override: { background: '#123456', fill: '#345678', edge: '#567890' } };
+    const { controller, requests } = setup({ initial });
+    controller.setPalette('slate');
+    if (action === 'match') controller.setPlayerMode('palette');
+    else controller.resetSection('seekbar');
+    assert.equal(controller.getState().draft.player_override, null);
+    assert.equal(controller.getState().draft.player_style_override, null);
+    assert.equal(controller.getState().draft.palette_id, 'slate');
+    assert.equal(await controller.save(), true);
+    assert.equal(requests[0].payload.player_override, null);
+    const reloaded = setup({ initial: { ...controller.getState().saved, revision: 8, player_recent_sets: initial.player_recent_sets } }).controller;
+    assert.equal(reloaded.getState().draft.player_override, null);
+    assert.equal(reloaded.getState().draft.player_style_override, null);
+  });
+}
+
+test('solid player colors stay solid after a new Start selection and restored unequal endpoints', () => {
+  const { controller } = setup();
+  const style = classicGreen();
+  style.surface = { mode: 'solid', angle: 45, start: '#123456', end: '#ABCDEF' };
+  controller.setPlayerStyle(style);
+  const properties = new Map();
+  const root = { style: { setProperty: (name, value) => properties.set(name, value), removeProperty() {} }, setAttribute() {}, removeAttribute() {} };
+  appearance.applyTheme(controller.getState().draft, root);
+  assert.equal(properties.get('--appearance-player-surface-start'), '#123456');
+  assert.equal(properties.get('--appearance-player-surface-end'), '#123456');
+  appearance.setPlayerStylePath(controller, 'surface.start', '#345678');
+  assert.equal(controller.getState().draft.player_style_override.surface.end, '#345678');
+  appearance.applyTheme(controller.getState().draft, root);
+  assert.equal(properties.get('--appearance-player-surface-end'), '#345678');
+});
+
 test('one aggregate draft keeps Main elements, Player & Seekbar, and Selection accent edits while navigating', () => {
   const { controller, initial } = setup();
   controller.setPalette('slate');

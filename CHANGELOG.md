@@ -61,6 +61,11 @@
   after an unconfirmed acceptance.
 - Restored the browser history position when unsaved appearance changes cancel
   Settings navigation.
+- Persisted player-color resets through the account preference store and kept
+  Solid player previews consistent. Prevented concurrent invitation rotations
+  from copying stale links and retained compact-player geometry when Settings
+  hides the library. Corrected duplicate-source track totals, preserved pending
+  optimistic edits during refresh, and restored the mobile Editorial album layout.
 - Preserved every rapid compact-player queue advance while streaming starts,
   and restored the playing position when the latest selection fails.
 - Bounded retained watcher paths and moves within directory groups, and checked

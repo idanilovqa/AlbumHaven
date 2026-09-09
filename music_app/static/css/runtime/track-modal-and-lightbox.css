@@ -498,21 +498,6 @@
   display: none;
 }
 @media (max-width: 720px) {
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
-    display: block;
-    padding: 0;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-header {
-    padding: 14px 16px 10px;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-body {
-    display: grid;
-  }
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
-  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main {
-    grid-column: auto;
-    grid-row: auto;
-  }
   .track-modal-body {
     grid-template-columns: 1fr;
   }
@@ -706,6 +691,23 @@
 }
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-list {
   padding-left: 0;
+}
+@media (max-width: 720px) {
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {
+    display: block;
+    padding: 0;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-header {
+    padding: 14px 16px 10px;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) > .track-modal-body {
+    display: grid;
+  }
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-cover,
+  .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) .track-modal-main {
+    grid-column: auto;
+    grid-row: auto;
+  }
 }
 .track-modal-cover-shell:has(> .album-artbox:only-child) {
   grid-template-columns: minmax(0, 1fr);

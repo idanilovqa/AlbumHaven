@@ -994,6 +994,56 @@ def test_live_isolated_postgres_pristine_bootstrap_cleanup_and_second_run(monkey
             isolatedPostgres.reset_application_tables(setup_url)
 
 
+def test_live_aggregate_appearance_persists_and_clears_migrated_player_colors(monkeypatch):
+    from music_app.services.appearance_preferences_postgres import (
+        AppearanceRevisionConflict,
+        PostgresAppearancePreferencesRepository,
+    )
+    from tests.py.test_appearance_preferences_postgres import aggregate_write
+
+    setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
+    legacy = {"background": "#123456", "fill": "#345678", "edge": "#567890"}
+    try:
+        _drop_application_schemas(setup_url)
+        isolatedPostgres.prepare_isolated_database(setup_url, runtime_url)
+        with isolatedPostgres._connect(setup_url) as connection:
+            account_id = int(connection.execute("select min(id) as id from app.accounts").fetchone()["id"])
+        repository = PostgresAppearancePreferencesRepository({"ALBUM_HAVEN_APP_DATABASE_URL": runtime_url})
+        payload = aggregate_write(player_override=legacy, player_style_override=None)
+
+        inserted = repository.save_preferences(account_id=account_id, preferences=payload, expected_revision=0)
+        assert inserted["revision"] == 1
+        assert repository.load_preferences(account_id=account_id)["player_override"] == legacy
+
+        updated = repository.save_preferences(
+            account_id=account_id, preferences={**payload, "album_details_layout": "stacked_bar"}, expected_revision=1,
+        )
+        assert updated["revision"] == 2
+        assert updated["album_details_layout"] == "stacked_bar"
+        assert repository.load_preferences(account_id=account_id)["player_override"] == legacy
+
+        cleared = repository.save_preferences(
+            account_id=account_id, preferences={**payload, "player_override": None}, expected_revision=2,
+        )
+        reloaded = repository.load_preferences(account_id=account_id)
+        assert reloaded["revision"] == cleared["revision"] == 3
+        assert reloaded["player_override"] is None
+        assert reloaded["player_style_override"] is None
+        with isolatedPostgres._connect(runtime_url) as connection:
+            row = connection.execute(
+                "select player_background_color, player_waveform_fill_color, player_waveform_edge_color "
+                "from app.user_appearance_preferences where account_id = %s and client_profile = 'desktop'",
+                (account_id,),
+            ).fetchone()
+        assert dict(row) == {"player_background_color": None, "player_waveform_fill_color": None, "player_waveform_edge_color": None}
+
+        with pytest.raises(AppearanceRevisionConflict):
+            repository.save_preferences(account_id=account_id, preferences=payload, expected_revision=2)
+        assert repository.load_preferences(account_id=account_id) == reloaded
+    finally:
+        isolatedPostgres.reset_application_tables(setup_url)
+
+
 def test_live_appearance_constraints_reject_nested_json_nulls(monkeypatch):
     setup_url, runtime_url = _dedicated_database_urls_or_skip(monkeypatch)
     psycopg = pytest.importorskip("psycopg")

@@ -9101,7 +9101,12 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
 }
 
 function invalidateAllHydratedTrackModalAlbumDetails() {
-  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys());
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
+    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    return !(claim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(claim));
+  });
   if (!cachedAlbums.length) return 0;
   return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
 }
@@ -24975,7 +24980,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -25095,7 +25100,7 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
@@ -25169,7 +25174,7 @@ function buildTrackListHtml(tracks, album = null) {
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
     multiDisc: grouped.multiDisc,
-    totalLength: album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds),
+    totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
@@ -30620,6 +30625,7 @@ function syncDockedCompactGeometry() {
   const tree = document.getElementById('shell-navigation-rail');
   if (!els.player || !tree) return;
   const geometry = resolveDockedCompactGeometry(tree.getBoundingClientRect());
+  if (geometry.width <= 0) return;
   els.player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
   els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
 }

@@ -339,6 +339,23 @@ test('docked player geometry follows the rendered artist-tree panel', () => {
   });
 });
 
+test('docked geometry preserves its last visible width while Settings hides the library rail', () => {
+  const context = loadHelper();
+  const properties = new Map();
+  let rect = { left: 8, width: 264 };
+  context.document = { getElementById: () => ({ getBoundingClientRect: () => rect }) };
+  vm.runInContext(fs.readFileSync(controllerPath, 'utf8'), context, { filename: controllerPath });
+  context.compactPlayerElements = () => ({ player: { style: { setProperty: (key, value) => properties.set(key, value) } } });
+  context.syncDockedCompactGeometry();
+  rect = { left: 0, width: 0 };
+  context.syncDockedCompactGeometry();
+  assert.equal(properties.get('--compact-docked-left'), '8px');
+  assert.equal(properties.get('--compact-docked-width'), '264px');
+  rect = { left: 12, width: 290 };
+  context.syncDockedCompactGeometry();
+  assert.equal(properties.get('--compact-docked-width'), '290px');
+});
+
 test('floating album details require a pointer double-click while keyboard and docked activation stay direct', () => {
   const helper = loadHelper();
 

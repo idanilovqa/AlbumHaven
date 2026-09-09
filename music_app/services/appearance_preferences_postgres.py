@@ -371,7 +371,8 @@ class PostgresAppearancePreferencesRepository:
                             %s::text[] waveform_color_updates,
                             %s::bigint expected_revision, %s::text compact_player_style,
                             %s::text album_details_layout, %s::text album_playing_row_animation,
-                            %s::text alert_family
+                            %s::text alert_family,
+                            %s::text player_background, %s::text player_fill, %s::text player_edge
                    ), updated as (
                      update app.user_appearance_preferences as saved
                         set main_surface_color = incoming.main_surface_color,
@@ -381,6 +382,9 @@ class PostgresAppearancePreferencesRepository:
                             interaction_overrides = incoming.interaction_overrides,
                             selection_accent = incoming.selection_accent,
                             player_style_override = incoming.player_style_override,
+                            player_background_color = incoming.player_background,
+                            player_waveform_fill_color = incoming.player_fill,
+                            player_waveform_edge_color = incoming.player_edge,
                             player_recent_sets = app.merge_player_recent_sets(saved.player_recent_sets, incoming.applied_player_set),
                             waveform_recent_colors = app.merge_waveform_recent_colors(
                               incoming.waveform_color_updates || saved.waveform_recent_colors
@@ -402,14 +406,15 @@ class PostgresAppearancePreferencesRepository:
                       palette_id, panel_index, interaction_overrides, selection_accent,
                       player_style_override, player_recent_sets, waveform_recent_colors,
                       revision, compact_player_style, album_details_layout, album_playing_row_animation,
-                      alert_family)
+                      alert_family, player_background_color, player_waveform_fill_color, player_waveform_edge_color)
                    select account_id, client_profile, main_surface_color, panel_background_color,
                           palette_id, panel_index, interaction_overrides, selection_accent,
                           player_style_override,
                           app.merge_player_recent_sets('[]'::jsonb, applied_player_set),
                           app.merge_waveform_recent_colors(waveform_color_updates),
                           expected_revision + 1, compact_player_style,
-                          album_details_layout, album_playing_row_animation, alert_family
+                          album_details_layout, album_playing_row_animation, alert_family,
+                          player_background, player_fill, player_edge
                      from incoming where expected_revision = 0
                    on conflict (account_id, client_profile) do nothing
                    returning {_READ_COLUMNS}
@@ -424,6 +429,7 @@ class PostgresAppearancePreferencesRepository:
                 colors.get("waveform_color_updates", []), expected_revision, colors["compact_player_style"],
                 colors["album_details_layout"], colors["album_playing_row_animation"],
                 colors["alert_family"],
+                *((colors["player_override"] or {}).get(field) for field in _PLAYER_FIELDS),
             )
             with self._connection() as connection:
                 row = connection.execute(sql, params).fetchone()

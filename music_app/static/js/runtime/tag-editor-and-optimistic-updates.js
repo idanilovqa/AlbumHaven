@@ -1926,7 +1926,7 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
     els.footer.textContent = '';
     els.footer.hidden = true;
@@ -2046,7 +2046,7 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
@@ -2120,7 +2120,7 @@ function buildTrackListHtml(tracks, album = null) {
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
     multiDisc: grouped.multiDisc,
-    totalLength: album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds),
+    totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }

@@ -77,6 +77,7 @@
     if (color === null) throw new TypeError('A player color is required.');
     const previousEdge = style.waveform.edge;
     style[group][field] = color;
+    if (path === 'surface.start' && style.surface.mode === 'solid') style.surface.end = color;
     if (playerColorPairs[path]) {
       const paired = derivePairedPlayerColor(path, color);
       const [pairedGroup, pairedField] = paired.role.split('.');
@@ -350,7 +351,7 @@
           const style = effectivePlayerStyle(getState());
           draft.player_style_override = style; pendingPlayerSet = copy(style);
         } else {
-          draft.player_style_override = null; pendingPlayerSet = null;
+          draft.player_style_override = null; draft.player_override = null; pendingPlayerSet = null;
         }
         for (const field of ['background', 'fill', 'edge']) delete errors['player_' + field];
         error = ''; syncInputs(true); notify(); return;
@@ -471,7 +472,7 @@
       if (section === 'backgrounds') {
         Object.assign(draft, empty(), { palette_id: null, panel_index: 0 });
       } else if (section === 'seekbar') {
-        draft.player_style_override = null; draft.compact_player_style = 'docked'; pendingPlayerSet = null; waveformColorUpdates = [];
+        draft.player_style_override = null; draft.player_override = null; draft.compact_player_style = 'docked'; pendingPlayerSet = null; waveformColorUpdates = [];
         delete errors.player_background; delete errors.player_fill; delete errors.player_edge;
       } else if (section === 'selection-accent') {
         const paletteAccent = palettes.find(palette => palette.id === draft.palette_id)?.selectionAccent;
@@ -984,7 +985,7 @@
         const style = effectivePlayerStyle(state);
         const preview = find('[data-player-live-preview]');
         applyDraftEditorTheme(state.draft, preview);
-        preview.style.setProperty('--preview-player-start', style.surface.start); preview.style.setProperty('--preview-player-end', style.surface.end); preview.style.setProperty('--preview-player-angle', `${style.surface.angle}deg`);
+        preview.style.setProperty('--preview-player-start', style.surface.start); preview.style.setProperty('--preview-player-end', style.surface.mode === 'solid' ? style.surface.start : style.surface.end); preview.style.setProperty('--preview-player-angle', `${style.surface.angle}deg`);
         preview.style.setProperty('--preview-control-fill', style.controls.fill); preview.style.setProperty('--preview-control-border', style.controls.border);
         preview.style.setProperty('--preview-waveform-fill', style.waveform.fill); preview.style.setProperty('--preview-waveform-edge', style.waveform.edge);
         preview.style.setProperty('--preview-handle-color', style.handles.color); preview.setAttribute('data-show-handles', String(waveformSelected && activeWaveformTab === 'handles'));
@@ -999,6 +1000,7 @@
         editor.querySelectorAll('[data-player-style-color],[data-player-style-hex]').forEach(input => {
           const [group, field] = (input.getAttribute('data-player-style-color') || input.getAttribute('data-player-style-hex')).split('.');
           if (document.activeElement !== input) input.value = style[group][field];
+          input.disabled = disabled || (group === 'surface' && field === 'end' && style.surface.mode === 'solid');
         });
         const angle = find('[data-player-style-angle]'); if (angle) angle.value = String(style.surface.angle);
         const angleOutput = find('[data-player-angle-output]'); if (angleOutput) angleOutput.textContent = `${style.surface.angle}°`;

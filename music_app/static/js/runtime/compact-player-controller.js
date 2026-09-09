@@ -43,6 +43,7 @@ function syncDockedCompactGeometry() {
   const tree = document.getElementById('shell-navigation-rail');
   if (!els.player || !tree) return;
   const geometry = resolveDockedCompactGeometry(tree.getBoundingClientRect());
+  if (geometry.width <= 0) return;
   els.player.style.setProperty('--compact-docked-left', `${geometry.left}px`);
   els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
 }

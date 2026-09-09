@@ -36,6 +36,33 @@
   const rosterReauthPanel = roster?.querySelector('[data-roster-reauth-panel]');
   const rosterReauthPassword = roster?.querySelector('[data-roster-reauth-password]');
   let rosterRetry = null;
+  let rosterRetryAccountId = null;
+  const pendingInvitationAccounts = new Set();
+
+  const setInvitationBusy = (accountId, busy) => {
+    if (busy) pendingInvitationAccounts.add(accountId);
+    else pendingInvitationAccounts.delete(accountId);
+    for (const [selector, key] of [['[data-copy-invitation]', 'copyInvitation'], ['[data-send-invitation]', 'sendInvitation']]) {
+      for (const button of document.querySelectorAll(selector)) {
+        if (button.dataset[key] === accountId) button.disabled = busy;
+      }
+    }
+  };
+
+  const finishInvitationAction = async (accountId, action) => {
+    let awaitingReauthentication = false;
+    try {
+      awaitingReauthentication = await action() === false;
+    } finally {
+      if (!awaitingReauthentication) setInvitationBusy(accountId, false);
+    }
+  };
+
+  const runInvitationAction = (accountId, action) => {
+    if (!active || pendingInvitationAccounts.has(accountId)) return Promise.resolve();
+    setInvitationBusy(accountId, true);
+    return finishInvitationAction(accountId, action);
+  };
 
   const announceRoster = (message) => {
     if (!rosterStatus) return;
@@ -72,7 +99,9 @@
     body: JSON.stringify(payload),
   });
 
-  const reauthenticateRosterThen = (retry) => {
+  const reauthenticateRosterThen = (retry, accountId) => {
+    if (rosterRetryAccountId && rosterRetryAccountId !== accountId) setInvitationBusy(rosterRetryAccountId, false);
+    rosterRetryAccountId = accountId;
     rosterRetry = retry;
     if (rosterReauthPanel) rosterReauthPanel.hidden = false;
     if (rosterReauthPassword) {
@@ -176,8 +205,8 @@
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/copy`,
     );
     if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => copyInvitation(accountId, false));
-      return;
+      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => copyInvitation(accountId, false)), accountId);
+      return false;
     }
     if (!response.ok) throw new Error('Invitation link could not be created.');
     const result = await response.json().catch(() => null);
@@ -196,8 +225,8 @@
       `/admin/accounts/${encodeURIComponent(accountId)}/invitation/send`,
     );
     if (response.status === 409 && allowReauthentication) {
-      reauthenticateRosterThen(() => sendInvitation(accountId, false));
-      return;
+      reauthenticateRosterThen(() => finishInvitationAction(accountId, () => sendInvitation(accountId, false)), accountId);
+      return false;
     }
     if (!response.ok) throw new Error('Invitation email could not be queued.');
     announceRoster('Invitation email queued. Older invitation links no longer work.');
@@ -208,7 +237,7 @@
     if (!accountId) continue;
     button.addEventListener('click', () => {
       closeMenuForAction(accountId);
-      return copyInvitation(accountId).catch(
+      return runInvitationAction(accountId, () => copyInvitation(accountId)).catch(
         (error) => showRosterError(error.message),
       );
     });
@@ -218,7 +247,7 @@
     if (!accountId) continue;
     button.addEventListener('click', () => {
       closeMenuForAction(accountId);
-      return sendInvitation(accountId).catch(
+      return runInvitationAction(accountId, () => sendInvitation(accountId)).catch(
         (error) => showRosterError(error.message),
       );
     });
@@ -241,6 +270,8 @@
   );
   roster?.querySelector('[data-roster-reauth-cancel]')?.addEventListener(
     'click', () => {
+      if (rosterRetryAccountId) setInvitationBusy(rosterRetryAccountId, false);
+      rosterRetryAccountId = null;
       rosterRetry = null;
       if (rosterReauthPanel) rosterReauthPanel.hidden = true;
     },
@@ -261,6 +292,7 @@
         if (!response.ok) throw new Error('Reauthentication failed.');
         if (rosterReauthPanel) rosterReauthPanel.hidden = true;
         const retry = rosterRetry;
+        rosterRetryAccountId = null;
         rosterRetry = null;
         await retry?.();
       } catch (error) {

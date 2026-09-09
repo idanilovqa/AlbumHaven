@@ -116,6 +116,7 @@ function loadRosterRuntime({
   clipboardReject = false,
   reauthOnFirstCopy = false,
   copyResponse = null,
+  request = null,
 } = {}) {
   const menuButton = element({
     dataset: { memberMenuTrigger: '41' },
@@ -170,6 +171,7 @@ function loadRosterRuntime({
     FormData: class {},
     fetch: async (url, options) => {
       fetches.push({ url, options });
+      if (request) return request(url, options);
       if (url.endsWith('/invitation/copy')) {
         copyAttempts += 1;
         if (reauthOnFirstCopy && copyAttempts === 1) {
@@ -408,6 +410,45 @@ test('admin roster copy and send invitation actions use distinct endpoints with 
     '/admin/accounts/41/invitation/send',
   );
   assert.match(runtime.status.textContent, /Invitation email queued/);
+});
+
+for (const secondAction of ['copyInvite', 'sendInvite']) {
+  for (const pendingStage of ['response', 'clipboard']) {
+    test(`roster invitation rotation excludes ${secondAction} during pending ${pendingStage}`, async t => {
+      let finish;
+      const pending = new Promise(resolve => { finish = resolve; });
+      const response = { ok: true, status: 200, json: async () => ({ invitation_url: `https://example.test/accept-invitation?purpose=account-invitation&token=${'A'.repeat(43)}` }) };
+      const runtime = loadRosterRuntime({ request: async () => pendingStage === 'response' ? pending : response });
+      if (pendingStage === 'clipboard') runtime.clipboard.writeText = async value => { await pending; runtime.clipboard.value = value; };
+      const first = runtime.row.copyInvite.click();
+      t.after(async () => { finish(response); await first; });
+      await new Promise(resolve => setImmediate(resolve));
+      const duplicate = runtime.row[secondAction].click();
+      t.after(async () => { finish(response); await duplicate; });
+      assert.equal(runtime.fetches.length, 1, 'a later rotation must not invalidate the pending copied token');
+      assert.equal(runtime.row.copyInvite.disabled, true);
+      assert.equal(runtime.row.sendInvite.disabled, true);
+      finish(response);
+      await Promise.all([first, duplicate]);
+      assert.match(runtime.clipboard.value, /token=A{43}$/);
+      assert.equal(runtime.row.copyInvite.disabled, false);
+      assert.equal(runtime.row.sendInvite.disabled, false);
+      await runtime.row[secondAction].click();
+      assert.equal(runtime.fetches.length, 2, 'normal actions resume after the prior result is exposed');
+    });
+  }
+}
+
+test('roster invitation rotation remains owned through reauthentication and releases on cancel', async () => {
+  const runtime = loadRosterRuntime({ reauthOnFirstCopy: true });
+  await runtime.row.copyInvite.click();
+  await runtime.row.sendInvite.click();
+  assert.equal(runtime.fetches.length, 1);
+  assert.equal(runtime.reauth.panel.hidden, false);
+  await runtime.reauth.cancel.click();
+  assert.equal(runtime.row.copyInvite.disabled, false);
+  await runtime.row.sendInvite.click();
+  assert.equal(runtime.fetches.length, 2);
 });
 
 test('admin roster invitation actions close the menu and restore trigger focus', async () => {

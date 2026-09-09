@@ -3588,10 +3588,12 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     duplicate_sources: [
       {
         folder_name: 'Folder A',
+        total_duration_display: '40:00',
         tracks: [{ path: 'C:\\Music\\Artist Alpha\\Album Alpha\\01 Track.flac' }],
       },
       {
         folder_name: 'Folder B',
+        total_duration_display: '40:01',
         tracks: [{ path: 'D:\\Mirror\\Artist Alpha\\Album Alpha\\01 Track.flac' }],
       },
     ],
@@ -3670,6 +3672,8 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   context.getTrackModalElements = () => baseElements;
   vm.createContext(context);
   vm.runInContext(helperSource, context, { filename: helperPath });
+  album.total_duration_display = '1:20:01';
+  for (const component of albumUiComponentSources) vm.runInContext(component.source, context, { filename: component.filename });
 
   context.renderTrackModalRelease(album);
 
@@ -3677,6 +3681,11 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="0"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
   assert.doesNotMatch(duplicateWarning.innerHTML, /data-duplicate-folder-album=/);
+  assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
+  context.state.modalDuplicateSourceIndices.alpha = 1;
+  context.renderTrackModalRelease(album);
+  assert.match(baseElements.list.innerHTML, /Total Length: 40:01/);
+  assert.doesNotMatch(baseElements.list.innerHTML, /Total Length: 1:20:01/);
 }
 
 {

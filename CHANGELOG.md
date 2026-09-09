@@ -2,6 +2,8 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Reported fixed CI review failure categories without exposing console text or
+  private usage data, while retaining complete review and test gates.
 - Retried due welcome messages through a bounded background worker when delivery
   is enabled, preserving uncertain delivery outcomes without automatic resend.
 - Restored separate main and bonus track durations inside the shared album

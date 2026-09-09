@@ -1,9 +1,20 @@
 # Private PR review usage
 
 Codex execution output is captured in a runner-private temporary file. The
-workflow verifies the pinned official action before applying that single logging
-change. Public artifacts contain validated findings and coverage; raw transcripts
+workflow verifies the pinned official action before applying private output routing
+and selecting JSONL output with `--json`; every other review argument is preserved.
+Public artifacts contain validated findings and coverage; raw transcripts
 and plaintext usage are not uploaded.
+
+Failed executions print only a fixed diagnostic category: `provider_quota_reported`,
+`authentication_failed`, `rate_limited`, `context_limit`, `transport_failure`, or
+`unknown`. The local classifier reads native top-level JSONL error events and
+ignores agent/tool message content and the action's console preamble or footer.
+Unrecognized, conflicting, malformed, or oversized captures remain `unknown`;
+the maximum classified capture is 16 MiB, without truncation. Categories report
+what the error indicates, not an independently verified billing or account state.
+Classifier failure preserves the original review exit code. Raw console output
+remains ephemeral on the runner and is never added to an artifact or usage envelope.
 
 Codex review batches, the integration review, and PR Agent retain encrypted
 usage artifacts for each GitHub Actions run and attempt. The readable report

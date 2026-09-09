@@ -92,10 +92,12 @@ test('private action rejects wrong pins dirty checkouts and repository-root mism
   }
 });
 
-for (const scenario of [{ exitCode: 0 }, { exitCode: 37 }, { exitCode: 0, captureUnavailable: true }]) {
-  const { exitCode, captureUnavailable = false } = scenario;
+for (const scenario of [{ exitCode: 0 }, { exitCode: 37 }, { exitCode: 0, captureUnavailable: true },
+  { exitCode: 37, nativeError: 'unexpected status 401 Unauthorized' }, { exitCode: 37, removeClassifier: true },
+  { exitCode: 0, emptyArgs: true }]) {
+  const { exitCode, captureUnavailable = false, nativeError = '', removeClassifier = false, emptyArgs = false } = scenario;
   test(captureUnavailable ? 'private action never launches the child when private capture cannot be created'
-    : `private action retains stdout stderr and original exit ${exitCode} without publishing usage`, t => {
+    : `private action retains stdout stderr and original exit ${exitCode} without publishing usage ${nativeError ? 'native category' : removeClassifier ? 'classifier failure' : emptyArgs ? 'integration defaults' : ''}`, t => {
     const { prepareActionSource } = helper();
     const directory = temporary(t);
     const actionDirectory = path.join(directory, 'action with spaces');
@@ -105,11 +107,17 @@ for (const scenario of [{ exitCode: 0 }, { exitCode: 37 }, { exitCode: 0, captur
     const observed = path.join(directory, 'observed.json');
     const output = path.join(directory, 'result.json');
     const githubOutput = path.join(directory, 'github-output');
+    const workspace = path.join(directory, 'workspace');
+    const classifier = path.join(workspace, 'scripts/ci/codex-failure-category.cjs');
+    fs.mkdirSync(path.dirname(classifier), { recursive: true });
+    fs.copyFileSync(path.resolve(__dirname, '../../scripts/ci/codex-failure-category.cjs'), classifier);
     fs.writeFileSync(path.join(actionDirectory, 'dist', 'main.js'), `
 const fs = require('node:fs');
 fs.writeFileSync(process.env.OBSERVED_ARGS, JSON.stringify({ args: process.argv.slice(2), nodeOptions: process.env.NODE_OPTIONS }));
 console.log('PRIVATE_TRANSCRIPT_MARKER tokens used 123456');
 console.error('PRIVATE_USAGE_MARKER model gpt-6-astra input_tokens 123456');
+if (process.env.FIXTURE_NATIVE_ERROR) console.error(JSON.stringify({ type: 'turn.failed', error: { message: process.env.FIXTURE_NATIVE_ERROR } }));
+if (process.env.FIXTURE_REMOVE_CLASSIFIER) fs.unlinkSync(process.env.FIXTURE_CLASSIFIER);
 fs.writeFileSync(process.env.CODEX_OUTPUT_FILE, '{"structured":"result"}');
 fs.appendFileSync(process.env.GITHUB_OUTPUT, 'final-message=fixture-result\\n');
 process.exit(Number(process.env.FIXTURE_EXIT));
@@ -123,10 +131,12 @@ process.exit(Number(process.env.FIXTURE_EXIT));
       process.env.PATH].filter(Boolean).join(path.delimiter);
     const env = { ...process.env, PATH: commandPath,
       RUNNER_TEMP: posixPath(runnerTemp), ACTION_PATH: posixPath(actionDirectory),
+      GITHUB_WORKSPACE: workspace, FIXTURE_CLASSIFIER: classifier,
+      FIXTURE_REMOVE_CLASSIFIER: removeClassifier ? '1' : '', FIXTURE_NATIVE_ERROR: nativeError,
       OBSERVED_ARGS: observed, FIXTURE_EXIT: String(exitCode), GITHUB_OUTPUT: githubOutput,
       NODE_OPTIONS: '--no-warnings', CODEX_PROMPT: 'fixture prompt', CODEX_PROMPT_FILE: 'prompt file.md',
       CODEX_OUTPUT_FILE: output, CODEX_HOME: 'fixture-home', CODEX_WORKING_DIRECTORY: 'fixture-workspace',
-      CODEX_ARGS: '["--image","image with spaces.png"]', CODEX_OUTPUT_SCHEMA: '', CODEX_OUTPUT_SCHEMA_FILE: 'schema.json',
+      CODEX_ARGS: emptyArgs ? '' : '["--image","image with spaces.png"]', CODEX_OUTPUT_SCHEMA: '', CODEX_OUTPUT_SCHEMA_FILE: 'schema.json',
       CODEX_SANDBOX: '', CODEX_PERMISSION_PROFILE: ':read-only', CODEX_MODEL: 'fixture-model',
       CODEX_EFFORT: 'high', CODEX_SAFETY_STRATEGY: 'drop-sudo', CODEX_USER: '' };
     const result = cp.spawnSync(bash, [posixPath(shellScript)], { env, encoding: 'utf8', windowsHide: true, timeout: 10000 });
@@ -147,6 +157,7 @@ process.exit(Number(process.env.FIXTURE_EXIT));
     const capture = fs.readFileSync(capturePath, 'utf8');
     assert.match(capture, /PRIVATE_TRANSCRIPT_MARKER tokens used 123456/);
     assert.match(capture, /PRIVATE_USAGE_MARKER/);
+    if (exitCode !== 0) assert.equal(result.stderr, `Codex review failed: ${nativeError ? 'authentication_failed' : 'unknown'}\n`);
     if (process.platform !== 'win32') assert.equal(fs.statSync(capturePath).mode & 0o777, 0o600);
     assert.equal(fs.readFileSync(output, 'utf8'), '{"structured":"result"}');
     if (process.platform !== 'win32') assert.equal(fs.statSync(output).mode & 0o777, 0o644,
@@ -155,7 +166,8 @@ process.exit(Number(process.env.FIXTURE_EXIT));
     const actual = JSON.parse(fs.readFileSync(observed));
     assert.equal(actual.nodeOptions, '--disable-sigusr1');
     assert.equal(actual.args[0], 'run-codex-exec');
-    for (const [flag, expected] of [['--prompt', env.CODEX_PROMPT], ['--extra-args', env.CODEX_ARGS],
+    assert.deepEqual(JSON.parse(actual.args[actual.args.indexOf('--extra-args') + 1]), [...(emptyArgs ? [] : JSON.parse(env.CODEX_ARGS)), '--json']);
+    for (const [flag, expected] of [['--prompt', env.CODEX_PROMPT],
       ['--permission-profile', ':read-only'], ['--safety-strategy', 'drop-sudo'], ['--model', 'fixture-model'], ['--effort', 'high']]) {
       assert.equal(actual.args[actual.args.indexOf(flag) + 1], expected);
     }

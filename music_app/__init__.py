@@ -76,7 +76,23 @@ def _recover_library_watch_after_manual_scan(
         clear_error = exc
     normalized_roots = tuple(dict(root) for root in root_definitions)
     targeted_reconciler.replace_roots(normalized_roots)
-    watch_service.replace_roots(normalized_roots)
+    try:
+        watch_service.replace_roots(normalized_roots)
+    except Exception:
+        from music_app.services.library_event_coordinator import CoordinatorProblem
+
+        for root in normalized_roots:
+            try:
+                health_service.record_problem(
+                    CoordinatorProblem("reconciliation_failed", str(root.get("id") or ""))
+                )
+            except Exception:
+                # record_problem retains pending health before persistence;
+                # continue protecting every root and preserve the replacement error.
+                logging.getLogger("music_app").exception(
+                    "Unable to persist library watcher recovery problem."
+                )
+        raise
     if clear_error is not None:
         raise clear_error
     return cleared

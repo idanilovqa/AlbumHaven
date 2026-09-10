@@ -287,6 +287,88 @@ def test_invalid_password_input_fails_before_network(breached_passwords, passwor
     assert opener.calls == []
 
 
+@pytest.mark.parametrize("framing", [
+    "truncated-length", "truncated-chunked", "length", "chunked", "close",
+])
+def test_default_transport_rejects_truncated_framing_and_accepts_complete_bodies(
+    breached_passwords, monkeypatch, framing
+):
+    children = []
+    paths = []
+    real_popen = subprocess.Popen
+
+    def record_child(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(subprocess, "Popen", record_child)
+    prefix_body = f"{'A' * 35}:0\r\n".encode("ascii")
+    complete_body = prefix_body + f"{SUFFIX}:1\r\n".encode("ascii")
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_GET(self):
+            paths.append(self.path)
+            mode = "length" if self.path.startswith("/complete/") else framing
+            self.send_response(200)
+            self.send_header("Connection", "close")
+            if "length" in mode:
+                self.send_header("Content-Length", str(len(complete_body)))
+            elif "chunked" in mode:
+                self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            if mode == "truncated-length":
+                # A syntactically valid nonmatching line must not disguise an
+                # incomplete transport body whose omitted suffix is breached.
+                self.wfile.write(prefix_body)
+            elif "chunked" in mode:
+                body = prefix_body if mode.startswith("truncated") else complete_body
+                self.wfile.write(f"{len(body):x}\r\n".encode("ascii") + body + b"\r\n")
+                if mode == "chunked":
+                    self.wfile.write(b"0\r\n\r\n")
+            else:
+                self.wfile.write(complete_body)
+            self.wfile.flush()
+            self.close_connection = True
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = False
+    worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    worker.start()
+    try:
+        spec = util.spec_from_file_location("_framing_hibp_transport", breached_passwords.__file__)
+        transport = util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/framing/{{}}",
+            timeout_seconds=2,
+        )
+        if framing.startswith("truncated"):
+            with pytest.raises(transport.BreachedPasswordCheckError, match="screening unavailable"):
+                checker(PASSWORD)
+        else:
+            assert checker(PASSWORD) is True
+        assert children and all(child.poll() is not None for child in children)
+        next_checker = transport.HibpRangePasswordChecker(
+            range_url_template=f"http://127.0.0.1:{server.server_port}/complete/{{}}",
+            timeout_seconds=2,
+        )
+        assert next_checker(PASSWORD) is True
+        assert paths == [f"/framing/{PREFIX}", f"/complete/{PREFIX}"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()
+        assert all(child.poll() is not None for child in children)
+        assert all(child.stdout is None or child.stdout.closed for child in children)
+
+
 @pytest.mark.parametrize("slow_phase", ["headers", "body"])
 def test_default_transport_deadline_reaps_slow_stream_and_allows_next_check(
     breached_passwords, monkeypatch, slow_phase

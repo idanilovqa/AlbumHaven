@@ -167,6 +167,17 @@ test('every encrypted field is authenticated and wrong recipient keys are reject
   assert.throws(() => sealReport(report(), ec.publicKey.export({ type: 'spki', format: 'pem' })));
 });
 
+test('encrypted fields reject noncanonical base64 encodings', () => {
+  const { sealReport, openReport } = helper();
+  const envelope = sealReport(report(), keys().publicKey);
+  for (const field of ['wrappedKey', 'iv', 'tag', 'ciphertext']) {
+    for (const value of ['', ` ${envelope[field]}`, `${envelope[field]}\n`,
+      `${envelope[field]}=`, envelope[field].replace(/=+$/, '') + '!']) {
+      assert.throws(() => openReport({ ...envelope, [field]: value }, keys().privateKey));
+    }
+  }
+});
+
 test('invalid counters and mismatched record ownership fail closed', () => {
   const { sealReport, summarizeReports } = helper();
   const invalidRecords = [

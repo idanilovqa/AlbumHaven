@@ -75,6 +75,18 @@ test('capture beyond 16 MiB fails explicitly without truncation or output', t =>
   const result = seal(f); assert.notEqual(result.status, 0); assert.ok(!fs.existsSync(f.output));
   assert.equal(result.stdout, ''); assert.doesNotMatch(result.stderr, /PRIVATE|123/);
 });
+
+test('maximum supported diagnostic capture round-trips without regexp stack exhaustion', () => {
+  const raw = Buffer.alloc(usage.DIAGNOSTIC_MAX_BYTES, 0x61);
+  const report = { schemaVersion: 1, type: 'codex-execution-diagnostic', context,
+    execution: { status: 'complete', exitCode: 0, actionOutcome: 'success' },
+    consoleBase64: raw.toString('base64') };
+  const envelope = usage.sealDiagnostic(report, keys.publicKey);
+  const opened = usage.openDiagnostic(envelope, keys.privateKey, context);
+  assert.deepEqual(Buffer.from(opened.consoleBase64, 'base64'), raw);
+  assert.deepEqual(opened.context, context);
+  assert.deepEqual(opened.execution, report.execution);
+});
 test('missing malformed duplicate and cross-context sidecars fail closed', t => {
   const f = fixture(t); assert.notEqual(seal(f).status, 0); start(f);
   assert.notEqual(invoke(['start', '--runner-temp', f.root, '--capture', f.capture]).status, 0);

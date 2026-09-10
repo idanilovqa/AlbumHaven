@@ -727,7 +727,8 @@ class PostgresLibraryBrowseRepository:
             )
             in visible_family_artist_keys
         ]
-        if query and artist_display and not selected_artist_name_matches_query:
+        if (query and artist_display and not selected_artist_name_matches_query
+                and not related_filter_artists):
             family_artist_groups = []
         artist_groups = (
             _render_selected_artist_artist_groups(

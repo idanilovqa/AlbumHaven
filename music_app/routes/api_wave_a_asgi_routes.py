@@ -166,13 +166,16 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
                 != normalized_key
             ]
 
-    run_runtime_state_mutation_for_state(remove_from_runtime_albums)
-    invalidate_targeted_library_projections(
-        library_state,
-        _app_config(request),
-        revision=int(result["library_revision"]),
-        affected_album_keys=(normalized_key,),
-    )
+    def update_runtime_after_removal():
+        run_runtime_state_mutation_for_state(remove_from_runtime_albums)
+        invalidate_targeted_library_projections(
+            library_state,
+            _app_config(request),
+            revision=int(result["library_revision"]),
+            affected_album_keys=(normalized_key,),
+        )
+
+    await run_in_threadpool(update_runtime_after_removal)
     return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2

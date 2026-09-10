@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import tempfile
 from pathlib import Path
 
 
@@ -17,8 +19,9 @@ def parse_args() -> argparse.Namespace:
 
 def convert(source: Path, destination: Path) -> int:
     source = source.expanduser().resolve(strict=True)
-    destination = destination.expanduser().resolve(strict=False)
-    if destination.exists():
+    destination = destination.expanduser()
+    destination = destination.parent.resolve(strict=False) / destination.name
+    if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"Output already exists: {destination}")
     if source == destination:
         raise ValueError("Input and output paths must differ.")
@@ -31,17 +34,28 @@ def convert(source: Path, destination: Path) -> int:
             raise ValueError("Expected a tab-separated Text Tools export with a path column.")
         if any(not name for name in reader.fieldnames) or len(set(reader.fieldnames)) != len(reader.fieldnames):
             raise ValueError("Text Tools header columns must be nonempty and unique.")
-        with destination.open("x", encoding="utf-8", newline="\n") as output_stream:
-            for row in reader:
-                if None in row or any(value is None for value in row.values()):
-                    raise ValueError(
-                        f"Malformed Text Tools row {reader.line_num}: "
-                        f"expected {len(reader.fieldnames)} columns."
-                    )
-                record = {str(key): str(value or "") for key, value in row.items() if key}
-                output_stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
-                output_stream.write("\n")
-                row_count += 1
+        temporary_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", newline="\n", delete=False,
+                dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp",
+            ) as output_stream:
+                temporary_path = Path(output_stream.name)
+                for row in reader:
+                    if None in row or any(value is None for value in row.values()):
+                        raise ValueError(
+                            f"Malformed Text Tools row {reader.line_num}: "
+                            f"expected {len(reader.fieldnames)} columns."
+                        )
+                    record = {str(key): str(value or "") for key, value in row.items() if key}
+                    output_stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
+                    output_stream.write("\n")
+                    row_count += 1
+            # Linking publishes the complete file atomically and never replaces a winner.
+            os.link(temporary_path, destination)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
     return row_count
 
 

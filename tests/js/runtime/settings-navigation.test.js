@@ -177,6 +177,66 @@ test('a stale response cannot replace the most recently requested settings view'
   assert.equal(app.account.getAttribute('aria-current'), null);
 });
 
+for (const selection of [
+  { name: 'cached artist', url: '/?artist=Newest', selected_artist: 'Newest', all_artists: false },
+  { name: 'cached All artists', url: '/?all_artists=1', selected_artist: '', all_artists: true },
+]) {
+  for (const delayedStage of ['headers', 'body']) {
+    test(`${selection.name} history invalidates delayed Settings ${delayedStage}`, async () => {
+      const app = harness({ library: true, initialPath: '/?artist=Initial' });
+      let releaseResponse;
+      let releaseBody;
+      let bodyStarted;
+      const readingBody = new Promise(resolve => { bodyStarted = resolve; });
+      const response = {
+        ok: true, status: 200, url: 'http://localhost:5000/account',
+        headers: { get: () => 'text/html' },
+        text: () => {
+          bodyStarted();
+          return delayedStage === 'body'
+            ? new Promise(resolve => { releaseBody = resolve; })
+            : Promise.resolve('Stale account content');
+        },
+      };
+      app.responses.push(delayedStage === 'headers'
+        ? () => new Promise(resolve => { releaseResponse = resolve; })
+        : response);
+      const pending = app.navigation.navigate('/account');
+      const signal = app.requests[0].options.signal;
+      if (delayedStage === 'body') await readingBody;
+
+      // Cached selection commits through the actual browser history bridge;
+      // there is no library fetch whose cancellation could invalidate Settings.
+      const selectedView = {
+        url: selection.url, selected_artist: selection.selected_artist,
+        all_artists: selection.all_artists, galleryMarker: 'newest-cache-selection',
+      };
+      app.shell.replaceChildren({ textContent: selection.name });
+      app.document.title = selection.name;
+      app.pushLibraryView(selectedView);
+      const newestState = structuredClone(app.window.history.state);
+      if (delayedStage === 'headers') releaseResponse(response);
+      else releaseBody('Stale account content');
+
+      assert.equal(await pending, false);
+      assert.equal(signal.aborted, true);
+      assert.equal(app.requests.length, 1, 'the cached library choice must not require another request');
+      assert.equal(app.location.href, new URL(selection.url, 'http://localhost:5000').href);
+      assert.equal(app.historyIndex, 1);
+      assert.equal(app.historyEntries.length, 2);
+      assert.deepEqual(app.window.history.state, newestState);
+      assert.equal(app.window.history.state.selected_artist, selection.selected_artist);
+      assert.equal(app.window.history.state.all_artists, selection.all_artists);
+      assert.equal(app.host.hidden, true);
+      assert.equal(app.shell.hidden, false);
+      assert.equal(app.shell.childNodes[0].textContent, selection.name);
+      assert.equal(app.document.title, selection.name);
+      assert.equal(app.outlet.childNodes.length, 0);
+      assert.deepEqual(app.historyCalls, [['push', new URL(selection.url, 'http://localhost:5000').href]]);
+    });
+  }
+}
+
 test('missing settings content and redirected external HTML cannot replace the current view', async () => {
   const app = harness();
   app.respond('MISSING_SETTINGS_CONTENT');

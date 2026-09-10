@@ -99,7 +99,16 @@ def _read_range(expected_url: str, opener: Callable[..., Any], timeout: float) -
     with opener(request, timeout=timeout) as response:
         if response.getcode() != 200 or response.geturl() != expected_url:
             raise BreachedPasswordCheckError("Breached-password screening unavailable.")
-        return response.read(_MAX_RESPONSE_BYTES + 1)
+        # HTTPResponse.read(amount) can return a short, valid-looking prefix
+        # without raising on premature EOF. Capture its effective length before
+        # reading; chunked and close-delimited responses have no fixed length.
+        expected_length = getattr(response, "length", None)
+        if expected_length is not None and expected_length > _MAX_RESPONSE_BYTES:
+            raise BreachedPasswordCheckError("Breached-password screening unavailable.")
+        body = response.read(_MAX_RESPONSE_BYTES + 1)
+        if expected_length is not None and len(body) != expected_length:
+            raise BreachedPasswordCheckError("Breached-password screening unavailable.")
+        return body
 
 
 def _read_range_in_subprocess(template: str, prefix: str, timeout: float) -> bytes:

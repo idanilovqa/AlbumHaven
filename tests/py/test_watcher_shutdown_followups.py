@@ -12,6 +12,67 @@ from music_app.services import library_watch
 from tests.py.test_library_reconciliation import _native_watch_health
 
 
+@pytest.mark.parametrize("health_write_fails", [False, True], ids=["persisted", "pending"])
+def test_manual_recovery_stop_timeout_restores_unhealthy_roots(tmp_path, health_write_fails):
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from music_app import _recover_library_watch_after_manual_scan
+    from music_app.services.library_event_coordinator import CoordinatorProblem
+
+    entered, release = Event(), Event()
+    health = _native_watch_health()
+    initial = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    clock = [initial]
+    health._now = lambda: clock[0]
+    roots = [{"id": "main", "path": str(tmp_path)},
+        {"id": "second", "path": str(tmp_path)}]
+    for root in roots:
+        health.record_problem(CoordinatorProblem("reconciliation_failed", root["id"]))
+
+    class IdleEmitter(EventEmitter):
+        def queue_events(self, _timeout):
+            self.stopped_event.wait(2)
+
+    observer = BaseObserver(IdleEmitter)
+
+    def publish(_event):
+        entered.set()
+        release.wait(2)
+
+    source = library_watch.WatchdogLibraryEventSource(roots, observer_factory=lambda: observer)
+    watcher = library_watch.LibraryWatchService(source, publish, stop_timeout=0.05)
+    emitters = ()
+    replaced = []
+    try:
+        watcher.start()
+        emitters = tuple(observer.emitters)
+        observer.event_queue.put((FileModifiedEvent(str(tmp_path / "song.flac")), emitters[0].watch))
+        assert entered.wait(1)
+        clock[0] = initial + timedelta(seconds=2)
+        if health_write_fails:
+            def unavailable(_problem):
+                raise OSError("health persistence unavailable")
+            health._store.upsert = unavailable
+        with pytest.raises(RuntimeError, match="deadline"):
+            _recover_library_watch_after_manual_scan(health_service=health,
+                targeted_reconciler=SimpleNamespace(replace_roots=replaced.append),
+                watch_service=watcher, root_definitions=roots, scan_mode="manual_full_rescan",
+                scan_started_at=initial + timedelta(seconds=1), observed_root_ids={"main", "second"})
+        assert replaced == [tuple(roots)]
+        assert source._stopping.is_set() and source._observer is observer
+        problems = health.load_problems()
+        assert {problem.root_id for problem in problems} == {"main", "second"}
+        assert all(problem.detected_at == clock[0].isoformat() for problem in problems)
+        assert all(not health.root_allows_destructive_reconciliation(root["id"]) for root in roots)
+    finally:
+        release.set()
+        watcher._stop_timeout = 2
+        watcher.stop()
+        assert source._observer is None
+        assert not observer.is_alive()
+        assert all(not emitter.is_alive() for emitter in emitters)
+
+
 @pytest.mark.parametrize("failure", ["normalization", "publication"])
 def test_dispatch_failure_records_root_health_without_losing_dispatcher(tmp_path, monkeypatch, failure):
     health = _native_watch_health()

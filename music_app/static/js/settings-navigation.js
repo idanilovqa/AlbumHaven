@@ -238,6 +238,12 @@
     return {
       navigate,
       pushLibraryHistory(url, stateSnapshot) {
+        // A cached library selection can commit without starting another fetch.
+        // Its history entry still supersedes any older Settings response/body.
+        ++sequence;
+        navigationPending = false;
+        pending?.abort();
+        pending = null;
         updateHistory(new URL(url, window.location.href).href, 'push', stateSnapshot);
         libraryUrl = currentUrl;
         libraryHistoryState = currentHistoryState;

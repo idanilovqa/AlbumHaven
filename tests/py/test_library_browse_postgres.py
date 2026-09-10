@@ -4212,7 +4212,8 @@ def test_postgres_selected_artist_query_context_rebuilds_filtered_family_sidebar
     assert search_calls == ["neal morse"]
 
 
-def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(monkeypatch):
+@pytest.mark.parametrize("selection", ["implicit", "related-only", "combined"])
+def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(monkeypatch, selection):
     from music_app.services import library_browse_postgres as browse_module
 
     matching_primary_row = _browse_album_row(
@@ -4257,6 +4258,9 @@ def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(m
         "_load_search_rows",
         lambda *_args, **_kwargs: [matching_primary_row, matching_family_row],
     )
+    # Explicit primary selection hydrates complete rows rather than search previews.
+    monkeypatch.setattr(repository, "_load_selected_artist_rows",
+                        lambda *_args, **_kwargs: [matching_primary_row])
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
     monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
 
@@ -4266,6 +4270,8 @@ def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(m
             "q": "transatlantic",
             "artist": "Neal Morse",
             "omit_sidebar": "1",
+            **({"related_artist": "Transatlantic"} if selection != "implicit" else {}),
+            **({"primary_filter": "1"} if selection == "combined" else {}),
         },
         library_state={},
     )
@@ -4274,8 +4280,13 @@ def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(m
         album["name"]
         for group in payload["primary_artist_groups"]
         for album in group["albums"]
-    ] == ["The Transatlantic Demos"]
-    assert payload["family_artist_groups"] == []
+    ] == ([] if selection == "related-only" else ["The Transatlantic Demos"])
+    assert [group["artist"] for group in payload["family_artist_groups"]] == (
+        [] if selection == "implicit" else ["Transatlantic"]
+    )
+    if selection != "implicit":
+        assert [album["name"] for group in payload["family_artist_groups"]
+                for album in group["albums"]] == ["SMPTe"]
     assert [item["display_name"] for item in payload["artist_family_filters"]] == [
         "Neal Morse",
         "Transatlantic",

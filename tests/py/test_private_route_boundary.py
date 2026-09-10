@@ -345,6 +345,46 @@ def test_invitation_redaction_clears_cached_query_views_on_the_same_request():
     assert request.state.account_invitation_link_token == raw
 
 
+@pytest.mark.parametrize("path", ["/reset-password", "/accept-invitation"])
+@pytest.mark.parametrize("method", ["HEAD", "POST", "OPTIONS", "DELETE"])
+def test_non_get_lifecycle_queries_are_redacted_without_exchange_state(path, method):
+    request = Request({"type": "http", "http_version": "1.1", "method": method,
+        "scheme": "https", "path": path, "raw_path": path.encode("ascii"),
+        "query_string": b"purpose=password-reset&token=private-link-token",
+        "headers": [(b"host", b"music.test")]})
+    assert request.url.query and request.query_params.get("token") == "private-link-token"
+
+    _redact_lifecycle_link_query(request)
+
+    assert request.scope["query_string"] == b""
+    assert request.url.query == ""
+    assert tuple(request.query_params.multi_items()) == ()
+    assert request.scope.get("state", {}) == {}
+
+
+@pytest.mark.parametrize("path", ["/reset-password", "/accept-invitation"])
+def test_head_lifecycle_query_is_redacted_before_downstream_405(path):
+    app = FastAPI()
+    observed = {}
+
+    @app.get(path)
+    async def lifecycle_get():
+        pytest.fail("HEAD must not exchange a lifecycle token")
+
+    @app.middleware("http")
+    async def observe_downstream(request, call_next):
+        observed.update(query=request.scope["query_string"], url_query=request.url.query,
+            params=tuple(request.query_params.multi_items()), state=dict(request.scope.get("state", {})))
+        return await call_next(request)
+
+    install_private_route_boundary(app)
+    status, body = _request(app, path, method="HEAD", query="purpose=password-reset&token=private-link-token")
+
+    assert status == 405
+    assert b"private-link-token" not in body
+    assert observed == {"query": b"", "url_query": "", "params": (), "state": {}}
+
+
 @pytest.mark.parametrize("query, invalid_marker", [
     ("invalid=1", True),
     ("invalid=1&token=private-token", False),

@@ -234,26 +234,27 @@ def _redact_lifecycle_link_query(request: Request) -> None:
     }
     scope = request.scope
     prefix = prefixes.get(scope.get("path"))
-    if str(scope.get("method") or "").upper() != "GET" or prefix is None:
+    if prefix is None:
         return
     raw_query = scope.get("query_string", b"")
     if not raw_query:
         return
-    query_params = QueryParams(raw_query.decode("latin-1"))
-    pairs = list(query_params.multi_items())
-    if prefix == "password_reset_link":
-        request.state.password_reset_link_invalid_marker = pairs == [("invalid", "1")]
-    setattr(
-        request.state,
-        f"{prefix}_query_valid",
-        (
-            len(pairs) == 2
-            and sum(key == "purpose" for key, _value in pairs) == 1
-            and sum(key == "token" for key, _value in pairs) == 1
-        ),
-    )
-    setattr(request.state, f"{prefix}_purpose", query_params.get("purpose"))
-    setattr(request.state, f"{prefix}_token", query_params.get("token"))
+    if str(scope.get("method") or "").upper() == "GET":
+        query_params = QueryParams(raw_query.decode("latin-1"))
+        pairs = list(query_params.multi_items())
+        if prefix == "password_reset_link":
+            request.state.password_reset_link_invalid_marker = pairs == [("invalid", "1")]
+        setattr(
+            request.state,
+            f"{prefix}_query_valid",
+            (
+                len(pairs) == 2
+                and sum(key == "purpose" for key, _value in pairs) == 1
+                and sum(key == "token" for key, _value in pairs) == 1
+            ),
+        )
+        setattr(request.state, f"{prefix}_purpose", query_params.get("purpose"))
+        setattr(request.state, f"{prefix}_token", query_params.get("token"))
     scope["query_string"] = b""
     request.__dict__.pop("_url", None)
     request.__dict__.pop("_query_params", None)

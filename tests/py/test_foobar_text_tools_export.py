@@ -51,3 +51,41 @@ def test_text_tools_accepts_explicit_empty_column(tmp_path):
     assert helper.convert(source, destination) == 1
     assert json.loads(destination.read_text(encoding="utf-8")) == {
         "path": "Music/first.flac", "title": "Title", "artist": ""}
+
+
+@pytest.mark.parametrize("malformed", ["bad.flac\tMissing", "bad.flac\tExtra\tArtist\tUnexpected"])
+def test_text_tools_failed_conversion_removes_partial_output_and_allows_retry(tmp_path, malformed):
+    source, destination = tmp_path / "source.tsv", tmp_path / "output.jsonl"
+    valid = "path\ttitle\tartist\nvalid.flac\tValid\tArtist\n"
+    source.write_text(valid + malformed + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match=r"row 3.*3 columns"):
+        helper.convert(source, destination)
+    assert not destination.exists(), "failed conversion must not publish a valid-looking prefix"
+    assert {item.name for item in tmp_path.iterdir()} == {"source.tsv"}
+    source.write_text(valid, encoding="utf-8")
+    assert helper.convert(source, destination) == 1
+    assert json.loads(destination.read_text(encoding="utf-8"))["title"] == "Valid"
+
+
+@pytest.mark.parametrize("concurrent", [False, True])
+def test_text_tools_never_overwrites_an_existing_or_racing_destination(tmp_path, monkeypatch, concurrent):
+    source, destination = tmp_path / "source.tsv", tmp_path / "output.jsonl"
+    source.write_text("path\ttitle\nvalid.flac\tValid\n", encoding="utf-8")
+    preserved = b"another export must survive\n"
+    original_exists = Path.exists
+    raced = []
+    if concurrent:
+        def exists(candidate):
+            if candidate == destination and not raced:
+                raced.append(True)
+                destination.write_bytes(preserved)
+                return False  # Another producer won immediately after our absence check.
+            return original_exists(candidate)
+        monkeypatch.setattr(Path, "exists", exists)
+    else:
+        destination.write_bytes(preserved)
+    with pytest.raises(FileExistsError):
+        helper.convert(source, destination)
+    assert destination.read_bytes() == preserved
+    assert {item.name for item in tmp_path.iterdir()} == {"source.tsv", "output.jsonl"}
+    assert bool(raced) is concurrent

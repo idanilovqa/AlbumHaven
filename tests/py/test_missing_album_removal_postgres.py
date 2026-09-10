@@ -658,3 +658,92 @@ def _flatten_values(value: object) -> list[object]:
             values.extend(_flatten_values(item))
         return values
     return [value]
+
+
+@pytest.mark.parametrize("contended_stage", ["mutation", "invalidation"])
+def test_removal_cache_contention_keeps_event_loop_responsive(monkeypatch, tmp_path, contended_stage):
+    import asyncio
+    from threading import Event, Lock, Thread
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services import state as runtime_state
+    from tests.py.asgi_testing import run_asgi_request_async
+
+    app = create_test_asgi_app(tmp_path, monkeypatch)
+    begin_contention, held, attempted, heartbeat = Event(), Event(), Event(), Event()
+    physical_lock = Lock()
+    failures, observed, committed = [], [], []
+
+    class ObservedLock:
+        def __enter__(self):
+            if held.is_set():
+                attempted.set()
+            physical_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            physical_lock.release()
+
+    monkeypatch.setattr(runtime_state, "_CACHE_LOCK", ObservedLock())
+
+    class Service:
+        def __init__(self, _config, *, root_health_check=None):
+            pass
+
+        def confirm_removal(self, album_key):
+            assert not physical_lock.locked(), "persistence must precede runtime contention"
+            committed.append(album_key)
+            return {"removed_album_key": album_key, "library_revision": 22}
+
+    monkeypatch.setattr(routes, "PostgresMissingAlbumRemovalService", Service)
+    app.state.library_state["albums"] = [{"key": ALBUM_KEY}, {"key": "retained"}]
+    function_name = ("run_runtime_state_mutation_for_state" if contended_stage == "mutation"
+                     else "invalidate_targeted_library_projections")
+    original = getattr(routes, function_name)
+
+    def gated(*args, **kwargs):
+        assert committed == [ALBUM_KEY]
+        begin_contention.set()
+        assert held.wait(2), "external cache holder did not start"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(routes, function_name, gated)
+
+    def hold_cache():
+        try:
+            assert begin_contention.wait(2)
+            with physical_lock:
+                held.set()
+                assert attempted.wait(2), "route did not attempt the held cache lock"
+                # An external deadline releases the lock even if old code blocks asyncio.
+                observed.append(heartbeat.wait(0.75))
+        except BaseException as error:
+            failures.append(error)
+            held.set()
+
+    async def exercise():
+        async def mark_heartbeat():
+            assert await asyncio.to_thread(attempted.wait, 3)
+            heartbeat.set()
+        pulse = asyncio.create_task(mark_heartbeat())
+        try:
+            response = await run_asgi_request_async(
+                app, "POST", f"/api/library/albums/{ALBUM_KEY}/confirm-removal")
+            await pulse
+            return response
+        finally:
+            if not pulse.done():
+                pulse.cancel()
+                await asyncio.gather(pulse, return_exceptions=True)
+
+    holder = Thread(target=hold_cache)
+    holder.start()
+    try:
+        status, _headers, body = asyncio.run(exercise())
+    finally:
+        begin_contention.set()
+        holder.join(4)
+    assert not holder.is_alive() and failures == []
+    assert observed == [True], f"{contended_stage} cache wait blocked the ASGI event loop"
+    assert status == 200 and decode_json(body)["removed_album_key"] == ALBUM_KEY
+    assert app.state.library_state["albums"] == [{"key": "retained"}]
+    assert app.state.library_state["inventory_mutation_revision"] == 22

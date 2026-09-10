@@ -170,8 +170,10 @@ function sealPayload(sanitized, publicKeyPem) {
   } finally { dataKey.fill(0); plaintext.fill(0); }
 }
 function base64(value, length) {
-  if (typeof value !== 'string' || !value || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) invalid();
+  if (typeof value !== 'string' || !value) invalid();
   const bytes = Buffer.from(value, 'base64');
+  // Canonical re-encoding rejects padding/character variants without a
+  // repeated-group regexp that exhausts V8's stack on large diagnostics.
   if (bytes.toString('base64') !== value || (length !== undefined && bytes.length !== length)) invalid();
   return bytes;
 }

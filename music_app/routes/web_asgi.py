@@ -13,6 +13,7 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
@@ -851,7 +852,8 @@ async def index(request: Request) -> Response:
     cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
         library_state.get("cold_scan_handoff_status") or "idle"
     ) == "claimed"
-    bootstrap_payload, payload_elapsed_ms, startup_preview = _build_bootstrap_payload(
+    bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
+        _build_bootstrap_payload,
         query_args=query_args,
         config=config,
         logger=route_logger,
@@ -995,7 +997,8 @@ async def bootstrap_data(request: Request) -> JSONResponse:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
-    bootstrap_payload, _payload_elapsed_ms, _startup_preview = _build_bootstrap_payload(
+    bootstrap_payload, _payload_elapsed_ms, _startup_preview = await run_in_threadpool(
+        _build_bootstrap_payload,
         query_args=query_args,
         config=_app_config(request),
         logger=_app_logger(request),

@@ -2,6 +2,8 @@
 
 ## 0.9.43 - 2026-09-10
 
+- Kept status requests responsive while startup pages build their PostgreSQL
+  bootstrap payloads.
 - Kept pointer-driven player layout changes free of stale focus highlights while
   preserving keyboard and responsive focus transfer.
 - Registered the complete component inventory and preserved exact displayed-cover

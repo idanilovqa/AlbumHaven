@@ -28,7 +28,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -91,7 +91,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -145,7 +145,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -239,7 +239,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 45
     steps:
@@ -354,7 +354,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.pipeline_mode == 'full' }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.pipeline_mode == 'full' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -383,7 +383,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_auth == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -478,7 +478,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_phase7_admin == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -573,7 +573,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_functional == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     timeout-minutes: 90
     strategy:
@@ -758,7 +758,7 @@ jobs:
       - review_prerequisites
       - pr_agent_review
       - codex_review
-    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.review_prerequisites.result == 'success' && needs.review_scope.result == 'success' && needs.review_scope.outputs.skip_tests != 'true' && needs.review_scope.outputs.run_performance == 'true' && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: windows-2025
     strategy:
       fail-fast: false
@@ -1153,6 +1153,8 @@ jobs:
       issues: read
     outputs:
       mode: ${{ steps.classify.outputs.mode }}
+      skip_reviews: ${{ steps.classify.outputs.skip_reviews }}
+      skip_tests: ${{ steps.classify.outputs.skip_tests }}
       pipeline_mode: ${{ steps.classify.outputs.pipeline_mode }}
       focused_stage: ${{ steps.classify.outputs.focused_stage }}
       focused_exact_cases_json: ${{ steps.classify.outputs.focused_exact_cases_json }}
@@ -1232,6 +1234,44 @@ jobs:
           PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: node scripts/ci/classify-pr-review-scope.cjs
+
+      - name: Record owner-requested review waiver
+        if: ${{ steps.classify.outputs.skip_reviews == 'true' }}
+        uses: actions/github-script@v7
+        env:
+          SKIP_TESTS: ${{ steps.classify.outputs.skip_tests }}
+          PIPELINE_MODE: ${{ steps.classify.outputs.pipeline_mode }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const waiver = {
+              schemaVersion: 1,
+              repository: process.env.GITHUB_REPOSITORY,
+              pullRequestNumber: context.payload.pull_request.number,
+              runId: process.env.GITHUB_RUN_ID,
+              runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+              headSha: context.payload.pull_request.head.sha,
+              label: 'skip_reviews', review_waived: true, mode: 'none',
+              pipelineMode: process.env.PIPELINE_MODE,
+              skipTests: process.env.SKIP_TESTS === 'true',
+              ...(context.payload.pull_request.number === 1 ? {
+                snapshotSha: '4167a9072d5ef013de2f2b193fb09ea77657e37a',
+                reviewBaseSha: 'e0845f83552e1b0043cf435dcb82d5b959e31a05',
+              } : {}),
+            };
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'waiver.json'), JSON.stringify(waiver));
+            await core.summary.addHeading('AI reviews skipped by request')
+              .addRaw('The skip_reviews label waives AI reviews. This run does not establish review coverage. All test gates remain mandatory for merge and release.').write();
+
+      - name: Preserve review waiver evidence
+        if: ${{ steps.classify.outputs.skip_reviews == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr1-review-waiver-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/waiver.json
+          if-no-files-found: error
+          retention-days: 14
 
   pr_agent_review:
     name: PR Agent Review
@@ -1965,7 +2005,7 @@ jobs:
           "## Cloud Verification Gate`nAuthoritative same-repository conclusion: success." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Record successfully reviewed head
-        if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        if: ${{ github.event.pull_request.head.repo.full_name == github.repository && needs.review_scope.outputs.skip_reviews != 'true' }}
         uses: actions/github-script@v7
         with:
           script: |

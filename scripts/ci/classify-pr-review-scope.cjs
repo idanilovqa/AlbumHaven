@@ -280,6 +280,14 @@ function selectReviewDiffBase({ action, baseSha, lastReviewedSha, forceFullRevie
   return action === 'synchronize' && lastReviewedSha ? lastReviewedSha : baseSha;
 }
 
+function applyPipelineSkips(scope, { labels = [], repository, headRepository } = {}) {
+  const trusted = Boolean(repository && repository === headRepository);
+  const selected = new Set(normalizeLabels(labels));
+  const skipReviews = trusted && selected.has('skip_reviews');
+  const skipTests = trusted && selected.has('skip_tests');
+  return { ...scope, mode: skipReviews ? 'none' : scope.mode, skipReviews, skipTests };
+}
+
 function runCli(env = process.env) {
   const action = requireValue(env.PR_EVENT_ACTION, 'PR_EVENT_ACTION');
   const baseSha = requireSha(env.PR_BASE_SHA, 'PR_BASE_SHA');
@@ -335,10 +343,18 @@ function runCli(env = process.env) {
   const performanceShards = pipeline.pipelineMode === 'full'
     ? PERFORMANCE_SHARDS
     : pipeline.focusedPerformanceShards;
-  const result = { ...review, ...pipeline };
+  const event = env.GITHUB_EVENT_PATH
+    ? JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, 'utf8')) : {};
+  const result = applyPipelineSkips({ ...review, ...pipeline }, {
+    labels,
+    repository: env.GITHUB_REPOSITORY,
+    headRepository: event.pull_request?.head?.repo?.full_name,
+  });
   const outputPath = requireValue(env.GITHUB_OUTPUT, 'GITHUB_OUTPUT');
   const output = [
     `mode=${result.mode}`,
+    `skip_reviews=${String(result.skipReviews)}`,
+    `skip_tests=${String(result.skipTests)}`,
     `base_sha=${result.baseSha}`,
     `head_sha=${result.headSha}`,
     `functional_change=${String(result.functionalChange)}`,
@@ -379,6 +395,7 @@ module.exports = {
   PERFORMANCE_SHARDS,
   PHASE7_TARGETS,
   classifyPipelineLabels,
+  applyPipelineSkips,
   parseFocusedE2eRequest,
   isDocumentationPath,
   parseNumstat,

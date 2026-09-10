@@ -35,6 +35,13 @@ not need the private repository to build or use Album Haven.
 
 ## Review-first CI execution
 
+- Owner-controlled pipeline labels are independent: `skip_reviews` intentionally
+  waives hosted reviewers without recording review coverage; `skip_tests` skips
+  test jobs and cannot satisfy the merge/release gate. Complete tests remain
+  mandatory for publication. PR1 has an explicit owner-authorized review waiver;
+  its preserved review snapshot and later separate review-fixes workflow are
+  documented in `docs/ci-pipeline-labels-and-deferred-review.md`.
+
 - In the authoritative pull-request pipeline, classify review scope first and
   run PR Agent Review and Codex PR Review independently when applicable. Start test and E2E jobs only
   after every applicable reviewer succeeds. A failed, cancelled, missing, or

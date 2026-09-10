@@ -5,10 +5,11 @@
   const document = root;
   let active = true;
   let removePointerListener = () => {};
+  let removePlacementListeners = () => {};
   const requests = typeof AbortController === 'undefined' ? null : new AbortController();
   const nativeFetch = globalThis.fetch;
   const fetch = (url, init) => nativeFetch(url, { ...init, ...(requests ? { signal: requests.signal } : {}) });
-  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); };
+  const cleanup = () => { active = false; requests?.abort(); removePointerListener(); removePlacementListeners(); };
   const navigate = (url) => {
     if (!active) return Promise.resolve(false);
     return options.navigate ? options.navigate(url) : window.location.assign(url);
@@ -118,6 +119,25 @@
     trigger.setAttribute('aria-expanded', 'false');
   };
 
+  const positionMenu = (trigger, menu) => {
+    const anchor = trigger.getBoundingClientRect();
+    const host = trigger.closest?.('.settings-outlet') || trigger.closest?.('[data-settings-host]');
+    const bounds = host?.getBoundingClientRect() || {
+      left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight,
+    };
+    const left = Math.max(8, bounds.left + 8);
+    const top = Math.max(8, bounds.top + 8);
+    const right = Math.min(window.innerWidth - 8, bounds.right - 8);
+    const bottom = Math.min(window.innerHeight - 8, bounds.bottom - 8);
+    menu.style.maxWidth = `${Math.max(0, right - left)}px`;
+    menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left, Math.min(anchor.right - rect.width, right - rect.width))}px`;
+    const preferredTop = anchor.bottom + 5 + rect.height <= bottom
+      ? anchor.bottom + 5 : anchor.top - rect.height - 5;
+    menu.style.top = `${Math.max(top, Math.min(preferredTop, bottom - rect.height))}px`;
+  };
+
   const closeMenuForAction = (accountId) => {
     const trigger = document.querySelector(
       `[data-member-menu-trigger="${accountId}"]`,
@@ -172,7 +192,10 @@
       const opening = menu.hidden;
       menu.hidden = !opening;
       trigger.setAttribute('aria-expanded', String(opening));
-      if (opening) menu.querySelector('[role="menuitem"]')?.focus();
+      if (opening) {
+        positionMenu(trigger, menu);
+        menu.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+      }
     });
     menu.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
@@ -202,6 +225,20 @@
   };
   document.addEventListener?.('pointerdown', onPointerDown);
   removePointerListener = () => document.removeEventListener?.('pointerdown', onPointerDown);
+  const closeOnLayoutChange = (event) => {
+    for (const menu of document.querySelectorAll('[data-member-menu]:not([hidden])')) {
+      if (event?.type === 'scroll' && menu.contains(event.target)) continue;
+      const trigger = document.querySelector(`[data-member-menu-trigger="${menu.dataset.memberMenu}"]`);
+      if (trigger) closeMenu(trigger, menu);
+    }
+  };
+  window.addEventListener?.('scroll', closeOnLayoutChange, true);
+  window.addEventListener?.('resize', closeOnLayoutChange);
+  removePlacementListeners = () => {
+    closeOnLayoutChange();
+    window.removeEventListener?.('scroll', closeOnLayoutChange, true);
+    window.removeEventListener?.('resize', closeOnLayoutChange);
+  };
 
   const copyInvitation = async (accountId, allowReauthentication = true) => {
     const response = await rosterRequest(
@@ -506,7 +543,13 @@
     if (reauthPanel) reauthPanel.hidden = true;
   });
 
-  form.querySelector('[data-reauth-submit]')?.addEventListener('click', async (event) => {
+  const reauthSubmit = form.querySelector('[data-reauth-submit]');
+  reauthPassword?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    event.preventDefault();
+    if (!reauthSubmit?.disabled) reauthSubmit?.click();
+  });
+  reauthSubmit?.addEventListener('click', async (event) => {
     const button = event.currentTarget;
     const password = reauthPassword?.value || '';
     if (!password) {

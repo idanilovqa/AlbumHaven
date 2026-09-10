@@ -260,6 +260,8 @@ class LibraryWatchHealthService:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._pending: dict[str, LibraryWatchHealthProblem] = {}
         self._lock = Lock()
+        self._persistence_lock = Lock()
+        self._recovered_before: dict[str, str] = {}
 
     def record_event(self, event: LibraryEvent) -> bool:
         if event.kind not in _HEALTH_EVENT_KINDS:
@@ -287,13 +289,21 @@ class LibraryWatchHealthService:
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
         )
         with self._lock:
+            if problem.detected_at <= self._recovered_before.get(root_id, ""):
+                return True
             pending = self._pending.get(root_id)
             if pending is None or pending.detected_at <= problem.detected_at:
                 self._pending[root_id] = problem
-        self._store.upsert(problem)
-        with self._lock:
-            if self._pending.get(root_id) is problem:
-                self._pending.pop(root_id, None)
+        # Publish pending health before waiting, so new warnings fail closed
+        # while an earlier write or recovery owns the persistence boundary.
+        with self._persistence_lock:
+            with self._lock:
+                if self._pending.get(root_id) is not problem:
+                    return True
+            self._store.upsert(problem)
+            with self._lock:
+                if self._pending.get(root_id) is problem:
+                    self._pending.pop(root_id, None)
         return True
 
     def load_problems(self) -> list[LibraryWatchHealthProblem]:
@@ -344,15 +354,21 @@ class LibraryWatchHealthService:
             scan_started_at,
             fallback=self._now,
         )
-        cleared = self._store.clear(
-            normalized,
-            detected_before=detected_before,
-        )
-        with self._lock:
-            for root_id in normalized:
-                problem = self._pending.get(root_id)
-                if problem is not None and problem.detected_at <= detected_before:
-                    self._pending.pop(root_id, None)
+        with self._persistence_lock:
+            cleared = self._store.clear(
+                normalized,
+                detected_before=detected_before,
+            )
+            with self._lock:
+                for root_id in normalized:
+                    # A caller may have captured an old timestamp before this
+                    # recovery but not yet published its pending warning.
+                    self._recovered_before[root_id] = max(
+                        detected_before, self._recovered_before.get(root_id, ""),
+                    )
+                    problem = self._pending.get(root_id)
+                    if problem is not None and problem.detected_at <= detected_before:
+                        self._pending.pop(root_id, None)
         return cleared
 
 

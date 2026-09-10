@@ -14,6 +14,8 @@ function element(initial = {}) {
     ...initial,
     listeners,
     attributes: { ...(initial.attributes || {}) },
+    style: {},
+    getBoundingClientRect() { return { left: 600, right: 790, top: 600, bottom: 642, width: 190, height: 130 }; },
     addEventListener(name, callback) { listeners.set(name, callback); },
     setAttribute(name, value) { this.attributes[name] = value; },
     getAttribute(name) { return this.attributes[name] ?? null; },
@@ -26,11 +28,12 @@ function element(initial = {}) {
   };
 }
 
-function loadRuntime({ mode = 'create', active = true, initialActive = true, libraryAccess = true, navigate, confirm = () => true } = {}) {
+function loadRuntime({ mode = 'create', active = true, initialActive = true, libraryAccess = true, navigate, request, confirm = () => true } = {}) {
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false, textContent: mode === 'create' ? 'Create user' : 'Save changes' });
   const error = element({ hidden: true, textContent: '' });
+  const reauth = { panel: element({ hidden: true }), password: element({ value: '' }), submit: element({ disabled: false }) };
   const status = element({ hidden: true, textContent: '' });
   const activeControl = element({ checked: active });
   const activeAction = element({ dataset: { adminAction: 'toggle-active' } });
@@ -53,6 +56,9 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
     querySelector: (selector) => {
       if (selector === 'button[type="submit"]') return submit;
       if (selector === '[name="is_active"]') return activeControl;
+      if (selector === '[data-reauth-panel]') return reauth.panel;
+      if (selector === '[data-reauth-password]') return reauth.password;
+      if (selector === '[data-reauth-submit]') return reauth.submit;
       return null;
     },
     querySelectorAll: (selector) => (
@@ -90,6 +96,7 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
     FormData: FakeFormData,
     fetch: async (...args) => {
       fetches.push(args);
+      if (request) return request(...args);
       return { ok: true, json: async () => ({ account_id: 42 }) };
     },
     window: {
@@ -110,7 +117,7 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
   if (navigate) context.window.AlbumHavenMountAdmin(context.document, { navigate });
   return {
-    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, form, fetches, confirmations,
+    password, toggle, submit, error, status, reset, welcome, revoke, activeAction, activeControl, form, fetches, confirmations, reauth,
     assigned: () => assigned,
   };
 }
@@ -161,6 +168,7 @@ function loadRosterRuntime({
 
   const fetches = [];
   const documentListeners = new Map();
+  const windowListeners = new Map();
   let copyAttempts = 0;
   let successfulCopies = 0;
   const clipboard = {
@@ -200,7 +208,12 @@ function loadRosterRuntime({
     },
     navigator: { clipboard },
     URL,
-    window: { location: { origin: 'https://example.test', assign() {} } },
+    window: {
+      innerWidth: 800, innerHeight: 720,
+      location: { origin: 'https://example.test', assign() {} },
+      addEventListener(name, callback) { windowListeners.set(name, callback); },
+      removeEventListener(name) { windowListeners.delete(name); },
+    },
     document: {
       addEventListener(name, callback) { documentListeners.set(name, callback); },
       querySelectorAll(selector) {
@@ -214,6 +227,7 @@ function loadRosterRuntime({
         return [];
       },
       querySelector(selector) {
+        if (selector === '[data-settings-host]') return {};
         if (selector === '[data-admin-roster]') return roster;
         if (selector === '[data-admin-account-form]') return null;
         if (selector === '[data-member-menu="41"]') return menu;
@@ -224,6 +238,7 @@ function loadRosterRuntime({
     },
   });
   vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  const cleanup = context.window.AlbumHavenMountAdmin(context.document);
   return {
     row: { menuButton, menu, copyInvite, sendInvite, sendOtherInvite },
     status,
@@ -233,9 +248,68 @@ function loadRosterRuntime({
     clipboard,
     fetches,
     documentListeners,
+    windowListeners, cleanup,
     outside: element(),
   };
 }
+
+test('detail Enter uses Continue and does not submit another stale account mutation', async () => {
+  let patches = 0;
+  const runtime = loadRuntime({ mode: 'edit', request: async (_url, options) => {
+    if (options.method === 'PATCH' && ++patches === 1) {
+      return { ok: false, status: 409, json: async () => ({ detail: 'Recent authentication is required.' }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  } });
+  runtime.form.requestSubmit();
+  await runtime.form.submission;
+  assert.equal(runtime.reauth.panel.hidden, false);
+  runtime.reauth.password.value = 'owner password';
+  let prevented = false;
+  runtime.reauth.password.listeners.get('keydown')({ key: 'Enter', preventDefault() { prevented = true; } });
+  await new Promise(setImmediate);
+  assert.equal(prevented, true);
+  assert.deepEqual(runtime.fetches.map(([url, options]) => [url, options.method]), [
+    ['/admin/accounts/41', 'PATCH'], ['/admin/reauthenticate', 'POST'], ['/admin/accounts/41', 'PATCH'],
+  ]);
+  assert.equal(runtime.reauth.password.value, '');
+  assert.equal(runtime.reauth.panel.hidden, true);
+});
+
+test('detail Enter respects an in-flight Continue and leaves composing input alone', () => {
+  const runtime = loadRuntime({ mode: 'edit' });
+  runtime.reauth.password.value = 'owner password';
+  runtime.reauth.submit.disabled = true;
+  let prevented = 0;
+  const press = runtime.reauth.password.listeners.get('keydown');
+  press({ key: 'Enter', preventDefault() { prevented += 1; } });
+  press({ key: 'Enter', isComposing: true, preventDefault() { prevented += 1; } });
+  assert.equal(prevented, 1);
+  assert.equal(runtime.fetches.length, 0);
+  runtime.reauth.submit.disabled = false;
+  runtime.reauth.password.value = '';
+  press({ key: 'Enter', preventDefault() {} });
+  assert.equal(runtime.fetches.length, 0);
+  assert.equal(runtime.reauth.password.focused, true);
+});
+
+test('roster menu is clamped above its last-row trigger and closes on layout change or disposal', async () => {
+  const runtime = loadRosterRuntime();
+  const { menuButton, menu } = runtime.row;
+  await menuButton.click();
+  assert.equal(menu.style.left, '600px');
+  assert.equal(menu.style.top, '465px');
+  runtime.windowListeners.get('scroll')({ type: 'scroll', target: runtime.outside });
+  assert.equal(menu.hidden, true);
+  assert.equal(menuButton.getAttribute('aria-expanded'), 'false');
+  await menuButton.click();
+  runtime.windowListeners.get('resize')({ type: 'resize' });
+  assert.equal(menu.hidden, true);
+  await menuButton.click();
+  runtime.cleanup();
+  assert.equal(menu.hidden, true);
+  assert.equal(runtime.windowListeners.size, 0);
+});
 
 for (const outcome of ['same-account', 'other-account', 'failed-send']) {
   test(`invitation fallback follows successful token rotation: ${outcome}`, async () => {

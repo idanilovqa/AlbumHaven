@@ -591,3 +591,36 @@ def test_admin_mail_routes_return_ambiguous_secret_free_responses():
     assert service.welcome_calls[0]["actor_account_id"] == 7
     assert service.welcome_calls[0]["target_account_id"] == 41
     assert service.reset_calls[0]["target_account_id"] == 41
+
+
+@pytest.mark.parametrize("action", ["welcome", "password-reset"])
+@pytest.mark.parametrize("failure", [RuntimeError, ValueError])
+def test_admin_mail_initialization_errors_are_service_unavailable(monkeypatch, action, failure):
+    from music_app.routes import admin_asgi
+
+    app, service = _app()
+    del app.state.admin_mail_action_service
+
+    def unavailable(_config):
+        raise failure("private mail configuration detail")
+
+    monkeypatch.setattr(admin_asgi, "PostgresAdminMailActionService", unavailable)
+    status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
+
+    assert status == 503
+    assert body == b'{"detail":"Mail action is temporarily unavailable."}'
+    assert service.welcome_calls == service.reset_calls == []
+    assert not hasattr(app.state, "admin_mail_action_service")
+
+
+@pytest.mark.parametrize("action,method", [("welcome", "queue_welcome"), ("password-reset", "queue_password_reset")])
+def test_admin_mail_action_validation_still_returns_client_error(action, method):
+    app, service = _app()
+
+    def invalid(**_kwargs):
+        raise ValueError("private validation detail")
+
+    setattr(service, method, invalid)
+    status, body = _json_request(app, "POST", f"/admin/accounts/41/{action}", {})
+    assert status == 400
+    assert body == b'{"detail":"Mail action was invalid."}'

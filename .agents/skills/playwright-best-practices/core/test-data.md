@@ -19,7 +19,7 @@ This file covers **reusable test data builders** (factories, Faker, data generat
 
 ```typescript
 // factories/user.factory.ts
-interface User {
+export interface User {
   id: string;
   email: string;
   name: string;
@@ -50,7 +50,7 @@ const admin = createUser({ role: "admin", name: "Admin User" });
 
 ```typescript
 // factories/product.factory.ts
-interface Product {
+export interface Product {
   id: string;
   name: string;
   price: number;
@@ -398,8 +398,8 @@ test("add product to cart", async ({ page, testUser, testProducts }) => {
 
 ```typescript
 // fixtures/seed.fixture.ts
-import { test as base, APIRequestContext } from "@playwright/test";
-import { createUser } from "../factories/user.factory";
+import { test as base, expect } from "@playwright/test";
+import { createUser, type User } from "../factories/user.factory";
 
 type SeedFixtures = {
   seedUser: (overrides?: Partial<User>) => Promise<User>;
@@ -407,8 +407,6 @@ type SeedFixtures = {
 };
 
 export const test = base.extend<SeedFixtures>({
-  cleanupUsers: [],
-
   seedUser: async ({ request, cleanupUsers }, use) => {
     await use(async (overrides = {}) => {
       const userData = createUser(overrides);
@@ -446,9 +444,14 @@ test("user profile page", async ({ page, seedUser }) => {
 
 ### Transaction Rollback Seeding
 
+Use your project's connection pool and transaction interface from its database support module.
+
 ```typescript
 // fixtures/db.fixture.ts
-export const test = base.extend<{}, { db: DbTransaction }>({
+import { test as base } from "@playwright/test";
+import { pool, type DbTransaction } from "../support/database";
+
+export const test = base.extend<{ db: DbTransaction }>({
   db: [
     async ({}, use) => {
       const client = await pool.connect();

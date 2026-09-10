@@ -63,16 +63,40 @@ def test_earlier_health_write_does_not_remove_later_failed_pending_event():
         Path("C:/Music"),
     )
     first = Thread(target=service.record_event, args=(event,))
+    second_pending = Event()
+    failures = []
+
+    class ObservedPending(dict):
+        def __setitem__(self, key, value):
+            super().__setitem__(key, value)
+            if first_started.is_set():
+                second_pending.set()
+
+    service._pending = ObservedPending()
+
+    def record_second():
+        try:
+            service.record_event(event)
+        except RuntimeError as error:
+            failures.append(str(error))
+
     first.start()
-    assert first_started.wait(2)
+    second = Thread(target=record_second)
+    try:
+        assert first_started.wait(2)
+        second.start()
+        assert second_pending.wait(2)
+        assert not service.root_allows_destructive_reconciliation("main-root")
+    finally:
+        release_first.set()
+        first.join(2)
+        if second.ident is not None:
+            second.join(2)
 
-    with pytest.raises(RuntimeError, match="second write failed"):
-        service.record_event(event)
-    release_first.set()
-    first.join(2)
-
-    assert not first.is_alive()
+    assert not first.is_alive() and not second.is_alive()
+    assert failures == ["second write failed"]
     assert [problem.root_id for problem in service.load_problems()] == ["main-root"]
+    assert not service.root_allows_destructive_reconciliation("main-root")
 
 
 def test_delayed_older_insertion_preserves_newer_failed_health_after_scan():
@@ -130,6 +154,129 @@ def test_delayed_older_insertion_preserves_newer_failed_health_after_scan():
     with pytest.raises(health.LibraryRootUnhealthyError):
         with service.publication_guard(connection, ["main-root"]):
             pytest.fail("newer failed warning must hold destructive publication")
+
+
+@pytest.mark.parametrize("pause_at", ["before_pending", "before_persistence"])
+@pytest.mark.parametrize("clear_fails", [False, True], ids=["recovered", "recovery-failed"])
+def test_recovery_cutoff_rejects_delayed_old_records_only_after_success(pause_at, clear_fails):
+    from datetime import datetime, timedelta, timezone
+    from threading import Lock, current_thread
+    health = _health_module()
+    paused, release = Event(), Event()
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"}, connect=lambda _url: connection)
+
+    def now():
+        if pause_at == "before_pending":
+            paused.set()
+            assert release.wait(2)
+        return old
+
+    service = health.LibraryWatchHealthService(store, now=now)
+
+    class GatedPersistence:
+        def __init__(self):
+            self.lock = Lock()
+
+        def __enter__(self):
+            if pause_at == "before_persistence" and current_thread().name == "delayed-health":
+                paused.set()
+                assert release.wait(2)
+            self.lock.acquire()
+
+        def __exit__(self, *_args):
+            self.lock.release()
+
+    service._persistence_lock = GatedPersistence()
+    if clear_fails:
+        store.clear = lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("clear failed"))
+    failures = []
+
+    def record():
+        try:
+            service.record_event(health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music")))
+        except BaseException as error:
+            failures.append(error)
+
+    writer = Thread(target=record, name="delayed-health")
+    writer.start()
+    try:
+        assert paused.wait(2)
+        if clear_fails:
+            with pytest.raises(OSError, match="clear failed"):
+                service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"],
+                    scan_started_at=old + timedelta(seconds=1))
+        else:
+            service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"],
+                scan_started_at=old + timedelta(seconds=1))
+    finally:
+        release.set()
+        writer.join(2)
+    assert not writer.is_alive() and failures == []
+    assert [problem.root_id for problem in service.load_problems()] == (["main"] if clear_fails else [])
+    assert service.root_allows_destructive_reconciliation("main") is (not clear_fails)
+
+
+def test_recovery_waits_for_inflight_health_write_then_clears_it():
+    from datetime import datetime, timedelta, timezone
+    from threading import Lock, current_thread
+    health = _health_module()
+    writing, release, recovery_waiting = Event(), Event(), Event()
+    old = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"}, connect=lambda _url: connection)
+    original_upsert = store.upsert
+
+    def blocked_upsert(problem):
+        writing.set()
+        assert release.wait(2)
+        original_upsert(problem)
+
+    store.upsert = blocked_upsert
+    service = health.LibraryWatchHealthService(store, now=lambda: old)
+
+    class ObservedPersistence:
+        def __init__(self):
+            self.lock = Lock()
+
+        def __enter__(self):
+            if current_thread().name == "health-recovery":
+                recovery_waiting.set()
+            self.lock.acquire()
+
+        def __exit__(self, *_args):
+            self.lock.release()
+
+    service._persistence_lock = ObservedPersistence()
+    failures = []
+
+    def invoke(action):
+        try:
+            action()
+        except BaseException as error:
+            failures.append(error)
+
+    writer = Thread(target=invoke, args=(lambda: service.record_event(
+        health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music"))),))
+    recovery = Thread(target=invoke, name="health-recovery", args=(lambda: service.clear_after_scan(
+        scan_mode="manual_full_rescan", observed_root_ids=["main"], scan_started_at=old + timedelta(seconds=1)),))
+    writer.start()
+    try:
+        assert writing.wait(2)
+        recovery.start()
+        assert recovery_waiting.wait(2)
+        assert not service.root_allows_destructive_reconciliation("main")
+    finally:
+        release.set()
+        writer.join(2)
+        if recovery.ident is not None:
+            recovery.join(2)
+    assert not writer.is_alive() and not recovery.is_alive() and failures == []
+    assert service.load_problems() == []
+    assert service.root_allows_destructive_reconciliation("main")
 
 
 class _Rows:

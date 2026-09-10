@@ -295,6 +295,11 @@ def _database_action(setup_database_url: str, action: str) -> None:
     import psycopg
 
     statements = {
+        "age-owner-authentication": """
+            update app.account_sessions set authenticated_at = now() - interval '1 day'
+            where account_id = (select id from app.accounts where username_normalized = 'rendref')
+              and revoked_at is null
+        """,
         "disable-owner": """
             update app.accounts set is_active = false, disabled_at = now(),
               disabled_reason = 'e2e_control' where username_normalized = 'rendref'

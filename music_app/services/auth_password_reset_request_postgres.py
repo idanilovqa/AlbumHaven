@@ -158,7 +158,7 @@ class PostgresPasswordResetRequestService:
                             )
                         )
                     buckets.sort(key=lambda item: item[0])
-                    blocked = self._charge_buckets(connection, buckets, now)
+                    blocked, now = self._charge_buckets(connection, buckets, now)
                     if blocked:
                         self._append_audit(
                             connection,
@@ -198,6 +198,8 @@ class PostgresPasswordResetRequestService:
                         account.get("credential_version"), "credential version"
                     )
                     recipient = _recipient(account.get("contact_email"))
+                    # Lock waits and token generation must not consume the link's lifetime.
+                    now = _aware_utc(self._clock())
                     connection.execute(
                         """
                         update app.password_reset_tokens
@@ -288,7 +290,7 @@ class PostgresPasswordResetRequestService:
         connection: Any,
         buckets: list[tuple[str, bytes]],
         now: datetime,
-    ) -> bool:
+    ) -> tuple[bool, datetime]:
         # Retain each conflicting bucket against expiry cleanup without
         # replacing its current window, count or cooldown.
         for kind, digest in buckets:
@@ -327,6 +329,8 @@ class PostgresPasswordResetRequestService:
         ).fetchall()
         if len(rows) != len(buckets):
             raise RuntimeError
+        # Every bucket is retained and locked before evaluating a shared budget time.
+        now = _aware_utc(self._clock())
         by_kind = dict(buckets)
         blocked = False
         for raw in rows:
@@ -374,7 +378,7 @@ class PostgresPasswordResetRequestService:
                     """,
                     (now, kind, self._hmac_key_version, digest),
                 )
-        return blocked
+        return blocked, now
 
     def _bucket(self, domain: str, value: str) -> bytes:
         return keyed_bucket_digest(

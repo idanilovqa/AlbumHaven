@@ -115,6 +115,7 @@ test('app loader fetches one generated runtime bundle instead of individual runt
   assert.doesNotMatch(appJs, /const scriptPaths = \[/);
   assert.doesNotMatch(appJs, /Promise\.all\(scriptPaths\.map/);
   assert.equal((appJs.match(/window\.fetch\(/g) || []).length, 2);
+  assert.equal(Number(appJs.match(/bundledScriptCount: (\d+)/)?.[1]), RUNTIME_SCRIPT_PATHS.length);
 
   let previousIndex = -1;
   for (const fileName of expectedRuntimeOrder) {

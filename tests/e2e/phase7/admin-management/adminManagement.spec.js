@@ -3,6 +3,7 @@ import { SettingsModalAppBar } from '../../poms/settingsModalAppBar.js';
 import { SettingsModalAppBarActions } from '../../actions/settingsModalAppBarActions.js';
 import { invitationPathFrom, OWNER, signIn } from '../actions/authActions.js';
 import {
+  databaseAction,
   databaseState,
   expect,
   test,
@@ -53,6 +54,70 @@ const EDITABLE_CAPABILITIES = Object.freeze([
   'View operational logs',
   'View virtual discography',
 ]);
+
+test('admin detail password Enter reauthenticates before retrying Save changes', async ({ page }) => {
+  await signIn(page, OWNER, '/admin/members');
+  const members = new MembersPage(page);
+  await members.openAddUser();
+  await members.createUser({ username: 'keyboard.listener', email: 'keyboard.listener@example.test' });
+  const row = page.getByRole('row').filter({ hasText: 'keyboard.listener' });
+  await row.getByRole('button', { name: 'Actions for keyboard.listener' }).click();
+  await row.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  await expect(members.adminForm).toBeVisible();
+  await databaseAction('age-owner-authentication');
+  const mutations = [];
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === '/admin/reauthenticate' || request.method() === 'PATCH' && /^\/admin\/accounts\/\d+$/.test(pathname)) {
+      mutations.push({ pathname, method: request.method() });
+    }
+  });
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  const password = members.reauthPassword;
+  await expect(password).toBeVisible();
+  await password.fill(OWNER.password);
+  await password.press('Enter');
+  await expect(page).toHaveURL(/\/admin\/members$/);
+  expect(mutations.map(({ method }) => method)).toEqual(['PATCH', 'POST', 'PATCH']);
+  expect(mutations[1].pathname).toBe('/admin/reauthenticate');
+  await expect(members.reauthPanel).toHaveCount(0);
+});
+
+test('admin last-row actions remain usable in the scrolling tablet roster', async ({ page }) => {
+  await signIn(page, OWNER, '/admin/members');
+  const members = new MembersPage(page);
+  await members.openAddUser();
+  await members.createUser({ username: 'zzz.menu', email: 'zzz.menu@example.test' });
+  await page.setViewportSize({ width: 800, height: 720 });
+  const row = page.getByRole('row').last();
+  await expect(row).toContainText('zzz.menu');
+  const trigger = row.getByRole('button', { name: 'Actions for zzz.menu' });
+  await trigger.scrollIntoViewIfNeeded();
+  const table = page.getByRole('table', { name: 'Managed users' });
+  // parity-check: allow-read-only-measurement-evaluate -- compare native table scroll geometry before and after opening its menu
+  const before = await table.evaluate((element) => ({ top: element.scrollTop, height: element.scrollHeight }));
+  await trigger.click();
+  const menu = row.getByRole('menu');
+  await expect(menu.getByRole('menuitem')).toHaveCount(3);
+  await expect.poll(() => members.menuItemsAreHitTestable(menu)).toBe(true);
+  // parity-check: allow-read-only-measurement-evaluate -- opening the floating menu must not expand or scroll the table vertically
+  expect(await table.evaluate((element) => ({ top: element.scrollTop, height: element.scrollHeight }))).toEqual(before);
+  await menu.getByRole('menuitem').first().press('Escape');
+  await expect(trigger).toBeFocused();
+  await expect(menu).toBeHidden();
+  await trigger.click();
+  const tableBox = await table.boundingBox();
+  await page.mouse.move(tableBox.x + tableBox.width / 2, tableBox.y + tableBox.height / 2);
+  await page.mouse.wheel(-100, 0);
+  await expect(menu).toBeHidden();
+  await trigger.click();
+  await page.setViewportSize({ width: 810, height: 720 });
+  await expect(menu).toBeHidden();
+  await trigger.click();
+  await menu.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  await expect(members.adminForm).toBeVisible();
+  await expect(members.openActionMenus).toHaveCount(0);
+});
 
 test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu', async ({ page }) => {
   await signIn(page);

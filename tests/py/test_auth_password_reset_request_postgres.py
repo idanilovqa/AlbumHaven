@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 
 from music_app.services.auth_tokens import IssuedOpaqueToken
@@ -186,3 +186,30 @@ def test_blocked_request_is_generic_and_does_not_issue_or_revoke_reset():
     statements = [sql for sql, _ in connection.operations]
     assert not any("password_reset_tokens" in sql for sql in statements)
     assert audit.calls[0]["outcome"].value == "throttled"
+
+
+def test_reset_issuance_refreshes_clock_after_token_provider():
+    from music_app.services.auth_password_reset_request_postgres import PostgresPasswordResetRequestService
+
+    clock = [NOW]
+    connection = Connection(account={"id": 41, "is_active": True, "disabled_at": None,
+        "contact_email": "member@example.test", "credential_version": 3})
+    audit = Audit()
+
+    def delayed_token():
+        clock[0] += timedelta(seconds=1801)
+        return IssuedOpaqueToken(RAW_TOKEN, TOKEN_DIGEST)
+
+    result = PostgresPasswordResetRequestService(_config(), connect=lambda _: connection,
+        clock=lambda: clock[0], token_issuer=delayed_token, audit_repository=audit).request_reset(
+            candidate="member", source_key="203.0.113.9", request_ref="delayed-provider")
+
+    assert result.delivery is not None
+    token_params = next(params for sql, params in connection.operations
+        if "insert into app.password_reset_tokens" in sql)
+    assert token_params[3:5] == (clock[0], clock[0] + timedelta(seconds=1800))
+    assert next(params for sql, params in connection.operations
+        if "update app.password_reset_tokens" in sql)[0] == clock[0]
+    assert next(params for sql, params in connection.operations
+        if "insert into app.mail_outbox" in sql)[2] == clock[0]
+    assert audit.calls[0]["occurred_at"] == clock[0]

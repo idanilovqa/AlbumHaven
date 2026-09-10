@@ -513,12 +513,14 @@ async def _queue_mail_action(request: Request, account_id: int, action: str):
     actor = request.state.current_actor
     if actor.account_id is None or actor.current_library_id is None:
         return JSONResponse({"detail": "Action not permitted."}, status_code=403)
-    method = (
-        _mail_action_service(request).queue_welcome
-        if action == "welcome"
-        else _mail_action_service(request).queue_password_reset
-    )
     try:
+        service = _mail_action_service(request)
+    except Exception:
+        return JSONResponse(
+            {"detail": "Mail action is temporarily unavailable."}, status_code=503
+        )
+    try:
+        method = service.queue_welcome if action == "welcome" else service.queue_password_reset
         return await run_in_threadpool(
             method,
             actor_account_id=actor.account_id,

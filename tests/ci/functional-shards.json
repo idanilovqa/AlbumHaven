@@ -283,6 +283,13 @@
               "test": "tests/e2e/specs/searchTreeCorrectness.spec.js",
               "case": "FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input",
               "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/gallerySoundtrackDuration.spec.js",
+              "case": "FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits",
+              "area": "gallery-search"
             }
           ]
         }

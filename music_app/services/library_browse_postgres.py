@@ -5837,9 +5837,11 @@ def _root_album_browse_sql() -> str:
             count(distinct eligible_album_tracks.track_id)::integer as track_count,
             coalesce(sum(eligible_album_tracks.duration_seconds), 0)::integer as total_duration_seconds
           from eligible_album_tracks
-          join album_rows
-            on album_rows.library_id = eligible_album_tracks.library_id
-           and album_rows.album_id = eligible_album_tracks.album_id
+          join (
+            select distinct library_id, album_id from album_rows
+          ) as matched_albums
+            on matched_albums.library_id = eligible_album_tracks.library_id
+           and matched_albums.album_id = eligible_album_tracks.album_id
           group by eligible_album_tracks.album_id
         )
         select
@@ -6230,9 +6232,11 @@ def _selected_artist_preview_sql() -> str:
             count(distinct eligible_album_tracks.track_id)::integer as track_count,
             coalesce(sum(eligible_album_tracks.duration_seconds), 0)::integer as total_duration_seconds
           from eligible_album_tracks
-          join matched_album_rows
-            on matched_album_rows.library_id = eligible_album_tracks.library_id
-           and matched_album_rows.album_id = eligible_album_tracks.album_id
+          join (
+            select distinct library_id, album_id from matched_album_rows
+          ) as matched_albums
+            on matched_albums.library_id = eligible_album_tracks.library_id
+           and matched_albums.album_id = eligible_album_tracks.album_id
           group by eligible_album_tracks.album_id
         )
         select
@@ -6322,9 +6326,11 @@ def _artist_preview_rows_sql() -> str:
             count(distinct eligible_album_tracks.track_id)::integer as track_count,
             coalesce(sum(eligible_album_tracks.duration_seconds), 0)::integer as total_duration_seconds
           from eligible_album_tracks
-          join matched_album_rows
-            on matched_album_rows.library_id = eligible_album_tracks.library_id
-           and matched_album_rows.album_id = eligible_album_tracks.album_id
+          join (
+            select distinct library_id, album_id from matched_album_rows
+          ) as matched_albums
+            on matched_albums.library_id = eligible_album_tracks.library_id
+           and matched_albums.album_id = eligible_album_tracks.album_id
           group by eligible_album_tracks.album_id
         )
         select

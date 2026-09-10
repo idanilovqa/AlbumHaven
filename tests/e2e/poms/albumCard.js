@@ -68,6 +68,10 @@ export class AlbumCard extends BasePage {
     return '.album-subtitle';
   }
 
+  get durationWithinCardSelector() {
+    return '.album-length';
+  }
+
   get trackCountWithinCardSelector() {
     return '.track-count';
   }

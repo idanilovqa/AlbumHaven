@@ -1,7 +1,7 @@
 .app-bar [data-shell-horizontal-align="gallery-body"] { margin-left: 24px; }
 .app-bar--library { padding-right: 32px; }
 .gallery-top-row { flex: 0 0 auto; min-height: 0; margin-bottom: 0; }
-.gallery-bar { position: relative; z-index: 60; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+.gallery-bar { position: relative; z-index: 60; min-height: 54px; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 0 0 auto; border-bottom: 0; margin-bottom: 14px; }
 .gallery-bar__context { min-width: 0; }
 .gallery-bar__title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 1.08rem; font-weight: 750; }
 .gallery-bar__title > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

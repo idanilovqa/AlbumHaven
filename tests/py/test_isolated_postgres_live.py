@@ -660,7 +660,7 @@ def test_live_admin_account_updates_serialize_on_the_same_target(monkeypatch):
                   username_normalized, contact_email,
                   contact_email_normalized
                 ) values (
-                  'Concurrent administrator target', 'managed',
+                  'Concurrent administrator target', 'managed_user',
                   'Concurrent target', 'concurrent-target',
                   'concurrent-target@example.test',
                   'concurrent-target@example.test'

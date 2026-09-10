@@ -1,6 +1,13 @@
 # Changelog
 
-## 0.9.43 - 2026-09-09
+## 0.9.43 - 2026-09-10
+
+- Kept pointer-driven player layout changes free of stale focus highlights while
+  preserving keyboard and responsive focus transfer.
+- Registered the complete component inventory and preserved exact displayed-cover
+  byte evidence across navigation and the production image cache.
+- Added independent `skip_reviews` and `skip_tests` pipeline labels. PR1 uses an
+  owner-approved review waiver; complete passing tests remain required to release.
 
 - Preserved untouched native player components when saving partial appearance
   edits, without reinterpreting existing custom styles; kept duration text opaque.

@@ -63,12 +63,41 @@ function workflowJobSource(workflow, jobName, nextJobName = null) {
 function workflowStepSource(jobSource, stepName, nextStepName = null) {
   const startMarker = `      - name: ${stepName}`;
   const start = jobSource.indexOf(startMarker);
-  const end = nextStepName === null
-    ? jobSource.length
-    : jobSource.indexOf(`\n      - name: ${nextStepName}`, start);
   assert.notEqual(start, -1, `Missing workflow step ${stepName}`);
-  assert.notEqual(end, -1, `Missing workflow step after ${stepName}: ${nextStepName}`);
+  if (nextStepName !== null) {
+    assert.notEqual(jobSource.indexOf(`\n      - name: ${nextStepName}`, start), -1,
+      `Missing workflow step after ${stepName}: ${nextStepName}`);
+  }
+  // A named later boundary may have new diagnostic steps inserted before it.
+  // Keep assertions scoped to this step, including its own failure policy.
+  const nextStep = jobSource.indexOf('\n      - ', start + startMarker.length);
+  const end = nextStep === -1 ? jobSource.length : nextStep;
   return jobSource.slice(start, end);
+}
+
+for (const newline of ['\n', '\r\n']) {
+  test(`workflow step extraction isolates optional diagnostics (${JSON.stringify(newline)})`, () => {
+    const source = [
+      '      - name: Run Codex',
+      '        uses: ./.tmp/codex-action',
+      '      - name: Encrypt private Codex diagnostics',
+      '        if: always()',
+      '        continue-on-error: true',
+      '        run: encrypt',
+      '      - name: Collect private Codex usage',
+      '        run: collect',
+    ].join(newline);
+    const action = workflowStepSource(source, 'Run Codex', 'Collect private Codex usage');
+    assert.match(action, /uses: \.\/\.tmp\/codex-action/);
+    assert.doesNotMatch(action, /diagnostics|collect|^        (?:if|continue-on-error):/m);
+    for (const policy of ['if: false', 'continue-on-error: true']) {
+      const changed = source.replace('        uses:', `        ${policy}${newline}        uses:`);
+      assert.match(workflowStepSource(changed, 'Run Codex', 'Collect private Codex usage'),
+        /^        (?:if|continue-on-error):/m);
+    }
+    assert.throws(() => workflowStepSource(source, 'Run Codex', 'Missing output guard'),
+      /Missing workflow step after/);
+  });
 }
 
 test('production parity checker module exists', () => {

@@ -41,6 +41,21 @@ test('keyboard mode changes transfer focus to the active player controls', async
   await expect(collapse).toBeFocused();
 });
 
+test('pointer mode changes leave no focus highlight after the pointer exits the player', async ({ page }) => {
+  const collapse = page.getByRole('button', { name: 'Collapse', exact: true });
+  const expand = page.getByRole('button', { name: 'Expand', exact: true });
+  await collapse.click();
+  await page.getByRole('button', { name: 'Outside player', exact: true }).hover();
+  await expect(page.locator('.player-shell')).toHaveAttribute('aria-hidden', 'true');
+  await expect(expand).not.toBeFocused();
+  await expect(page.locator('.global-player:focus-within')).toHaveCount(0);
+  await expand.click();
+  await page.getByRole('button', { name: 'Outside player', exact: true }).hover();
+  await expect(page.locator('.compact-player-shell')).toHaveAttribute('aria-hidden', 'true');
+  await expect(collapse).not.toBeFocused();
+  await expect(page.locator('.global-player:focus-within')).toHaveCount(0);
+});
+
 test('denied storage access still completes keyboard mode changes and UI synchronization', async ({ page }) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));

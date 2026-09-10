@@ -30751,7 +30751,7 @@ function syncDockedCompactGeometry() {
   els.player.style.setProperty('--compact-docked-width', `${geometry.width}px`);
 }
 
-function applyCompactPlayerMode(mode, { persist = true } = {}) {
+function applyCompactPlayerMode(mode, { persist = true, transferFocus = true } = {}) {
   const els = compactPlayerElements();
   const next = resolveCompactPlayerMode({ eligible: compactPlayerEligible(), persistedMode: mode });
   const previousStyle = compactPlayerStyle;
@@ -30759,7 +30759,10 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
   compactPlayerStyle = getCompactPlayerStyle();
   const compact = next === 'compact';
   const outgoing = compact ? els.expanded : els.compact;
-  const transferFocus = outgoing?.contains?.(document.activeElement);
+  const outgoingFocus = outgoing?.contains?.(document.activeElement) ? document.activeElement : null;
+  // Pointer activation should not leave a focus highlight on the new mode.
+  // Keyboard and responsive changes still rescue focus from the inert shell.
+  if (outgoingFocus && !transferFocus) outgoingFocus.blur();
   document.documentElement.classList.toggle('has-compact-player', compact);
   document.documentElement.classList.toggle('has-docked-compact-player', compact && compactPlayerStyle === 'docked');
   document.documentElement.classList.toggle('has-floating-compact-player', compact && compactPlayerStyle === 'floating');
@@ -30797,7 +30800,7 @@ function applyCompactPlayerMode(mode, { persist = true } = {}) {
     }
   }
   syncCompactPlayerUi();
-  if (transferFocus) {
+  if (outgoingFocus && transferFocus) {
     const incoming = compact ? els.compact : els.expanded;
     const modeControl = compact ? els.expand : els.collapse;
     const focusTarget = modeControl && !modeControl.hidden && !modeControl.disabled
@@ -30916,8 +30919,8 @@ function initCompactPlayer() {
   let saved = 'expanded';
   try { saved = window.localStorage.getItem(COMPACT_PLAYER_MODE_STORAGE_KEY) || 'expanded'; } catch (_error) {}
   applyCompactPlayerMode(saved, { persist: false });
-  els.collapse?.addEventListener('click', () => applyCompactPlayerMode('compact'));
-  els.expand?.addEventListener('click', () => applyCompactPlayerMode('expanded'));
+  els.collapse?.addEventListener('click', (event) => applyCompactPlayerMode('compact', { transferFocus: !(event.detail > 0) }));
+  els.expand?.addEventListener('click', (event) => applyCompactPlayerMode('expanded', { transferFocus: !(event.detail > 0) }));
   els.play?.addEventListener('click', () => togglePlayerPlayback());
   els.previous?.addEventListener('click', () => playCompactQueueOffset(-1));
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));

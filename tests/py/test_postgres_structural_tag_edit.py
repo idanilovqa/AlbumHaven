@@ -417,11 +417,22 @@ def test_album_edit_restores_display_date_when_watcher_precreates_destination():
     assert "not %(updates_release_year)s::boolean" in normalized_sql
     assert "has_display_year_override" in normalized_sql
     assert "#>> '{scan_cache,file_entry,year}'" in normalized_sql
-    assert "then validated_source_album.release_year" in normalized_sql
+    destination_sql = normalized_sql.split("normalized_existing_destination_album as (", 1)[1].split(
+        "updated_album_ratings as (", 1
+    )[0]
+    assert (
+        "when not %(updates_release_year)s::boolean "
+        "and validated_source_album.has_display_year_override "
+        "and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null "
+        "then validated_source_album.release_year else library.local_albums.release_year"
+    ) in destination_sql
     assert (
         "jsonb_set( coalesce(library.local_albums.metadata, '{}'::jsonb), "
-        "'{release_date}', to_jsonb(validated_source_album.release_year::text), true )"
-    ) in normalized_sql
+        "'{release_date}', to_jsonb(coalesce( "
+        "nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''), "
+        "nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''), "
+        "validated_source_album.release_year::text )), true )"
+    ) in destination_sql
     assert "marked_partial_source_album as" in normalized_sql
     assert "from normalized_existing_destination_album" in normalized_sql
 

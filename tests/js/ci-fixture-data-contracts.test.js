@@ -355,8 +355,8 @@ test('approved test-data matrix records every discovered case', () => {
   });
 
   assert.deepEqual(errors, []);
-  assert.equal(matrix.length, 138);
-  assert.equal(new Set(matrix.map(caseIdentity)).size, 138);
+  assert.equal(matrix.length, 179);
+  assert.equal(new Set(matrix.map(caseIdentity)).size, 179);
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
 });
 
@@ -696,12 +696,12 @@ test('read-only inventory command reports complete discovery and ownership total
   assert.equal(inventory.configuredSurfaces, 10);
   assert.deepEqual(inventory.categories, {
     browserFunctional: 97,
-    component: 15,
+    component: 56,
     performance: 26,
-    total: 138,
+    total: 179,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 138,
+    testDataMatrix: 179,
     functionalShards: 97,
     performanceTargets: 26,
   });

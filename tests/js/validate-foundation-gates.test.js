@@ -118,7 +118,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 15);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 56);
 
   assert.deepEqual(
     validator.validatePytestCollection(

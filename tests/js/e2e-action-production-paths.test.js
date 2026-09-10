@@ -4368,7 +4368,10 @@ test('cover lookup hashes only decoded visible currentSrc response evidence', ()
   assert.match(coverLookup, /hasAttribute\('data-cover-visual-state'\)/);
   assert.match(coverLookup, /visualState[\s\S]*=== 'ready'/);
   assert.match(coverLookup, /imageResponseEvidence\.get\(src\)/);
-  assert.doesNotMatch(coverLookup, /\bfetch\s*\(/);
+  assert.match(coverLookup, /sourceUrl\.protocol !== 'blob:'/);
+  assert.match(coverLookup, /sourceUrl\.origin !== location\.origin/);
+  assert.match(coverLookup, /fetch\(expected\.currentSrc, \{ mode: 'same-origin' \}\)/);
+  assert.doesNotMatch(coverLookup, /fetch\((?:src|displayedSource|productionSrc)/);
 });
 
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
@@ -5261,3 +5264,62 @@ test('compact-player Appearance helper enters the owning Player and Seekbar page
     'an already-saved compact-player style must remain an idempotent action',
   );
 });
+
+
+test('cover lookup observes exact displayed blob bytes without a network response', async () => {
+  const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+  const vm = require('node:vm');
+  class Image {}
+  const element = Object.assign(new Image(), {
+    currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+    getAttribute: () => '/cover?path=fixture&v=upgraded', hasAttribute: () => false,
+  });
+  const expected = { currentSrc: element.currentSrc, productionSrc: element.getAttribute(), hasVisualState: false };
+  const requests = [];
+  const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+    HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+    fetch: async (url, options) => {
+      requests.push({ url, mode: options.mode });
+      return { ok: true, arrayBuffer: async () => Uint8Array.from([11, 23, 47, 255]).buffer };
+    },
+  });
+  assert.deepEqual(Array.from(await observe(element, expected)), [11, 23, 47, 255]);
+  assert.deepEqual(requests, [{ url: expected.currentSrc, mode: 'same-origin' }]);
+});
+
+for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-after', 'revision-after', 'decode-after', 'detached-after', 'hidden-after', 'read-error']) {
+  test(`cover lookup displayed blob observation rejects ${failure}`, async () => {
+    const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+    const vm = require('node:vm');
+    class Image {}
+    let productionSrc = '/cover?path=fixture&v=upgraded';
+    const element = Object.assign(new Image(), {
+      currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+      getAttribute: () => productionSrc, hasAttribute: () => false,
+    });
+    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover?path=fixture';
+    if (failure === 'foreign-blob') element.currentSrc = 'blob:https://foreign.invalid/id';
+    const expected = { currentSrc: element.currentSrc, productionSrc, hasVisualState: false };
+    if (failure === 'source-before') element.currentSrc += '-changed';
+    let reads = 0;
+    const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+      HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+      fetch: async () => {
+        reads += 1;
+        if (failure === 'read-error') throw new Error('blob read failed');
+        return { ok: true, arrayBuffer: async () => {
+          if (failure === 'source-after') element.currentSrc += '-changed';
+          if (failure === 'revision-after') productionSrc += '-changed';
+          if (failure === 'decode-after') element.complete = false;
+          if (failure === 'detached-after') element.isConnected = false;
+          if (failure === 'hidden-after') element.getBoundingClientRect = () => ({ width: 0, height: 0 });
+          return Uint8Array.from([11, 23]).buffer;
+        } };
+      },
+    });
+    await assert.rejects(observe(element, expected), /blob|changed/i);
+    assert.equal(reads, ['network-url', 'foreign-blob', 'source-before'].includes(failure) ? 0 : 1);
+  });
+}

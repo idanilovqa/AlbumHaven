@@ -789,18 +789,22 @@ test('cancelling a queued successor releases EOF only for the matching generatio
   markEos(fixture, { streamId: 61, role: 'current', emittedFrames: 64 });
   fixture.send({ type: 'expect-continuity', generation: fixture.generation, active: true });
   play(fixture);
-  renderQuantum(fixture);
+  assertRenderedStereo(
+    fixture,
+    [...sequence(1, 64), ...Array(64).fill(0)],
+    [...sequence(1, 64).map((value) => -value), ...Array(64).fill(0)],
+  );
   assert.equal(fixture.events('ended').length, 0);
   fixture.send({ type: 'expect-continuity', generation: fixture.generation - 1, active: false });
-  renderQuantum(fixture);
+  assertRenderedSilence(fixture);
   assert.equal(fixture.events('ended').length, 0, 'stale cancellation cannot release current EOF');
   fixture.send({ type: 'expect-continuity', generation: fixture.generation, active: false });
-  renderQuantum(fixture);
+  assertRenderedSilence(fixture);
   assert.deepEqual(fixture.events('ended'), [{
     type: 'ended', generation: fixture.generation, streamId: 61, timelineFrame: 64,
   }]);
   assert.equal(fixture.processor.playing, false);
-  renderQuantum(fixture);
+  assertRenderedSilence(fixture);
   assert.equal(fixture.events('ended').length, 1);
 });
 

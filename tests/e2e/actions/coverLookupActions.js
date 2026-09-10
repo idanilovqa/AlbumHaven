@@ -30,6 +30,31 @@ export function isDisplayedImageEvidenceReady(state) {
   );
 }
 
+// Runs in the browser as a read-only observation of the exact displayed Blob.
+export async function readDisplayedBlobBytes(element, expected) {
+  const sourceUrl = new URL(expected.currentSrc);
+  if (sourceUrl.protocol !== 'blob:' || sourceUrl.origin !== location.origin) {
+    throw new Error('Displayed blob evidence requires a same-origin blob URL.');
+  }
+  const matches = () => element instanceof HTMLImageElement
+    && element.isConnected
+    && element.getBoundingClientRect().width > 0
+    && element.getBoundingClientRect().height > 0
+    && element.currentSrc === expected.currentSrc
+    && String(element.getAttribute('data-production-cover-src') || '').trim() === expected.productionSrc
+    && element.hasAttribute('data-cover-visual-state') === expected.hasVisualState
+    && (!expected.hasVisualState || element.getAttribute('data-cover-visual-state') === 'ready')
+    && element.complete && element.naturalWidth > 0;
+  if (!matches()) throw new Error('Displayed blob source changed before observation.');
+  // A blob URL reads browser-owned bytes; it never requests the production /cover route.
+  const response = await fetch(expected.currentSrc, { mode: 'same-origin' });
+  if (!response.ok) throw new Error('Displayed blob bytes could not be read.');
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!matches()) throw new Error('Displayed blob source changed during observation.');
+  if (!bytes.length) throw new Error('Displayed blob evidence is empty.');
+  return Array.from(bytes);
+}
+
 export class CoverLookupActions {
   constructor(coverLookup) {
     this.coverLookup = coverLookup;
@@ -987,12 +1012,23 @@ export class CoverLookupActions {
       if (options.expectedCoverRevision && coverRevision !== String(options.expectedCoverRevision)) {
         return false;
       }
-      const pendingEvidence = this.imageResponseEvidence.get(src);
-      if (!pendingEvidence) return false;
-      const evidence = await pendingEvidence;
-      if (evidence.error) throw evidence.error;
+      let byteEvidence;
+      if (new URL(displayedState.currentSrc, this.coverLookup.page.url()).protocol === 'blob:') {
+        // parity-check: allow-read-only-measurement-evaluate -- exact decoded displayed blob bytes, without a network request or cache mutation
+        const bytes = await image.evaluate(readDisplayedBlobBytes, displayedState);
+        byteEvidence = {
+          src,
+          sha256: createHash('sha256').update(Buffer.from(bytes)).digest('hex').toUpperCase(),
+        };
+      } else {
+        const pendingEvidence = this.imageResponseEvidence.get(src);
+        if (!pendingEvidence) return false;
+        const evidence = await pendingEvidence;
+        if (evidence.error) throw evidence.error;
+        byteEvidence = evidence.value;
+      }
       resolvedEvidence = {
-        ...evidence.value,
+        ...byteEvidence,
         coverPath,
         coverRevision,
         currentSrc: displayedState.currentSrc,

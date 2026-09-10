@@ -355,7 +355,7 @@ async def status(request: Request) -> JSONResponse:
     # Status is observational: API-only clients see pending discovery, but only
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
-        payload = _build_status_payload_from_state(library_state)
+        payload = dict(_build_status_payload_from_state(library_state))
         payload["log_history_revision"] = load_log_history_revision(_app_config(request))
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":
@@ -378,6 +378,7 @@ async def status(request: Request) -> JSONResponse:
             # A failed preference read must not hide a health warning.
             pass
 
+    payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
     return JSONResponse(payload)
 
 
@@ -995,7 +996,10 @@ def _is_postgres_utility_projection_request(request: Request) -> bool:
 
 @router.get("/utilities/loops")
 async def utilities_loops(request: Request) -> JSONResponse:
-    return JSONResponse({"ok": True, "loops": load_loops(_app_config(request))})
+    actions = allowed_actions_for_request(request, (
+        "library.loops.read", "library.loops.create", "library.loops.delete", "library.loops.reorder",
+    ))
+    return JSONResponse({"ok": True, "loops": load_loops(_app_config(request)), "allowed_actions": actions.as_payload()})
 
 
 @router.get("/utilities/log-history")

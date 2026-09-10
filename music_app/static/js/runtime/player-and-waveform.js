@@ -345,24 +345,24 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
     : `
       <div class="utility-loop-tree-children">
         ${(group?.loops || []).map((loop) => `
-          <button class="utility-loop-tree-child ${String(loop?.id || '') === String(selectedLoopId || '') && state.utility.selectedLoopDetailMode === 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
+          <div class="utility-loop-tree-child" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
             <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-            <span class="utility-loop-tree-icon" aria-hidden="true"></span>
             <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
-          </button>
+            <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
+          </div>
         `).join('')}
       </div>
     `;
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
-      <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
+      <div class="utility-loop-group-row ${groupSelected ? 'is-active' : ''}">
         ${window.NavigationTree.renderItem({
           variant: 'wide', action: true, key: groupKey, draggable: true, className: 'utility-loop-group-list-item',
-          selected: groupSelected && state.utility.selectedLoopDetailMode !== 'loop',
+          selected: groupSelected,
           label: title, subtitle, year: representative?.year || '', artworkHtml,
           count: loopCount, countHidden: true,
           attributes: { 'data-utility-loop-group-key': groupKey },
-          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span></span>`,
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"/></svg></span></span>`,
         })}
       </div>
       ${loopsHtml}

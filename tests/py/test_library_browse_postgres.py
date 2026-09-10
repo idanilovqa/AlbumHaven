@@ -4497,7 +4497,6 @@ def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tr
     assert payload["primary_filter_active"] is True
     assert album["preview_only"] is False
     assert album["tracks"][0]["key"] == "cosmic-cathedral-deep-water-01"
-<<<<<<< HEAD
     selected_artist_queries = [
         sql
         for sql in executed_sql
@@ -4505,9 +4504,6 @@ def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tr
     ]
     assert len(selected_artist_queries) == 1
     assert "track_count" not in selected_artist_queries[0]
-=======
-    assert any("library.local_tracks.id as track_id" in sql for sql in executed_sql)
->>>>>>> 03dd32e (Implement Settings suggestions and rule workflows)
 
 
 def test_postgres_search_payload_supports_search_scoped_all_artists():

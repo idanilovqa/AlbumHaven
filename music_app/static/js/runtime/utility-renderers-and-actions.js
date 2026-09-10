@@ -433,6 +433,8 @@ function bindUtilityLoopDragAndDrop() {
 function renderUtilityLoops() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
+  if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
@@ -471,10 +473,10 @@ function renderUtilityLoops() {
     state.utility.selectedLoopId = String(defaultLoop?.id || '');
   }
   const selectedGroup = getSelectedUtilityLoopGroup();
-  const selectedLoop = state.utility.selectedLoopDetailMode === 'loop' ? getSelectedUtilityLoop() : null;
+  state.utility.selectedLoopDetailMode = 'group';
   renderUtilityLoopList(els, loops);
-  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup, selectedLoop);
-  ((selectedLoop ? [selectedLoop] : selectedGroup?.loops) || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
+  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup);
+  (selectedGroup?.loops || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
   updateUtilityLoopRepeatButton(String(state.utility.selectedLoopId || ''));
 }
 
@@ -614,6 +616,7 @@ function renderUtilityLogHistory() {
 function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');

@@ -1391,6 +1391,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
   return {
     ...base,
     ...source,
+    allowed_actions: isRuntimePlainObject(source.allowed_actions) ? { ...source.allowed_actions } : {},
     scan_in_progress: normalizeRuntimeBoolean(source.scan_in_progress, base.scan_in_progress),
     scan_processed: normalizeRuntimeNumber(source.scan_processed, base.scan_processed),
     scan_total: normalizeRuntimeNumber(source.scan_total, base.scan_total),
@@ -1786,6 +1787,8 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
   return nextStatus;
 }
 
@@ -3989,6 +3992,7 @@ const state = {
   repairAlertHideTimer: null,
   awaitingInitialDataRefresh: false,
   status: {},
+  loopCreateAllowed: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__?.['library.loops.create'] === true,
   coverRefreshTokens: {},
   coverFailures: {
     localDisplayPaths: {},
@@ -7792,7 +7796,7 @@ function attachAccountMenu(component) {
 
 const VIEWPORT_REFOCUS_SUPPRESSION_GRACE_MS = 400;
 const VIEWPORT_REFOCUS_HOVER_UNLOCK_COUNT = 2;
-const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
+const VIEWPORT_REFOCUS_EXEMPT_SELECTOR = '.gallery-anchored-menu, .artist-info-overlay, .artist-family-panel, .account-menu-component, .account-menu, .global-player, #track-modal, #utility-modal, #cover-lookup-modal, #cover-lookup-delete-confirm-modal, #repair-confirm-modal, #repair-progress-overlay, #tag-editor-modal, #tag-edit-confirm-modal, #loop-delete-confirm-modal, #image-lightbox, #non-album-modal, #version-picker-modal, #cover-lookup-drawer, #gallery-options-menu, #album-card-context-menu, #status-context-menu, #track-modal-version-context-menu, #recent-search-popover';
 const VIEWPORT_REFOCUS_INTENT_SELECTOR = '.album-card, [data-album-key], [data-track-path], [data-version-context-key], .artist-link, .album-title-button, .button, .icon-button, .play-track-button, .gallery-options-menu-item, .related-chip, a, button, input, select, textarea, label';
 const COVER_LOOKUP_REFOCUS_GUARDED_SELECTOR = '[data-select-local-cover], [data-select-pasted-cover], [data-select-remote-cover]';
 
@@ -11314,51 +11318,80 @@ function buildLoopEditActionControl({
 }
 
 function mountLoopEditActionControl({
-  root,
-  enabled = true,
-  active = false,
-  busy = false,
-  disabledLabel = 'Start playing the track to edit the loop',
-  onEnter,
-  onCreate,
-  onCancel,
+  root, interactionRoot, contextKey = '', enabled = true, canCreate = true, active = false, busy = false,
+  disabledLabel = 'Start playing the track to edit the loop', onEnter, onCreate, onCancel,
 } = {}) {
   if (!root) return null;
+  const compound = interactionRoot || root.closest?.('[data-playback-control-cluster]') || root;
+  const ownerDocument = root.ownerDocument || (typeof document !== 'undefined' ? document : null);
   const enter = root.querySelector('[data-loop-action="enter"]');
   const create = root.querySelector('[data-loop-action="create"]');
   const cancel = root.querySelector('[data-loop-action="cancel"]');
   const expanded = root.querySelector?.('[data-loop-action-expanded]') || null;
   const listeners = [];
-  let currentEnabled = Boolean(enabled);
-  let currentActive = Boolean(active);
-  let currentBusy = Boolean(busy);
-  let currentEngaged = false;
-  let pointerWithin = false;
-  let focusWithin = false;
+  const touchQuery = typeof matchMedia === 'function' ? matchMedia('(hover: none), (pointer: coarse)') : null;
+  let currentEnabled = Boolean(enabled), currentCanCreate = Boolean(canCreate);
+  let currentActive = Boolean(active), currentBusy = Boolean(busy), currentEngaged = false;
+  let pointerWithin = false, focusWithin = false, keyboardInput = true, destroyed = false;
+  let revealTimer = null, foldTimer = null;
+  let currentContextKey = String(contextKey || '');
   const listen = (target, name, listener) => {
     target?.addEventListener?.(name, listener);
     listeners.push([target, name, listener]);
   };
-  const renderEngagement = () => {
-    currentEngaged = currentActive && (pointerWithin || focusWithin);
+  const clearTimers = () => {
+    if (revealTimer !== null) clearTimeout(revealTimer);
+    if (foldTimer !== null) clearTimeout(foldTimer);
+    revealTimer = foldTimer = null;
+  };
+  const renderEngagement = (engaged) => {
+    currentEngaged = Boolean(engaged && currentCanCreate && !destroyed);
     root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    compound.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
+    [enter, create, cancel].forEach(button => button?.setAttribute?.('tabindex', currentEngaged ? '0' : '-1'));
+  };
+  const retained = () => Boolean(touchQuery?.matches || (keyboardInput && focusWithin));
+  const leave = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (pointerWithin || retained()) return renderEngagement(true);
+    if (!currentActive) return renderEngagement(false);
+    foldTimer = setTimeout(() => {
+      foldTimer = null;
+      if (!pointerWithin && !retained()) renderEngagement(false);
+    }, 500);
+  };
+  const visit = () => {
+    clearTimers();
+    if (!currentCanCreate) return renderEngagement(false);
+    if (currentActive || retained()) return renderEngagement(true);
+    if (currentEngaged) return;
+    revealTimer = setTimeout(() => {
+      revealTimer = null;
+      if (pointerWithin) renderEngagement(true);
+    }, 300);
   };
   const update = (next = {}) => {
-    const activating = !currentActive
-      && Object.prototype.hasOwnProperty.call(next, 'active')
-      && Boolean(next.active);
-    if (activating) {
-      pointerWithin = pointerWithin || Boolean(root.matches?.(':hover'));
-      const ownerDocument = root.ownerDocument
-        || (typeof document !== 'undefined' ? document : null);
-      const activeElement = ownerDocument?.activeElement;
-      focusWithin = focusWithin || Boolean(activeElement && root.contains?.(activeElement));
-    }
+    if (destroyed) return;
+    const wasActive = currentActive;
+    const wasAllowed = currentCanCreate;
+    const contextChanged = Object.prototype.hasOwnProperty.call(next, 'contextKey') && String(next.contextKey || '') !== currentContextKey;
+    if (contextChanged) currentContextKey = String(next.contextKey || '');
     if (Object.prototype.hasOwnProperty.call(next, 'enabled')) currentEnabled = Boolean(next.enabled);
+    if (Object.prototype.hasOwnProperty.call(next, 'canCreate')) currentCanCreate = Boolean(next.canCreate);
     if (Object.prototype.hasOwnProperty.call(next, 'active')) currentActive = Boolean(next.active);
     if (Object.prototype.hasOwnProperty.call(next, 'busy')) currentBusy = Boolean(next.busy);
-    renderEngagement();
-    const unavailable = !currentEnabled;
+    if (next.reset || contextChanged || !currentCanCreate || (wasActive && !currentActive)) {
+      clearTimers();
+      renderEngagement(retained() && currentCanCreate);
+    } else if ((!wasActive && currentActive) || (!wasAllowed && currentCanCreate)) {
+      pointerWithin = pointerWithin || Boolean(compound.matches?.(':hover'));
+      focusWithin = focusWithin || Boolean(ownerDocument?.activeElement && compound.contains?.(ownerDocument.activeElement));
+      clearTimers();
+      renderEngagement(retained() || (currentActive && pointerWithin));
+    } else if (retained()) renderEngagement(true);
+    root.hidden = !currentCanCreate;
+    const unavailable = !currentEnabled || !currentCanCreate;
     const disabled = unavailable || currentBusy;
     if (enter) {
       enter.hidden = currentActive;
@@ -11368,48 +11401,49 @@ function mountLoopEditActionControl({
       enter.setAttribute('title', unavailable ? disabledLabel : enter.getAttribute('aria-label'));
     }
     if (expanded) expanded.hidden = !currentActive;
-    if (create) {
-      create.hidden = !currentActive;
-      create.disabled = disabled;
-      create.setAttribute('aria-disabled', String(disabled));
-    }
-    if (cancel) {
-      cancel.hidden = !currentActive;
-      cancel.disabled = disabled;
-      cancel.setAttribute('aria-disabled', String(disabled));
-    }
+    [create, cancel].forEach(button => {
+      if (!button) return;
+      button.hidden = !currentActive;
+      button.disabled = disabled;
+      button.setAttribute('aria-disabled', String(disabled));
+    });
     root.classList?.toggle('is-active', currentActive);
     root.classList?.toggle('is-busy', currentBusy);
     root.classList?.toggle('is-disabled', unavailable);
     root.setAttribute?.('aria-busy', String(currentBusy));
-    root.setAttribute?.('data-loop-action-engaged', String(currentEngaged));
     root.setAttribute?.('data-loop-action-state', unavailable ? 'disabled' : (currentActive ? 'editing' : 'idle'));
+    if (compound !== root) compound.setAttribute?.('data-loop-action-state', currentActive ? 'editing' : 'idle');
+    compound.setAttribute?.('data-loop-create-allowed', String(currentCanCreate));
   };
-  listen(enter, 'click', () => { if (currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
-  listen(create, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCreate?.(); });
-  listen(cancel, 'click', () => { if (currentEnabled && !currentBusy && currentActive) onCancel?.(); });
-  listen(root, 'pointerenter', () => {
-    pointerWithin = true;
-    renderEngagement();
-  });
-  listen(root, 'pointerleave', () => {
-    pointerWithin = false;
-    renderEngagement();
-  });
-  listen(root, 'focusin', () => {
+  listen(enter, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && !currentActive) onEnter?.(); });
+  listen(create, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCreate?.(); });
+  listen(cancel, 'click', () => { if (currentCanCreate && currentEnabled && !currentBusy && currentActive) onCancel?.(); });
+  listen(compound, 'pointerenter', () => { pointerWithin = true; visit(); });
+  listen(compound, 'pointerleave', () => { pointerWithin = false; leave(); });
+  listen(compound, 'pointerdown', () => { keyboardInput = false; focusWithin = false; });
+  const keyboard = () => { keyboardInput = true; };
+  listen(ownerDocument, 'keydown', keyboard);
+  listen(compound, 'keydown', keyboard);
+  listen(compound, 'focusin', () => {
     focusWithin = true;
-    renderEngagement();
+    if (keyboardInput) { clearTimers(); renderEngagement(true); }
   });
-  listen(root, 'focusout', (event) => {
-    focusWithin = Boolean(event?.relatedTarget && root.contains?.(event.relatedTarget));
-    renderEngagement();
+  listen(compound, 'focusout', event => {
+    focusWithin = Boolean(event?.relatedTarget && compound.contains?.(event.relatedTarget));
+    leave();
   });
-  update({ enabled, active, busy });
-  const destroy = () => {
-    listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
-    listeners.length = 0;
+  listen(touchQuery, 'change', () => { if (retained()) visit(); else leave(); });
+  renderEngagement(Boolean(touchQuery?.matches));
+  update({ enabled, canCreate, active, busy });
+  return {
+    update,
+    destroy() {
+      clearTimers();
+      destroyed = true;
+      listeners.forEach(([target, name, listener]) => target?.removeEventListener?.(name, listener));
+      listeners.length = 0;
+    },
   };
-  return { update, destroy };
 }
 
 function normalizeLoopRange(range, duration) {
@@ -11463,6 +11497,11 @@ function createLoopRangeController({
   let queuedClientX = null;
   let frame = 0;
   let documentDragListenersAttached = false;
+  const elementListeners = [];
+  const listen = (element, name, handler) => {
+    element?.addEventListener?.(name, handler);
+    elementListeners.push([element, name, handler]);
+  };
 
   const render = (range = currentRange) => {
     const duration = Math.max(0, Number(getDuration?.()) || 0);
@@ -11591,7 +11630,7 @@ function createLoopRangeController({
   }
 
   Object.entries(handles).forEach(([role, handle]) => {
-    handle?.addEventListener('pointerdown', (event) => {
+    listen(handle, 'pointerdown', (event) => {
       event.preventDefault?.();
       onRangeInteractionStart?.(role);
       render(currentRange);
@@ -11601,7 +11640,7 @@ function createLoopRangeController({
       handle.setPointerCapture?.(event.pointerId);
       handle.focus?.();
     });
-    handle?.addEventListener('keydown', (event) => {
+    listen(handle, 'keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault?.();
         event.stopPropagation?.();
@@ -11626,7 +11665,7 @@ function createLoopRangeController({
       onRangeCommit?.({ ...currentRange });
     });
   });
-  surface?.addEventListener('pointerdown', (event) => {
+  listen(surface, 'pointerdown', (event) => {
     if (event.target?.closest?.('[data-loop-range-handle]')) return;
     event.preventDefault?.();
     render(currentRange);
@@ -11642,7 +11681,7 @@ function createLoopRangeController({
     attachDocumentDragListeners();
     surface.setPointerCapture?.(event.pointerId);
   });
-  root.addEventListener?.('keydown', (event) => {
+  listen(root, 'keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault?.();
     onCancel?.();
@@ -11653,7 +11692,20 @@ function createLoopRangeController({
       || currentRange.endSeconds !== Number(getRange?.()?.endSeconds)) {
     onRangePreview?.({ ...currentRange });
   }
-  return { render, getRange: () => ({ ...currentRange }) };
+  return {
+    render,
+    getRange: () => ({ ...currentRange }),
+    destroy() {
+      if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = 0;
+      queuedClientX = null;
+      drag = null;
+      pendingSurfaceGesture = null;
+      detachDocumentDragListeners();
+      elementListeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
+      elementListeners.length = 0;
+    },
+  };
 }
 
 function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
@@ -11745,10 +11797,11 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '' } = {}) {
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = 'capsule' } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }
+    const style = loopControlStyle === 'companion' ? 'companion' : 'capsule';
     if (variant === 'compact-player') {
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
@@ -11761,7 +11814,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
     if (variant === 'expanded-player') {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
-        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player">
+        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
           <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
@@ -11776,7 +11829,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
       throw new TypeError('PlaybackControlCluster requires the loop action renderer.');
     }
     return `
-      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop">
+      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop" data-loop-control-style="${style}">
         <button class="loop-play-control-button utility-loop-play" type="button" data-playback-control-action="play-pause" data-loop-play="${id}" aria-label="Play or pause">&#9654;</button>
         <span class="loop-play-control-actions utility-loop-actions" data-playback-control-loop-actions>
           ${renderLoopActions({ ownerId: owner, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
@@ -12290,24 +12343,24 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
     : `
       <div class="utility-loop-tree-children">
         ${(group?.loops || []).map((loop) => `
-          <button class="utility-loop-tree-child ${String(loop?.id || '') === String(selectedLoopId || '') && state.utility.selectedLoopDetailMode === 'loop' ? 'is-active' : ''}" type="button" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
+          <div class="utility-loop-tree-child" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
             <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-            <span class="utility-loop-tree-icon" aria-hidden="true"></span>
             <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
-          </button>
+            <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
+          </div>
         `).join('')}
       </div>
     `;
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
-      <div class="utility-loop-group-row ${groupSelected && state.utility.selectedLoopDetailMode !== 'loop' ? 'is-active' : ''}">
+      <div class="utility-loop-group-row ${groupSelected ? 'is-active' : ''}">
         ${window.NavigationTree.renderItem({
           variant: 'wide', action: true, key: groupKey, draggable: true, className: 'utility-loop-group-list-item',
-          selected: groupSelected && state.utility.selectedLoopDetailMode !== 'loop',
+          selected: groupSelected,
           label: title, subtitle, year: representative?.year || '', artworkHtml,
           count: loopCount, countHidden: true,
           attributes: { 'data-utility-loop-group-key': groupKey },
-          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0">${collapsed ? '▸' : '▾'}</span></span>`,
+          trailingHtml: `<span class="utility-loop-collapse-toggle-wrap"><span class="utility-loop-collapse-toggle" data-utility-loop-collapse="${escapeHtml(groupKey)}" aria-label="${collapsed ? 'Expand song loops' : 'Collapse song loops'}" aria-expanded="${collapsed ? 'false' : 'true'}" role="button" tabindex="0"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"/></svg></span></span>`,
         })}
       </div>
       ${loopsHtml}
@@ -14626,10 +14679,10 @@ function buildUtilityLoopEntry(loop) {
   return `
     <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
       <div class="utility-loop-heading">
-        <div>
-          <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        </div>
-        <button class="icon-button utility-loop-remove" type="button" data-delete-saved-loop="${escapeHtml(loop.id || '')}" aria-label="Remove loop" title="Remove loop">&#128465;</button>
+        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
@@ -14688,7 +14741,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
   const coverHtml = buildUtilityAlbumArtbox(representative, {
     label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
   });
-  const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
+  const loopsToRender = group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
   const albumLine = representative.album || '';
@@ -14704,7 +14757,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
             <div class="utility-detail-meta">${escapeHtml(albumLine || 'Unknown album')}</div>
             ${yearLine ? `<div class="utility-detail-meta">${escapeHtml(yearLine)}</div>` : ''}
           </div>
-          <div class="utility-detail-meta">${escapeHtml(selectedLoop ? '1 loop selected' : `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
+          <div class="utility-detail-meta">${escapeHtml(`${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
         </div>
       </div>
       <div class="utility-loop-group-main">
@@ -19362,6 +19415,8 @@ function bindUtilityLoopDragAndDrop() {
 function renderUtilityLoops() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
+  if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
@@ -19400,10 +19455,10 @@ function renderUtilityLoops() {
     state.utility.selectedLoopId = String(defaultLoop?.id || '');
   }
   const selectedGroup = getSelectedUtilityLoopGroup();
-  const selectedLoop = state.utility.selectedLoopDetailMode === 'loop' ? getSelectedUtilityLoop() : null;
+  state.utility.selectedLoopDetailMode = 'group';
   renderUtilityLoopList(els, loops);
-  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup, selectedLoop);
-  ((selectedLoop ? [selectedLoop] : selectedGroup?.loops) || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
+  els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup);
+  (selectedGroup?.loops || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
   updateUtilityLoopRepeatButton(String(state.utility.selectedLoopId || ''));
 }
 
@@ -19543,6 +19598,7 @@ function renderUtilityLogHistory() {
 function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');
@@ -19729,6 +19785,7 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
     if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   })) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
     clearUtilityLoopSpaceOwner();
   }
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
@@ -19843,7 +19900,11 @@ function initializeUtilityLoopPlayer(loop) {
   if (!loop) return;
   const loopId = String(loop.id || '');
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
-  if (!audio || audio.dataset.bound === '1') return;
+  if (!audio) return;
+  if (audio.dataset.bound === '1') {
+    mountSavedLoopControls(loopId);
+    return;
+  }
   const playButton = document.querySelector(`[data-loop-play="${cssEscape(loopId)}"]`);
   const timeline = document.querySelector(`[data-loop-timeline="${cssEscape(loopId)}"]`);
   const loopEntry = playButton?.closest?.('[data-utility-loop-entry]')
@@ -19888,6 +19949,7 @@ function initializeUtilityLoopPlayer(loop) {
     }
     updateUtilityLoopPlayerUi(loopId);
   });
+  mountSavedLoopControls(loopId);
   updateUtilityLoopRepeatButton(loopId);
   updateUtilityLoopPlayerUi(loopId);
   if (!state.utility.loopKeyboardSeekBound) {
@@ -20102,8 +20164,11 @@ function noteSavedLoopWholeRangePlaybackProgress(loopId, audio) {
 function getSavedLoopRangeDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   const audioDuration = Number(elements.audio?.duration);
-  if (Number.isFinite(audioDuration) && audioDuration > 0) return audioDuration;
-  return Math.max(0, Number(loop?.duration_seconds) || 0);
+  const sourceDuration = Number(loop?.duration_seconds);
+  if (Number.isFinite(audioDuration) && audioDuration > 0) {
+    return Number.isFinite(sourceDuration) && sourceDuration > 0 ? Math.min(audioDuration, sourceDuration) : audioDuration;
+  }
+  return Number.isFinite(sourceDuration) ? Math.max(0, sourceDuration) : 0;
 }
 
 function getSavedLoopEditDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
@@ -20124,7 +20189,7 @@ function setSavedLoopEditorBusy(loopId, busy) {
   else delete state.utility.savedLoopEditorBusy[id];
   const actionRoot = getSavedLoopRangeElements(id).actionRoot;
   actionRoot?._loopActionController?.update({
-    enabled: true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
+    enabled: true, canCreate: state.loopCreateAllowed === true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
   });
   actionRoot?.setAttribute('aria-busy', busy ? 'true' : 'false');
 }
@@ -20202,6 +20267,7 @@ function setSavedLoopEditMode(loopId, active) {
   if (elements.boundaryTimes) elements.boundaryTimes.hidden = true;
   elements.actionRoot?._loopActionController?.update({
     enabled: true,
+    canCreate: state.loopCreateAllowed === true,
     active: editor.active,
     busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
   });
@@ -20249,6 +20315,11 @@ function handleSavedLoopEditKeydown(event) {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const tagName = String(target?.tagName || '').toUpperCase();
   const inputType = String(target?.getAttribute?.('type') || target?.type || '').toLowerCase();
+  const rangeHandle = target?.getAttribute?.('data-loop-range-handle');
+  const nativeAction = ['BUTTON', 'A', 'SELECT'].includes(tagName)
+    || (tagName === 'INPUT' && inputType !== 'range')
+    || Boolean(target?.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+  if (nativeAction && !rangeHandle) return false;
   const isTextEntry = tagName === 'TEXTAREA'
     || Boolean(target?.isContentEditable)
     || (tagName === 'INPUT'
@@ -20269,6 +20340,7 @@ function mountSavedLoopControls(loopId) {
     elements.actionRoot._loopActionController = mountLoopEditActionControl({
       root: elements.actionRoot,
       enabled: true,
+      canCreate: state.loopCreateAllowed === true,
       active: Boolean(state.utility.loopEditors?.[id]?.active),
       busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
       onEnter: () => openSavedLoopCreation(id),
@@ -20312,6 +20384,7 @@ function mountSavedLoopControls(loopId) {
 }
 
 async function openSavedLoopCreation(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const id = String(loopId || '');
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
   if (!loop || state.utility.savedLoopEditorBusy?.[id]) return false;
@@ -20329,9 +20402,13 @@ async function openSavedLoopCreation(loopId) {
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
+    const mountedActionController = elements.actionRoot?._loopActionController;
     const waveform = await loadSavedLoopWaveformPeaks(id);
+    if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -20348,7 +20425,9 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);
@@ -20359,6 +20438,7 @@ async function openSavedLoopCreation(loopId) {
 }
 
 async function createLoopFromSavedLoop(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   if (!loop) return;
   const id = String(loopId || '');
@@ -20415,13 +20495,14 @@ async function createLoopFromSavedLoop(loopId) {
   }
 }
 
-async function deleteSavedLoop(loopId) {
+async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   const id = String(loopId || '');
-  if (!id) return;
+  if (!id || state.utility.allowedActions?.['library.loops.delete'] === false) return false;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
+  if (!loop) return false;
   const deletedGroupKey = loop ? buildUtilityLoopGroupKey(loop) : '';
   const name = loop?.name || 'this loop';
-  if (!await showLoopDeleteConfirmDialog(name)) return;
+  if (!confirmed && !await showLoopDeleteConfirmDialog(name)) return false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(id)}"]`);
   audio?.pause();
   try {
@@ -20443,9 +20524,11 @@ async function deleteSavedLoop(loopId) {
     state.utility.selectedLoopDetailMode = 'group';
     renderUtilityModalContent();
     showToast('Loop removed.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Loops] Failed to remove loop.', error);
     showToast(error.message || 'Failed to remove loop.', 'error', 4200);
+    return false;
   }
 }
 
@@ -21168,7 +21251,7 @@ async function loadUtilityRules(force = false) {
 
 async function loadUtilityLoops(force = false) {
   if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && !force) {
+  if (state.utility.loopsLoaded && state.utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
@@ -21178,12 +21261,20 @@ async function loadUtilityLoops(force = false) {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
+      state.utility.allowedActions = data.allowed_actions && typeof data.allowed_actions === 'object' ? { ...data.allowed_actions } : {};
+      state.utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = state.utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
       state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
       state.utility.loopsLoaded = true;
       const groupedLoops = groupUtilityLoops(state.utility.loops || []);
       collapseAllUtilityLoopGroups();
-      state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
-      state.utility.selectedLoopId = String(groupedLoops[0]?.loops?.[0]?.id || '');
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(state.utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      state.utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(state.utility.selectedLoopId || ''))) {
+        state.utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
       state.utility.selectedLoopDetailMode = 'group';
     } catch (error) {
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
@@ -21781,6 +21872,7 @@ async function disconnectLastfmIntegration() {
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
@@ -21818,6 +21910,27 @@ function closeUtilityModal(skipAppearanceGuard = false) {
 }
 
 let repairConfirmReturnFocus = null;
+
+function openSavedLoopDeleteConfirm(loopId) {
+  const loop = (state.utility.loops || []).find(item => String(item.id || '') === String(loopId || ''));
+  if (!loop || state.utility.allowedActions?.['library.loops.delete'] !== true) return false;
+  const els = getRepairConfirmElements();
+  if (!els.overlay) return false;
+  state.utility.pendingSavedLoopDeleteId = String(loop.id);
+  state.utility.pendingRepairAction = 'saved-loop-delete';
+  els.overlay.removeAttribute?.('data-confirm-mode');
+  els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+  els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+  if (els.title) { els.title.hidden = false; els.title.textContent = 'Delete saved loop?'; }
+  if (els.text) els.text.textContent = `Delete “${loop.name || 'Saved loop'}”? The saved loop will be removed.`;
+  if (els.cancel) { els.cancel.textContent = 'No'; els.cancel.disabled = false; }
+  if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+  repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  els.cancel?.focus?.();
+  return true;
+}
 
 function openRepairConfirmModal() {
   const els = getRepairConfirmElements();
@@ -21917,6 +22030,7 @@ function closeRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  state.utility.pendingSavedLoopDeleteId = '';
   state.utility.pendingRepairKey = '';
   state.utility.pendingProblemSuggestions = null;
   state.utility.pendingRuleRevert = null;
@@ -25095,6 +25209,20 @@ function tagEditOriginStillOwnsView(originatingViewStateRevision) {
 }
 
 async function confirmRepairSelectedAlbum() {
+  if (state.utility.pendingRepairAction === 'saved-loop-delete') {
+    const id = state.utility.pendingSavedLoopDeleteId;
+    if (!id || state.utility.savedLoopDeleteBusy || state.utility.allowedActions?.['library.loops.delete'] !== true) return;
+    state.utility.savedLoopDeleteBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      if (await deleteSavedLoop(id, { confirmed: true }) === true) closeRepairConfirmModal();
+    } finally {
+      state.utility.savedLoopDeleteBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
   if (state.utility.pendingRepairAction === 'suggestions') return confirmProblemSuggestions();
   if (state.utility.pendingRepairAction === 'revert-rule') {
     const pending = state.utility.pendingRuleRevert;
@@ -31459,6 +31587,8 @@ function updatePlayerUi() {
   }
   els.loopActions?._loopActionController?.update({
     enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
@@ -31857,6 +31987,8 @@ function startPlayerLoopExpirySession() {
 function getGlobalPlayerLoopControlOptions() {
   const action = {
       enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+      canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
       active: state.player.loopActive,
       busy: state.player.saveBusy,
       disabledLabel: 'Start playing the track to edit the loop',
@@ -31896,6 +32028,8 @@ function getGlobalPlayerLoopControlOptions() {
     mountAction: (root) => mountLoopEditActionControl({
       root,
       enabled: action.enabled,
+      canCreate: action.canCreate,
+      contextKey: action.contextKey,
       active: action.active,
       busy: action.busy,
       disabledLabel: action.disabledLabel,
@@ -31932,6 +32066,7 @@ function scheduleActiveStreamingLoop() {
 }
 
 function setLoopActive(active) {
+  if (active && state.loopCreateAllowed === false) return;
   const playback = getPlayerPlaybackSnapshot();
   if (active && (!state.player.current || !(playback.src || state.player.current?.src))) {
     showToast('Play a track before selecting a loop.', 'error', 2600);
@@ -32141,6 +32276,16 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   return trackedPause;
 }
 
+function isPlayerNativeKeyboardAction(target) {
+  if (!target || target.getAttribute?.('data-loop-range-handle')) return false;
+  const tag = String(target.tagName || '').toUpperCase();
+  const type = String(target.getAttribute?.('type') || target.type || '').toLowerCase();
+  const role = String(target.getAttribute?.('role') || '').toLowerCase();
+  return ['BUTTON', 'A', 'SELECT'].includes(tag)
+    || (tag === 'INPUT' && type !== 'range')
+    || ['button', 'menuitem', 'checkbox', 'radio', 'switch', 'tab'].includes(role)
+    || Boolean(target.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+}
 function handlePlayerKeyboardPlayback(event) {
   if (
     !event
@@ -32154,7 +32299,7 @@ function handlePlayerKeyboardPlayback(event) {
   ) return false;
   if (event.key !== ' ' && event.key !== 'Spacebar' && event.code !== 'Space') return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target)) return false;
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target)) return false;
   if (
     typeof handleUtilityLoopSpacePlayback === 'function'
     && handleUtilityLoopSpacePlayback(event)
@@ -32173,6 +32318,7 @@ function handlePlayerKeyboardPlayback(event) {
 }
 
 async function saveCurrentLoop() {
+  if (state.loopCreateAllowed === false) return;
   if (state.player.saveBusy) return;
   const current = state.player.current;
   if (!current || !state.player.loopActive) return;
@@ -32232,7 +32378,7 @@ function handlePlayerLoopEditKeydown(event) {
     || event.shiftKey
   ) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
     return false;
   }
   event.preventDefault();
@@ -32368,6 +32514,34 @@ function attachPlayerEvents() {
   }
   updatePlayerUi();
   restorePlayerState();
+}
+
+function syncLoopCreateCapability() {
+  const canCreate = state.loopCreateAllowed === true;
+  if (state.utility) {
+    state.utility.allowedActions = { ...(state.utility.allowedActions || {}), 'library.loops.create': canCreate };
+  }
+  document.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    root._loopActionController?.update({ canCreate });
+  });
+}
+
+function disposeMountedLoopActions(container) {
+  container?.querySelectorAll?.('[data-loop-range-owner]').forEach(root => {
+    root._loopRangeController?.destroy?.();
+    delete root._loopRangeController;
+  });
+  container?.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    const owner = root.getAttribute?.('data-loop-action-owner') || '';
+    if (owner.startsWith('saved-loop-')) {
+      const id = owner.slice('saved-loop-'.length);
+      state.utility.savedLoopOpenEpoch ||= {};
+      state.utility.savedLoopOpenEpoch[id] = (Number(state.utility.savedLoopOpenEpoch[id]) || 0) + 1;
+    }
+    root._loopActionController?.destroy();
+    delete root._loopActionController;
+    if (root.dataset) delete root.dataset.loopActionsBound;
+  });
 }
 
 // END js/runtime/player-loop-playback.js
@@ -33005,14 +33179,7 @@ async function handleUtilityBootstrapClick(event) {
   const utilityLoopItemButton = event.target.closest('[data-utility-loop-id]');
   if (utilityLoopItemButton) {
     event.preventDefault();
-    if (state.utility.loopSuppressClick) {
-      state.utility.loopSuppressClick = false;
-      return;
-    }
-    state.utility.selectedLoopGroupKey = utilityLoopItemButton.getAttribute('data-utility-loop-group-key') || '';
-    state.utility.selectedLoopId = utilityLoopItemButton.getAttribute('data-utility-loop-id') || '';
-    state.utility.selectedLoopDetailMode = 'loop';
-    renderUtilityModalContent();
+    state.utility.loopSuppressClick = false;
     return;
   }
 
@@ -33024,6 +33191,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
       && (now - Number(state.utility.lastLoopGroupClickAt || 0)) <= 350;
@@ -33031,7 +33199,7 @@ async function handleUtilityBootstrapClick(event) {
     state.utility.lastLoopGroupClickAt = now;
     state.utility.selectedLoopGroupKey = groupKey;
     const selectedGroup = getSelectedUtilityLoopGroup();
-    state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
+    if (!sameGroup) state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
     state.utility.selectedLoopDetailMode = 'group';
     if (isDoubleClickCandidate) {
       state.utility.lastLoopGroupClickKey = '';
@@ -33039,7 +33207,7 @@ async function handleUtilityBootstrapClick(event) {
       toggleUtilityLoopGroupCollapse(groupKey);
       return;
     }
-    renderUtilityModalContent();
+    if (!sameGroup) renderUtilityModalContent();
     return;
   }
 
@@ -33137,7 +33305,7 @@ async function handleUtilityBootstrapClick(event) {
   const deleteSavedLoopButton = event.target.closest('[data-delete-saved-loop]');
   if (deleteSavedLoopButton) {
     event.preventDefault();
-    deleteSavedLoop(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
+    openSavedLoopDeleteConfirm(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
     return;
   }
 
@@ -33819,6 +33987,12 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  const collapse = event.target?.closest?.('[data-utility-loop-collapse]');
+  if (collapse && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    return toggleUtilityLoopGroupCollapse(collapse.getAttribute('data-utility-loop-collapse'));
+  }
   const tab = event.target?.closest?.('[data-utility-tab]');
   if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
     const tabs = getUtilityModalElements().tabs.filter(item => !item.disabled && !item.hidden);
@@ -33992,8 +34166,21 @@ function handleUtilityBootstrapMouseUp(event) {
 function toggleUtilityLoopGroupCollapse(groupKey) {
   const normalizedGroupKey = String(groupKey || '');
   if (!normalizedGroupKey) return false;
+  state.utility.collapsedLoopGroups ||= {};
   state.utility.collapsedLoopGroups[normalizedGroupKey] = !Boolean(state.utility.collapsedLoopGroups[normalizedGroupKey]);
-  renderUtilityModalContent();
+  if (typeof renderUtilityLoopList === 'function') {
+    const els = getUtilityModalElements();
+    const scroll = els.list?.scrollTop;
+    const focusedToggle = document.activeElement?.closest?.('[data-utility-loop-collapse]');
+    const restoreFocus = focusedToggle?.getAttribute('data-utility-loop-collapse') === normalizedGroupKey;
+    renderUtilityLoopList(els, state.utility.loops || []);
+    if (restoreFocus) {
+      const replacement = Array.from(els.list?.querySelectorAll?.('[data-utility-loop-collapse]') || [])
+        .find(toggle => toggle.getAttribute('data-utility-loop-collapse') === normalizedGroupKey);
+      replacement?.focus({ preventScroll: true });
+    }
+    if (els.list && Number.isFinite(scroll)) els.list.scrollTop = scroll;
+  } else renderUtilityModalContent();
   return true;
 }
 
@@ -36196,6 +36383,7 @@ if (
   });
 }
 updateStatusIndicator({
+  allowed_actions: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ || {},
   scan_in_progress: Boolean(bootstrap.scanInProgress),
   scan_phase: String(bootstrap.scanPhase || 'idle'),
   scan_mode: String(bootstrap.scanMode || 'idle'),

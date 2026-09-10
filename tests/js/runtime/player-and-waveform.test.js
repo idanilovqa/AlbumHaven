@@ -518,10 +518,10 @@ test('persistent-player loop controls overlay beside Play without displacing the
   assert.doesNotMatch(css, /grid-template-columns:\s*auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)/);
   assert.match(mountRule, /position:\s*absolute/);
   assert.match(clusterRule, /--loop-play-control-size:\s*48px/);
-  assert.match(clusterRule, /container-type:\s*inline-size/);
-  assert.match(mountRule, /left:\s*60\.4166667cqw/);
-  assert.match(mountRule, /top:\s*58\.3333333cqw/);
-  assert.match(mountRule, /width:\s*39px/);
+  assert.match(clusterRule, /width:\s*56px/);
+  assert.match(mountRule, /left:\s*52px/);
+  assert.match(mountRule, /top:\s*5px/);
+  assert.match(mountRule, /width:\s*34px/);
   assert.match(mainRule, /grid-column:\s*2/);
   assert.match(mainRule, /width:\s*100%/);
   assert.doesNotMatch(
@@ -532,8 +532,8 @@ test('persistent-player loop controls overlay beside Play without displacing the
   assert.doesNotMatch(activeRootRule, /margin-inline-end/);
   assert.match(
     css,
-    /\.loop-play-control-actions\s+\.loop-edit-action-pod::before,[^]*\.loop-play-control-actions\s+\.loop-edit-action-pod::after\s*\{[^}]*display:\s*none/s,
-    'both players must remove painted attachment arcs from the transparent Play-circle cutout',
+    /\[data-loop-control-style="companion"\]\s+\.loop-edit-action-pod::after\s*\{[^}]*clip-path:\s*path\(/s,
+    'the companion draws its contour on a separate layer so action glyphs stay unclipped',
   );
 });
 

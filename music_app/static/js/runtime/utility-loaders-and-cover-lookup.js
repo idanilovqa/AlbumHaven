@@ -631,7 +631,7 @@ async function loadUtilityRules(force = false) {
 
 async function loadUtilityLoops(force = false) {
   if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && !force) {
+  if (state.utility.loopsLoaded && state.utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
@@ -641,12 +641,20 @@ async function loadUtilityLoops(force = false) {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
+      state.utility.allowedActions = data.allowed_actions && typeof data.allowed_actions === 'object' ? { ...data.allowed_actions } : {};
+      state.utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = state.utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
       state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
       state.utility.loopsLoaded = true;
       const groupedLoops = groupUtilityLoops(state.utility.loops || []);
       collapseAllUtilityLoopGroups();
-      state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
-      state.utility.selectedLoopId = String(groupedLoops[0]?.loops?.[0]?.id || '');
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(state.utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      state.utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(state.utility.selectedLoopId || ''))) {
+        state.utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
       state.utility.selectedLoopDetailMode = 'group';
     } catch (error) {
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
@@ -1244,6 +1252,7 @@ async function disconnectLastfmIntegration() {
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
@@ -1281,6 +1290,27 @@ function closeUtilityModal(skipAppearanceGuard = false) {
 }
 
 let repairConfirmReturnFocus = null;
+
+function openSavedLoopDeleteConfirm(loopId) {
+  const loop = (state.utility.loops || []).find(item => String(item.id || '') === String(loopId || ''));
+  if (!loop || state.utility.allowedActions?.['library.loops.delete'] !== true) return false;
+  const els = getRepairConfirmElements();
+  if (!els.overlay) return false;
+  state.utility.pendingSavedLoopDeleteId = String(loop.id);
+  state.utility.pendingRepairAction = 'saved-loop-delete';
+  els.overlay.removeAttribute?.('data-confirm-mode');
+  els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+  els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+  if (els.title) { els.title.hidden = false; els.title.textContent = 'Delete saved loop?'; }
+  if (els.text) els.text.textContent = `Delete “${loop.name || 'Saved loop'}”? The saved loop will be removed.`;
+  if (els.cancel) { els.cancel.textContent = 'No'; els.cancel.disabled = false; }
+  if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+  repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  els.cancel?.focus?.();
+  return true;
+}
 
 function openRepairConfirmModal() {
   const els = getRepairConfirmElements();
@@ -1380,6 +1410,7 @@ function closeRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  state.utility.pendingSavedLoopDeleteId = '';
   state.utility.pendingRepairKey = '';
   state.utility.pendingProblemSuggestions = null;
   state.utility.pendingRuleRevert = null;

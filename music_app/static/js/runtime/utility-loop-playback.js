@@ -102,6 +102,7 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
     if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   })) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
     clearUtilityLoopSpaceOwner();
   }
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
@@ -216,7 +217,11 @@ function initializeUtilityLoopPlayer(loop) {
   if (!loop) return;
   const loopId = String(loop.id || '');
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
-  if (!audio || audio.dataset.bound === '1') return;
+  if (!audio) return;
+  if (audio.dataset.bound === '1') {
+    mountSavedLoopControls(loopId);
+    return;
+  }
   const playButton = document.querySelector(`[data-loop-play="${cssEscape(loopId)}"]`);
   const timeline = document.querySelector(`[data-loop-timeline="${cssEscape(loopId)}"]`);
   const loopEntry = playButton?.closest?.('[data-utility-loop-entry]')
@@ -261,6 +266,7 @@ function initializeUtilityLoopPlayer(loop) {
     }
     updateUtilityLoopPlayerUi(loopId);
   });
+  mountSavedLoopControls(loopId);
   updateUtilityLoopRepeatButton(loopId);
   updateUtilityLoopPlayerUi(loopId);
   if (!state.utility.loopKeyboardSeekBound) {
@@ -475,8 +481,11 @@ function noteSavedLoopWholeRangePlaybackProgress(loopId, audio) {
 function getSavedLoopRangeDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   const audioDuration = Number(elements.audio?.duration);
-  if (Number.isFinite(audioDuration) && audioDuration > 0) return audioDuration;
-  return Math.max(0, Number(loop?.duration_seconds) || 0);
+  const sourceDuration = Number(loop?.duration_seconds);
+  if (Number.isFinite(audioDuration) && audioDuration > 0) {
+    return Number.isFinite(sourceDuration) && sourceDuration > 0 ? Math.min(audioDuration, sourceDuration) : audioDuration;
+  }
+  return Number.isFinite(sourceDuration) ? Math.max(0, sourceDuration) : 0;
 }
 
 function getSavedLoopEditDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
@@ -497,7 +506,7 @@ function setSavedLoopEditorBusy(loopId, busy) {
   else delete state.utility.savedLoopEditorBusy[id];
   const actionRoot = getSavedLoopRangeElements(id).actionRoot;
   actionRoot?._loopActionController?.update({
-    enabled: true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
+    enabled: true, canCreate: state.loopCreateAllowed === true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
   });
   actionRoot?.setAttribute('aria-busy', busy ? 'true' : 'false');
 }
@@ -575,6 +584,7 @@ function setSavedLoopEditMode(loopId, active) {
   if (elements.boundaryTimes) elements.boundaryTimes.hidden = true;
   elements.actionRoot?._loopActionController?.update({
     enabled: true,
+    canCreate: state.loopCreateAllowed === true,
     active: editor.active,
     busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
   });
@@ -622,6 +632,11 @@ function handleSavedLoopEditKeydown(event) {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const tagName = String(target?.tagName || '').toUpperCase();
   const inputType = String(target?.getAttribute?.('type') || target?.type || '').toLowerCase();
+  const rangeHandle = target?.getAttribute?.('data-loop-range-handle');
+  const nativeAction = ['BUTTON', 'A', 'SELECT'].includes(tagName)
+    || (tagName === 'INPUT' && inputType !== 'range')
+    || Boolean(target?.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+  if (nativeAction && !rangeHandle) return false;
   const isTextEntry = tagName === 'TEXTAREA'
     || Boolean(target?.isContentEditable)
     || (tagName === 'INPUT'
@@ -642,6 +657,7 @@ function mountSavedLoopControls(loopId) {
     elements.actionRoot._loopActionController = mountLoopEditActionControl({
       root: elements.actionRoot,
       enabled: true,
+      canCreate: state.loopCreateAllowed === true,
       active: Boolean(state.utility.loopEditors?.[id]?.active),
       busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
       onEnter: () => openSavedLoopCreation(id),
@@ -685,6 +701,7 @@ function mountSavedLoopControls(loopId) {
 }
 
 async function openSavedLoopCreation(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const id = String(loopId || '');
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
   if (!loop || state.utility.savedLoopEditorBusy?.[id]) return false;
@@ -702,9 +719,13 @@ async function openSavedLoopCreation(loopId) {
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
+    const mountedActionController = elements.actionRoot?._loopActionController;
     const waveform = await loadSavedLoopWaveformPeaks(id);
+    if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -721,7 +742,9 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);
@@ -732,6 +755,7 @@ async function openSavedLoopCreation(loopId) {
 }
 
 async function createLoopFromSavedLoop(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   if (!loop) return;
   const id = String(loopId || '');
@@ -788,13 +812,14 @@ async function createLoopFromSavedLoop(loopId) {
   }
 }
 
-async function deleteSavedLoop(loopId) {
+async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   const id = String(loopId || '');
-  if (!id) return;
+  if (!id || state.utility.allowedActions?.['library.loops.delete'] === false) return false;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
+  if (!loop) return false;
   const deletedGroupKey = loop ? buildUtilityLoopGroupKey(loop) : '';
   const name = loop?.name || 'this loop';
-  if (!await showLoopDeleteConfirmDialog(name)) return;
+  if (!confirmed && !await showLoopDeleteConfirmDialog(name)) return false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(id)}"]`);
   audio?.pause();
   try {
@@ -816,9 +841,11 @@ async function deleteSavedLoop(loopId) {
     state.utility.selectedLoopDetailMode = 'group';
     renderUtilityModalContent();
     showToast('Loop removed.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Loops] Failed to remove loop.', error);
     showToast(error.message || 'Failed to remove loop.', 'error', 4200);
+    return false;
   }
 }
 

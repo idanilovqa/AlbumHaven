@@ -285,6 +285,7 @@
 
   <script>
     window.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__ = {{ bootstrap_payload | tojson }};
+    window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ = {{ playback_allowed_actions.as_payload() | tojson }};
   </script>
 </body>
 </html>

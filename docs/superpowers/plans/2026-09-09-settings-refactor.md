@@ -238,11 +238,13 @@ Task 3 final evidence: independent focused verification recorded 326/326 JavaScr
 Modify: `music_app/static/js/runtime/playback-control-cluster.js`, `music_app/static/js/runtime/loop-range-controls.js`, `music_app/static/js/runtime/utility-loop-playback.js`, `music_app/static/js/utilities/loops-tab.js`, `music_app/static/css/runtime/non-album-and-player.css`.
 Tests: `tests/js/runtime/playback-control-cluster.test.js`, `loop-range-controls.test.js`, `loop-edit-session-expiry.test.js`, `utility-loop-playback.test.js`; component coverage `tests/components/loopRangeControls.spec.js`.
 
-- [ ] Write fake-clock behavior tests: idle hidden at 299 ms/revealed at 300; early exit cancels; idle exit hides immediately; active exit retained at 499/folded at 500; returning cancels; range survives; disposal cancels timers.
-- [ ] Add tests for real save flow, cancel, busy/failure states, capability loss and unchanged playback/range contracts.
-- [ ] Implement presentation variants and lifecycle-owned timers inside the shared component, not document-global mock listeners.
-- [ ] Apply panels/source timestamps/full borders/red deletion; remove individual child-loop selection and Add loop; preserve tree expansion and existing audio controls.
-- [ ] Verify waveform coordinates do not move on reveal, all glyphs/glows fit, keyboard remains usable and reduced motion is respected. Focused tests, build, manual acceptance, commit.
+- [x] Write fake-clock behavior tests: idle hidden at 299 ms/revealed at 300; early exit cancels; idle exit hides immediately; active exit retained at 499/folded at 500; returning cancels; range survives; disposal cancels timers.
+- [x] Add tests for real save flow, cancel, busy/failure states, capability loss and unchanged playback/range contracts.
+- [x] Implement presentation variants and lifecycle-owned timers inside the shared component, not document-global mock listeners.
+- [x] Apply panels/source timestamps/full borders/red deletion; remove individual child-loop selection and Add loop; preserve tree expansion and existing audio controls.
+- [x] Verify waveform coordinates do not move on reveal, all glyphs/glows fit, keyboard remains usable and reduced motion is respected. Focused tests, build, manual acceptance, commit.
+
+Task 4 completed focused verification and orchestrator manual acceptance. The final grant-cache regression passed 89 focused cases; prior Python source-window verification passed 44 cases, with shared controls, native keyboard ownership, lifecycle, build/syntax/parity evidence recorded in [Task 4 validation](2026-09-09-settings-refactor-task4-validation.md). Real saves, nested source timestamps, folded range retention, native Cancel, stable playback, narrow geometry and first-open action projection passed. Task 8 retains the persisted A/B appearance selector and validation of both variants through that UI; Task 9 retains touch interaction and functional/regression automation. This local checkpoint does not claim those later tasks complete.
 
 ### Task 5 — Durable reorder (L05)
 
@@ -329,4 +331,4 @@ Complete means the section 3 cases have real authorized current-stack behavior, 
 
 Excluded: implementing the future playlist conversion workflow, rewriting waveform/audio architecture, framework migration, unsupported native client delivery, public Sites deployment, VPN/firewall product changes, fabricated statistics/metadata and uncertain corrections presented as actionable.
 
-Runtime implementation is authorized and the section 4 technical checkpoint is approved. Tasks 2 and 3 have completed their focused verification and orchestrator manual checkpoints. Task 4 follows; remaining slices retain their stated implementation checks with intermediate manual validation delegated to the orchestrator under the owner's final-only review instruction. No merge or publication.
+Runtime implementation is authorized and the section 4 technical checkpoint is approved. Tasks 2, 3 and 4 have completed their focused verification and orchestrator manual checkpoints. Task 5 is next; remaining slices retain their stated implementation checks with intermediate manual validation delegated to the orchestrator under the owner's final-only review instruction. No merge or publication.

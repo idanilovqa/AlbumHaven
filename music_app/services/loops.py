@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
+import math
 import subprocess
 import tempfile
 import uuid
@@ -31,10 +32,60 @@ def loop_previews_dir(config) -> Path:
     return path
 
 
+def resolve_loop_original_window(loop, get_parent):
+    """Resolve historical media-relative coordinates without fabricating ancestry."""
+    current = loop
+    offset = 0.0
+    seen = set()
+    try:
+        duration = float(loop["end_seconds"]) - float(loop["start_seconds"])
+        if not math.isfinite(duration) or duration <= 0:
+            return None
+        while isinstance(current, dict):
+            key = str(current.get("id") or "")
+            if key in seen:
+                return None
+            seen.add(key)
+            local_start = float(current["start_seconds"])
+            local_end = float(current["end_seconds"])
+            local_duration = local_end - local_start
+            if not math.isfinite(local_start) or not math.isfinite(local_end) or local_start < 0 or local_duration <= 0:
+                return None
+            if offset + duration > local_duration + 0.001:
+                return None
+            if current.get("original_start_seconds") is not None and current.get("original_end_seconds") is not None:
+                start = float(current["original_start_seconds"])
+                end = float(current["original_end_seconds"])
+                if not math.isfinite(start) or not math.isfinite(end) or start < 0 or end <= start:
+                    return None
+                if abs((end - start) - local_duration) > 0.001:
+                    return None
+                return round(offset + start, 3), round(offset + start + duration, 3)
+            start = float(current["start_seconds"])
+            if not math.isfinite(start) or start < 0:
+                return None
+            offset += start
+            parent_id = str(current.get("parent_loop_id") or "")
+            if not parent_id:
+                return round(offset, 3), round(offset + duration, 3)
+            current = get_parent(parent_id)
+        return None
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
 def load_loops(config) -> list[dict[str, object]]:
     selection = select_runtime_persistence_adapter("saved_loops", config)
     if selection.effective_backend == PERSISTENCE_BACKEND_POSTGRES:
-        return SavedLoopsPostgresAdapter(config).load_loops()
+        items = SavedLoopsPostgresAdapter(config).load_loops()
+        by_id = {str(item.get("id") or ""): item for item in items}
+        for item in items:
+            original = resolve_loop_original_window(item, by_id.get)
+            if original is not None:
+                item["original_start_seconds"], item["original_end_seconds"] = original
+            elif "original_start_seconds" in item or "original_end_seconds" in item:
+                item["original_start_seconds"] = item["original_end_seconds"] = None
+        return items
     raise RuntimeError("Saved loop runtime metadata requires Postgres persistence.")
 
 
@@ -313,6 +364,8 @@ def build_loop_item(
     album: str = "",
     cover_path: str = "",
     parent_loop_id: str = "",
+    original_start_seconds: float | None = None,
+    original_end_seconds: float | None = None,
 ) -> dict[str, object]:
     return {
         "id": loop_id,
@@ -322,6 +375,8 @@ def build_loop_item(
         "start_seconds": round(float(start_seconds), 3),
         "end_seconds": round(float(end_seconds), 3),
         "duration_seconds": round(float(end_seconds) - float(start_seconds), 3),
+        "original_start_seconds": round(float(original_start_seconds), 3) if original_start_seconds is not None else (round(float(start_seconds), 3) if not parent_loop_id else None),
+        "original_end_seconds": round(float(original_end_seconds), 3) if original_end_seconds is not None else (round(float(end_seconds), 3) if not parent_loop_id else None),
         "artist": artist,
         "title": title,
         "album": album,

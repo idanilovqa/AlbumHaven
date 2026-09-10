@@ -2223,10 +2223,10 @@ test('plain Space intercepts only when foreground playback handles it', async ()
       handled: false,
       observed: { prevented: 0, stopped: 0 },
     },
-    controls: interceptedControlEvents.map(() => ({
-      handled: true,
-      observed: { prevented: 1, stopped: 1 },
-      playbackDelta: 1,
+    controls: interceptedControlEvents.map((_, index) => ({
+      handled: [2, 7].includes(index),
+      observed: { prevented: [2, 7].includes(index) ? 1 : 0, stopped: [2, 7].includes(index) ? 1 : 0 },
+      playbackDelta: [2, 7].includes(index) ? 1 : 0,
     })),
   });
 });
@@ -2239,13 +2239,13 @@ test('keyboard Space preserves the focused control after the resume request reso
     src: '/track?path=song.flac',
   });
   const timeline = new FakeElement({ tagName: 'INPUT', type: 'range' });
-  const focusedButton = new FakeElement({ tagName: 'BUTTON' });
+  const focusedRange = new FakeElement({ tagName: 'INPUT', type: 'range' });
   const { context } = loadHelper({ audio, timeline });
 
   assert.equal(context.handlePlayerKeyboardPlayback({
     key: ' ',
     code: 'Space',
-    target: focusedButton,
+    target: focusedRange,
     defaultPrevented: false,
     altKey: false,
     ctrlKey: false,
@@ -2282,7 +2282,7 @@ test('global Space delegates to an owned Utility loop before toggling player aud
   assert.equal(context.handlePlayerKeyboardPlayback({
     key: ' ',
     code: 'Space',
-    target: new FakeElement({ tagName: 'BUTTON' }),
+    target: new FakeElement({ tagName: 'DIV' }),
     defaultPrevented: false,
     altKey: false,
     ctrlKey: false,
@@ -2673,7 +2673,7 @@ test('successful loop save refreshes scissors after clearing the busy state', as
 
   await context.saveCurrentLoop();
 
-  assert.deepEqual(uiStates.at(-1), { enabled: true, active: false, busy: false });
+  assert.deepEqual(uiStates.at(-1), { enabled: true, canCreate: false, contextKey: 'C:/Music/song.flac', active: false, busy: false });
   assert.ok(context.state.player.current, 'the loaded track remains available for another loop');
 });
 
@@ -3076,3 +3076,56 @@ test('bottom-player edit mode preserves the stereo waveform and visible playhead
   assert.match(css, /\.player-timeline-wrap\s*>\s*\.loop-range-surface\s+\.loop-range-selection\s*\{[^}]*(?:inset-block:\s*-\d+(?:\.\d+)?px|top:\s*(-?\d+(?:\.\d+)?px)[^}]*bottom:\s*\1)/s);
   assert.match(helperSource, /drawWaveformOnCanvas\s*\([^]*compactPeaks[^]*(?:currentTime|progress)/);
 });
+
+for (const action of ['cancel', 'create', 'play']) {
+  for (const key of ['Enter', ' ']) {
+    test(`main player native ${action} ${key === ' ' ? 'Space' : 'Enter'} preserves button activation`, () => {
+      const { context, audio } = loadHelper();
+      context.state.player.loopActive = true;
+      let saves = 0;
+      context.saveCurrentLoop = () => { saves += 1; };
+      const target = new FakeElement({ tagName: 'BUTTON', attributes: { 'data-loop-action': action } });
+      let prevented = false;
+      const event = { key, target, preventDefault() { prevented = true; } };
+      const handled = key === 'Enter' ? context.handlePlayerLoopEditKeydown(event) : context.handlePlayerKeyboardPlayback(event);
+      assert.equal(handled, false);
+      assert.equal(prevented, false);
+      assert.equal(saves, 0);
+      assert.equal(audio.pauseCalls + audio.playCalls, 0);
+    });
+  }
+}
+
+for (const deleteAllowed of [true, false]) {
+  test(`main save before first Settings open loads authoritative loop permissions (delete ${deleteAllowed})`, async () => {
+    const requests = [];
+    const saved = { id: 'created', name: 'Created loop' };
+    const older = { id: 'older', name: 'Other song loop' };
+    const { context } = loadHelper({
+      showLoopNameDialog: async () => 'Created loop',
+      fetch: async url => {
+        requests.push(url);
+        return { ok: true, json: async () => url === '/loops/create'
+          ? { ok: true, loop: saved, loops: [saved] }
+          : { ok: true, loops: [older, saved], allowed_actions: { 'library.loops.read': true, 'library.loops.create': true, 'library.loops.delete': deleteAllowed } } };
+      },
+    });
+    context.state.player.loopActive = true;
+    context.state.utility.loopsLoaded = false;
+    context.state.utility.allowedActions = {};
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+    context.buildUtilityLoopGroupKey = loop => loop.id === 'created' ? 'saved-song' : 'other-song';
+    context.groupUtilityLoops = loops => loops.map(loop => ({ key: context.buildUtilityLoopGroupKey(loop), loops: [loop] }));
+    context.collapseAllUtilityLoopGroups = () => {};
+    await context.saveCurrentLoop();
+    assert.equal(context.state.utility.allowedActions['library.loops.delete'], undefined, 'the mutation response must not invent grants');
+    context.state.utility.activeTab = 'loops';
+    await context.loadUtilityLoops();
+    assert.deepEqual(requests, ['/loops/create', '/utilities/loops']);
+    assert.equal(context.state.utility.allowedActions['library.loops.delete'], deleteAllowed);
+    assert.equal(context.state.utility.selectedLoopGroupKey, 'saved-song');
+    assert.equal(context.state.utility.selectedLoopId, 'created');
+    await context.loadUtilityLoops();
+    assert.deepEqual(requests, ['/loops/create', '/utilities/loops'], 'an established grant or denial projection may reuse the cache');
+  });
+}

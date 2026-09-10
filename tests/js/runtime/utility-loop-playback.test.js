@@ -2117,3 +2117,90 @@ for (const failure of ['null', 'reject']) {
     assert.equal(waveformMode, true);
   });
 }
+
+test('saved-panel initialization mounts reveal controls before any hidden action is clicked', () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.audio.dataset.bound, '1');
+  assert.equal(harness.actionRoot.dataset.loopActionsBound, '1');
+  assert.ok(harness.actionRoot._loopActionController);
+  assert.equal(harness.rangeControllerMounts.length, 1);
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.rangeControllerMounts.length, 1, 'reinitialization retains the controller');
+});
+
+test('saved-panel initialization mounts replacement controls when audio is already bound', () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.audio.dataset.bound = '1';
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.actionRoot.dataset.loopActionsBound, '1');
+  assert.equal(harness.rangeControllerMounts.length, 1);
+});
+
+test('encoder padding cannot extend editable saved-loop bounds or change ordinary media duration', async () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.audio.duration = 12.04;
+  await harness.context.openSavedLoopCreation('loop-1');
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].durationSeconds, 12);
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].endSeconds, 12);
+  assert.equal(harness.rangeControllerMounts[0].getDuration(), 12);
+  assert.equal(harness.audio.duration, 12.04);
+  harness.context.cancelSavedLoopCreation('loop-1');
+  harness.audio.duration = 11.98;
+  assert.equal(harness.context.getSavedLoopRangeDuration('loop-1'), 11.98);
+});
+
+for (const departure of ['closed Settings', 'changed tab', 'closed and reopened Settings']) {
+  test(`pending saved waveform cannot revive controls after ${departure}`, async () => {
+    let resolveWaveform;
+    const harness = createSavedLoopEditorHarness({ waveformPromise: new Promise(resolve => { resolveWaveform = resolve; }) });
+    const overlay = { hidden: false };
+    harness.context.getUtilityModalElements = () => ({ overlay });
+    const pending = harness.context.openSavedLoopCreation('loop-1');
+    if (departure === 'closed Settings') overlay.hidden = true;
+    else if (departure === 'changed tab') harness.context.state.utility.activeTab = 'rules';
+    delete harness.actionRoot._loopActionController;
+    delete harness.editor._loopRangeController;
+    harness.context.state.utility.loopEditors['loop-1'].active = false;
+    resolveWaveform(harness.waveform);
+    assert.equal(await pending, false);
+    assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false);
+    assert.equal(harness.actionRoot._loopActionController, undefined);
+    assert.equal(harness.editor._loopRangeController, undefined);
+    assert.equal(harness.waveformDraws.length, 0);
+  });
+}
+
+test('saved-panel disposal destroys mounted range controller while preserving pending range state', async () => {
+  const harness = createSavedLoopEditorHarness();
+  await harness.context.openSavedLoopCreation('loop-1');
+  const retained = harness.context.state.utility.loopEditors['loop-1'];
+  let rangeDestructions = 0;
+  harness.editor._loopRangeController.destroy = () => { rangeDestructions += 1; };
+  harness.actionRoot._loopActionController.destroy = () => {};
+  harness.actionRoot.setAttribute('data-loop-action-owner', 'saved-loop-loop-1');
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-loop-playback.js'), 'utf8'), harness.context);
+  harness.context.disposeMountedLoopActions({ querySelectorAll: selector => selector === '[data-loop-action-owner]' ? [harness.actionRoot] : [harness.editor] });
+  assert.equal(rangeDestructions, 1);
+  assert.equal(harness.editor._loopRangeController, undefined);
+  assert.strictEqual(harness.context.state.utility.loopEditors['loop-1'], retained);
+});
+
+for (const action of ['cancel', 'create', 'play', 'delete']) {
+  test(`native Enter on saved-loop ${action} keeps button ownership instead of invoking the global save shortcut`, async () => {
+    const harness = createSavedLoopEditorHarness({ hidden: false });
+    const button = new FakeElement({ tagName: 'BUTTON', attributes: { 'data-loop-action': action } });
+    let prevented = false;
+    const handled = harness.context.handleSavedLoopEditKeydown({ key: 'Enter', target: button, preventDefault() { prevented = true; } });
+    assert.equal(handled, false);
+    assert.equal(prevented, false);
+    assert.deepEqual(harness.dialogCalls, []);
+    if (action === 'cancel') {
+      button.addEventListener('click', () => harness.context.cancelSavedLoopCreation('loop-1'));
+      button.dispatch('click');
+      assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false);
+      assert.deepEqual(harness.dialogCalls, []);
+      assert.deepEqual(harness.fetchCalls, []);
+    }
+  });
+}

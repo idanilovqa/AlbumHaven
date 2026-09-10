@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import math
+
+from music_app.services.loops import resolve_loop_original_window
 
 
 JsonDict = dict[str, object]
@@ -20,6 +23,8 @@ def validate_loop_create_payload(payload: JsonDict):
         end_seconds = float(payload.get("end_seconds"))
     except (TypeError, ValueError):
         return None, ({"ok": False, "error": "Loop start and end times are required"}, 400)
+    if not math.isfinite(start_seconds) or not math.isfinite(end_seconds) or start_seconds < 0:
+        return None, ({"ok": False, "error": "Loop times must be finite and nonnegative"}, 400)
     if end_seconds <= start_seconds:
         return None, ({"ok": False, "error": "Loop end must be after loop start"}, 400)
     return {
@@ -41,8 +46,22 @@ def resolve_loop_creation_source(
 ):
     parent_loop_id = str(payload.get("source_loop_id") or "").strip()
     parent_loop = get_loop(config, parent_loop_id) if parent_loop_id else None
+    if parent_loop_id and not parent_loop:
+        return None, ({"ok": False, "error": "Saved loop source was not found"}, 400)
+    try:
+        start_seconds = float(payload.get("start_seconds") or 0)
+        end_seconds = float(payload.get("end_seconds") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None, ({"ok": False, "error": "Loop times must be finite and nonnegative"}, 400)
+    if not math.isfinite(start_seconds) or not math.isfinite(end_seconds) or start_seconds < 0 or end_seconds <= start_seconds:
+        return None, ({"ok": False, "error": "Loop times must define a finite positive range"}, 400)
 
     if parent_loop:
+        original = resolve_loop_original_window(parent_loop, lambda key: get_loop(config, key))
+        if original is None:
+            return None, ({"ok": False, "error": "Original song timestamps are unavailable for this saved loop"}, 409)
+        if end_seconds > original[1] - original[0] + 0.001:
+            return None, ({"ok": False, "error": "Loop range exceeds the saved source duration"}, 400)
         source_path = resolve_loop_media_path(config, parent_loop_id)
         if source_path is None:
             return None, ({"ok": False, "error": "Saved loop source file was not found"}, 400)
@@ -53,6 +72,8 @@ def resolve_loop_creation_source(
             "album": str(parent_loop.get("album") or ""),
             "cover_path": str(parent_loop.get("cover_path") or ""),
             "parent_loop_id": parent_loop_id,
+            "original_start_seconds": round(original[0] + start_seconds, 3),
+            "original_end_seconds": round(original[0] + end_seconds, 3),
         }, None
 
     source_path = normalize_music_file_path(str(payload.get("source_path") or ""))
@@ -67,6 +88,8 @@ def resolve_loop_creation_source(
         "album": str(payload.get("album") or entry.get("album") or ""),
         "cover_path": str(payload.get("cover_path") or entry.get("cover_path") or ""),
         "parent_loop_id": "",
+        "original_start_seconds": start_seconds,
+        "original_end_seconds": end_seconds,
     }, None
 
 

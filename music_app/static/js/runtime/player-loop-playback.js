@@ -85,6 +85,8 @@ function updatePlayerUi() {
   }
   els.loopActions?._loopActionController?.update({
     enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+    canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
     active: state.player.loopActive,
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
@@ -483,6 +485,8 @@ function startPlayerLoopExpirySession() {
 function getGlobalPlayerLoopControlOptions() {
   const action = {
       enabled: Boolean(getPlayerPlaybackSnapshot().src || state.player.current?.src),
+      canCreate: state.loopCreateAllowed === true,
+    contextKey: state.player.current?.path || state.player.current?.src || '',
       active: state.player.loopActive,
       busy: state.player.saveBusy,
       disabledLabel: 'Start playing the track to edit the loop',
@@ -522,6 +526,8 @@ function getGlobalPlayerLoopControlOptions() {
     mountAction: (root) => mountLoopEditActionControl({
       root,
       enabled: action.enabled,
+      canCreate: action.canCreate,
+      contextKey: action.contextKey,
       active: action.active,
       busy: action.busy,
       disabledLabel: action.disabledLabel,
@@ -558,6 +564,7 @@ function scheduleActiveStreamingLoop() {
 }
 
 function setLoopActive(active) {
+  if (active && state.loopCreateAllowed === false) return;
   const playback = getPlayerPlaybackSnapshot();
   if (active && (!state.player.current || !(playback.src || state.player.current?.src))) {
     showToast('Play a track before selecting a loop.', 'error', 2600);
@@ -767,6 +774,16 @@ function pausePlayerPlaybackForHandoff(playback = getPlayerPlaybackSnapshot()) {
   return trackedPause;
 }
 
+function isPlayerNativeKeyboardAction(target) {
+  if (!target || target.getAttribute?.('data-loop-range-handle')) return false;
+  const tag = String(target.tagName || '').toUpperCase();
+  const type = String(target.getAttribute?.('type') || target.type || '').toLowerCase();
+  const role = String(target.getAttribute?.('role') || '').toLowerCase();
+  return ['BUTTON', 'A', 'SELECT'].includes(tag)
+    || (tag === 'INPUT' && type !== 'range')
+    || ['button', 'menuitem', 'checkbox', 'radio', 'switch', 'tab'].includes(role)
+    || Boolean(target.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+}
 function handlePlayerKeyboardPlayback(event) {
   if (
     !event
@@ -780,7 +797,7 @@ function handlePlayerKeyboardPlayback(event) {
   ) return false;
   if (event.key !== ' ' && event.key !== 'Spacebar' && event.code !== 'Space') return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target)) return false;
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target)) return false;
   if (
     typeof handleUtilityLoopSpacePlayback === 'function'
     && handleUtilityLoopSpacePlayback(event)
@@ -799,6 +816,7 @@ function handlePlayerKeyboardPlayback(event) {
 }
 
 async function saveCurrentLoop() {
+  if (state.loopCreateAllowed === false) return;
   if (state.player.saveBusy) return;
   const current = state.player.current;
   if (!current || !state.player.loopActive) return;
@@ -858,7 +876,7 @@ function handlePlayerLoopEditKeydown(event) {
     || event.shiftKey
   ) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (isTextEntryElement(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
+  if (isTextEntryElement(target) || isPlayerNativeKeyboardAction(target) || target?.closest?.('[role="dialog"], dialog, [aria-modal="true"]')) {
     return false;
   }
   event.preventDefault();
@@ -994,4 +1012,32 @@ function attachPlayerEvents() {
   }
   updatePlayerUi();
   restorePlayerState();
+}
+
+function syncLoopCreateCapability() {
+  const canCreate = state.loopCreateAllowed === true;
+  if (state.utility) {
+    state.utility.allowedActions = { ...(state.utility.allowedActions || {}), 'library.loops.create': canCreate };
+  }
+  document.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    root._loopActionController?.update({ canCreate });
+  });
+}
+
+function disposeMountedLoopActions(container) {
+  container?.querySelectorAll?.('[data-loop-range-owner]').forEach(root => {
+    root._loopRangeController?.destroy?.();
+    delete root._loopRangeController;
+  });
+  container?.querySelectorAll?.('[data-loop-action-owner]').forEach(root => {
+    const owner = root.getAttribute?.('data-loop-action-owner') || '';
+    if (owner.startsWith('saved-loop-')) {
+      const id = owner.slice('saved-loop-'.length);
+      state.utility.savedLoopOpenEpoch ||= {};
+      state.utility.savedLoopOpenEpoch[id] = (Number(state.utility.savedLoopOpenEpoch[id]) || 0) + 1;
+    }
+    root._loopActionController?.destroy();
+    delete root._loopActionController;
+    if (root.dataset) delete root.dataset.loopActionsBound;
+  });
 }

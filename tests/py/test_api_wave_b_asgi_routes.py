@@ -1291,6 +1291,7 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     output_path = Path(app.config["DATA_DIR"]) / "loops" / "child-loop.mp3"
     parent_loop = {
         "id": "parent-loop",
+        "start_seconds": 60, "end_seconds": 80,
         "artist": "Parent Artist",
         "title": "Parent Title",
         "album": "Parent Album",
@@ -1354,6 +1355,7 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     assert payload["loop"]["album"] == "Parent Album"
     assert payload["loop"]["cover_path"] == "C:/covers/parent.jpg"
     assert payload["loop"]["parent_loop_id"] == "parent-loop"
+    assert (payload["loop"]["original_start_seconds"], payload["loop"]["original_end_seconds"]) == (62, 65)
     assert payload["loops"][0]["parent_loop_id"] == "parent-loop"
 
 

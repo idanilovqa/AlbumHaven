@@ -1,6 +1,6 @@
 {% macro playback_control_cluster(variant, owner_id='') -%}
 {% if variant == 'expanded-player' %}
-<span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="{{ variant }}">
+<span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="{{ variant }}" data-loop-control-style="capsule">
   <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
   <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="{{ owner_id }}" data-loop-action-owner="{{ owner_id }}"></span>
 </span>

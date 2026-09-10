@@ -270,14 +270,7 @@ async function handleUtilityBootstrapClick(event) {
   const utilityLoopItemButton = event.target.closest('[data-utility-loop-id]');
   if (utilityLoopItemButton) {
     event.preventDefault();
-    if (state.utility.loopSuppressClick) {
-      state.utility.loopSuppressClick = false;
-      return;
-    }
-    state.utility.selectedLoopGroupKey = utilityLoopItemButton.getAttribute('data-utility-loop-group-key') || '';
-    state.utility.selectedLoopId = utilityLoopItemButton.getAttribute('data-utility-loop-id') || '';
-    state.utility.selectedLoopDetailMode = 'loop';
-    renderUtilityModalContent();
+    state.utility.loopSuppressClick = false;
     return;
   }
 
@@ -289,6 +282,7 @@ async function handleUtilityBootstrapClick(event) {
       return;
     }
     const groupKey = utilityLoopButton.getAttribute('data-utility-loop-group-key') || '';
+    const sameGroup = groupKey === String(state.utility.selectedLoopGroupKey || '');
     const now = Date.now();
     const isDoubleClickCandidate = String(state.utility.lastLoopGroupClickKey || '') === String(groupKey)
       && (now - Number(state.utility.lastLoopGroupClickAt || 0)) <= 350;
@@ -296,7 +290,7 @@ async function handleUtilityBootstrapClick(event) {
     state.utility.lastLoopGroupClickAt = now;
     state.utility.selectedLoopGroupKey = groupKey;
     const selectedGroup = getSelectedUtilityLoopGroup();
-    state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
+    if (!sameGroup) state.utility.selectedLoopId = selectedGroup?.loops?.[0]?.id || state.utility.selectedLoopId || '';
     state.utility.selectedLoopDetailMode = 'group';
     if (isDoubleClickCandidate) {
       state.utility.lastLoopGroupClickKey = '';
@@ -304,7 +298,7 @@ async function handleUtilityBootstrapClick(event) {
       toggleUtilityLoopGroupCollapse(groupKey);
       return;
     }
-    renderUtilityModalContent();
+    if (!sameGroup) renderUtilityModalContent();
     return;
   }
 
@@ -402,7 +396,7 @@ async function handleUtilityBootstrapClick(event) {
   const deleteSavedLoopButton = event.target.closest('[data-delete-saved-loop]');
   if (deleteSavedLoopButton) {
     event.preventDefault();
-    deleteSavedLoop(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
+    openSavedLoopDeleteConfirm(deleteSavedLoopButton.getAttribute('data-delete-saved-loop') || '');
     return;
   }
 
@@ -1084,6 +1078,12 @@ function handleUtilityBootstrapKeyDown(event) {
   ) {
     return false;
   }
+  const collapse = event.target?.closest?.('[data-utility-loop-collapse]');
+  if (collapse && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault();
+    event.stopPropagation?.();
+    return toggleUtilityLoopGroupCollapse(collapse.getAttribute('data-utility-loop-collapse'));
+  }
   const tab = event.target?.closest?.('[data-utility-tab]');
   if (tab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
     const tabs = getUtilityModalElements().tabs.filter(item => !item.disabled && !item.hidden);
@@ -1257,7 +1257,20 @@ function handleUtilityBootstrapMouseUp(event) {
 function toggleUtilityLoopGroupCollapse(groupKey) {
   const normalizedGroupKey = String(groupKey || '');
   if (!normalizedGroupKey) return false;
+  state.utility.collapsedLoopGroups ||= {};
   state.utility.collapsedLoopGroups[normalizedGroupKey] = !Boolean(state.utility.collapsedLoopGroups[normalizedGroupKey]);
-  renderUtilityModalContent();
+  if (typeof renderUtilityLoopList === 'function') {
+    const els = getUtilityModalElements();
+    const scroll = els.list?.scrollTop;
+    const focusedToggle = document.activeElement?.closest?.('[data-utility-loop-collapse]');
+    const restoreFocus = focusedToggle?.getAttribute('data-utility-loop-collapse') === normalizedGroupKey;
+    renderUtilityLoopList(els, state.utility.loops || []);
+    if (restoreFocus) {
+      const replacement = Array.from(els.list?.querySelectorAll?.('[data-utility-loop-collapse]') || [])
+        .find(toggle => toggle.getAttribute('data-utility-loop-collapse') === normalizedGroupKey);
+      replacement?.focus({ preventScroll: true });
+    }
+    if (els.list && Number.isFinite(scroll)) els.list.scrollTop = scroll;
+  } else renderUtilityModalContent();
   return true;
 }

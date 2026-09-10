@@ -211,6 +211,7 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
                 request.app.state.auth_policy_config,
             ),
             **context,
+            "playback_allowed_actions": allowed_actions_for_request(request, ("library.loops.create",)),
         },
     )
 

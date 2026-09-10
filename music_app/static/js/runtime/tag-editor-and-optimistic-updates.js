@@ -386,6 +386,20 @@ function tagEditOriginStillOwnsView(originatingViewStateRevision) {
 }
 
 async function confirmRepairSelectedAlbum() {
+  if (state.utility.pendingRepairAction === 'saved-loop-delete') {
+    const id = state.utility.pendingSavedLoopDeleteId;
+    if (!id || state.utility.savedLoopDeleteBusy || state.utility.allowedActions?.['library.loops.delete'] !== true) return;
+    state.utility.savedLoopDeleteBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      if (await deleteSavedLoop(id, { confirmed: true }) === true) closeRepairConfirmModal();
+    } finally {
+      state.utility.savedLoopDeleteBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
   if (state.utility.pendingRepairAction === 'suggestions') return confirmProblemSuggestions();
   if (state.utility.pendingRepairAction === 'revert-rule') {
     const pending = state.utility.pendingRuleRevert;

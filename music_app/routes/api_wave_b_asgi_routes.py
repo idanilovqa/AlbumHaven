@@ -615,6 +615,8 @@ async def create_saved_loop(request: Request) -> JSONResponse:
         album=str(source_details["album"]),
         cover_path=str(source_details["cover_path"]),
         parent_loop_id=str(source_details["parent_loop_id"]),
+        original_start_seconds=source_details["original_start_seconds"],
+        original_end_seconds=source_details["original_end_seconds"],
     )
     add_loop(config, item)
     log_app_event(

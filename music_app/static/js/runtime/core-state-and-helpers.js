@@ -8,6 +8,7 @@ const state = {
   repairAlertHideTimer: null,
   awaitingInitialDataRefresh: false,
   status: {},
+  loopCreateAllowed: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__?.['library.loops.create'] === true,
   coverRefreshTokens: {},
   coverFailures: {
     localDisplayPaths: {},

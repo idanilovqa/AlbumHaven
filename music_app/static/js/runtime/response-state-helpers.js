@@ -1064,6 +1064,7 @@ function normalizeStatusPayload(payload, fallbackStatus = null) {
   return {
     ...base,
     ...source,
+    allowed_actions: isRuntimePlainObject(source.allowed_actions) ? { ...source.allowed_actions } : {},
     scan_in_progress: normalizeRuntimeBoolean(source.scan_in_progress, base.scan_in_progress),
     scan_processed: normalizeRuntimeNumber(source.scan_processed, base.scan_processed),
     scan_total: normalizeRuntimeNumber(source.scan_total, base.scan_total),
@@ -1459,6 +1460,8 @@ function mergeViewPayload(patch, options = {}) {
 function applyStatusPayload(payload, fallbackStatus = null) {
   const nextStatus = normalizeStatusPayload(payload, fallbackStatus || state.status);
   state.status = nextStatus;
+  state.loopCreateAllowed = nextStatus.allowed_actions?.['library.loops.create'] === true;
+  if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
   return nextStatus;
 }
 

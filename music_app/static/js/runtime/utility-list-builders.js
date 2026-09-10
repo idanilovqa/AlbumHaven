@@ -81,10 +81,10 @@ function buildUtilityLoopEntry(loop) {
   return `
     <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
       <div class="utility-loop-heading">
-        <div>
-          <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
-        </div>
-        <button class="icon-button utility-loop-remove" type="button" data-delete-saved-loop="${escapeHtml(loop.id || '')}" aria-label="Remove loop" title="Remove loop">&#128465;</button>
+        <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+        <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
+        <span class="utility-loop-original-times"><span>Original timestamps</span><strong>${loop.original_start_seconds != null && loop.original_end_seconds != null ? `${formatLoopTime(loop.original_start_seconds, true)} – ${formatLoopTime(loop.original_end_seconds, true)}` : 'Unavailable'}</strong></span>
+        ${state.utility.allowedActions?.['library.loops.delete'] === true ? window.ButtonComponent.renderActionButton({ icon: 'delete', semantic: 'destructive', ariaLabel: `Delete ${loop.name || 'Saved loop'}`, title: `Delete ${loop.name || 'Saved loop'}`, className: 'utility-loop-remove', attributes: { 'data-delete-saved-loop': loop.id || '' } }) : ''}
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
@@ -143,7 +143,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
   const coverHtml = buildUtilityAlbumArtbox(representative, {
     label: `Artwork for ${representative.title || representative.name || 'loop'}`, interactive: true,
   });
-  const loopsToRender = selectedLoop ? [selectedLoop] : group.loops;
+  const loopsToRender = group.loops;
   const headerTitle = representative.title || representative.name || 'Saved loops';
   const artistLine = representative.artist || '';
   const albumLine = representative.album || '';
@@ -159,7 +159,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
             <div class="utility-detail-meta">${escapeHtml(albumLine || 'Unknown album')}</div>
             ${yearLine ? `<div class="utility-detail-meta">${escapeHtml(yearLine)}</div>` : ''}
           </div>
-          <div class="utility-detail-meta">${escapeHtml(selectedLoop ? '1 loop selected' : `${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
+          <div class="utility-detail-meta">${escapeHtml(`${group.loops.length} saved loop${group.loops.length === 1 ? '' : 's'}`)}</div>
         </div>
       </div>
       <div class="utility-loop-group-main">

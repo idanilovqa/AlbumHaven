@@ -1,4 +1,6 @@
 import { BasePage } from './basePage.js';
+import { AlbumTrackTable } from './components/albumTrackTable.js';
+import { AppConfirmDialog } from './components/appConfirmDialog.js';
 
 function exactNormalizedText(value) {
   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -15,8 +17,8 @@ export class TrackModal extends BasePage {
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
     this.footer = page.locator(this.footerSelector);
-    this.discHeaders = this.dialog.locator('.track-disc-header');
-    this.discTotals = this.dialog.locator('.track-disc-total');
+    this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
+    this.discTotals = this.dialog.locator('.album-track-table__disc-total');
     this.coverImage = page.locator(this.coverImageSelector);
     this.detailedCoverImage = page.locator(this.detailedCoverImageSelector);
     this.coverPlaceholder = page.locator(this.coverPlaceholderSelector);
@@ -36,6 +38,15 @@ export class TrackModal extends BasePage {
     this.lightboxCloseButton = page.locator(this.lightboxCloseButtonSelector);
     this.lightboxPreviousButton = page.locator('#image-lightbox-prev');
     this.lightboxNextButton = page.locator('#image-lightbox-next');
+    this.albumTrackTable = new AlbumTrackTable(this.dialog);
+    this.header = this.dialog.locator('.album-details-header');
+    this.headerActions = this.dialog.locator('.album-details-header__actions .action-button');
+    this.missingAlert = this.dialog.locator('[data-on-page-alert="error"]');
+    this.removeMissingAlbumButton = this.dialog.locator('[data-remove-missing-album="1"]');
+    this.artbox = this.dialog.locator('#track-modal-cover .album-artbox');
+    this.missingEditButton = this.dialog.getByRole('button', { name: 'Edit album tags unavailable while album is missing' });
+    this.missingFolderButton = this.dialog.getByRole('button', { name: 'Open album folder unavailable while album is missing' });
+    this.appConfirmDialog = new AppConfirmDialog(page);
   }
 
   get dialogSelector() {
@@ -75,7 +86,7 @@ export class TrackModal extends BasePage {
   }
 
   get coverPlaceholderSelector() {
-    return '#track-modal-cover .cover-placeholder';
+    return '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]';
   }
 
   get playButtonSelector() {
@@ -122,12 +133,40 @@ export class TrackModal extends BasePage {
     return this.trackRowAt(index).locator('.play-track-button').first();
   }
 
+  async readStackingCheckpoint(appBar) {
+    const modalHandle = await this.dialog.elementHandle();
+    const appBarHandle = await appBar.root.elementHandle();
+    if (!modalHandle || !appBarHandle) {
+      await modalHandle?.dispose();
+      await appBarHandle?.dispose();
+      throw new Error('Album Details and app bar must both be mounted for stacking inspection.');
+    }
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- verify real overlay hit testing
+      return await this.page.evaluate(({ modal, appBarElement }) => {
+        const appBarBounds = appBarElement.getBoundingClientRect();
+        const topmost = document.elementFromPoint(
+          appBarBounds.left + (appBarBounds.width / 2),
+          appBarBounds.top + (appBarBounds.height / 2),
+        );
+        return {
+          modalZIndex: Number(getComputedStyle(modal).zIndex) || 0,
+          appBarZIndex: Number(getComputedStyle(appBarElement).zIndex) || 0,
+          appBarCoveredByAlbumDetails: Boolean(topmost?.closest('#track-modal')),
+        };
+      }, { modal: modalHandle, appBarElement: appBarHandle });
+    } finally {
+      await modalHandle.dispose();
+      await appBarHandle.dispose();
+    }
+  }
+
   trackTitleAt(index) {
-    return this.trackRowAt(index).locator('.track-title').first();
+    return this.trackRowAt(index).locator('.album-track-table__title').first();
   }
 
   trackNumberAt(index) {
-    return this.trackRowAt(index).locator('.track-number').first();
+    return this.trackRowAt(index).locator('[data-cdt-column="number"]').first();
   }
 
   async readDisplayedTrackNumbers() {
@@ -164,7 +203,7 @@ export class TrackModal extends BasePage {
   }
 
   secondaryArtistAt(index) {
-    return this.trackRowAt(index).locator('.track-artist-name').first();
+    return this.trackRowAt(index).locator('.album-track-table__secondary').first();
   }
 
   async readTrackCreditColorsAt(index) {
@@ -180,13 +219,54 @@ export class TrackModal extends BasePage {
 
   trackRowByTitle(trackTitle) {
     return this.trackRows.filter({
-      has: this.page.locator('.track-title').filter({ hasText: exactNormalizedText(trackTitle) }),
+      has: this.page.locator('.album-track-table__title').filter({ hasText: exactNormalizedText(trackTitle) }),
     }).first();
+  }
+
+  playButtonByTrackTitle(trackTitle) {
+    return this.trackRowByTitle(trackTitle).locator('.play-track-button').first();
+  }
+
+  async readAlbumTrackTableTotal() {
+    return String(await this.albumTrackTable.aggregateTotal.textContent() || '').trim();
   }
 
   problemButtonByTrackTitle(trackTitle) {
     return this.trackRowByTitle(trackTitle)
       .getByRole('button', { name: 'Open this track in Problematic Files', exact: true });
+  }
+
+  problemCellByTrackTitle(trackTitle) {
+    return this.trackRowByTitle(trackTitle).locator('[data-cdt-column="problem"]');
+  }
+
+  durationCellByTrackTitle(trackTitle) {
+    return this.trackRowByTitle(trackTitle).locator('[data-cdt-column="duration"]');
+  }
+
+  async readEditorialTableAlignment() {
+    const titleHandle = await this.title.elementHandle();
+    const tableHandle = await this.albumTrackTable.tables.first().elementHandle();
+    if (!titleHandle || !tableHandle) {
+      await titleHandle?.dispose();
+      await tableHandle?.dispose();
+      throw new Error('Expected the Album Details title and track table for alignment measurement.');
+    }
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- compare real Editorial title and table geometry
+      return await this.page.evaluate(({ title, table }) => {
+        const titleBounds = title.getBoundingClientRect();
+        const tableBounds = table.getBoundingClientRect();
+        return {
+          titleLeft: titleBounds.left,
+          tableLeft: tableBounds.left,
+          delta: Math.abs(titleBounds.left - tableBounds.left),
+        };
+      }, { title: titleHandle, table: tableHandle });
+    } finally {
+      await titleHandle.dispose();
+      await tableHandle.dispose();
+    }
   }
 
   async readCoverLightboxSources() {

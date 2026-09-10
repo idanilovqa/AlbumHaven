@@ -13,8 +13,11 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
+from music_app.routes.appearance_asgi import load_appearance_context
 from music_app.services.app_logging import log_app_event
+from music_app.services.auth_session_csrf import issue_session_csrf
 from music_app.services.covers import (
     find_existing_cover_display_variant,
     normalize_cover_variant_priority,
@@ -37,6 +40,7 @@ from music_app.services.library_roots import (
 )
 from music_app.services.loops import resolve_loop_media_path, resolve_loop_preview_path
 from music_app.services.playlist_read_seams import build_view_surface_payload, resolve_active_view_surface
+from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.runtime_shutdown import create_daemon_executor
 from music_app.services.shell_layout_seams import build_shell_layout_payload
 from music_app.services.startup_bootstrap import (
@@ -174,10 +178,12 @@ def _template_url_for(request: Request, name: str, **path_params: object) -> str
 def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
     if asset_paths is None:
         static_root = Path(__file__).resolve().parent.parent / "static"
+        runtime_stylesheets = tuple(sorted((static_root / "css" / "runtime").glob("*.css")))
         asset_paths = (
             static_root / "app.js",
             static_root / "js" / "runtime-bundle.js",
             static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
+            *runtime_stylesheets,
         )
     digest = hashlib.sha256()
     try:
@@ -199,6 +205,11 @@ def _template_response(request: Request, context: dict[str, object]) -> Response
             "request": request,
             "url_for": lambda name, **path_params: _template_url_for(request, name, **path_params),
             "runtime_asset_version": request.app.state.runtime_asset_version,
+            "account_menu_allowed_actions": allowed_actions_for_request(request, ("accounts.read",)),
+            "account_menu_csrf_token": issue_session_csrf(
+                request.cookies.get("__Host-album_haven_session"),
+                request.app.state.auth_policy_config,
+            ),
             **context,
         },
     )
@@ -841,7 +852,8 @@ async def index(request: Request) -> Response:
     cold_scan_waiting = bool(library_state.get("cold_scan_pending")) or str(
         library_state.get("cold_scan_handoff_status") or "idle"
     ) == "claimed"
-    bootstrap_payload, payload_elapsed_ms, startup_preview = _build_bootstrap_payload(
+    bootstrap_payload, payload_elapsed_ms, startup_preview = await run_in_threadpool(
+        _build_bootstrap_payload,
         query_args=query_args,
         config=config,
         logger=route_logger,
@@ -863,6 +875,7 @@ async def index(request: Request) -> Response:
     response = _template_response(
         request,
         {
+            **await load_appearance_context(request),
             "query": query_raw,
             "selected_artist": selected_artist,
             "effective_selected_artist": resolve_effective_selected_artist(
@@ -876,6 +889,7 @@ async def index(request: Request) -> Response:
             "startup_preview": startup_preview,
         },
     )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     claim_token = _claim_pending_cold_scan(request)
     if claim_token is not None:
         try:
@@ -957,9 +971,10 @@ async def news_center(request: Request) -> Response:
         "has_related": False,
         "initial_view_partial": False,
     }
-    return _template_response(
+    response = _template_response(
         request,
         {
+            **await load_appearance_context(request),
             "query": "",
             "selected_artist": "",
             "effective_selected_artist": "",
@@ -971,6 +986,8 @@ async def news_center(request: Request) -> Response:
             "startup_preview": startup_preview,
         },
     )
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 @router.get("/bootstrap-data")
@@ -980,7 +997,8 @@ async def bootstrap_data(request: Request) -> JSONResponse:
     query_raw = query_args.get("q", "").strip()
     selected_artist = query_args.get("artist", "").strip()
     refreshed = query_args.get("refreshed") == "1"
-    bootstrap_payload, _payload_elapsed_ms, _startup_preview = _build_bootstrap_payload(
+    bootstrap_payload, _payload_elapsed_ms, _startup_preview = await run_in_threadpool(
+        _build_bootstrap_payload,
         query_args=query_args,
         config=_app_config(request),
         logger=_app_logger(request),

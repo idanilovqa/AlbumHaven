@@ -1,4 +1,5 @@
 const PLAYER_WAVEFORM_PEAK_COUNT = 280;
+const PLAYER_WAVEFORM_DETAIL_PEAK_COUNT = 720;
 const PLAYER_WAVEFORM_BUSY_RETRY_DELAYS_MS = Object.freeze([50, 100, 200, 400, 800]);
 const SAVED_LOOP_WAVEFORM_CACHE_LIMIT = 4;
 const playerWaveformPeakCache = new Map();
@@ -63,7 +64,7 @@ async function resumePlayerWaveformPeakLoadsAfterForegroundView(suspension) {
   const path = String(state.player?.current?.path || '');
   if (!path || generation !== Number(suspension.generation || 0)) return null;
 
-  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_PEAK_COUNT, generation);
+  const peaks = await loadWaveformPeaks(path, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
   if (!peaks || playerWaveformForegroundSuspensionDepth > 0
       || Number(state.player?.streaming?.generation) !== generation
       || String(state.player?.current?.path || '') !== path) return null;
@@ -138,7 +139,7 @@ async function loadSavedLoopWaveformPeaks(loopId) {
 
 async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT, generation = 0) {
   const rawPath = String(path || '');
-  if (!rawPath || sampleCount !== PLAYER_WAVEFORM_PEAK_COUNT) return null;
+  if (!rawPath || ![PLAYER_WAVEFORM_PEAK_COUNT, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT].includes(sampleCount)) return null;
   if (playerWaveformForegroundSuspensionDepth > 0) return null;
   if (playerWaveformPeakGeneration !== generation) {
     playerWaveformPeakController?.abort();
@@ -148,7 +149,7 @@ async function loadWaveformPeaks(path, sampleCount = PLAYER_WAVEFORM_PEAK_COUNT,
   } else if (!playerWaveformPeakController) {
     playerWaveformPeakController = new AbortController();
   }
-  const identity = `${generation}\u0000${rawPath}`;
+  const identity = `${generation}\u0000${sampleCount}\u0000${rawPath}`;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
     playerWaveformPeakCache.delete(identity);
@@ -213,7 +214,7 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
   } else if (!playerWaveformPeakController) {
     playerWaveformPeakController = new AbortController();
   }
-  const identity = `${generation}\u0000${rawPath}`;
+  const identity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${rawPath}`;
   let peaks = null;
   if (playerWaveformPeakCache.has(identity)) {
     const cached = playerWaveformPeakCache.get(identity);
@@ -237,14 +238,14 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
       probe = (async () => {
         const query = new URLSearchParams({
           path: rawPath,
-          bins: String(PLAYER_WAVEFORM_PEAK_COUNT),
+          bins: String(PLAYER_WAVEFORM_DETAIL_PEAK_COUNT),
           cachedOnly: '1',
         });
         const response = await fetch(`/playback/waveform?${query}`, { signal: controller.signal });
         if (!response.ok || response.status !== 200) return null;
         const cachedPeaks = validateWaveformPeakPayload(
           await response.json(),
-          PLAYER_WAVEFORM_PEAK_COUNT,
+          PLAYER_WAVEFORM_DETAIL_PEAK_COUNT,
         );
         if (!cachedPeaks || controller.signal.aborted
             || state.player.streaming.generation !== generation) return null;
@@ -278,12 +279,12 @@ async function probeCachedWaveformPeaks(path, generation = 0) {
 }
 
 async function promoteWaveformPeaks(completedPath, currentPath, generation) {
-  const completedIdentity = `${generation}\u0000${String(completedPath || '')}`;
-  const currentIdentity = `${generation}\u0000${String(currentPath || '')}`;
+  const completedIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(completedPath || '')}`;
+  const currentIdentity = `${generation}\u0000${PLAYER_WAVEFORM_DETAIL_PEAK_COUNT}\u0000${String(currentPath || '')}`;
   let cached = playerWaveformPeakCache.get(currentIdentity);
   let peaks = cached ? await cached : null;
   if (!peaks && state.player.streaming.generation === generation) {
-    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_PEAK_COUNT, generation);
+    await loadWaveformPeaks(currentPath, PLAYER_WAVEFORM_DETAIL_PEAK_COUNT, generation);
     cached = playerWaveformPeakCache.get(currentIdentity);
     peaks = cached ? await cached : null;
   }

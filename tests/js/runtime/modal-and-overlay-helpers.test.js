@@ -230,6 +230,75 @@ function loadHelper() {
   };
 }
 
+test('non-album tracks follow the displayed artist family instead of a retained root list', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Neal Morse', title: 'Solo track' },
+    { artist: 'Flying Colors', title: 'Family track' },
+    { artist: 'Folkstone', title: 'Unrelated track' },
+  ];
+  context.state.view = {
+    selected_artist: 'Neal Morse',
+    related_artists: ['Flying Colors'],
+    non_album_tracks: tracks,
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
+  context.state.view.non_album_tracks = [tracks[2]];
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('backend-scoped non-album search matches survive an empty album gallery', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Flying Colors', title: 'Family track' },
+    { artist: 'Folkstone', title: 'Unrelated track' },
+  ];
+  context.state.view = { non_album_tracks: tracks, artist_groups: [{ artist: 'Neal Morse' }] };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks);
+  context.state.view.query = 'Family';
+  context.state.view.non_album_tracks = [tracks[0]];
+  context.state.view.artist_groups.push({ artist: 'Flying Colors' });
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  context.state.view.artist_groups = [];
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [tracks[0]]);
+  context.state.view.selected_artist = 'Unrelated Artist';
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('non-album artist scope retains folder matches and canonical album artists', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Unknown', display_path: 'Rock\\Neal Morse\\song.mp3' },
+    { artist: 'Guest', album_artist: 'neal morse' },
+    { artist: 'Other', display_path: 'Rock\\Other\\Neal Morse.mp3' },
+  ];
+  context.state.view = { selected_artist: 'Neal Morse', non_album_tracks: tracks };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
+});
+
+test('non-album artist scope expands only aliases of the displayed family', () => {
+  const { context } = loadHelper();
+  const tracks = [
+    { artist: 'Unknown', display_path: 'Rock/Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Family Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Family_Alias/song.mp3' },
+    { artist: 'Unknown', display_path: 'Rock/Unrelated Alias/song.mp3' },
+  ];
+  context.state.view = {
+    selected_artist: 'Canonical', related_artists: ['Family'], non_album_tracks: tracks,
+    artist_family_filters: [
+      { display_name: 'Canonical', variation_names: ['Canonical', 'Alias'] },
+      { display_name: 'Family', variation_names: ['Family', 'Family Alias'] },
+      { display_name: 'Unrelated', variation_names: ['Unrelated', 'Unrelated Alias'] },
+    ],
+  };
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 3));
+  context.state.view.selected_artist = 'Another Artist';
+  context.state.view.related_artists = [];
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), [],
+    'retained aliases must not authorize tracks after the displayed artist changes');
+});
+
 test('non-album modal uses compact three-column tables in exception order', () => {
   const { context } = loadHelper();
   const markup = context.buildNonAlbumTrackSectionsMarkup([

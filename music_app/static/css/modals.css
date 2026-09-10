@@ -45,7 +45,7 @@ body.modal-open { overflow: hidden; }
   align-items: center;
   justify-content: center;
   padding: 24px;
-  z-index: 80;
+  z-index: 108;
 }
 .track-modal[hidden] { display: none; }
 .track-modal-dialog {

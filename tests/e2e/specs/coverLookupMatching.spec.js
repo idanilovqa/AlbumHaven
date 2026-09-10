@@ -55,7 +55,7 @@ const EXPECTED_PROVIDER_ROLES = [
   'false-artist-identity-project',
 ];
 
-test(`${CASE_ID} lookup matching rejects larger false Metallica releases before provider autoselection`, async ({
+test(`${CASE_ID} lookup matching rejects larger false Metallica releases before provider autoselection`, { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -71,7 +71,7 @@ test(`${CASE_ID} lookup matching rejects larger false Metallica releases before 
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(TARGET)).toEqual(TARGET);
     expect((await trackModalActions.waitForLoadedSummary()).title)
-      .toBe(Object.values(TARGET).join(' - '));
+      .toBe(Object.values(TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();

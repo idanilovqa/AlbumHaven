@@ -1,4 +1,6 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
 import {
   captureResponsiveGalleryScreenshot,
   expectCardsWithinSelectedScale,
@@ -7,8 +9,18 @@ import {
   waitForResponsiveGalleryLayout,
 } from '../helpers/responsiveGalleryHelpers.js';
 
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({
+      username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle,
+    }, use);
+  }, { auto: true }],
+});
+
 const ARTIST = 'Album Rating Contract';
 const RATED_ALBUM = 'Rating Numeric Authority';
+const COVERLESS_ARTIST = 'ДДТ';
+const COVERLESS_ALBUM = 'Студийные записи';
 const GALLERY_SCALE_PERCENT = 125;
 const BASE_CARD_WIDTH_PX = 240;
 const SELECTED_SCALE_CARD_CEILING_PX = resolveSelectedScaleCardCeiling(
@@ -18,12 +30,15 @@ const SELECTED_SCALE_CARD_CEILING_PX = resolveSelectedScaleCardCeiling(
 const WIDE_VIEWPORT = Object.freeze({ width: 1440, height: 960 });
 const NARROW_VIEWPORT = Object.freeze({ width: 1024, height: 960 });
 
-test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', async ({
+test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale', { tag: '@area:responsive-visual' }, async ({
   galleryActions,
   page,
   searchToolbarActions,
+  settingsModalAppBarActions,
   stepLogger,
   testArtifacts,
+  utilityAppearanceActions,
+  utilityTabBarActions,
 }) => {
   let wideLayout;
   let narrowLayout;
@@ -34,6 +49,12 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       `/?surface=albums&gallery_display=cards&gallery_scale_percent=${GALLERY_SCALE_PERCENT}`,
     );
     await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.choosePalette('paper', 1);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
     await searchToolbarActions.search(ARTIST, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(ARTIST);
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, RATED_ALBUM);
@@ -47,11 +68,7 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
     });
-    await galleryActions.waitForVisibleGalleryCoversLoaded({
-      minimumCount: 3,
-      allowPlaceholder: true,
-      placeholderScenario: 'Rating Scan Discovery intentionally has no cover art',
-    });
+    await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 3 });
     await captureResponsiveGalleryScreenshot(
       galleryActions.galleryPage,
       testArtifacts,
@@ -66,11 +83,7 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,
     });
-    await galleryActions.waitForVisibleGalleryCoversLoaded({
-      minimumCount: 2,
-      allowPlaceholder: true,
-      placeholderScenario: 'Rating Scan Discovery intentionally has no cover art',
-    });
+    await galleryActions.waitForVisibleGalleryCoversLoaded({ minimumCount: 2 });
     await captureResponsiveGalleryScreenshot(
       galleryActions.galleryPage,
       testArtifacts,
@@ -86,5 +99,23 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
     expect(narrowLayout.maxCardWidth).toBeLessThanOrEqual(wideLayout.maxCardWidth + 1);
     expectResponsiveRatingSingleLine(expect, wideLayout);
     expectResponsiveRatingSingleLine(expect, narrowLayout);
+  });
+
+  await stepLogger.step('Apply the Paper palette to an exact projected coverless album card', async () => {
+    await searchToolbarActions.search(COVERLESS_ARTIST, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(COVERLESS_ARTIST);
+    await galleryActions.scrollToAlbumUnderHeading(COVERLESS_ARTIST, COVERLESS_ALBUM);
+    await galleryActions.waitForVisibleGalleryCoversLoaded({
+      minimumCount: 1,
+      allowPlaceholder: true,
+      placeholderScenario: `${COVERLESS_ARTIST} / ${COVERLESS_ALBUM} is the projected coverless fixture`,
+    });
+    const artbox = await galleryActions.galleryPage.albumCard
+      .readAlbumArtboxAppearance(COVERLESS_ALBUM);
+    expect(artbox.state).toBe('empty');
+    expect(artbox.backgroundImage).toContain('linear-gradient');
+    expect(artbox.color).not.toBe('rgba(0, 0, 0, 0)');
+    expect(Math.abs(artbox.width - artbox.height)).toBeLessThanOrEqual(1);
+    expect(artbox.missingMarkVisible).toBe(true);
   });
 });

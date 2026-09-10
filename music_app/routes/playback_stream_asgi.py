@@ -7,7 +7,7 @@ import json
 import math
 from typing import Any
 
-from fastapi import APIRouter, Request, WebSocket
+from fastapi import APIRouter, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from starlette.websockets import WebSocketDisconnect
 
@@ -20,6 +20,7 @@ from music_app.services.playback_pcm import (
     pack_pcm_frame,
 )
 from music_app.services.waveform_peaks import WaveformPeaksBusyError
+from music_app.services.policy_asgi import require_action
 
 
 MAX_PLAYBACK_CONNECTIONS = 6
@@ -34,6 +35,7 @@ MAX_TRACK_PATH_CHARACTERS = 32_768
 PCM_STREAM_SEND_COOPERATIVE_PAUSE_SECONDS = 0.001
 
 CLOSE_INVALID_CONTROL = 4400
+CLOSE_UNAUTHENTICATED = 4401
 CLOSE_FORBIDDEN_ORIGIN = 4403
 CLOSE_MEDIA_NOT_FOUND = 4404
 CLOSE_CREDIT_VIOLATION = 4408
@@ -68,7 +70,10 @@ async def playback_waveform(
     path: str = "",
     loop_id: str = "",
     cachedOnly: str = "",
+    bins: int = 280,
 ) -> Response:
+    if bins not in {280, 720}:
+        return JSONResponse({"error": "Unsupported waveform sample count"}, status_code=400)
     requested_path = str(path or "").strip()
     requested_loop_id = str(loop_id or "").strip()
     if requested_path and requested_loop_id:
@@ -88,7 +93,7 @@ async def playback_waveform(
         try:
             peaks = await request.app.state.waveform_peaks_registry.get_cached(
                 resolved_path,
-                bins=280,
+                bins=bins,
             )
         except WaveformPeaksBusyError as error:
             return JSONResponse({"error": str(error)}, status_code=429)
@@ -105,7 +110,7 @@ async def playback_waveform(
     peaks_task = asyncio.create_task(
         request.app.state.waveform_peaks_registry.run(
             resolved_path,
-            bins=280,
+            bins=bins,
         )
     )
     disconnect_task = asyncio.create_task(_wait_for_http_disconnect(request))
@@ -396,6 +401,18 @@ class _PlaybackPcmConnection:
 
     async def _open_tracked(self, control: dict[str, Any]) -> bool:
         if self._closed:
+            return False
+        try:
+            await require_action(
+                "library.media.read",
+                refresh_actor=True,
+            )(self._websocket)
+        except HTTPException as exc:
+            await self.reject(
+                CLOSE_UNAUTHENTICATED
+                if exc.status_code == 401
+                else CLOSE_FORBIDDEN_ORIGIN
+            )
             return False
         generation = _bounded_integer(
             control.get("generation"), minimum=1, maximum=_MAX_PROTOCOL_INTEGER
@@ -813,6 +830,17 @@ class _PlaybackPcmConnection:
 async def playback_pcm_socket(websocket: WebSocket) -> None:
     if not _same_origin(websocket):
         await websocket.close(code=CLOSE_FORBIDDEN_ORIGIN)
+        return
+    try:
+        await require_action("library.media.read")(websocket)
+    except HTTPException as exc:
+        await websocket.close(
+            code=(
+                CLOSE_UNAUTHENTICATED
+                if exc.status_code == 401
+                else CLOSE_FORBIDDEN_ORIGIN
+            )
+        )
         return
     registry: PlaybackPcmRegistry = websocket.app.state.playback_pcm_registry
     connection = await registry.acquire_connection(websocket)

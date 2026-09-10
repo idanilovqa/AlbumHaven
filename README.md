@@ -11,7 +11,7 @@ from a web interface.
 > roadmap are not yet available unless they also appear in the current-feature
 > section below.
 
-Current release: `0.9.42`
+Current release: `0.9.43`
 
 ## What Album Haven does today
 
@@ -24,6 +24,9 @@ Current release: `0.9.42`
 - Records album ratings and track preferences.
 - Provides utilities for reviewing library problems and correcting music tags
   and metadata.
+- Supports local accounts, administrator-managed invitations and library access,
+  password recovery, and security audit records.
+- Watches library files on Windows and reports changes that need a manual rescan.
 
 ## Main goals
 
@@ -40,7 +43,7 @@ Current release: `0.9.42`
 The detailed roadmap is evolving, but the broad direction is:
 
 1. **Strengthen the foundation:** improve the web experience and search, then
-   add accounts, permissions, multi-library support, and clearer boundaries
+   add multi-library support and clearer boundaries
    between hosted metadata and private media.
 2. **Expand discovery and listening:** add richer album and artist pages,
    discography and release discovery, lists, favorites, listening history,
@@ -72,8 +75,84 @@ MUSIC_DIR=/path/to/your/music
 ALBUM_HAVEN_APP_DATABASE_URL=postgresql://album_haven_app@localhost:5432/album_haven_core
 ```
 
-Use `ALBUM_HAVEN_DATABASE_URL` with the migration role when applying database
-migrations. Keep credentials outside the repository.
+Use `ALBUM_HAVEN_MIGRATOR_DATABASE_URL` with the migration role when applying
+database migrations. Keep credentials outside the repository.
+
+### Provision the initial owner
+
+After applying the database migrations and setting the Phase 7 authentication
+values shown in `.env.example`, run this once from an interactive terminal:
+
+```text
+python scripts/bootstrap_auth_owner.py
+```
+
+The command reads the configured bootstrap owner's password twice through the terminal's protected
+password prompt. It does not accept command-line arguments, redirected input,
+or a password environment variable. Password policy screening uses the free
+[Pwned Passwords range API](https://haveibeenpwned.com/API/v3): only the first
+five characters of a SHA-1 digest are sent over HTTPS, padded responses are
+requested, and provisioning stops if a trustworthy screening result is
+unavailable. The accepted password is then hashed with the configured Argon2id
+policy before the short database transaction begins.
+
+Rerunning the command reconciles the retained account and library but never
+replaces an existing credential. If a credential already exists, the command
+states that the supplied password was not installed and exits with status `3`.
+This provisioning command is not a password reset or emergency recovery
+mechanism.
+
+If normal email recovery is unavailable, an operator with local terminal and
+database access can reset the bootstrap owner with:
+
+```text
+python scripts/break_glass_auth_owner.py
+```
+
+The command accepts no arguments or password environment variable. It reads a
+new password twice through the protected terminal prompt, replaces the bootstrap-owner
+credential, revokes active sessions and reset state, and records the emergency
+action in the security audit transaction. Use it only for owner lockout, not as
+the routine password-change path.
+
+When `ALBUM_HAVEN_WELCOME_EMAIL_ENABLED=true`, provisioning also commits one
+password-free welcome message to the Postgres mail outbox. Only after the owner
+transaction commits does the command make one bounded SMTP delivery attempt.
+The account remains ready if the provider is unavailable; retryable failures
+stay durably in the outbox for a later worker attempt. Configure a real TLS or
+STARTTLS SMTP provider with the `ALBUM_HAVEN_SMTP_*` values in `.env.example`
+to deliver to real email addresses. SMTP credentials are optional only for
+providers that do not require authentication.
+
+### Clean up retained security audit events
+
+Security audit events are retained for at least 90 days. Set
+`ALBUM_HAVEN_MIGRATOR_DATABASE_URL` to the migration-role connection and run
+one bounded cleanup batch with:
+
+```text
+python scripts/cleanup_auth_audit.py --batch-size 1000
+```
+
+Schedule this command daily or weekly through the host scheduler. Each run
+deletes only the oldest eligible batch, so large backlogs require repeated
+invocations and normal runs never hold an unbounded delete transaction. The
+command deliberately does not use `ALBUM_HAVEN_APP_DATABASE_URL`: the runtime
+role retains insert-only access to the append-only audit table, while the
+maintenance command uses existing migrator privileges. Output contains only
+the deleted-row count; connection details and event contents are never shown.
+
+Expired authentication throttle buckets also need bounded maintenance. Schedule
+the following command daily or weekly with the runtime application connection
+available through `ALBUM_HAVEN_APP_DATABASE_URL`:
+
+```text
+python scripts/cleanup_auth_throttles.py --batch-size 1000
+```
+
+The command deletes only buckets whose failure window and any cooldown have
+both expired. Active rows are locked or skipped, each transaction is capped at
+10,000 rows, and output contains only the deleted-row count.
 
 ## Run
 
@@ -83,6 +162,29 @@ python app.py
 
 The application listens on the local address configured by the runtime. Album
 Haven does not upload your local music library by default.
+
+This release disables automatic filesystem watching on Linux and logs that mode
+at startup. After the initial import, use **Full Rescan** to update the library
+after adding, editing, moving, or deleting music files.
+
+For HTTPS testing from another device on your LAN, set these values in `.env`
+(replace the example IP with your server's LAN address):
+
+```text
+MUSIC_APP_TLS_MODE=local
+MUSIC_APP_PORT=5000
+ALBUM_HAVEN_PUBLIC_BASE_URL=https://192.168.1.50:5000
+```
+
+Then use the same `python app.py` command and open that HTTPS address on either
+device. Album Haven generates and reuses a local certificate; no proxy or extra
+process is needed. Browsers show an untrusted-certificate warning, which must be
+accepted where supported. This mode is for local testing, not publicly trusted
+HTTPS. See [local HTTPS setup and checks](docs/local-auth-setup-and-manual-tests.md#local-https-on-other-devices)
+for firewall, certificate, and password-reset details.
+
+For Phase 7 environment values, owner and managed-user setup, and a manual
+acceptance checklist, see [Local authentication setup and testing](docs/local-auth-setup-and-manual-tests.md).
 
 ## Tests
 

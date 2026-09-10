@@ -51,6 +51,17 @@ const confirmModalsTemplate = fs.readFileSync(path.join(
   'confirm-modals.html',
 ), 'utf8');
 
+test('all Appearance pages share one draft without a leave confirmation', () => {
+  assert.match(
+    helperSource,
+    /const sharedAppearanceKeys = \['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'\]/,
+  );
+  assert.match(
+    helperSource,
+    /sharedAppearanceKeys\.includes\(state\.utility\.appearanceKey\)\s*&&\s*sharedAppearanceKeys\.includes\(nextAppearanceKey\)/,
+  );
+});
+
 function createElement(attributes = {}) {
   return {
     checked: Boolean(attributes.checked),
@@ -89,6 +100,7 @@ function createContext(stateOverrides = {}) {
   const calls = {
     pendingSyncs: 0,
     renders: 0,
+    missingAlbumRemovalConfirms: [],
   };
   const context = {
     document: {
@@ -164,6 +176,10 @@ function createContext(stateOverrides = {}) {
     },
     openAlbumInExplorer() {},
     openAlbumOnDiscogs() {},
+    confirmMissingAlbumRemoval(album, runtimeOptions) {
+      calls.missingAlbumRemovalConfirms.push({ album, runtimeOptions });
+      return Promise.resolve(true);
+    },
     openRepairConfirmModal() {},
     openTagEditor() {},
     openUtilityLogHistoryTab() {},
@@ -329,6 +345,7 @@ test('removing a problem filter preserves the selected album in the live bootstr
 test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', () => {
   const { context } = createContext({
     deferProblematicAutoSelection: true,
+    focusedTrackPath: 'C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem.flac',
   });
   const { event } = createEvent({
     '[data-problematic-album-key]': createElement({
@@ -340,6 +357,45 @@ test('clicking a problematic album row clears deferred auto-selection in the liv
 
   assert.equal(context.state.utility.selectedProblematicKey, 'album-7');
   assert.equal(context.state.utility.deferProblematicAutoSelection, false);
+  assert.equal(context.state.utility.focusedTrackPath, '');
+});
+
+test('Problematic Files uses the shared missing-album removal confirmation', () => {
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+  };
+  const { context, calls } = createContext({
+    problematicFiles: [album],
+    selectedProblematicKey: album.key,
+  });
+  context.getSelectedProblematicAlbum = () => album;
+  const removalButton = createElement({ 'data-remove-missing-album': '1' });
+  const { event, wasPrevented } = createEvent({
+    '#utility-modal [data-remove-missing-album="1"]': removalButton,
+  });
+
+  context.handleUtilityBootstrapClick(event);
+
+  assert.equal(wasPrevented(), true);
+  assert.deepEqual(calls.missingAlbumRemovalConfirms, [{
+    album,
+    runtimeOptions: { source: 'problematic-files' },
+  }]);
+});
+
+test('Problematic Files handler leaves Album Details missing-album actions to the gallery handler', () => {
+  const { context, calls } = createContext();
+  const { event, wasPrevented } = createEvent({
+    '[data-remove-missing-album="1"]': createElement({ 'data-remove-missing-album': '1' }),
+  });
+
+  context.handleUtilityBootstrapClick(event);
+
+  assert.equal(wasPrevented(), false);
+  assert.deepEqual(calls.missingAlbumRemovalConfirms, []);
 });
 
 test('Rules revert passes the complete current exclusion item to the optimistic queue', async () => {

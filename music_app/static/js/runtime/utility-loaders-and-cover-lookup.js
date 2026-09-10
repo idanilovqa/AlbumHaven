@@ -38,7 +38,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         throw new Error(readProblematicPayloadError(data, 'Unable to load problematic files.'));
       }
       if (Number(state.utility.problematicSummaryRequestToken || 0) !== requestToken) return null;
-      const { summaryItems, initialDetail } = validateProblematicSummaryPayload(data);
+      const { summaryItems, initialDetail, operationalItems } = validateProblematicSummaryPayload(data);
       const stateCommitStartedAt = getProblematicUtilityNow();
       initialDetailKey = String(initialDetail?.key || '').trim();
       state.utility.problematicFiles = summaryItems.map((item) => {
@@ -46,6 +46,7 @@ async function loadProblematicFiles(force = false, options = {}) {
         initialDetailMerged = true;
         return { ...item, ...initialDetail, detail_loaded: true };
       });
+      state.utility.libraryWatchHealthProblems = operationalItems;
       state.utility.detailLoadPromises = {};
       state.utility.loaded = true;
       loadSucceeded = true;
@@ -56,6 +57,7 @@ async function loadProblematicFiles(force = false, options = {}) {
       loadError = String(error?.message || error || 'Unable to load problematic files.');
       console.error('[AlbumHaven][Utilities] Failed to load problematic files.', error);
       state.utility.problematicFiles = [];
+      state.utility.libraryWatchHealthProblems = [];
       state.utility.detailLoadPromises = {};
       state.utility.loaded = false;
       showToast('Unable to load problematic files.', 'error', 3200);
@@ -237,9 +239,39 @@ function validateProblematicSummaryPayload(payload) {
   if (itemKeys.has('')) {
     throw new Error('Problematic Files summary items must include non-empty keys.');
   }
+  const rawOperationalItems = Array.isArray(payload.operational_items)
+    ? payload.operational_items
+    : [];
+  if (rawOperationalItems.some((item) => !isProblematicPayloadObject(item))) {
+    throw new Error('Problematic Files operational items must be JSON objects.');
+  }
+  const operationalItems = rawOperationalItems.map((item) => {
+    const stateValue = String(item.state || '').trim();
+    const rootKey = String(item.root_key || '').trim();
+    if (
+      ![
+        'overflow',
+        'reconciliation_failed',
+        'root_unavailable',
+        'stable_write_unavailable',
+      ].includes(stateValue)
+      || !/^root_[a-f0-9]{16}$/.test(rootKey)
+    ) {
+      throw new Error('Problematic Files operational item is invalid.');
+    }
+    return {
+      state: stateValue,
+      root_key: rootKey,
+      detected_at: String(item.detected_at || ''),
+      message: 'Some library changes may have been missed.',
+      allowed_actions: item?.allowed_actions?.['library.refresh'] === true
+        ? { 'library.refresh': true }
+        : {},
+    };
+  });
   const initialDetailValue = payload.initial_detail;
   if (initialDetailValue === undefined || initialDetailValue === null) {
-    return { summaryItems: payload.items, initialDetail: null };
+    return { summaryItems: payload.items, initialDetail: null, operationalItems };
   }
   if (!isProblematicPayloadObject(initialDetailValue)) {
     throw new Error('Problematic Files initial detail must be a JSON object or null.');
@@ -251,6 +283,7 @@ function validateProblematicSummaryPayload(payload) {
   return {
     summaryItems: payload.items,
     initialDetail: validateProblematicDetailPayload(initialDetailValue, initialDetailKey),
+    operationalItems,
   };
 }
 
@@ -1206,7 +1239,9 @@ async function disconnectLastfmIntegration() {
   }
 }
 
-function closeUtilityModal() {
+function closeUtilityModal(skipAppearanceGuard = false) {
+  if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
+  if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   const els = getUtilityModalElements();
   if (!els.overlay) return;
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
@@ -1692,7 +1727,25 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
     if (!bucket.album_rating) bucket.album_rating = parseOptionalInteger(track?.album_rating) || 0;
   });
 
-  return Array.from(grouped.values())
+  const groupedAlbums = Array.from(grouped.values());
+  const groupedAlbumBaseKeyCounts = groupedAlbums.reduce((counts, groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    counts.set(baseKey, Number(counts.get(baseKey) || 0) + 1);
+    return counts;
+  }, new Map());
+  groupedAlbums.forEach((groupedAlbum) => {
+    const key = String(groupedAlbum?.key || '');
+    const yearMarkerIndex = key.indexOf('::year::');
+    const baseKey = yearMarkerIndex >= 0 ? key.slice(0, yearMarkerIndex) : key;
+    const year = parseOptionalInteger(groupedAlbum?.year);
+    if (year != null && Number(groupedAlbumBaseKeyCounts.get(baseKey) || 0) > 1) {
+      groupedAlbum.key = `${baseKey}::year::${year}`;
+    }
+  });
+
+  return groupedAlbums
     .map((bucket) => {
       const tracks = bucket.tracks.slice().sort((left, right) => {
         const discCompare = Number(left?.disc_number ?? 999) - Number(right?.disc_number ?? 999);
@@ -1701,8 +1754,41 @@ function buildOptimisticUpdatedAlbumsFromEdits(album, updates) {
         if (trackCompare) return trackCompare;
         return String(left?.title || '').localeCompare(String(right?.title || ''), undefined, { sensitivity: 'base' });
       });
+      const distinctTrackArtists = new Map();
+      tracks.forEach((track) => {
+        const artist = String(track?.artist || '').trim();
+        const key = artist.toLocaleLowerCase();
+        if (artist && !distinctTrackArtists.has(key)) distinctTrackArtists.set(key, artist);
+      });
+      const destinationAlbumArtistKey = String(bucket.album_artist || '').trim().toLocaleLowerCase();
+      const promotesSoleCompilationArtist = (
+        ['va', 'v.a.', 'various artists', 'various artist', 'various'].includes(destinationAlbumArtistKey)
+        && distinctTrackArtists.size === 1
+      );
+      const promotedAlbumArtist = promotesSoleCompilationArtist
+        ? Array.from(distinctTrackArtists.values())[0]
+        : '';
+      const promotedAlbumArtistKey = promotedAlbumArtist.toLocaleLowerCase();
+      const trackRows = Array.isArray(bucket.track_rows)
+        ? bucket.track_rows.map((row) => {
+          if (!promotedAlbumArtist) return row;
+          const secondaryCredits = String(row?.secondary_artist || '')
+            .split(/\s+\/\s+/)
+            .map((credit) => credit.trim())
+            .filter((credit) => credit && credit.toLocaleLowerCase() !== promotedAlbumArtistKey);
+          return {
+            ...row,
+            secondary_artist: secondaryCredits.join(' / ') || null,
+          };
+        })
+        : null;
       return {
         ...bucket,
+        ...(promotedAlbumArtist ? {
+          album_artist: promotedAlbumArtist,
+          key: [promotedAlbumArtistKey, ...String(bucket.key || '').split('::').slice(1)].join('::'),
+        } : {}),
+        ...(trackRows ? { track_rows: trackRows } : {}),
         preview_only: false,
         track_count_preview: tracks.length,
         track_paths: tracks.map((track) => String(track?.path || '')).filter(Boolean),

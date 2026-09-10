@@ -1,0 +1,319 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+
+NOW = datetime(2026, 8, 31, 22, 30, tzinfo=timezone.utc)
+
+
+class Cursor:
+    def __init__(self, rows=(), rowcount=1):
+        self.rows = list(rows)
+        self.rowcount = rowcount
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class Transaction:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        self.connection.events.append("begin")
+
+    def __exit__(self, exc_type, exc, tb):
+        self.connection.events.append("rollback" if exc_type else "commit")
+
+
+class Connection:
+    def __init__(self, *, target_owner=False, target_active=True, target_access=True):
+        self.target_owner = target_owner
+        self.target_active = target_active
+        self.target_access = target_access
+        self.events = []
+        self.operations = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def transaction(self):
+        return Transaction(self)
+
+    def execute(self, sql, params=()):
+        statement = " ".join(sql.casefold().split())
+        self.operations.append((statement, params))
+        if "from app.account_sessions" in statement and "for update" in statement:
+            return Cursor(({"id": 11, "account_id": 7, "authenticated_at": NOW,
+                "revoked_at": None, "idle_expires_at": NOW + timedelta(hours=1),
+                "absolute_expires_at": NOW + timedelta(days=1)},))
+        if "with locked_accounts" in statement:
+            return Cursor(({
+                "actor_account_id": 7,
+                "library_id": 9,
+                "target_account_id": 41,
+                "target_is_active": self.target_active,
+                "target_is_bootstrap_owner": self.target_owner,
+                "target_has_library_access": self.target_access,
+            },))
+        return Cursor()
+
+
+def _service(connection):
+    from music_app.services.admin_member_mutation_postgres import (
+        PostgresAdminMemberMutationService,
+    )
+
+    return PostgresAdminMemberMutationService(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://app"},
+        connect=lambda _url: connection,
+        clock=lambda: NOW,
+    )
+
+
+def test_admin_update_replaces_membership_and_capabilities_and_revokes_on_disable():
+    connection = Connection()
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW - timedelta(minutes=2),
+        library_id=9,
+        target_account_id=41,
+        is_active=False,
+        current_library_access=False,
+        capability_keys=("library.browse.read",),
+        confirm_disable=True,
+        confirm_remove_access=True,
+        request_ref="admin-update-1",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert any(
+        "set is_active = %s" in sql
+        and "disabled_at" in sql
+        and params[0] is False
+        for sql, params in connection.operations
+    )
+    assert any("delete from library.library_memberships" in sql for sql in statements)
+    assert any("update app.capabilities" in sql and "revoked_at" in sql for sql in statements)
+    assert not any("insert into app.capabilities" in sql for sql in statements)
+    assert any("update app.account_sessions" in sql and "administrator_disabled" in sql for sql in statements)
+    invitation_tokens = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if sql.startswith("update app.account_invitation_tokens")
+    )
+    assert "consumed_at is null" in invitation_tokens[0]
+    assert "revoked_at is null" in invitation_tokens[0]
+    assert invitation_tokens[1] == (NOW, 41)
+    invitation_transactions = next(
+        (sql, params)
+        for sql, params in connection.operations
+        if sql.startswith("update app.account_invitation_transactions")
+    )
+    assert "consumed_at is null" in invitation_transactions[0]
+    assert "select id from app.account_invitation_tokens" in invitation_transactions[0]
+    assert invitation_transactions[1] == (NOW, 41)
+    assert any("account_updated" in sql for sql in statements)
+    account_lock = next(i for i, sql in enumerate(statements) if "with locked_accounts" in sql)
+    audit = next(i for i, sql in enumerate(statements) if "account_updated" in sql)
+    assert account_lock < statements.index(invitation_tokens[0])
+    assert statements.index(invitation_tokens[0]) < statements.index(invitation_transactions[0]) < audit
+    assert connection.events == ["begin", "commit"]
+
+
+def test_admin_update_requires_recent_auth_and_explicit_destructive_confirmation():
+    from music_app.services.admin_member_mutation_postgres import (
+        DestructiveConfirmationRequired,
+        RecentAuthenticationRequired,
+    )
+
+    connection = Connection()
+    service = _service(connection)
+
+    try:
+        service.update_account(
+            actor_account_id=7,
+            actor_session_id=11,
+            actor_authenticated_at=NOW - timedelta(minutes=11),
+            library_id=9,
+            target_account_id=41,
+            is_active=True,
+            current_library_access=True,
+            capability_keys=("library.browse.read",),
+            confirm_disable=False,
+            confirm_remove_access=False,
+            request_ref="admin-update-2",
+        )
+    except RecentAuthenticationRequired:
+        pass
+    else:
+        raise AssertionError("stale administrator authentication must fail")
+    assert connection.operations == []
+
+    try:
+        service.update_account(
+            actor_account_id=7,
+            actor_session_id=11,
+            actor_authenticated_at=NOW,
+            library_id=9,
+            target_account_id=41,
+            is_active=False,
+            current_library_access=True,
+            capability_keys=("library.browse.read",),
+            confirm_disable=False,
+            confirm_remove_access=False,
+            request_ref="admin-update-3",
+        )
+    except DestructiveConfirmationRequired:
+        pass
+    else:
+        raise AssertionError("disable without confirmation must fail")
+
+
+def test_admin_update_cannot_disable_or_detach_bootstrap_owner():
+    connection = Connection(target_owner=True)
+
+    try:
+        _service(connection).update_account(
+            actor_account_id=7,
+            actor_session_id=11,
+            actor_authenticated_at=NOW,
+            library_id=9,
+            target_account_id=41,
+            is_active=False,
+            current_library_access=False,
+            capability_keys=("library.browse.read",),
+            confirm_disable=True,
+            confirm_remove_access=True,
+            request_ref="admin-update-4",
+        )
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("bootstrap owner protection must fail closed")
+    assert connection.events[-1] == "rollback"
+
+
+def test_admin_update_allows_permission_edits_without_reconfirming_retained_disabled_state():
+    connection = Connection(target_active=False, target_access=False)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=False,
+        current_library_access=False,
+        capability_keys=("library.browse.read",),
+        confirm_disable=False,
+        confirm_remove_access=False,
+        request_ref="admin-update-retained-disabled-state",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert statements[0].startswith("with locked_accounts")
+    assert any("set is_active = %s" in sql for sql in statements)
+    assert connection.events == ["begin", "commit"]
+
+
+@pytest.mark.parametrize("is_active", [False, True])
+def test_admin_can_change_account_state_after_access_removal_without_grants(is_active):
+    connection = Connection(target_access=False)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=is_active,
+        current_library_access=False,
+        capability_keys=(),
+        confirm_disable=not is_active,
+        confirm_remove_access=False,
+        request_ref="admin-detached-account-state",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert connection.events == ["begin", "commit"]
+    assert not any("insert into app.capabilities" in sql for sql in statements)
+    assert not any("insert into library.library_memberships" in sql for sql in statements)
+    assert any(
+        sql.startswith("update app.account_sessions") and "administrator_disabled" in sql
+        for sql in statements
+    ) is not is_active
+
+
+def test_admin_cannot_restore_access_without_selecting_capabilities():
+    connection = Connection(target_access=False)
+
+    with pytest.raises(ValueError, match="capabilities"):
+        _service(connection).update_account(
+            actor_account_id=7,
+            actor_session_id=11,
+            actor_authenticated_at=NOW,
+            library_id=9,
+            target_account_id=41,
+            is_active=True,
+            current_library_access=True,
+            capability_keys=(),
+            confirm_disable=False,
+            confirm_remove_access=False,
+            request_ref="admin-detached-account-restore",
+        )
+
+    assert connection.operations == []
+
+
+def test_admin_owner_save_preserves_membership_grants_and_account_state():
+    connection = Connection(target_owner=True)
+
+    _service(connection).update_account(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        is_active=True,
+        current_library_access=True,
+        capability_keys=(
+            "library.browse.read", "library.media.read", "library.problems.read",
+            "library.resources.read", "library.playlists.create", "library.playlists.manage",
+            "library.playlists.items.manage", "library.track_preferences.manage",
+            "library.discovery.read", "library.rules.read", "library.logs.read",
+            "library.virtual_discography.read",
+        ),
+        confirm_disable=False,
+        confirm_remove_access=False,
+        request_ref="admin-owner-noop",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert statements[0].startswith("with locked_accounts")
+    assert any("from app.account_sessions" in sql and "for update" in sql for sql in statements)
+    assert not any(sql.startswith(("update ", "insert ", "delete ")) for sql in statements)
+    assert connection.events == ["begin", "commit"]
+
+
+def test_admin_session_revoke_requires_confirmation_and_records_audit():
+    connection = Connection()
+
+    _service(connection).revoke_sessions(
+        actor_account_id=7,
+        actor_session_id=11,
+        actor_authenticated_at=NOW,
+        library_id=9,
+        target_account_id=41,
+        confirmed=True,
+        request_ref="admin-revoke-1",
+    )
+
+    statements = [sql for sql, _params in connection.operations]
+    assert any("update app.account_sessions" in sql and "administrator_revoked" in sql for sql in statements)
+    assert any("sessions_revoked" in sql for sql in statements)

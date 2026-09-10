@@ -6,6 +6,12 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const alertComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'alert-components.js');
+const alertComponentSource = fs.readFileSync(alertComponentPath, 'utf8');
+const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');
+const albumArtboxSource = fs.readFileSync(albumArtboxPath, 'utf8');
+const galleryCardPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-card-component.js');
+const galleryCardSource = fs.readFileSync(galleryCardPath, 'utf8');
 const schedulerPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-cover-load-scheduler.js');
 const schedulerSource = fs.readFileSync(schedulerPath, 'utf8');
 const galleryCssPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css');
@@ -452,6 +458,9 @@ function createRuntimeContext() {
   };
 
   vm.createContext(context);
+  vm.runInContext(alertComponentSource, context, { filename: alertComponentPath });
+  vm.runInContext(albumArtboxSource, context, { filename: albumArtboxPath });
+  vm.runInContext(galleryCardSource, context, { filename: galleryCardPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.createDeferredCoverPlaceholders = (count) => {
     context.__deferredCoverPlaceholders = Array.from(
@@ -2437,7 +2446,7 @@ test('replacing a keyed artist section never transiently mounts both versions', 
   );
 });
 
-test('changed same-artist reconciliation retains an unrelated undecoded card as the scroll anchor', () => {
+test('canonical same-artist reconciliation retains mounted cards without an optimistic preservation hint', () => {
   const {
     context,
     containerEl,
@@ -2560,7 +2569,7 @@ test('changed same-artist reconciliation retains an unrelated undecoded card as 
     key: 'artist:same',
     html: 'canonical',
     node: canonicalSection,
-  }], { preserveExistingChildren: true });
+  }]);
 
   const finalCards = containerEl.children[0].cards;
   assert.deepEqual(
@@ -3844,5 +3853,75 @@ test('rating row component derives star size and score reservation from its rend
     starRule,
     /font-size[^;]*(?:px|rem|vw|vh|clamp)\b/,
     'star glyph sizing must not fall back to hardcoded screen-size bounds',
+  );
+});
+
+test('missing album card renders an accessible bottom-right small alert', () => {
+  const { context } = createRuntimeContext();
+  const markup = context.albumCardHtml({
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+    tracks: [],
+  });
+
+  const coverStart = markup.indexOf('class="album-card__artbox-trigger album-open-trigger cover"');
+  const coverEnd = markup.indexOf('</button>', coverStart);
+  const coverMarkup = markup.slice(coverStart, coverEnd);
+  assert.match(coverMarkup, /class="small-alert small-alert--error"/);
+  assert.match(coverMarkup, /class="small-alert__icon"/);
+  assert.match(coverMarkup, /class="small-alert__text">Album not found<\/span>/);
+  assert.match(coverMarkup, /class="album-artbox__missing-mark"/);
+  assert.doesNotMatch(coverMarkup, /No cover art/);
+  assert.match(markup, /aria-label="Open SMPTe - The Roine Stolt Mixes tracklist\. Album not found"/);
+  assert.match(coverMarkup, /role="status" aria-label="Album not found"/);
+  assert.doesNotMatch(coverMarkup, /role="status" tabindex=/);
+});
+
+test('present album without cover art uses the crossed-disc placeholder without a missing alert', () => {
+  const { context } = createRuntimeContext();
+  const markup = context.albumCardHtml({
+    key: 'present-album-without-art',
+    name: 'Present Album Without Art',
+    album_artist: 'Example Artist',
+    inventory_status: 'present',
+    tracks: [{ title: 'A Track' }],
+  });
+
+  const coverStart = markup.indexOf('class="album-card__artbox-trigger album-open-trigger cover"');
+  const coverEnd = markup.indexOf('</button>', coverStart);
+  const coverMarkup = markup.slice(coverStart, coverEnd);
+  assert.match(coverMarkup, /class="album-artbox album-artbox--empty"/);
+  assert.match(coverMarkup, /class="album-artbox__missing-mark"/);
+  assert.match(coverMarkup, /album-artbox__missing-disc/);
+  assert.match(coverMarkup, /album-artbox__missing-groove/);
+  assert.match(coverMarkup, /album-artbox__missing-slash/);
+  assert.doesNotMatch(coverMarkup, /No cover art/);
+  assert.doesNotMatch(coverMarkup, /small-alert/);
+  assert.doesNotMatch(markup, /Album not found/);
+});
+
+test('missing album inventory state invalidates a retained gallery card', () => {
+  const { context } = createRuntimeContext();
+  const album = {
+    key: 'transatlantic-roine-stolt-mixes',
+    name: 'SMPTe - The Roine Stolt Mixes',
+    album_artist: 'Transatlantic',
+    tracks: [],
+  };
+
+  const presentKey = context.getAlbumCardRenderKey(album);
+  const missingKey = context.getAlbumCardRenderKey({
+    ...album,
+    inventory_status: 'missing',
+    missing_since: '2026-09-03T12:00:00Z',
+  });
+
+  assert.notEqual(
+    presentKey,
+    missingKey,
+    'the reconciler must be able to replace a retained normal card with its missing tombstone',
   );
 });

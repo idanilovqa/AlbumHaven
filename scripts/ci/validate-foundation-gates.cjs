@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_PYTEST_CASES = 3037;
 const MINIMUM_PYTEST_MODULES = 147;
-const EXPECTED_COMPONENT_CASES = 5;
+const EXPECTED_COMPONENT_CASES = 56;
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);
@@ -116,7 +116,7 @@ function validateWorkflowContract(workflow) {
   const errors = [];
   if (!/^on:\r?\n\s+pull_request:/m.test(workflow)
     || /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m.test(workflow)) {
-    errors.push('foundation workflow must remain pull_request-only');
+    errors.push('foundation workflow must remain pull-request-only');
   }
   requirePatterns(workflow, [
     [/ExpectedMajorVersion\s+17/, 'PostgreSQL 17'],
@@ -128,9 +128,11 @@ function validateWorkflowContract(workflow) {
     components: jobSource(workflow, 'test_components', 'test_node_windows'),
     windowsNode: jobSource(workflow, 'test_node_windows', 'test_python'),
     python: jobSource(workflow, 'test_python', 'e2e_production_parity'),
-    parity: jobSource(workflow, 'e2e_production_parity', 'e2e_functional'),
+    parity: jobSource(workflow, 'e2e_production_parity', 'e2e_phase7_auth'),
+    phase7Auth: jobSource(workflow, 'e2e_phase7_auth', 'e2e_phase7_admin'),
+    phase7Admin: jobSource(workflow, 'e2e_phase7_admin', 'e2e_functional'),
     functional: jobSource(workflow, 'e2e_functional', 'e2e_performance_ci'),
-    performance: jobSource(workflow, 'e2e_performance_ci', 'pr_agent_review'),
+    performance: jobSource(workflow, 'e2e_performance_ci', 'review_scope'),
   };
   if (!jobs.functional) errors.push('foundation workflow must preserve the functional job');
   if (!jobs.performance) errors.push('foundation workflow must preserve the performance job');
@@ -141,13 +143,31 @@ function validateWorkflowContract(workflow) {
     }
   }
 
-  for (const [name, source] of [['portable', jobs.portable], ['components', jobs.components], ['production parity', jobs.parity]]) {
+  for (const [name, source] of Object.entries(jobs)) {
+    if (!source) continue;
+    requirePatterns(source, [
+      [/^      - review_prerequisites\r?$/m, 'review_prerequisites dependency'],
+      [/^    if: \$\{\{ !cancelled\(\) && needs\.review_prerequisites\.result == 'success'/m, 'successful review prerequisite and cancellable job condition'],
+    ], `${name} job`, errors);
+  }
+
+  for (const [name, source] of [['portable', jobs.portable], ['production parity', jobs.parity]]) {
     if (!source) continue;
     if (!/runs-on:\s*ubuntu-latest/.test(source)) errors.push(`${name} job must run on Ubuntu`);
     if (/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
       errors.push(`${name} portable job must remain available to forks without secrets`);
     }
     if (/secrets\./.test(source)) errors.push(`${name} portable job must not receive secrets`);
+  }
+
+  if (jobs.components) {
+    if (!/runs-on:\s*windows-2025/.test(jobs.components)) {
+      errors.push('components job must run on windows-2025 for its approved win32 snapshots');
+    }
+    if (/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(jobs.components)) {
+      errors.push('components job must remain available to forks without secrets');
+    }
+    if (/secrets\./.test(jobs.components)) errors.push('components job must not receive secrets');
   }
 
   for (const [name, source] of [['windows Node', jobs.windowsNode], ['Windows Python', jobs.python]]) {
@@ -205,11 +225,37 @@ function validateWorkflowContract(workflow) {
     [/npm run check:e2e-production-parity/, 'production parity command'],
   ], 'production parity job', errors);
 
+  for (const [name, source, command] of [
+    ['Phase 7 auth', jobs.phase7Auth, 'npm run test:e2e:phase7:auth'],
+    ['Phase 7 admin', jobs.phase7Admin, 'npm run test:e2e:phase7:admin'],
+  ]) {
+    if (!source) continue;
+    if (!/runs-on:\s*windows-2025/.test(source)) errors.push(`${name} job must run on windows-2025`);
+    if (!/github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository/.test(source)) {
+      errors.push(`${name} job must be limited to a same-repository pull request`);
+    }
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
+      if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
+        errors.push(`${name} job is missing review dependency ${dependency}`);
+      }
+    }
+    requirePatterns(source, [
+      [/node-version:\s*["']22["']/, 'Node.js 22'],
+      [/python-version:\s*["']3\.11["']/, 'Python 3.11'],
+      [/chrome-version:\s*["']151\.0\.7922\.138["']/, 'pinned Chrome'],
+      [/PLAYWRIGHT_BROWSER:\s*chrome/, 'pinned Chrome selection'],
+      [/PLAYWRIGHT_CHROME_EXECUTABLE/, 'pinned Chrome executable handoff'],
+      [/-Mode\s+Provision/, 'isolated PostgreSQL provision'],
+      [/-Mode\s+Teardown/, 'isolated PostgreSQL teardown'],
+      [new RegExp(command.replaceAll(':', '\\:')), 'dedicated Playwright command'],
+    ], name, errors);
+  }
+
   for (const source of [jobs.functional, jobs.performance]) {
     if (!source) continue;
-    for (const dependency of ['test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity']) {
+    for (const dependency of ['review_scope', 'pr_agent_review', 'codex_review']) {
       if (!new RegExp(`- ${dependency}(?:\\r?\\n|$)`).test(source)) {
-        errors.push(`heavy browser job is missing foundation dependency ${dependency}`);
+        errors.push(`heavy browser job is missing review dependency ${dependency}`);
       }
     }
   }

@@ -41,6 +41,73 @@ const waveformSource = fs.readFileSync(waveformPath, 'utf8');
 const loopSource = fs.readFileSync(loopPath, 'utf8');
 const peaksSource = fs.readFileSync(peaksPath, 'utf8');
 
+test('waveform peak shaping preserves silence and separates hits from quieter material', () => {
+  const { context } = loadRuntime();
+
+  assert.equal(context.shapeWaveformPeak(0), 0);
+  assert.equal(context.shapeWaveformPeak(1), 1);
+  assert.ok(context.shapeWaveformPeak(0.5) < 0.25);
+  assert.ok(context.shapeWaveformPeak(0.8) < 0.65);
+});
+
+test('updateWaveformAppearance publishes the effective seekbar presentation', async () => {
+  const player = {
+    attributes: {},
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    },
+  };
+  const wrapClasses = new Set();
+  const documentRootClasses = new Set();
+  const classList = (classes) => ({
+    toggle(name, force) {
+      if (force) classes.add(name);
+      else classes.delete(name);
+    },
+  });
+  const wrap = { classList: classList(wrapClasses) };
+  const timeline = { parentElement: wrap };
+  const waveformCanvas = { hidden: false, getContext: () => null };
+  const documentRoot = { classList: classList(documentRootClasses) };
+  const { context } = loadRuntime({
+    document: {
+      documentElement: documentRoot,
+      getElementById(id) {
+        if (id === 'player-timeline') return timeline;
+        if (id === 'player-waveform-canvas') return waveformCanvas;
+        return null;
+      },
+      querySelector(selector) {
+        return selector === '.global-player' ? player : null;
+      },
+      querySelectorAll() { return []; },
+      addEventListener() {},
+    },
+  });
+
+  context.state.player.appearance.seekbarMode = 'default';
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'regular');
+  assert.equal(documentRootClasses.has('has-waveform-player'), false);
+  assert.equal(wrapClasses.has('is-waveform'), false);
+
+  context.state.player.appearance.seekbarMode = 'waveform';
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'waveform');
+  assert.equal(documentRootClasses.has('has-waveform-player'), true);
+  assert.equal(wrapClasses.has('is-waveform'), true);
+
+  context.state.player.appearance.seekbarMode = 'default';
+  context.state.player.loopActive = true;
+  await context.updateWaveformAppearance();
+
+  assert.equal(player.attributes['data-player-seekbar-presentation'], 'waveform');
+  assert.equal(documentRootClasses.has('has-waveform-player'), true);
+  assert.equal(wrapClasses.has('is-waveform'), true);
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     state: {
@@ -131,9 +198,9 @@ function deferred() {
 
 function peakPayload(seed) {
   return {
-    sampleCount: 280,
-    left: Array.from({ length: 280 }, () => seed),
-    right: Array.from({ length: 280 }, () => seed / 2),
+    sampleCount: 720,
+    left: Array.from({ length: 720 }, () => seed),
+    right: Array.from({ length: 720 }, () => seed / 2),
   };
 }
 
@@ -438,7 +505,7 @@ test('persistent-player loop controls overlay beside Play without displacing the
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
-  const shellRule = css.match(/\.player-shell\s*\{([^}]*)\}/s)?.[1] || '';
+  const shellRule = css.match(/(?:^|\n)\.player-shell\s*\{([^}]*)\}/s)?.[1] || '';
   const clusterRule = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
   const mountRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
   const mainRule = css.match(/\.player-main\s*\{([^}]*)\}/s)?.[1] || '';
@@ -446,8 +513,8 @@ test('persistent-player loop controls overlay beside Play without displacing the
     /\.loop-edit-actions\.is-active\[data-loop-action-engaged="true"\]\s*\{([^}]*)\}/s,
   )?.[1] || '';
 
-  assert.match(shellRule, /grid-template-columns:\s*auto\s+auto\s+minmax\(0,\s*1fr\)/);
-  assert.doesNotMatch(shellRule, /auto\s+auto\s+auto\s+minmax/);
+  assert.match(shellRule, /grid-template-columns:\s*auto\s+minmax\(0,\s*1fr\)/);
+  assert.doesNotMatch(shellRule, /auto\s+auto\s+minmax/);
   assert.doesNotMatch(css, /grid-template-columns:\s*auto\s+auto\s+auto\s+minmax\(0,\s*1fr\)/);
   assert.match(mountRule, /position:\s*absolute/);
   assert.match(clusterRule, /--loop-play-control-size:\s*48px/);
@@ -455,7 +522,7 @@ test('persistent-player loop controls overlay beside Play without displacing the
   assert.match(mountRule, /left:\s*60\.4166667cqw/);
   assert.match(mountRule, /top:\s*58\.3333333cqw/);
   assert.match(mountRule, /width:\s*39px/);
-  assert.match(mainRule, /grid-column:\s*3/);
+  assert.match(mainRule, /grid-column:\s*2/);
   assert.match(mainRule, /width:\s*100%/);
   assert.doesNotMatch(
     mainRule,
@@ -470,40 +537,38 @@ test('persistent-player loop controls overlay beside Play without displacing the
   );
 });
 
-test('persistent-player regular and waveform timelines share the Play centerline', () => {
+test('persistent-player controls and timelines use mode-specific centerlines', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
-  const wrapRule = css.match(/\.player-timeline-wrap\s*\{([^}]*)\}/s)?.[1] || '';
-  const coverRule = css.match(/\.player-cover-button\s*\{([^}]*)\}/s)?.[1] || '';
-  const playClusterRule = css.match(/\.player-play-cluster\s*\{([^}]*)\}/s)?.[1] || '';
-  const idleBackdropRule = css.match(/\.player-timeline-wrap\.is-idle::before\s*\{([^}]*)\}/s)?.[1] || '';
-  const waveformWrapRule = css.match(/\.player-timeline-wrap\.is-waveform\s*\{([^}]*)\}/s)?.[1] || '';
+  const playerRule = css.match(/\.global-player\s*\{([^}]*)\}/s)?.[1] || '';
   const waveformRule = css.match(/\.player-waveform-canvas\s*\{([^}]*)\}/s)?.[1] || '';
-  const timelineRule = css.match(/(?:^|\n)\.player-timeline\s*\{([^}]*)\}/s)?.[1] || '';
   const waveformTimelineRule = css.match(
     /\.player-timeline-wrap\.is-waveform\s+\.player-timeline\s*\{([^}]*)\}/s,
   )?.[1] || '';
 
-  assert.match(coverRule, /grid-row:\s*1\s*\/\s*4/);
-  assert.match(coverRule, /align-self:\s*center/);
-  assert.match(playClusterRule, /grid-row:\s*1\s*\/\s*4/);
-  assert.match(playClusterRule, /align-self:\s*center/);
-  assert.doesNotMatch(coverRule, /margin-top:\s*\d+(?:\.\d+)?px/);
-  assert.doesNotMatch(playClusterRule, /margin-top:\s*\d+(?:\.\d+)?px/);
+  assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
+  assert.match(playerRule, /--player-regular-centerline:\s*39px/);
+  assert.match(playerRule, /--player-controls-size:\s*48px/);
+  assert.match(playerRule, /--player-leading-width:\s*114px/);
   assert.match(
-    wrapRule,
-    /transform:\s*translateY\(-9px\)/,
-    'idle and playing timelines share one upward centerline correction',
+    css,
+    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-controls\s*\{[^}]*margin-top:\s*calc\(var\(--player-waveform-centerline\)\s*-\s*\(var\(--player-controls-size\)\s*\/\s*2\)\)/s,
   );
-  assert.doesNotMatch(waveformWrapRule, /transform:\s*translateY\(-\d+(?:\.\d+)?px\)/);
-  assert.match(timelineRule, /position:\s*absolute/);
-  assert.match(timelineRule, /bottom:\s*5px/);
-  assert.match(timelineRule, /height:\s*36px/);
-  assert.match(waveformRule, /bottom:\s*5px/);
-  assert.match(waveformRule, /height:\s*36px/);
-  assert.match(idleBackdropRule, /bottom:\s*5px/);
-  assert.match(idleBackdropRule, /height:\s*36px/);
+  assert.match(
+    css,
+    /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-controls\s*\{[^}]*margin-top:\s*calc\(var\(--player-regular-centerline\)\s*-\s*\(var\(--player-controls-size\)\s*\/\s*2\)\)/s,
+  );
+  assert.match(
+    css,
+    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*29px[^}]*height:\s*56px/s,
+  );
+  assert.match(
+    css,
+    /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*15px[^}]*height:\s*48px/s,
+  );
+  assert.match(waveformRule, /bottom:\s*0/);
+  assert.match(waveformRule, /height:\s*56px/);
   assert.match(waveformTimelineRule, /position:\s*absolute/);
   assert.match(waveformTimelineRule, /opacity:\s*0\.42/);
   assert.match(waveformTimelineRule, /appearance:\s*none/);
@@ -517,16 +582,15 @@ test('persistent-player regular and waveform timelines share the Play centerline
   );
 });
 
-test('persistent-player metadata and timestamps share a subtle upward offset', () => {
+test('persistent-player metadata and timestamps use approved mode offsets', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
-  const metaRule = css.match(/\.player-meta\s*\{([^}]*)\}/s)?.[1] || '';
-  const timeRule = css.match(/\.player-time\s*\{([^}]*)\}/s)?.[1] || '';
 
-  assert.match(metaRule, /transform:\s*translateY\(-7px\)/);
-  assert.match(timeRule, /transform:\s*translateY\(-7px\)/);
-  assert.match(timeRule, /margin-bottom:\s*13px/);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-meta\s*\{[^}]*top:\s*7px[^}]*left:\s*calc\(-1\s*\*\s*var\(--player-leading-width\)\)/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-time\s*\{[^}]*top:\s*8px/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-meta\s*\{[^}]*top:\s*10px[^}]*left:\s*0/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-time\s*\{[^}]*top:\s*11px/s);
 });
 
 test('persistent player restores the compact unclipped player and stereo waveform geometry', () => {
@@ -537,29 +601,17 @@ test('persistent player restores the compact unclipped player and stereo wavefor
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'base-layout.css',
   ), 'utf8');
   const playerHeight = Number(baseLayoutCss.match(/--player-height:\s*(\d+)px/)?.[1] || 0);
-  const playerRule = css.match(/\.global-player\s*\{([^}]*)\}/s)?.[1] || '';
-  const shellRule = css.match(/\.player-shell\s*\{([^}]*)\}/s)?.[1] || '';
-  const mainRule = css.match(/\.player-main\s*\{([^}]*)\}/s)?.[1] || '';
   const waveformRule = css.match(/\.player-waveform-canvas\s*\{([^}]*)\}/s)?.[1] || '';
   const rangeSurfaceRule = css.match(
     /\.player-timeline-wrap\s*>\s*\.loop-range-surface\s*\{([^}]*)\}/s,
   )?.[1] || '';
-  const shellRows = shellRule.match(/grid-template-rows:\s*([^;]+)/)?.[1] || '';
-  const mainRows = mainRule.match(/grid-template-rows:\s*([^;]+)/)?.[1] || '';
-  const rowGap = Number(shellRule.match(/row-gap:\s*(\d+)px/)?.[1] || 0);
   const waveformHeight = Number(waveformRule.match(/height:\s*(\d+)px/)?.[1] || 0);
 
-  assert.equal(playerHeight, 85, 'the bottom player reserves seven pixels of title clearance');
-  assert.match(
-    playerRule,
-    /padding:\s*13px\s+16px\s+6px/,
-    'the extra player height becomes top clearance without lowering the waveform on screen',
-  );
-  assert.equal(shellRows, mainRows, 'shell and main metadata/time/waveform rows stay aligned');
-  assert.equal(shellRows, '18px 12px 32px');
-  assert.equal(rowGap, 1);
-  assert.equal(waveformHeight, 36, 'the stereo canvas returns to the approved unclipped height');
-  assert.match(rangeSurfaceRule, /height:\s*36px/);
+  assert.equal(playerHeight, 68, 'regular mode uses the approved compact expanded-player height');
+  assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*92px/s);
+  assert.match(css, /:root\.has-compact-player\s*\{[^}]*--player-height:\s*0px/s);
+  assert.equal(waveformHeight, 56, 'the stereo canvas is slightly smaller than the foobar reference');
+  assert.match(rangeSurfaceRule, /height:\s*56px/);
 });
 
 test('persistent-player handles live inside the full stereo range surface', () => {

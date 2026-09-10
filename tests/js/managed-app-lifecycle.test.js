@@ -171,6 +171,24 @@ test('restart writes one atomic nonce request and resolves only its ready acknow
   }
 });
 
+test('watcher cleanup emits only its fixed operation and waits for ready acknowledgment', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory), createNonce: () => 'watcher-cleanup-2',
+      pollIntervalMs: 1, timeoutMs: 100,
+      async sleep() {
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'), 'utf8')),
+          { nonce: 'watcher-cleanup-2', operation: 'watcher-cleanup' });
+        fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({ nonce: 'watcher-cleanup-2', status: 'ready' }));
+      },
+    });
+    assert.equal(typeof lifecycle.cleanupWatcherFixture, 'function');
+    assert.deepEqual(await lifecycle.cleanupWatcherFixture(), { nonce: 'watcher-cleanup-2', status: 'ready' });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('restart reports a clear timeout when no matching ready acknowledgment arrives', async () => {
   const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
   const { root, controlDirectory } = createOwnedDirectories();
@@ -238,3 +256,47 @@ test('restart promptly throws a matching failed acknowledgment instead of pollin
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+for (const outcome of ['acknowledged', 'timeout-reported', 'timeout-unreported']) {
+  test(`reportFailure retains a pending restart error: ${outcome}`, async () => {
+    const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+    const { root, controlDirectory } = createOwnedDirectories();
+    const ackPath = path.join(controlDirectory, 'restart-ack.json');
+    const requestPath = path.join(controlDirectory, 'restart-request.json');
+    let clock = 0, nonceIndex = 0, releaseRestart;
+    const restartWait = new Promise(resolve => { releaseRestart = resolve; });
+    try {
+      const lifecycle = createManagedAppLifecycle({
+        environment: createValidEnvironment(root, controlDirectory),
+        createNonce: () => `preserve-error-${++nonceIndex}`,
+        now: () => clock, timeoutMs: 10, pollIntervalMs: 10,
+        async sleep() {
+          const request = JSON.parse(fs.readFileSync(requestPath, 'utf8'));
+          if (!request.operation) {
+            await restartWait;
+            if (outcome === 'acknowledged') {
+              fs.writeFileSync(ackPath, JSON.stringify({ nonce: request.nonce, status: 'failed', phase: 'start-replacement', error: 'original restart failure' }));
+            } else clock += 11;
+          } else if (outcome === 'timeout-unreported') clock += 11;
+          else fs.writeFileSync(ackPath, JSON.stringify({ nonce: request.nonce, status: 'failed', phase: 'fixture-cleanup', error: 'terminal fixture cleanup failure' }));
+        },
+      });
+      const originalResult = lifecycle.restart().catch(error => error);
+      const reportResult = lifecycle.reportFailure().then(value => ({ value }), error => ({ error }));
+      releaseRestart();
+      const original = await originalResult;
+      assert.ok(original instanceof Error);
+      const reported = await reportResult;
+      if (outcome === 'timeout-unreported') {
+        assert.ok(reported.error instanceof AggregateError);
+        assert.equal(reported.error.errors[0], original);
+        assert.match(reported.error.errors[1].message, /Timed out.*preserve-error-2/);
+      } else {
+        assert.equal(reported.error, original, 'terminal reporting must retain the prior restart failure');
+        assert.equal(JSON.parse(fs.readFileSync(ackPath, 'utf8')).status, 'failed');
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}

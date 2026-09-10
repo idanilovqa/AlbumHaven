@@ -61,6 +61,13 @@ export class ArtistPageSettingsActions {
       .filter(Boolean);
   }
 
+  async expectNoNonAlbumTracks() {
+    await this.open();
+    await expect(this.artistPageSettings.nonAlbumTracksCount).toHaveText('0');
+    await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
+    await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();
+  }
+
   async closeNonAlbumTracks(options = {}) {
     await this.artistPageSettings.nonAlbumTracksCloseButton.click();
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden({

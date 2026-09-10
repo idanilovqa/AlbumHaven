@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export function isRetryableStatusProbeError(error) {
   const message = String(error?.message || error || '');
@@ -133,7 +134,7 @@ export class AppBarActions {
     await expect.poll(async () => {
       let response;
       try {
-        response = await this.appBar.page.request.get('/status');
+        response = await authenticatedPageGet(this.appBar.page, '/status');
       } catch (error) {
         if (!isRetryableStatusProbeError(error)) throw error;
         lastStatus = { transport_error: String(error?.message || error) };
@@ -167,6 +168,24 @@ export class AppBarActions {
     return lastStatus;
   }
 
+  async waitForIncrementalScanUiSettled(options = {}) {
+    await this.appBar.waitForPageCondition((scanIndicatorSelector) => {
+      const indicator = document.querySelector(scanIndicatorSelector);
+      if (!(indicator instanceof HTMLElement) || indicator.classList.contains('is-busy')) {
+        return false;
+      }
+      if (typeof state === 'undefined') return false;
+      const ui = state.ui || {};
+      return !state.busy
+        && !String(ui.activeViewRequestUrl || '').trim()
+        && !ui.pendingScanCompletionViewRefresh
+        && !ui.pendingScanCompletionViewRefreshRetryScheduled
+        && !Number(ui.pendingScanCompletionViewRefreshEligibleRequestId || 0);
+    }, {
+      timeout: options.timeout || 120000,
+    }, this.appBar.scanIndicatorSelector);
+  }
+
   async triggerIncrementalScanAndWaitForBusy() {
     const refreshResponsePromise = this.appBar.page.waitForResponse((response) => {
       if (response.request().method() !== 'POST') return false;
@@ -185,6 +204,7 @@ export class AppBarActions {
   async triggerIncrementalScanAndWait(options = {}) {
     await this.triggerIncrementalScanAndWaitForBusy();
     await this.waitForIncrementalScanComplete(options);
+    await this.waitForIncrementalScanUiSettled(options);
   }
 
   async waitForScanAndCoverRefreshIdle(options = {}) {
@@ -192,7 +212,7 @@ export class AppBarActions {
     await expect.poll(async () => {
       let response;
       try {
-        response = await this.appBar.page.request.get('/status');
+        response = await authenticatedPageGet(this.appBar.page, '/status');
       } catch (error) {
         if (!isRetryableStatusProbeError(error)) throw error;
         lastStatus = { transport_error: String(error?.message || error) };

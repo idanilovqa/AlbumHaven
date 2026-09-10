@@ -122,7 +122,16 @@ test('problematic-file render scrolls the focused track row into view determinis
   };
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
+    list: {
+      innerHTML: '',
+      scrollTop: 0,
+      getBoundingClientRect() { return { top: 0, bottom: 200 }; },
+      querySelector(selector) {
+        return selector === '.utility-list-item.is-active'
+          ? { getBoundingClientRect() { return { top: 20, bottom: 60 }; } }
+          : null;
+      },
+    },
     detail,
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
@@ -173,6 +182,15 @@ test('problematic-file render scrolls the focused track row into view determinis
   assert.deepEqual(cssEscapeCalls, [trackPath]);
   assert.deepEqual(selectorCalls, [`[data-problematic-track-path="${escapedTrackPath}"]`]);
   assert.equal(detail.scrollTop, 88);
+
+  detail.scrollTop = 0;
+  context.renderProblematicFiles();
+
+  assert.equal(
+    detail.scrollTop,
+    76,
+    'a late summary/detail rerender must keep the requested track row in view',
+  );
 });
 
 test('rerender leaves a failed problematic album detail in its terminal state', () => {
@@ -534,11 +552,14 @@ test('late Problematic detail responses are discarded after a newer selection ow
 });
 
 function renderFocusedAlbumWithGeometry({
+  deferAnimationFrame = true,
   detailBottom,
   initialDetailScrollTop,
   initialScrollTop,
+  initialLayoutReady = true,
   listBottom,
   quantizeScrollTop = false,
+  resetScrollOnInnerHTML = false,
   rowBottom,
   trackBottom,
 }) {
@@ -550,15 +571,28 @@ function renderFocusedAlbumWithGeometry({
   const scrollCalls = [];
   const activeAlbumRow = {
     getBoundingClientRect() {
-      return { top: rowBottom - 60, bottom: rowBottom, height: 60 };
+      return layoutReady
+        ? { top: rowBottom - 60, bottom: rowBottom, height: 60 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     scrollIntoView(options) {
       scrollCalls.push({ target: 'album', options });
     },
   };
   let currentScrollTop = initialScrollTop;
+  let currentDetailScrollTop = initialDetailScrollTop;
+  let layoutReady = initialLayoutReady;
+  let listInnerHTML = '';
+  const scheduledAnimationFrames = [];
+  const inputListeners = new Map();
   const list = {
-    innerHTML: '',
+    get innerHTML() {
+      return listInnerHTML;
+    },
+    set innerHTML(value) {
+      listInnerHTML = value;
+      if (resetScrollOnInnerHTML) currentScrollTop = 0;
+    },
     get scrollTop() {
       return currentScrollTop;
     },
@@ -566,7 +600,9 @@ function renderFocusedAlbumWithGeometry({
       currentScrollTop = quantizeScrollTop ? Math.floor(value) : value;
     },
     getBoundingClientRect() {
-      return { top: listBottom - 200, bottom: listBottom, height: 200 };
+      return layoutReady
+        ? { top: listBottom - 200, bottom: listBottom, height: 200 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     querySelector(selector) {
       return selector === '.utility-list-item.is-active' ? activeAlbumRow : null;
@@ -574,7 +610,9 @@ function renderFocusedAlbumWithGeometry({
   };
   const focusedTrackRow = {
     getBoundingClientRect() {
-      return { top: trackBottom - 32, bottom: trackBottom, height: 32 };
+      return layoutReady
+        ? { top: trackBottom - 32, bottom: trackBottom, height: 32 }
+        : { top: 0, bottom: 0, height: 0 };
     },
   };
   const focusedTrackMatch = {
@@ -588,9 +626,16 @@ function renderFocusedAlbumWithGeometry({
   };
   const detail = {
     innerHTML: '',
-    scrollTop: initialDetailScrollTop,
+    get scrollTop() {
+      return currentDetailScrollTop;
+    },
+    set scrollTop(value) {
+      currentDetailScrollTop = value;
+    },
     getBoundingClientRect() {
-      return { top: detailBottom - 200, bottom: detailBottom, height: 200 };
+      return layoutReady
+        ? { top: detailBottom - 200, bottom: detailBottom, height: 200 }
+        : { top: 0, bottom: 0, height: 0 };
     },
     querySelector(selector) {
       return selector === '[data-problematic-track-path="escaped-track-path"]'
@@ -598,6 +643,14 @@ function renderFocusedAlbumWithGeometry({
         : null;
     },
   };
+  for (const container of [list, detail]) {
+    const listeners = new Map();
+    inputListeners.set(container, listeners);
+    container.addEventListener = (type, listener) => {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(listener);
+    };
+  }
   const elements = {
     overlay: {},
     list,
@@ -640,6 +693,14 @@ function renderFocusedAlbumWithGeometry({
     cssEscape() {
       return 'escaped-track-path';
     },
+    scheduleBrowserAnimationFrame(callback) {
+      if (deferAnimationFrame) {
+        scheduledAnimationFrames.push(callback);
+        return scheduledAnimationFrames.length;
+      }
+      callback();
+      return 1;
+    },
     async loadProblematicAlbumDetail() {},
   };
   vm.createContext(context);
@@ -647,7 +708,66 @@ function renderFocusedAlbumWithGeometry({
 
   context.renderProblematicFiles();
 
-  return { detail, list, scrollCalls };
+  return {
+    context,
+    detail,
+    input(containerName, type, properties = {}) {
+      const container = containerName === 'list' ? list : detail;
+      for (const listener of inputListeners.get(container).get(type) || []) {
+        listener({ type, target: container, ...properties });
+      }
+    },
+    flushAnimationFrame({ makeLayoutReady = true } = {}) {
+      if (makeLayoutReady) layoutReady = true;
+      scheduledAnimationFrames.shift()?.();
+    },
+    list,
+    scrollCalls,
+  };
+}
+
+for (const [container, type, properties] of [
+  ['list', 'wheel', { deltaY: 50 }], ['detail', 'wheel', { deltaY: -50 }],
+  ['detail', 'touchmove', {}], ['detail', 'pointerdown', { button: 0 }],
+  ['detail', 'keydown', { key: 'PageDown' }], ['list', 'keydown', { key: 'Home' }],
+]) {
+  test(`focused problematic navigation yields to user ${container} ${type} across queued layout and rerenders`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input(container, type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, '');
+    rendered.list.scrollTop = 180; rendered.detail.scrollTop = 250;
+    const attempts = rendered.scrollCalls.length;
+    rendered.flushAnimationFrame();
+    rendered.context.renderProblematicFiles();
+    assert.equal(rendered.scrollCalls.length, attempts, 'old request must not pull either viewport back');
+    assert.equal(rendered.list.scrollTop, 180);
+    assert.equal(rendered.detail.scrollTop, 250);
+    rendered.context.state.utility.focusedTrackPath = requested;
+    rendered.context.renderProblematicFiles();
+    assert.ok(rendered.scrollCalls.length > attempts, 'a later explicit navigation owns a new request');
+  });
+}
+
+for (const [type, properties] of [
+  ['scroll', {}], ['pointerdown', { button: 0, target: { closest: () => null } }],
+  ['keydown', { key: 'PageDown', target: { closest: () => ({ tagName: 'INPUT' }) } }],
+  ['keydown', { key: ' ', target: { closest: () => ({ tagName: 'BUTTON' }) } }],
+  ['keydown', { key: 'Tab' }], ['wheel', { deltaY: 0, deltaX: 0 }],
+]) {
+  test(`focused problematic navigation retains deferred ownership for non-scroll input ${type} ${properties.key || ''}`, () => {
+    const rendered = renderFocusedAlbumWithGeometry({ detailBottom: 240, listBottom: 300,
+      initialDetailScrollTop: 0, initialScrollTop: 0, initialLayoutReady: false,
+      rowBottom: 320, trackBottom: 260 });
+    const requested = rendered.context.state.utility.focusedTrackPath;
+    rendered.input('detail', type, properties);
+    assert.equal(rendered.context.state.utility.focusedTrackPath, requested);
+    rendered.flushAnimationFrame();
+    assert.equal(rendered.detail.scrollTop, 20);
+    assert.equal(rendered.list.scrollTop, 20);
+  });
 }
 
 function assertNearestAlbumScrollCall(scrollCalls) {
@@ -686,6 +806,146 @@ test('problematic-file render rounds a fractional focused-album clip up to one s
   assert.equal(list.scrollTop, 183);
   assert.equal(detail.scrollTop, 38);
 });
+
+test('problematic-file render corrects focused navigation after layout and retains it for late rerenders', () => {
+  const rendered = renderFocusedAlbumWithGeometry({
+    deferAnimationFrame: true,
+    detailBottom: 240,
+    initialDetailScrollTop: 0,
+    initialLayoutReady: false,
+    initialScrollTop: 0,
+    listBottom: 300,
+    rowBottom: 320,
+    trackBottom: 260,
+  });
+
+  assert.equal(rendered.list.scrollTop, 0);
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
+
+  rendered.flushAnimationFrame({ makeLayoutReady: false });
+
+  assert.equal(rendered.list.scrollTop, 0);
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
+
+  rendered.flushAnimationFrame();
+
+  assert.equal(rendered.list.scrollTop, 20);
+  assert.equal(rendered.detail.scrollTop, 20);
+  assert.notEqual(rendered.context.state.utility.focusedTrackPath, '');
+});
+
+test('problematic-file render preserves the selected album viewport across a late rerender', () => {
+  const rendered = renderFocusedAlbumWithGeometry({
+    detailBottom: 240,
+    initialDetailScrollTop: 0,
+    initialScrollTop: 0,
+    listBottom: 300,
+    resetScrollOnInnerHTML: true,
+    rowBottom: 280,
+    trackBottom: 220,
+  });
+
+  rendered.context.state.utility.focusedTrackPath = '';
+  rendered.list.scrollTop = 182;
+
+  rendered.context.renderProblematicFiles();
+
+  assert.equal(rendered.list.scrollTop, 182);
+});
+
+for (const withLoadingRefresh of [false, true]) {
+test(`problematic-file render preserves owned mutation scroll geometry across a late ${withLoadingRefresh ? 'loading refresh' : 'rerender'}`, () => {
+  const selectedAlbum = {
+    key: 'album-previous',
+    name: 'Album Previous',
+    detail_loaded: true,
+  };
+  let currentScrollTop = 1335;
+  let listHtml = '<button>Album Previous</button>';
+  let naturalContentHeight = 1456;
+  let retainedNode = {
+    style: { height: '79px' },
+    matches(selector) {
+      return selector === '[data-problematic-scroll-retainer]';
+    },
+  };
+  const originalRetainedNode = retainedNode;
+  const clampScrollTop = (value) => Math.min(
+    Number(value),
+    Math.max(0, naturalContentHeight + (retainedNode ? 79 : 0) - 200),
+  );
+  const list = {
+    get innerHTML() {
+      return listHtml;
+    },
+    set innerHTML(value) {
+      listHtml = value;
+      naturalContentHeight = value.includes('Loading...') ? 40 : 1456;
+      retainedNode = null;
+      currentScrollTop = clampScrollTop(currentScrollTop);
+    },
+    get scrollTop() {
+      return currentScrollTop;
+    },
+    set scrollTop(value) {
+      currentScrollTop = clampScrollTop(value);
+    },
+    querySelector(selector) {
+      return retainedNode?.matches(selector) ? retainedNode : null;
+    },
+    appendChild(node) {
+      retainedNode = node;
+      return node;
+    },
+  };
+  const elements = {
+    overlay: {},
+    list,
+    detail: {
+      innerHTML: '',
+      removeAttribute() {},
+    },
+    count: { textContent: '' },
+    search: { disabled: false, placeholder: '', value: '' },
+    problemFilterButton: { disabled: false, hidden: false },
+    tabs: [],
+  };
+  const context = {
+    state: {
+      utility: {
+        activeTab: 'problematic-files',
+        focusedTrackPath: '',
+        loaded: true,
+        loading: false,
+        problematicFiles: [selectedAlbum],
+        searchQuery: '',
+        selectedProblematicKey: selectedAlbum.key,
+        selectedProblemFilters: [],
+      },
+    },
+    getUtilityModalElements() { return elements; },
+    getFilteredProblematicAlbums() { return [selectedAlbum]; },
+    renderProblemFilterControls() {},
+    getSelectedProblematicAlbumFrom() { return selectedAlbum; },
+    buildProblematicAlbumListItem() { return '<button>Album Previous</button>'; },
+    initializeRepairSelections() {},
+    buildProblematicAlbumDetail() { return '<h2>Album Previous</h2>'; },
+    async loadProblematicAlbumDetail() {},
+  };
+  vm.createContext(context);
+  vm.runInContext(rendererSource, context, { filename: rendererPath });
+
+  if (withLoadingRefresh) {
+    context.state.utility.loading = true;
+    context.renderProblematicFiles();
+    context.state.utility.loading = false;
+  }
+  context.renderProblematicFiles();
+
+  assert.equal(retainedNode, originalRetainedNode, 'the owned scroll geometry must survive list replacement');
+  assert.equal(list.scrollTop, 1335, 'the late render must restore the mutation-owned scroll position');
+});
+}
 
 test('empty log history visibly explains session-only storage and keeps export explicit', () => {
   const elements = {

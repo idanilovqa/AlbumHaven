@@ -5,7 +5,8 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'bootstrap-init.js');
-const helperSource = fs.readFileSync(helperPath, 'utf8');
+const accountMenuPath = path.join(path.dirname(helperPath), 'account-menu.js');
+const helperSource = `${fs.readFileSync(accountMenuPath, 'utf8')}\n${fs.readFileSync(helperPath, 'utf8')}`;
 const loaderHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'loader-status-helpers.js');
 const loaderHelperSource = fs.readFileSync(loaderHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');

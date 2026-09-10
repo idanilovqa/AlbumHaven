@@ -33,7 +33,7 @@ const EXPECTED_EDIT_TAG_FILENAMES = Array.from({ length: 17 }, (_, index) => {
     : `${String(trackNumber).padStart(2, '0')} - Track ${trackNumber}.mp3`;
 });
 
-test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album', async ({
+test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -54,7 +54,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
     );
     await galleryActions.clickAlbumDetailsByAlbumName(LEGACY_IGNORED_ALBUM);
     const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${LEGACY_IGNORED_ARTIST} - ${LEGACY_IGNORED_ALBUM}`);
+    expect(summary.title).toContain(`${LEGACY_IGNORED_ARTIST} • ${LEGACY_IGNORED_ALBUM}`);
     await trackModalActions.expectProblemLinksAbsent();
     await trackModalActions.close();
   });
@@ -78,7 +78,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
   });
 });
 
-test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', async ({
+test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -98,8 +98,9 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
     await searchToolbarActions.waitForQuery(ALBUM);
     await galleryActions.waitForAlbumVisibleUnderHeading(ALBUM_ARTIST, ALBUM);
     await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);
-    const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(`${ALBUM_ARTIST} - ${ALBUM}`);
+    const summary = await trackModalActions.waitForInteractiveSummary();
+    expect(summary.title).toContain(ALBUM);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(ALBUM_ARTIST);
   });
 
   await stepLogger.step('Show the server-owned Problematic Files action on the late problematic track', async () => {
@@ -142,6 +143,10 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
   await stepLogger.step('Open Problematic Files from that exact track and scroll the matching album into view', async () => {
     await utilityProblematicFilesActions.startNavigationRenderObservation();
     await trackModalActions.openProblematicFilesForTrack(PROBLEMATIC_TRACK);
+    const utilityStack = await settingsModalAppBarActions.settingsModalAppBar
+      .readStackingCheckpoint(trackModalActions.trackModal.dialog);
+    expect(utilityStack.utilityZIndex).toBeGreaterThan(utilityStack.underlyingZIndex);
+    expect(utilityStack.utilityOwnsTopElement).toBe(true);
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     await utilityProblematicFilesActions.waitForSelectedDetailSelection({ expectedTitle: ALBUM });
     await utilityProblematicFilesActions.waitForActiveAlbumInSidebarViewport(ALBUM);
@@ -177,7 +182,7 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
 
 });
 
-test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload', async ({
+test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -523,11 +528,15 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
       album: SUGGESTED_EDIT_ALBUM,
     });
     const normalizedSelectedPath = selectedTitleRepair.path.toLowerCase();
-    expect(postgresAfterSuggestedRepair).toEqual(postgresBeforeSuggestedRepair.map((row) => (
+    const withoutLibraryRoot = ({ library_root_id: _libraryRootId, ...row }) => row;
+    expect(postgresAfterSuggestedRepair.map(withoutLibraryRoot)).toEqual(
+      postgresBeforeSuggestedRepair.map((row) => withoutLibraryRoot(
       String(row.path || '').toLowerCase() === normalizedSelectedPath
         ? { ...row, title: selectedTitleRepair.repaired }
-        : row
-    )));
+        : row,
+      )),
+    );
+    expect(postgresAfterSuggestedRepair.every((row) => Boolean(row.library_root_id))).toBe(true);
 
     await utilityTabBarActions.openTab('rules');
     await utilityRulesActions.waitForReady();
@@ -619,7 +628,7 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
   }
 });
 
-test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion', async ({
+test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,

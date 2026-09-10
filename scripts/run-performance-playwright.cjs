@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const childProcess = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 const crypto = require('node:crypto');
 const {
   _private: terminalSummary,
@@ -43,6 +44,7 @@ const SCAN_SETUP_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL
 const SCAN_RUNTIME_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL';
 const SCAN_ALLOW_SHARED_DATABASE_ENV = 'ALBUM_HAVEN_SCAN_PERFORMANCE_ALLOW_SHARED_DATABASE';
 const SCAN_DATABASE_RUNBOOK = '.env.example';
+const PERFORMANCE_CHILD_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const SCAN_DATABASE_NAME = 'album_haven_scan_e2e';
 const SCAN_SETUP_DATABASE_ROLE = 'album_haven_migrator';
 const SCAN_RUNTIME_DATABASE_ROLE = 'album_haven_app';
@@ -1724,6 +1726,7 @@ function runPerformanceAttempt(
     cwd: repoRoot,
     env: attemptEnv,
     encoding: 'utf8',
+    maxBuffer: PERFORMANCE_CHILD_MAX_BUFFER_BYTES,
     windowsHide: true,
   });
   if (result.error) {
@@ -1734,6 +1737,11 @@ function runPerformanceAttempt(
   }
   if (result.stderr) {
     process.stderr.write(result.stderr);
+  }
+  if (result.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+    const error = new Error('Performance child process cleanup is unproven; stopping remaining runs.');
+    error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
   }
   const combinedOutput = `${result.stdout || ''}${result.stderr || ''}`;
   assertNoLiveCoverProviderDomains(combinedOutput, verificationGroup?.label);
@@ -1978,6 +1986,7 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
   const artifactRoot = options.useLegacyArtifacts
     ? null
     : resolvePerformanceTargetArtifactRoot(target);
+  let processCleanupFailed = false;
   try {
     const result = runPerformanceAttempt(
       target,
@@ -2002,8 +2011,11 @@ function runSinglePerformanceAttempt(target, options, verificationGroup, attempt
       terminalSummary.parsePlaywrightListResults(result.combinedOutput),
       result,
     );
+  } catch (error) {
+    processCleanupFailed = error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
   } finally {
-    cleanupManagedScanStatusSamples(managedScanStatusEnv);
+    if (!processCleanupFailed) cleanupManagedScanStatusSamples(managedScanStatusEnv);
   }
 }
 
@@ -2051,6 +2063,7 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
       buildSyntheticFixtureIsolationEnv(firstTarget),
     ),
   );
+  let processCleanupFailed = false;
   try {
     const result = runPerformanceAttempt(
       firstTarget,
@@ -2079,8 +2092,11 @@ function runBatchPerformanceAttempt(targets, options, verificationGroup, attempt
         result,
       );
     });
+  } catch (error) {
+    processCleanupFailed = error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+    throw error;
   } finally {
-    cleanupManagedScanStatusSamples(managedScanStatusEnv);
+    if (!processCleanupFailed) cleanupManagedScanStatusSamples(managedScanStatusEnv);
   }
 }
 
@@ -2464,6 +2480,8 @@ if (require.main === module) {
   } catch (error) {
     console.error(error?.message || error);
     printUsage();
-    process.exit(1);
+    process.exit(error?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      ? PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      : 1);
   }
 }

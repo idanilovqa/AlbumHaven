@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 
 import pytest
 
@@ -107,6 +108,10 @@ def playback_app(tmp_path, monkeypatch):
         FakePostgresLibraryRootSettingsStore,
     )
     monkeypatch.setattr(
+        "music_app.services.exception_overrides.load_exception_overrides",
+        lambda _config: {},
+    )
+    monkeypatch.setattr(
         "music_app.services.state.hydrate_runtime_library_state_on_startup",
         lambda _runtime: True,
     )
@@ -163,6 +168,132 @@ def open_command(media_path: Path, **changes) -> dict[str, object]:
     return command
 
 
+def configure_authenticated_request_double(websocket: object) -> None:
+    websocket.cookies = {}
+    websocket.state = SimpleNamespace()
+    websocket.client = SimpleNamespace(host="testclient")
+
+
+def test_pcm_socket_rejects_missing_authentication_before_admission(playback_app):
+    from music_app.services.current_actor import CurrentActor
+
+    class AnonymousResolver:
+        def resolve(self, _token):
+            return CurrentActor.anonymous()
+
+    playback_app.state.current_actor_resolver = AnonymousResolver()
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is False
+            assert socket.close_code == 4401
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("capability_keys", "accepted"),
+    [
+        (("library.media.read",), True),
+        ((), False),
+    ],
+    ids=["admin-assigned-playback-grant", "missing-playback-grant"],
+)
+def test_pcm_socket_uses_managed_account_playback_permission(
+    playback_app,
+    capability_keys,
+    accepted,
+):
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    assert "library.media.read" in MANAGED_CAPABILITY_KEYS
+
+    class ManagedAccountResolver:
+        def resolve(self, _token):
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=tuple(
+                    CapabilityGrant(key, "library", 23) for key in capability_keys
+                ),
+            )
+
+    playback_app.state.current_actor_resolver = ManagedAccountResolver()
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is accepted
+            if not accepted:
+                assert socket.close_code == 4403
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("revoked_actor", "expected_close_code"),
+    [
+        ("anonymous", 4401),
+        ("missing-capability", 4403),
+    ],
+)
+def test_pcm_socket_revalidates_durable_authority_before_each_open(
+    playback_app,
+    media_path,
+    decoder_factory,
+    revoked_actor,
+    expected_close_code,
+):
+    from music_app.services.current_actor import (
+        ActorState,
+        CapabilityGrant,
+        CurrentActor,
+        LibraryRelationship,
+    )
+
+    class RevocableResolver:
+        revoked = False
+
+        def resolve(self, _token):
+            if self.revoked and revoked_actor == "anonymous":
+                return CurrentActor.anonymous()
+            return CurrentActor(
+                state=ActorState.ACTIVE,
+                account_id=41,
+                session_id=73,
+                username_display="Listener",
+                current_library_id=23,
+                library_relationships=(LibraryRelationship(23, "member", False),),
+                capability_grants=(
+                    ()
+                    if self.revoked
+                    else (CapabilityGrant("library.media.read", "library", 23),)
+                ),
+            )
+
+    resolver = RevocableResolver()
+    playback_app.state.current_actor_resolver = resolver
+
+    async def scenario():
+        async with websocket_session(playback_app, "/playback/pcm") as socket:
+            assert socket.accepted is True
+            resolver.revoked = True
+            await socket.send_json(open_command(media_path))
+            assert await socket.receive_close() == expected_close_code
+
+    asyncio.run(scenario())
+    assert decoder_factory.instances == []
+
+
 def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed_bins(
     playback_app,
     media_path,
@@ -202,6 +333,39 @@ def test_waveform_route_resolves_configured_media_path_and_returns_compact_fixed
     assert body == json.dumps(expected, separators=(",", ":")).encode("utf-8")
     assert headers["content-type"] == "application/json"
     assert int(headers["content-length"]) == len(body)
+
+
+def test_waveform_route_allows_the_bounded_higher_detail_player_density(
+    playback_app,
+    media_path,
+):
+    from music_app.services.waveform_peaks import WaveformPeaks
+
+    class RegistryDouble:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Path, int]] = []
+
+        async def run(self, path: Path, *, bins: int) -> WaveformPeaks:
+            self.calls.append((path, bins))
+            return WaveformPeaks(
+                left=(0.25,) * bins,
+                right=(0.5,) * bins,
+                sample_count=bins,
+            )
+
+    registry = RegistryDouble()
+    playback_app.state.waveform_peaks_registry = registry
+
+    status, _headers, body = run_asgi_request(
+        playback_app,
+        "GET",
+        "/playback/waveform",
+        query={"path": str(media_path), "bins": "720"},
+    )
+
+    assert status == 200
+    assert registry.calls == [(media_path, 720)]
+    assert decode_json(body)["sampleCount"] == 720
 
 
 def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bounded_registry(
@@ -2109,6 +2273,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
             self.app = playback_app
             self.client_closed = False
             self.receive_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2145,7 +2310,7 @@ def test_disconnect_while_decoder_open_is_pending_does_not_raise_on_metadata_sen
         assert connection is not None
 
         run_task = asyncio.create_task(connection.run())
-        await start_entered.wait()
+        await asyncio.wait_for(start_entered.wait(), timeout=1)
         websocket.client_closed = True
         allow_start.set()
 
@@ -2167,6 +2332,7 @@ def test_unrelated_metadata_send_runtime_error_still_propagates(
     class FailingMetadataWebSocketDouble:
         def __init__(self) -> None:
             self.app = playback_app
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2222,6 +2388,7 @@ def test_disconnect_during_stream_send_does_not_emit_decoder_error_and_releases_
                 {"type": "credit", "generation": 1, "streamId": 1, "frames": 1},
             ]
             self.decoder_error_send_calls = 0
+            configure_authenticated_request_double(self)
 
         async def accept(self) -> None:
             pass
@@ -2324,6 +2491,7 @@ def test_decoder_start_that_finishes_after_shutdown_is_cancelled_without_registr
         def __init__(self) -> None:
             self.app = playback_app
             self.events: list[dict[str, object]] = []
+            configure_authenticated_request_double(self)
 
         async def send_json(self, event: dict[str, object]) -> None:
             self.events.append(event)

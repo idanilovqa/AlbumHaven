@@ -674,6 +674,9 @@ test('persistent and saved-loop players share one relational Play control cluste
   const template = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'templates', 'index.html',
   ), 'utf8');
+  const playbackControlMacro = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'templates', 'partials', 'playback-control-cluster.html',
+  ), 'utf8');
   const clusterRule = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
   const buttonRule = css.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
   const actionRule = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
@@ -682,8 +685,8 @@ test('persistent and saved-loop players share one relational Play control cluste
   )?.[1] || '';
 
   assert.match(
-    template,
-    /class="loop-play-control-cluster player-play-cluster"[^]*class="loop-play-control-button player-play"[^]*class="loop-play-control-actions player-loop-actions"/s,
+    `${template}\n${playbackControlMacro}`,
+    /class="[^"]*playback-control-cluster[^"]*player-play-cluster"[^]*class="loop-play-control-button player-play"[^]*class="loop-play-control-actions player-loop-actions"/s,
     'the persistent player must render the shared Play/edit-control cluster hierarchy',
   );
   assert.match(clusterRule, /--loop-play-control-size:\s*48px/);

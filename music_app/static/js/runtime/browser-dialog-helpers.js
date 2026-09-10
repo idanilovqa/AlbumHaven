@@ -25,6 +25,69 @@ function showBrowserConfirm(message) {
   return Boolean(target.confirm(String(message || '')));
 }
 
+let activeAppConfirmDialog = null;
+
+function showAppConfirmDialog(options = {}) {
+  if (activeAppConfirmDialog) return activeAppConfirmDialog.promise;
+  if (typeof document === 'undefined') return Promise.resolve(false);
+  const modal = document.getElementById('app-confirm-modal');
+  const title = document.getElementById('app-confirm-title');
+  const text = document.getElementById('app-confirm-text');
+  const cancelButton = document.getElementById('app-confirm-cancel');
+  const acceptButton = document.getElementById('app-confirm-accept');
+  if (!modal || !title || !text || !cancelButton || !acceptButton) return Promise.resolve(false);
+
+  const previousFocus = document.activeElement;
+  const listeners = [];
+  const listen = (element, name, handler) => {
+    element?.addEventListener?.(name, handler);
+    listeners.push([element, name, handler]);
+  };
+  let resolveDialog;
+  const promise = new Promise(resolve => { resolveDialog = resolve; });
+  activeAppConfirmDialog = { promise };
+  const finish = accepted => {
+    if (activeAppConfirmDialog?.promise !== promise) return;
+    listeners.forEach(([element, name, handler]) => element?.removeEventListener?.(name, handler));
+    modal.hidden = true;
+    activeAppConfirmDialog = null;
+    resolveDialog(Boolean(accepted));
+    previousFocus?.focus?.();
+  };
+  const handleKeydown = event => {
+    if (event?.key === 'Escape') {
+      event.preventDefault?.();
+      event.stopPropagation?.();
+      finish(false);
+      return;
+    }
+    if (event?.key !== 'Tab') return;
+    if (event.shiftKey && document.activeElement === cancelButton) {
+      event.preventDefault?.(); acceptButton.focus?.();
+    } else if (!event.shiftKey && document.activeElement === acceptButton) {
+      event.preventDefault?.(); cancelButton.focus?.();
+    }
+  };
+  const handleBackdropClick = event => {
+    if (typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event)) finish(false);
+  };
+  if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  listen(cancelButton, 'click', () => finish(false));
+  listen(acceptButton, 'click', () => finish(true));
+  listen(modal, 'keydown', handleKeydown);
+  listen(modal, 'click', handleBackdropClick);
+  title.textContent = String(options.title || 'Confirm action');
+  text.textContent = String(options.message || 'Continue?');
+  cancelButton.textContent = String(options.cancelLabel || 'Cancel');
+  acceptButton.textContent = String(options.acceptLabel || 'Continue');
+  acceptButton.classList?.toggle?.('confirm-modal-danger', Boolean(options.danger));
+  modal.style.zIndex = '140';
+  modal.hidden = false;
+  document.body?.classList?.add?.('modal-open');
+  cancelButton.focus?.();
+  return promise;
+}
+
 let activeLoopNameDialog = null;
 
 function showLoopNameDialog(options = {}) {

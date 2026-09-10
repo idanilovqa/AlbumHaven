@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures.thread import _threads_queues, _worker
+from concurrent.futures.thread import _worker
 from threading import Lock
 
 
@@ -50,7 +50,6 @@ class DaemonThreadPoolExecutor(ThreadPoolExecutor):
         worker_thread.daemon = True
         worker_thread.start()
         self._threads.add(worker_thread)
-        _threads_queues[worker_thread] = self._work_queue
 
 
 def create_daemon_executor(*, max_workers: int, thread_name_prefix: str) -> DaemonThreadPoolExecutor:

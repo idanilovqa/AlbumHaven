@@ -353,6 +353,7 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
 
     calls: list[dict[str, object]] = []
     refresh_calls: list[dict[str, object]] = []
+    watcher_root_calls: list[list[dict[str, object]]] = []
 
     def fake_start_background_refresh_for_state(library_state, config, logger, **kwargs):
         assert library_state is asgi_app.state.library_state
@@ -372,6 +373,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     def fake_save_library_settings_and_start_refresh(config, settings_payload, **kwargs):
         assert config is asgi_app.state.config
         assert kwargs["library_state"] is asgi_app.state.library_state
+        kwargs["replace_watch_roots"](
+            [{"id": "main", "path": settings_payload["main_library_roots"][0]["path"]}]
+        )
         kwargs["start_background_refresh"](force=True, scan_mode="library_settings_update")
         calls.append(
             {
@@ -394,6 +398,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     assert not hasattr(asgi_routes, "_flask_app")
     asgi_logger = SimpleNamespace(name="asgi-library-settings-logger")
     asgi_app.state.logger = asgi_logger
+    asgi_app.state.replace_library_watch_roots = (
+        lambda roots: watcher_root_calls.append(list(roots))
+    )
     asgi_app.state.flask_app = FatalFlaskBridge()
     monkeypatch.setattr(
         asgi_routes,
@@ -451,6 +458,9 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
             "scan_mode": "library_settings_update",
         }
     ]
+    assert watcher_root_calls == [[
+        {"id": "main", "path": str(app.config["MUSIC_DIR"])}
+    ]]
 
 
 def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch):
@@ -548,6 +558,81 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
         "ok": True,
         "settings": saved_settings,
     }
+
+
+@pytest.mark.parametrize("concurrent_save", [False, True])
+def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_serialized(
+    asgi_app, monkeypatch, concurrent_save,
+):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services.library_settings import save_library_settings_and_start_refresh
+
+    entered = Event()
+    release = Event()
+    saved = []
+    replacements = []
+
+    def save_roots(_config, settings):
+        saved.append(settings["main_library_roots"][0]["id"])
+        return settings
+
+    def replace_roots(roots):
+        replacements.append(roots[0]["id"])
+        entered.set()
+        assert release.wait(3.0), "test cleanup must release watcher replacement"
+
+    def workflow(config, settings, **kwargs):
+        return save_library_settings_and_start_refresh(
+            config, settings, save_root_settings=save_roots, **kwargs,
+        )
+
+    def start_refresh(library_state, *_args, **_kwargs):
+        library_state["scan_in_progress"] = True
+
+    monkeypatch.setattr(routes, "save_library_settings_and_start_refresh", workflow)
+    monkeypatch.setattr(routes, "start_background_refresh_for_state", start_refresh)
+    asgi_app.state.replace_library_watch_roots = replace_roots
+    # Only a deadlock guard; successful requests release this before it fires.
+    timer = Timer(1.5, release.set)
+    timer.start()
+
+    async def exercise():
+        tasks = []
+        try:
+            tasks.append(asyncio.create_task(_run_asgi_request_async(
+                asgi_app, "POST", "/library-settings",
+                json_body={"settings": {"main_library_roots": [{"id": "first", "path": "C:/First"}]}},
+            )))
+            assert await asyncio.to_thread(entered.wait, 1.0)
+            assert not release.is_set(), "watcher replacement blocked the ASGI loop"
+            if concurrent_save:
+                tasks.append(asyncio.create_task(_run_asgi_request_async(
+                    asgi_app, "POST", "/library-settings",
+                    json_body={"settings": {"main_library_roots": [{"id": "second", "path": "C:/Second"}]}},
+                )))
+            heartbeat = await asyncio.wait_for(_run_asgi_request_async(
+                asgi_app, "GET", "/utilities/save-task/missing-task",
+            ), timeout=0.5)
+            assert heartbeat[0] == 404
+            assert not release.is_set()
+            release.set()
+            return await asyncio.gather(*tasks)
+        finally:
+            release.set()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    try:
+        results = asyncio.run(exercise())
+    finally:
+        release.set()
+        timer.cancel()
+        timer.join(timeout=2.0)
+        assert not timer.is_alive()
+
+    assert [result[0] for result in results] == ([200, 409] if concurrent_save else [200])
+    assert saved == ["first"]
+    assert replacements == ["first"]
+    assert asgi_app.state.library_state["scan_in_progress"] is True
 
 
 def test_asgi_library_settings_post_rejects_overlapping_roots(app, asgi_app, monkeypatch):
@@ -4508,6 +4593,67 @@ def test_asgi_bridge_finalize_default_problematic_matcher_uses_explicit_dependen
     assert observed["config"] is app.config
     assert observed["library_state"] is library_state
     assert observed["logger"] is sentinel_logger
+
+
+def test_asgi_bridge_clear_exception_restores_postgres_album_membership(
+    app,
+    monkeypatch,
+):
+    from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+
+    track_path = "C:/Music/Artist/Album/01 Restore.flac"
+    persisted: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        asgi_routes,
+        "persist_structural_tag_edit_for_config",
+        lambda config, **options: persisted.append(
+            {"config": config, **options}
+        ),
+    )
+    monkeypatch.setattr(
+        asgi_routes,
+        "queue_finalize_save_task",
+        lambda **kwargs: kwargs["complete_scoped_persistence"](),
+    )
+
+    asgi_routes._bridge_queue_finalize_save_task(
+        task_id="task-clear-exception-membership",
+        config=app.config,
+        logger=SimpleNamespace(name="asgi-save-task-logger"),
+        get_state=lambda: {"albums": [], "file_cache": {}},
+        previous_file_cache={
+            track_path: {
+                "path": track_path,
+                "album": "Album",
+                "exception_type": "Non-album rarity",
+            }
+        },
+        updated_file_cache={
+            track_path: {
+                "path": track_path,
+                "album": "Album",
+                "exception_type": "",
+            }
+        },
+        changed_paths={track_path},
+        requested_track_paths={track_path},
+        changed_field_names={"exception_type"},
+        scoped_postgres_exception_only=True,
+    )
+
+    assert len(persisted) == 1
+    assert persisted[0]["config"] is app.config
+    assert persisted[0]["changed_paths"] == {track_path}
+    assert persisted[0]["previous_file_entries"][track_path][
+        "exception_type"
+    ] == "Non-album rarity"
+    assert persisted[0]["updated_file_entries"][track_path][
+        "exception_type"
+    ] == ""
+    assert persisted[0]["changed_field_names"] == {"exception_type"}
+    assert callable(persisted[0]["before_commit"])
+    assert persisted[0]["rebuild_relation_projection"] is False
 
 
 def test_asgi_bridge_artist_edit_requests_atomic_relation_projection_rebuild(

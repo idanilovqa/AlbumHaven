@@ -406,7 +406,38 @@ def test_postgres_album_split_inserts_covered_destination_and_moves_only_selecte
     )
 
 
-def test_postgres_album_split_projects_destination_for_non_album_exception_track(
+def test_album_edit_restores_display_date_when_watcher_precreates_destination():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._persist_structural_album_tag_edit_sql()
+    )
+
+    assert "normalized_existing_destination_album as" in normalized_sql
+    assert "not %(updates_release_year)s::boolean" in normalized_sql
+    assert "has_display_year_override" in normalized_sql
+    assert "#>> '{scan_cache,file_entry,year}'" in normalized_sql
+    destination_sql = normalized_sql.split("normalized_existing_destination_album as (", 1)[1].split(
+        "updated_album_ratings as (", 1
+    )[0]
+    assert (
+        "when not %(updates_release_year)s::boolean "
+        "and validated_source_album.has_display_year_override "
+        "and nullif(btrim(library.local_albums.metadata ->> 'release_date'), '') is null "
+        "then validated_source_album.release_year else library.local_albums.release_year"
+    ) in destination_sql
+    assert (
+        "jsonb_set( coalesce(library.local_albums.metadata, '{}'::jsonb), "
+        "'{release_date}', to_jsonb(coalesce( "
+        "nullif(btrim(library.local_albums.metadata ->> 'release_date'), ''), "
+        "nullif(btrim(validated_source_album.metadata ->> 'release_date'), ''), "
+        "validated_source_album.release_year::text )), true )"
+    ) in destination_sql
+    assert "marked_partial_source_album as" in normalized_sql
+    assert "from normalized_existing_destination_album" in normalized_sql
+
+
+def test_postgres_album_rename_keeps_non_album_exception_track_detached(
     monkeypatch,
 ):
     paths, previous, updated = _entries(album="Problematic Files Rename Probe")
@@ -425,14 +456,19 @@ def test_postgres_album_split_projects_destination_for_non_album_exception_track
         changed_field_names={"album"},
     )
 
-    assert result["album_rows_updated"] == 1
+    assert result["album_rows_updated"] == 0
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
     mutation_params = next(
         params
         for sql, params in connection.executed
-        if "source_album_track_file_count" in _normalized_sql(sql)
+        if isinstance(params, dict) and "input_rows" in params
     )
-    assert mutation_params["destination_album_title"] == "Problematic Files Rename Probe"
-    assert mutation_params["changed_paths"] == [selected_path]
+    assert "destination_album_title" not in mutation_params
+    assert (
+        mutation_params["input_rows"][0]["file_entry"]["album"]
+        == "Problematic Files Rename Probe"
+    )
 
 
 def test_postgres_blank_album_edit_keeps_strongly_inferred_track_attached(monkeypatch):
@@ -600,6 +636,78 @@ def test_postgres_album_restore_accepts_an_already_detached_blank_album_track(
         previous_file_entries=previous,
         updated_file_entries=updated,
         changed_field_names={"album"},
+    )
+
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
+    assert result["destination_album_id"] == 41
+    executed_sql = [_normalized_sql(sql) for sql, _params in connection.executed]
+    assert any("insert into library.local_albums" in sql for sql in executed_sql)
+    _assert_album_restore_updates_existing_track_identity_in_place(connection)
+
+
+def test_postgres_exception_track_album_rename_keeps_inventory_membership_detached(
+    monkeypatch,
+):
+    paths, restored, previous = _entries(album="Problematic Files Rename Probe")
+    selected_path = paths[0]
+    previous = {selected_path: previous[selected_path]}
+    previous[selected_path]["exception_type"] = "Non-album rarity"
+    restored = {selected_path: {**restored[selected_path], "album": "Recovered Album"}}
+    result_row = _successful_result(path_count=1)
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.validate_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"album"},
+    )
+    result = adapter.persist_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"album"},
+    )
+
+    assert result["album_rows_updated"] == 0
+    assert result["track_rows_updated"] == 1
+    assert result["track_file_rows_updated"] == 1
+    executed_sql = [_normalized_sql(sql) for sql, _params in connection.executed]
+    assert not any("insert into library.local_albums" in sql for sql in executed_sql)
+    assert any(
+        isinstance(params, dict)
+        and "input_rows" in params
+        and "destination_album_key" not in params
+        for _sql, params in connection.executed
+    )
+
+
+def test_postgres_exception_clear_restores_detached_track_to_its_nonempty_album(
+    monkeypatch,
+):
+    paths, restored, previous = _entries(album="Two Track Rarity Fixture")
+    selected_path = paths[0]
+    previous = {selected_path: previous[selected_path]}
+    previous[selected_path]["exception_type"] = "Non-album rarity"
+    restored = {selected_path: {**restored[selected_path], "exception_type": ""}}
+    result_row = _successful_result(path_count=1)
+    result_row.update(source_album_count=0, source_album_track_file_count=0)
+    connection = StructuralTagEditConnection(result_row)
+    adapter = _adapter(monkeypatch, connection)
+
+    adapter.validate_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"exception_type"},
+    )
+    result = adapter.persist_structural_tag_edit(
+        changed_paths={selected_path},
+        previous_file_entries=previous,
+        updated_file_entries=restored,
+        changed_field_names={"exception_type"},
     )
 
     assert result["track_rows_updated"] == 1
@@ -1127,7 +1235,10 @@ def test_postgres_targeted_structural_edit_rejects_broader_field_sets(
     connection = StructuralTagEditConnection(_successful_result())
     adapter = _adapter(monkeypatch, connection)
 
-    with pytest.raises(ValueError, match="album-only or year-only"):
+    with pytest.raises(
+        ValueError,
+        match="album-only, year-only, or exception-only",
+    ):
         adapter.persist_structural_tag_edit(
             changed_paths=set(updated),
             previous_file_entries=previous,
@@ -1161,7 +1272,9 @@ def test_postgres_album_rename_preserves_row_identity_cover_and_unrelated_metada
     )[1].split("inserted_destination_album as (", 1)[0]
     assert "cover_path" not in destination_album_update
     assert "cover_revision" not in destination_album_update
-    assert "metadata =" not in destination_album_update
+    assert "metadata = case" in destination_album_update
+    assert "else library.local_albums.metadata end" in destination_album_update
+    assert "'{release_date}'" in destination_album_update
     assert "not exists" in normalized_sql
     assert "delete from library.local_tracks" not in normalized_sql
     assert "delete from library.local_track_files" not in normalized_sql
@@ -1214,7 +1327,9 @@ def test_postgres_album_only_rename_never_overwrites_current_album_metadata(
     assert mutation_params["destination_is_explicit_separate"] is False
     assert "else library.local_albums.release_year" in destination_album_update
     assert "cover_path =" not in destination_album_update
-    assert "metadata =" not in destination_album_update
+    assert "metadata = case" in destination_album_update
+    assert "else library.local_albums.metadata end" in destination_album_update
+    assert "'{release_date}'" in destination_album_update
     assert "%(destination_album_metadata)s" not in destination_album_update
     assert "destination_album_metadata" not in mutation_params
 

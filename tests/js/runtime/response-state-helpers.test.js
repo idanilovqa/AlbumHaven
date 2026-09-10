@@ -6,6 +6,18 @@ const vm = require('node:vm');
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
 
+require('node:test')('search normalization preserves, inherits, and explicitly clears artist-name matches', () => {
+  const context = loadHelpers();
+  const matches = (source, fallback) => Array.from(
+    context.normalizeRuntimeSearchContext(source, fallback).artist_name_match_artists,
+  );
+  assert.deepEqual(matches({ artist_name_match_artists: [' Broadcast ', 'Stereolab'] }),
+    ['Broadcast', 'Stereolab']);
+  assert.deepEqual(matches({}, { artist_name_match_artists: ['Broadcast'] }), ['Broadcast']);
+  assert.deepEqual(matches({ artist_name_match_artists: [] },
+    { artist_name_match_artists: ['Broadcast'] }), []);
+});
+
 function loadHelpers() {
   const context = {
     appBootstrap: {
@@ -275,6 +287,7 @@ function loadHelpers() {
       selected_artist_source: 'auto_top_match',
       direct_match_artists: ['Broadcast'],
       related_match_artists: [],
+      artist_name_match_artists: [],
     },
     selected_artist: 'Broadcast',
     album_count: '4',
@@ -424,6 +437,7 @@ function loadHelpers() {
       selected_artist_source: 'auto_top_match',
       direct_match_artists: ['Broadcast'],
       related_match_artists: [],
+      artist_name_match_artists: [],
     },
     selected_artist: 'Broadcast',
     all_artists_active: false,

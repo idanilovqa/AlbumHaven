@@ -1,5 +1,8 @@
 import { expect, test as base } from '@playwright/test';
-import { warmFunctionalBrowser } from '../../../scripts/playwright-functional-browser-warmup.mjs';
+import {
+  readAuthenticatedStartupRelationProjectionReadiness,
+  warmFunctionalBrowser,
+} from '../../../scripts/playwright-functional-browser-warmup.mjs';
 import {
   ArtistFamilyActions,
   ArtistPageSettingsActions,
@@ -8,6 +11,7 @@ import {
   GalleryActions,
   GlobalPlayerActions,
   LibrarySettingsActions,
+  LibraryFilesystemWatcherActions,
   NavigationPanelActions,
   ScanPageActions,
   SettingsModalAppBarActions,
@@ -30,6 +34,7 @@ import {
   GalleryPage,
   GlobalPlayer,
   LibrarySettings,
+  LibraryWatchStatus,
   NavigationPanel,
   ScanPage,
   SettingsModalAppBar,
@@ -46,9 +51,9 @@ import {
 } from '../poms/index.js';
 import { installContextRequestInterceptionGuard } from './requestInterceptionGuard.js';
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
-import { readStartupRelationProjectionReadiness } from '../helpers/startupRelationProjectionReadiness.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
+import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -295,11 +300,16 @@ function formatStacktrace(errors) {
 const functionalBrowserWarmupFixtures = (
   process.env.ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP === '1'
     ? {
-      functionalBrowserWarmup: [async ({ browser, startupRelationProjectionReadiness }, use, workerInfo) => {
+      functionalBrowserWarmup: [async ({ browser, startupRelationProjectionReadiness, reuseAuthentication, workerAuthentication }, use, workerInfo) => {
+        if (!reuseAuthentication) {
+          await use();
+          return;
+        }
         await warmFunctionalBrowser({
           browser,
           baseURL: String(workerInfo.project.use?.baseURL || ''),
           viewport: workerInfo.project.use?.viewport,
+          storageState: await workerAuthentication.getStorageState(),
         });
         await use();
       }, { scope: 'worker', auto: true }],
@@ -308,11 +318,34 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  // Login/alternate-user suites opt out at file scope with test.use().
+  reuseAuthentication: [true, { scope: 'worker', option: true }],
+  authenticateFreshBrowserSession: [true, { option: true }],
+
+  workerAuthentication: [async ({ browser }, use, workerInfo) => {
+    await use(createWorkerAuthentication({
+      browser,
+      baseURL: String(workerInfo.project.use?.baseURL || ''),
+      viewport: workerInfo.project.use?.viewport,
+    }));
+  }, { scope: 'worker' }],
+
+  storageState: async ({ reuseAuthentication, workerAuthentication }, use) => {
+    await use(reuseAuthentication
+      ? await workerAuthentication.getStorageState()
+      : { cookies: [], origins: [] });
+  },
+
   managedAppLifecycle: [async ({}, use) => {
     await use(createManagedAppLifecycle());
   }, { scope: 'worker' }],
 
-  freshBrowserSession: async ({ browser, testArtifacts }, use, testInfo) => {
+  freshBrowserSession: async ({
+    browser,
+    testArtifacts,
+    authenticateFreshBrowserSession,
+    storageState,
+  }, use, testInfo) => {
     let session = null;
     try {
       await use({
@@ -324,6 +357,7 @@ export const test = base.extend({
           const context = await browser.newContext({
             baseURL: configuredBaseUrl,
             viewport: testInfo.project.use?.viewport || { width: 1440, height: 960 },
+            storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
           try {
@@ -383,9 +417,18 @@ export const test = base.extend({
     }
   },
 
-  startupRelationProjectionReadiness: [async ({}, use, workerInfo) => {
+  startupRelationProjectionReadiness: [async ({ browser, reuseAuthentication, workerAuthentication }, use, workerInfo) => {
+    if (!reuseAuthentication) {
+      await use(null);
+      return;
+    }
     const baseURL = String(workerInfo.project.use?.baseURL || '');
-    await use(await readStartupRelationProjectionReadiness({ baseURL }));
+    await use(await readAuthenticatedStartupRelationProjectionReadiness({
+      browser,
+      baseURL,
+      viewport: workerInfo.project.use?.viewport,
+      storageState: await workerAuthentication.getStorageState(),
+    }));
   }, { scope: 'worker', auto: true }],
 
   ...functionalBrowserWarmupFixtures,
@@ -475,6 +518,10 @@ export const test = base.extend({
 
   librarySettingsActions: async ({ page }, use, testInfo) => {
     await use(new LibrarySettingsActions(new LibrarySettings(page, testInfo)));
+  },
+
+  libraryFilesystemWatcherActions: async ({ page }, use, testInfo) => {
+    await use(new LibraryFilesystemWatcherActions(new LibraryWatchStatus(page, testInfo)));
   },
 
   navigationPanelActions: async ({ page }, use, testInfo) => {

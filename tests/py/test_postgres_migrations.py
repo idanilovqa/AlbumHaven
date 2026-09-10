@@ -9,6 +9,27 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "migrations" / "postgres"
+AGGREGATE_APPEARANCE_MIGRATION = (
+    MIGRATIONS_DIR / "0057_aggregate_appearance_workspace.sql"
+)
+ALBUM_DETAILS_APPEARANCE_MIGRATION = (
+    MIGRATIONS_DIR / "0058_album_details_appearance.sql"
+)
+ALERT_APPEARANCE_MIGRATION = (
+    MIGRATIONS_DIR / "0059_alert_appearance_family.sql"
+)
+PLAYER_AWARE_OUTLINE_MIGRATION = (
+    MIGRATIONS_DIR / "0060_player_aware_interaction_outline.sql"
+)
+MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION = (
+    MIGRATIONS_DIR / "0061_create_missing_album_removal_function.sql"
+)
+MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION = (
+    MIGRATIONS_DIR / "0063_replace_missing_album_removal_lock_snapshot.sql"
+)
+READONLY_ACCOUNT_PRIVILEGES_MIGRATION = (
+    MIGRATIONS_DIR / "0062_narrow_readonly_account_privileges.sql"
+)
 BASELINE_MIGRATION = MIGRATIONS_DIR / "0001_create_current_stack_schemas.sql"
 LOCAL_MBID_ASSERTIONS_MIGRATION = MIGRATIONS_DIR / "0002_create_local_mbid_assertions.sql"
 LOCAL_MBID_PROJECTION_PROVENANCE_MIGRATION = (
@@ -408,10 +429,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-10:] == [
-        "0036_add_problematic_candidate_index.sql",
-        "0037_add_problematic_track_candidate_index.sql",
-        "0038_add_problematic_required_text_candidate.sql",
+    assert migration_names[-27:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -419,7 +437,236 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0043_create_local_track_waveform_peaks.sql",
         "0044_create_tag_edit_intents.sql",
         "0045_add_non_album_candidate_index.sql",
+        "0046_add_local_auth_lifecycle.sql",
+        "0047_add_auth_preauth_tokens.sql",
+        "0048_add_password_reset_transactions.sql",
+        "0049_enforce_single_use_password_reset_exchange.sql",
+        "0050_add_security_audit_cleanup_index.sql",
+        "0051_add_auth_throttle_cleanup_index.sql",
+        "0052_add_managed_account_invitations.sql",
+        "0053_create_user_appearance_preferences.sql",
+        "0054_add_appearance_palettes_and_player_colors.sql",
+        "0055_waveform_recent_colors.sql",
+        "0056_compact_player_appearance_profiles.sql",
+        "0057_aggregate_appearance_workspace.sql",
+        "0058_album_details_appearance.sql",
+        "0059_alert_appearance_family.sql",
+        "0060_player_aware_interaction_outline.sql",
+        "0061_create_missing_album_removal_function.sql",
+        "0062_narrow_readonly_account_privileges.sql",
+        "0063_replace_missing_album_removal_lock_snapshot.sql",
+        "0064_grant_library_membership_delete.sql",
+        "0065_native_player_component_provenance.sql",
     ]
+
+
+def test_readonly_account_privilege_migration_is_upgrade_safe_and_identity_private():
+    sql = _normalized_sql(
+        READONLY_ACCOUNT_PRIVILEGES_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "revoke all on table app.accounts from album_haven_readonly" in sql
+    assert "grant select (" in sql
+    grant_columns = sql.split("grant select (", 1)[1].split(") on app.accounts", 1)[0]
+    for private_column in (
+        "username_display",
+        "username_normalized",
+        "contact_email",
+        "contact_email_normalized",
+        "metadata",
+    ):
+        assert private_column not in grant_columns
+
+
+def test_album_details_appearance_migration_has_closed_defaults():
+    sql = _normalized_sql(ALBUM_DETAILS_APPEARANCE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "album_details_layout text not null default 'classic_bar'" in sql
+    assert "album_playing_row_animation text not null default 'enabled'" in sql
+    assert "album_details_layout in ('classic_bar', 'stacked_bar', 'editorial_canvas')" in sql
+    assert "album_playing_row_animation in ('enabled', 'disabled')" in sql
+
+
+def test_alert_appearance_migration_has_closed_curated_family_default():
+    sql = _normalized_sql(ALERT_APPEARANCE_MIGRATION.read_text(encoding="utf-8"))
+
+    assert "alert_family text not null default 'ember'" in sql
+    assert "alert_family in ('ember', 'signal', 'quiet')" in sql
+
+
+def test_player_aware_outline_migration_replaces_legacy_interaction_keys_with_closed_shape():
+    assert PLAYER_AWARE_OUTLINE_MIGRATION.exists()
+    sql = _normalized_sql(
+        PLAYER_AWARE_OUTLINE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "drop constraint if exists user_appearance_aggregate_shape" in sql
+    assert (
+        "coalesce(interaction_overrides->>'focus', "
+        "interaction_overrides->>'button_hover_border')"
+    ) in sql
+    update_sql = sql[
+        sql.index("update app.user_appearance_preferences"):
+        sql.index("alter table app.user_appearance_preferences alter column")
+    ]
+    assert (
+        "where interaction_overrides ? 'focus' "
+        "or interaction_overrides ? 'button_hover_border'"
+    ) in update_sql
+    for value in ("automatic", "theme", "player", "custom", "item_outline"):
+        assert value in sql
+    for retained_key in (
+        "item_hover",
+        "item_selected",
+        "button_hover_background",
+        "button_pressed",
+    ):
+        assert retained_key in sql
+
+    default_match = re.search(
+        r"alter column interaction_overrides set default\s+'(?P<default>\{.*?\})'::jsonb",
+        sql,
+    )
+    assert default_match is not None
+    default_sql = default_match.group("default")
+    assert "item_outline" in default_sql
+    assert "button_hover_border" not in default_sql
+    assert '"focus"' not in default_sql
+
+    constraint_sql = sql[sql.index("add constraint user_appearance_aggregate_shape"):]
+    assert "array['source', 'color']" in constraint_sql
+    assert "button_hover_border" not in constraint_sql
+    assert "'focus'" not in constraint_sql
+
+
+def test_player_aware_outline_migration_validates_every_nested_appearance_value():
+    sql = _normalized_sql(
+        PLAYER_AWARE_OUTLINE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "app.is_valid_player_appearance_style" in sql
+    assert "app.is_valid_player_style_history" in sql
+    assert "select coalesce(" in sql
+    assert "jsonb_typeof(candidate) is distinct from 'object'" in sql
+    assert "jsonb_typeof(candidate) is distinct from 'array'" in sql
+    assert (
+        "candidate->'surface'->>'mode' in "
+        "('gradient', 'layered_gradient', 'solid')) is not true"
+    ) in sql
+    assert "jsonb_typeof(selection_accent->'enabled') = 'boolean'" in sql
+    assert "selection_accent->>'color' ~ '^#[0-9a-f]{6}$') is true" in sql
+    for field in (
+        "item_hover",
+        "item_selected",
+        "button_hover_background",
+        "button_pressed",
+    ):
+        assert f"interaction_overrides->'{field}'" in sql
+
+
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_uses_a_bounded_security_definer_capability(migration_path):
+    assert migration_path.exists()
+    sql = _normalized_sql(
+        migration_path.read_text(encoding="utf-8")
+    )
+
+    assert "create or replace function library.confirm_missing_album_removal(target_album_key text)" in sql
+    assert "security definer" in sql
+    assert "set search_path = pg_catalog" in sql
+    assert "app.bootstrap_owners.owner_key = 'local-bootstrap-owner'" in sql
+    assert "library.local_albums.library_id = bootstrap_context.library_id" in sql
+    assert "left join library.library_roots" in sql
+    assert "library.library_roots.root_path" in sql
+    assert "library.local_track_files.scan_cache_stale is false" in sql
+    assert "delete from library.local_track_files" in sql
+    assert "delete from library.local_tracks" in sql
+    assert "delete from library.local_albums" in sql
+    assert "revoke all on function library.confirm_missing_album_removal(text) from public" in sql
+    assert "grant execute on function library.confirm_missing_album_removal(text) to album_haven_app" in sql
+    assert "grant delete" not in sql
+    assert "album_haven_readonly" not in sql
+    assert "grant all" not in sql
+    assert "on all tables" not in sql
+
+
+@pytest.mark.parametrize("migration_path", [
+    MISSING_ALBUM_REMOVAL_FUNCTION_MIGRATION,
+    MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION,
+])
+def test_missing_album_removal_fails_closed_for_watcher_health_and_stales_relations(migration_path):
+    assert migration_path.exists()
+    sql = _normalized_sql(
+        migration_path.read_text(encoding="utf-8")
+    )
+
+    assert "library_watch_health" in sql
+    assert "root_id" in sql
+    assert "'{scan_cache,relation_projection,status}'" in sql
+    assert "to_jsonb('stale'::text)" in sql
+
+
+def test_missing_album_removal_takes_a_fresh_snapshot_after_publication_lock():
+    assert MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.exists()
+    sql = _normalized_sql(MISSING_ALBUM_REMOVAL_SNAPSHOT_MIGRATION.read_text(encoding="utf-8"))
+    assert "language sql volatile security definer" in sql
+    body = sql.split("as $function$", 1)[1].split("$function$", 1)[0].strip()
+    lock_statement, inventory_statement = body.split(";", 1)
+    assert lock_statement == (
+        "select pg_catalog.pg_advisory_xact_lock( "
+        "pg_catalog.hashtext('album-haven:local-inventory-publication') )"
+    )
+    assert inventory_statement.strip().startswith("with bootstrap_context as (")
+    assert "inventory_lock" not in inventory_statement
+
+
+def test_aggregate_appearance_migration_adds_revisioned_bounded_workspace_state():
+    assert AGGREGATE_APPEARANCE_MIGRATION.exists()
+    sql = _normalized_sql(
+        AGGREGATE_APPEARANCE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    for column in (
+        "revision bigint not null default 0",
+        "interaction_overrides jsonb",
+        "selection_accent jsonb",
+        "player_style_override jsonb",
+        "player_recent_sets jsonb",
+    ):
+        assert column in sql
+    assert "revision >= 0" in sql
+    assert "jsonb_typeof(interaction_overrides) = 'object'" in sql
+    assert "jsonb_typeof(selection_accent) = 'object'" in sql
+    assert "selection_accent jsonb not null default '{\"enabled\":true,\"color\":\"#34ca78\"}'::jsonb" in sql
+    assert "jsonb_object_length" not in sql
+    assert "jsonb_typeof(player_style_override) = 'object'" in sql
+    assert "jsonb_typeof(player_recent_sets) = 'array'" in sql
+    assert "jsonb_array_length(player_recent_sets) <= 5" in sql
+    assert "merge_player_recent_sets" in sql
+    for closed_key in (
+        "item_hover", "item_selected", "button_hover_background",
+        "button_hover_border", "button_pressed", "focus",
+        "surface", "controls", "waveform", "handles",
+    ):
+        assert closed_key in sql
+
+
+def test_aggregate_appearance_migration_moves_legacy_accent_and_seeds_one_complete_player_set():
+    assert AGGREGATE_APPEARANCE_MIGRATION.exists()
+    sql = _normalized_sql(
+        AGGREGATE_APPEARANCE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "appearance_selection_accent_v1" in sql
+    assert "app.accounts" in sql
+    assert "player_background_color" in sql
+    assert "player_waveform_fill_color" in sql
+    assert "player_waveform_edge_color" in sql
+    assert "player_recent_sets" in sql
+    assert "jsonb_build_object" in sql
 
 
 def test_non_album_candidate_migration_indexes_active_exact_album_markers():

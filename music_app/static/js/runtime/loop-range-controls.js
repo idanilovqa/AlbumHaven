@@ -384,8 +384,9 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const barWidth = width / count;
   const center = Math.floor(height / 2);
   const maxHalfHeight = Math.max(0, Math.floor((height - 1) / 2));
-  const fill = (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
-  const edge = (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
+  const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
+  const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
   context.fillStyle = fill;
   context.globalAlpha = 0.42;
   for (let index = 0; index < count; index += 1) {

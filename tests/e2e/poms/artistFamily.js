@@ -13,6 +13,7 @@ export class ArtistFamily extends BasePage {
     this.list = page.locator(this.listSelector);
     this.primaryChip = page.locator(this.primaryChipSelector);
     this.chips = page.locator(this.chipSelector);
+    this.firstInactiveChip = page.locator(`${this.chipSelector}:not(.active)`).first();
   }
 
   get boxSelector() {
@@ -37,5 +38,30 @@ export class ArtistFamily extends BasePage {
 
   chipByName(name) {
     return this.chips.filter({ hasText: exactNormalizedText(name) }).first();
+  }
+
+  async readAppearanceCheckpoint() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect shared Artist Family palette states
+    return this.box.evaluate((box) => {
+      const toggle = box.querySelector('#related-toggle');
+      const primary = box.querySelector('#related-list [data-related-primary="1"]');
+      const firstInactive = [...box.querySelectorAll('#related-list .related-chip')]
+        .find((chip) => !chip.classList.contains('active'));
+      const read = (element) => {
+        if (!(element instanceof HTMLElement)) return null;
+        const style = getComputedStyle(element);
+        return {
+          backgroundColor: style.backgroundColor,
+          borderColor: style.borderColor,
+          color: style.color,
+        };
+      };
+      return {
+        box: read(box),
+        toggle: read(toggle),
+        primary: read(primary),
+        firstInactive: read(firstInactive),
+      };
+    });
   }
 }

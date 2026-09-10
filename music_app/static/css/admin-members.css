@@ -1,0 +1,158 @@
+
+.settings-host {
+  color-scheme: dark;
+  --night: #06111f;
+  --nav: #081829;
+  --surface: #0d1c2d;
+  --surface-2: #13263a;
+  --line: #26394f;
+  --ink: #f3f6fa;
+  --muted: #91a2b8;
+  --blue: #56adff;
+  --green: #34ca78;
+  --red: #ff575f;
+}
+.settings-host * { box-sizing: border-box; }
+.settings-host {
+  color: var(--ink);
+  font-family: "Segoe UI", Inter, Arial, sans-serif; -webkit-font-smoothing: antialiased;
+  caret-color: transparent;
+}
+.settings-host button,
+.settings-host input,
+.settings-host select { font: inherit; }
+.settings-host input,
+.settings-host textarea,
+.settings-host select,
+.settings-host [contenteditable="true"] {
+  caret-color: auto;
+}
+.settings-host .settings-nav nav { display: grid; gap: 5px; }
+.settings-host .settings-nav-item { min-height: 44px; padding: 0 13px; display: flex; align-items: center; gap: 13px; border-radius: 9px; color: #a3b0c1; font-size: 14px; text-decoration: none; }
+.settings-host .settings-nav-item span { width: 22px; color: #8498b0; font-size: 20px; text-align: center; }
+.settings-host .settings-nav-item.is-active { color: #fff; background: #172d43; box-shadow: inset 3px 0 var(--green); }
+.settings-host .settings-nav-item.is-future { color: #718399; }
+.settings-host .detail-back:hover,
+.settings-host .detail-back:focus-visible,
+.settings-host .member-edit:hover,
+.settings-host .member-edit:focus-visible { color: #fff; outline: none; }
+.settings-host .members-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 22px; }
+.settings-host .members-heading h1,
+.settings-host .detail-heading h1 { margin: 0; font-size: 29px; letter-spacing: -.035em; }
+.settings-host .members-heading p,
+.settings-host .detail-heading p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.settings-host .admin-button { min-height: 40px; padding: 0 15px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid #30475e; border-radius: 9px; color: var(--ink); background: transparent; font-weight: 700; text-decoration: none; cursor: pointer; }
+.settings-host .admin-button.is-primary { border-color: var(--green); color: #06150e; background: var(--green); }
+.settings-host .admin-button.is-danger { border-color: #d93d45; color: var(--red); }
+.settings-host .admin-button:hover,
+.settings-host .admin-button:focus-visible { filter: brightness(1.1); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 14%); }
+.settings-host .admin-notice { margin: 0 0 18px; padding: 12px 14px; border: 1px solid #2c684c; border-radius: 8px; color: #afe2c4; background: #103426; font-size: 12px; }
+.settings-host .members-table { border: 1px solid var(--line); }
+.settings-host .members-row { min-height: 78px; padding: 0 15px; display: grid; grid-template-columns: minmax(210px, 1.6fr) minmax(170px, 1.25fr) .65fr .8fr .75fr 58px; align-items: center; gap: 17px; border-bottom: 1px solid #1d3044; color: #9caec2; font-size: 12px; }
+.settings-host .members-row:last-child { border-bottom: 0; }
+.settings-host .members-table-head { min-height: 42px; color: #65778d; font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.settings-host .member-identity { display: flex; align-items: center; gap: 12px; }
+.settings-host .member-avatar { width: 38px; height: 38px; display: grid; place-items: center; flex: 0 0 auto; border: 1px solid #315171; border-radius: 50%; color: #e9f2fc; background: #173759; font-size: 12px; font-weight: 800; }
+.settings-host .member-identity strong,
+.settings-host .member-access strong,
+.settings-host .detail-person strong { display: block; color: var(--ink); font-size: 13px; }
+.settings-host .member-identity small,
+.settings-host .member-access small,
+.settings-host .detail-person small { display: block; margin-top: 4px; color: #8294aa; font-size: 11px; }
+.settings-host .status-dot { width: 8px; height: 8px; margin-right: 8px; display: inline-block; border-radius: 50%; background: var(--green); }
+.settings-host .status-dot.is-pending { background: #e5aa45; }
+.settings-host .status-dot.is-disabled { background: #59687a; }
+.settings-host .member-edit,
+.settings-host .detail-back { color: var(--blue); text-decoration: none; }
+.settings-host .member-actions { position: relative; display: flex; justify-content: flex-end; }
+.settings-host .member-actions-trigger { width: 42px; min-height: 42px; padding: 0; font-size: 21px; letter-spacing: .08em; }
+.settings-host .member-actions-menu {
+  position: fixed; z-index: 20; width: 190px; min-width: 0; padding: 5px; overflow: auto;
+  display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 35%);
+}
+.settings-host .member-actions-menu[hidden],
+.settings-host .invitation-copy-fallback[hidden] { display: none; }
+.settings-host .member-actions-menu button,
+.settings-host .member-actions-menu a {
+  min-height: 38px; padding: 0 11px; display: flex; align-items: center; border: 0; border-radius: 6px;
+  color: var(--ink); background: transparent; font-size: 12px; text-align: left; text-decoration: none; cursor: pointer;
+}
+.settings-host .member-actions-menu button:hover,
+.settings-host .member-actions-menu button:focus-visible,
+.settings-host .member-actions-menu a:hover,
+.settings-host .member-actions-menu a:focus-visible { outline: none; background: #1d3852; }
+.settings-host .invitation-copy-fallback { margin: 0 0 18px; padding: 15px; border: 1px solid #31587b; border-radius: 9px; background: #10263b; }
+.settings-host .invitation-copy-fallback p { margin: 0 0 10px; color: #c5d2df; font-size: 12px; }
+.settings-host .invitation-copy-fallback input[readonly] {
+  width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid #32485f; border-radius: 7px;
+  color: var(--ink); background: #0b1929; font-family: ui-monospace, "Cascadia Code", monospace;
+}
+.settings-host .invitation-copy-fallback .admin-button { margin-top: 10px; }
+.settings-host .detail-main { width: min(970px, 100%); }
+.settings-host .detail-back { display: inline-flex; margin-bottom: 29px; font-size: 13px; }
+.settings-host .detail-heading { margin-bottom: 25px; }
+.settings-host .detail-person { margin-top: 18px; display: flex; align-items: center; gap: 13px; }
+.settings-host .admin-detail-form { display: grid; }
+.settings-host .detail-field { margin-bottom: 14px; display: grid; grid-template-columns: 220px minmax(0, 1fr); align-items: start; gap: 18px; }
+.settings-host .detail-field > span:first-child { padding-top: 12px; font-size: 13px; font-weight: 700; }
+.settings-host .detail-field > input,
+.settings-host .detail-field > select,
+.settings-host .password-control { width: 100%; min-height: 42px; border: 1px solid #32485f; border-radius: 8px; color: var(--ink); background: #0b1929; }
+.settings-host .detail-field > input,
+.settings-host .detail-field > select { padding: 0 13px; }
+.settings-host .detail-field small { grid-column: 2; margin-top: -11px; color: #8294aa; font-size: 11px; }
+.settings-host .detail-field input:focus,
+.settings-host .detail-field select:focus,
+.settings-host .password-control:focus-within { border-color: var(--blue); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 12%); }
+.settings-host .password-control { display: flex; overflow: hidden; }
+.settings-host .password-control input { min-width: 0; flex: 1; padding: 0 13px; border: 0; outline: 0; color: var(--ink); background: transparent; }
+.settings-host .password-control button { width: 70px; border: 0; border-left: 1px solid #32485f; color: var(--ink); background: transparent; cursor: pointer; }
+.settings-host .role-note { margin: 0 0 14px 238px; padding: 12px 14px; display: flex; gap: 12px; border: 1px solid #2e6da2; border-radius: 8px; color: #b7cee5; background: #102943; font-size: 11px; line-height: 1.45; }
+.settings-host .role-note > span:first-child { color: var(--blue); font-size: 18px; }
+.settings-host .effective-access { min-height: 58px; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); font-size: 12px; }
+.settings-host .effective-access small { margin-left: 7px; color: var(--muted); }
+.settings-host .permission-fieldset { margin: 0; padding: 19px 0 20px; border: 0; border-bottom: 1px solid var(--line); }
+.settings-host .permission-fieldset legend,
+.settings-host .account-settings > h2 { color: #8da0b8; font-size: 11px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase; }
+.settings-host .permission-groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 15px; }
+.settings-host .permission-group + .permission-group { padding-left: 28px; border-left: 1px solid var(--line); }
+.settings-host .permission-group h2 { margin: 0 0 7px; color: #9cafc5; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.settings-host .permission-group label { min-height: 25px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #bdc9d6; font-size: 11px; }
+.settings-host .switch { width: 31px; height: 17px; flex: 0 0 auto; accent-color: var(--green); }
+.settings-host .switch:disabled,
+.settings-host .detail-field > select:disabled { color: var(--muted); accent-color: var(--muted); opacity: .65; cursor: not-allowed; }
+.settings-host .account-settings { padding-top: 19px; }
+.settings-host .account-settings > h2 { margin: 0 0 7px; }
+.settings-host .detail-setting { min-height: 62px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+.settings-host .detail-setting > span:first-child strong { display: block; font-size: 12px; }
+.settings-host .detail-setting > span:first-child small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.settings-host .detail-setting.is-danger strong { color: var(--red); }
+.settings-host .detail-actions { padding-top: 16px; display: flex; justify-content: flex-end; gap: 11px; }
+.settings-host .admin-form-error { padding: 12px; border: 1px solid #7c4047; border-radius: 8px; color: #ffc0c4; background: #371c22; font-size: 12px; }
+.settings-host .admin-form-status { padding: 12px; border: 1px solid #2c684c; border-radius: 8px; color: #afe2c4; background: #103426; font-size: 12px; }
+.settings-host .reauth-panel { margin-top: 18px; padding: 17px; border: 1px solid #31587b; border-radius: 10px; background: #10263b; }
+.settings-host .reauth-panel h2 { margin: 0; font-size: 15px; }
+.settings-host .reauth-panel p { margin: 5px 0 15px; color: #a7b8ca; font-size: 11px; }
+.settings-host .reauth-panel label > span:first-child { display: block; margin-bottom: 7px; color: #d7e0e9; font-size: 11px; font-weight: 700; }
+.settings-host .reauth-actions { margin-top: 13px; display: flex; justify-content: flex-end; gap: 9px; }
+
+@media (max-width: 980px) {
+.settings-host .members-table { overflow-x: auto; }
+.settings-host .members-row { min-width: 910px; }
+}
+@media (max-width: 720px) {
+.settings-host .settings-nav nav { margin-top: 14px; grid-template-columns: 1fr 1fr; }
+.settings-host .members-table { overflow-x: visible; border: 0; }
+.settings-host .members-row { min-width: 0; padding: 14px 0; grid-template-columns: 1fr 1fr; align-items: start; gap: 12px 18px; }
+.settings-host .members-table-head { display: none; }
+.settings-host .member-identity { min-width: 0; grid-column: 1 / -1; }
+.settings-host .member-identity span:last-child { min-width: 0; overflow-wrap: anywhere; }
+.settings-host .members-row [role="cell"]:not(.member-identity)::before { content: attr(data-label); display: block; margin-bottom: 4px; color: #65778d; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.settings-host .detail-field { grid-template-columns: 1fr; gap: 7px; }
+.settings-host .detail-field > span:first-child { padding-top: 0; }
+.settings-host .detail-field small { grid-column: 1; margin-top: -3px; }
+.settings-host .role-note { margin-left: 0; }
+.settings-host .permission-groups { grid-template-columns: 1fr; }
+.settings-host .permission-group + .permission-group { padding: 14px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+}

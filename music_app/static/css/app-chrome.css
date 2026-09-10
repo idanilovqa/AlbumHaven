@@ -1,0 +1,243 @@
+/* Shared authenticated chrome: library and Settings consume the same app bar. */
+:root {
+  --app-chrome: #0e1b2b;
+  --app-surface: #111c2c;
+  --app-control: #1e2c3e;
+  --app-ink: #f3f6fa;
+  --app-muted: #97a6bb;
+  --app-active: #1b3047;
+  --app-bar-height: 56px;
+  --app-sidebar-width: 240px;
+  --app-surface-radius: 14px;
+}
+
+.shell-layout,
+.settings-host.settings-shell {
+  display: grid;
+  grid-template-columns: var(--app-sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--app-bar-height) minmax(0, 1fr);
+  min-height: 0;
+  background: var(--app-chrome);
+}
+.shell-layout { height: calc(100dvh - var(--player-height)); }
+.settings-host.settings-shell { height: 100dvh; }
+#app-shell ~ .settings-host.settings-shell { height: calc(100dvh - var(--player-height)); }
+
+.app-bar {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: var(--app-sidebar-width) minmax(0, 1fr) auto;
+  align-items: center;
+  min-width: 0;
+  padding: 0 16px 0 0;
+  background: var(--app-chrome);
+  color: var(--app-ink);
+  border: 0;
+  box-shadow: none;
+  /* Menus clear the gallery while drawers, dialogs and the player stay above. */
+  position: relative;
+  z-index: 100;
+}
+.app-bar-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 48px;
+  margin-left: 12px;
+  border-radius: 8px;
+}
+.app-bar-brand-mark {
+  --app-bar-brand-ink: var(--appearance-ink, var(--app-ink, #f3f6fa));
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 38px;
+}
+.app-bar-brand-art { display: block; width: 100%; height: 100%; object-fit: contain; }
+.app-bar-brand-label {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  display: grid;
+  place-items: center;
+  width: 21.25%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--appearance-play, #4bc173);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-bar-brand-ink) 18%, transparent);
+}
+.app-bar-brand-label-hole {
+  width: 23%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--appearance-play-ink, #10201a);
+}
+:root[data-appearance-mode='light'] .app-bar-brand-art {
+  filter: brightness(0);
+  opacity: .78;
+}
+.app-bar-brand:hover { background: #ffffff06; }
+.app-bar :is(a, input, .button:not(.action-button)):focus-visible,
+.artists-drawer-button:focus-visible {
+  outline: 2px solid #72baff;
+  outline-offset: 3px;
+}
+.app-bar .toolbar-left,
+.app-bar .toolbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.app-bar .toolbar-left { margin: 0; padding-left: 0; }
+.app-bar .toolbar-right { padding-left: 20px; flex-wrap: nowrap; }
+.app-bar .search-input-wrap { width: 360px; min-width: 0; flex: 0 1 360px; }
+.app-bar input[type='search'] {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid #ffffff06;
+  border-radius: 8px;
+  background: var(--app-control);
+  color: var(--app-ink);
+  font-size: 12px;
+}
+.app-bar input[type='search']::placeholder { color: var(--app-muted); }
+.app-bar .button:not(.action-button) {
+  height: 34px;
+  border: 1px solid #ffffff04;
+  border-radius: 8px;
+  background: var(--app-control);
+}
+.app-bar .button:not(.action-button) { padding: 0 12px; font-size: 12px; }
+.app-bar .cover-lookup-drawer-glyph { width: 20px; height: 20px; }
+.app-bar #settings-button { font-size: 19px; }
+.app-bar .search-field {
+  --search-field-height: 34px;
+  --search-field-border: #ffffff06;
+  --search-field-background: var(--app-control);
+  --search-field-color: var(--app-ink);
+  --search-field-muted: var(--app-muted);
+  --search-field-hover: var(--app-active);
+  --search-field-focus: #72baff;
+  font-size: 12px;
+}
+.app-bar .search-field .search-field-control > input[type='search'] {
+  padding-right: 0;
+}
+
+.shell-navigation-rail,
+.settings-host .settings-nav {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--app-chrome);
+  border: 0;
+}
+.shell-navigation-rail { height: 100%; padding: 20px 14px; }
+.shell-navigation-rail h2 { margin-left: 12px; }
+.shell-navigation-rail .artist-link { border-color: transparent; }
+.shell-navigation-rail .artist-link:hover { background: #ffffff07; }
+.shell-navigation-rail .artist-link.active { background: var(--app-active); }
+.shell-navigation-rail-backdrop { display: none; }
+
+.shell-main-surface,
+.settings-host .settings-outlet {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  margin-right: 8px;
+  background: var(--app-surface);
+  border-radius: var(--app-surface-radius) var(--app-surface-radius) 0 0;
+  box-shadow: inset 1px 1px 0 #ffffff03;
+}
+.shell-main-surface { display: flex; flex-direction: column; padding: 24px; }
+.settings-host .settings-outlet { overflow: auto; }
+.settings-host .settings-nav { padding: 25px 14px; }
+.settings-host .settings-nav h2 { margin: 0 12px 20px; font-size: 18px; }
+.settings-host .settings-nav-item.is-active { background: var(--app-active); }
+.settings-host .settings-main { min-width: 0; padding: 31px 42px 60px; }
+.artists-drawer-button { display: none; }
+
+.shell-navigation-rail,
+.shell-main-surface .albums-scroll,
+.settings-host .settings-nav,
+.settings-host .settings-outlet {
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff24 transparent;
+}
+
+/* Preserve the existing runtime drawer breakpoint and its open/close hooks. */
+@media (max-width: 900px) {
+  .shell-layout { grid-template-columns: minmax(0, 1fr); }
+  .shell-layout .app-bar { grid-template-columns: 80px minmax(0, 1fr) auto; }
+  .shell-layout .toolbar-left { padding-left: 0; }
+  .shell-main-surface { grid-column: 1; margin-left: 8px; }
+  .shell-navigation-rail {
+    position: fixed;
+    inset: var(--app-bar-height) auto var(--player-height) 0;
+    width: min(var(--app-sidebar-width), calc(100vw - 56px));
+    height: auto;
+    box-shadow: 18px 0 36px #0005;
+    transform: translateX(-100%);
+    opacity: 0;
+    visibility: hidden;
+    transition: transform 180ms ease, opacity 180ms ease, visibility 180ms ease;
+    z-index: 3000;
+  }
+  .shell-navigation-rail.is-mobile-drawer-open {
+    transform: translateX(0);
+    opacity: 1;
+    visibility: visible;
+  }
+  .shell-navigation-rail-backdrop {
+    display: block;
+    position: fixed;
+    inset: var(--app-bar-height) 0 var(--player-height) 0;
+    width: 100%;
+    height: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: #0f172a94;
+    z-index: 2990;
+  }
+  .artists-drawer-button { display: inline-flex; height: 30px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--app-control); }
+}
+
+@media (max-width: 720px) {
+  .shell-layout { --app-bar-height: 104px; }
+  .shell-layout .app-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 52px 52px;
+    padding: 0 12px;
+  }
+  .app-bar-brand { margin-left: 0; width: 44px; }
+  .app-bar-brand-mark { width: 34px; height: 34px; }
+  .app-bar .toolbar-left { grid-column: 1 / -1; grid-row: 2; padding: 0 0 10px; }
+  .app-bar .search-input-wrap { width: auto; flex: 1 1 auto; }
+  .app-bar input[type='search'], .app-bar .button:not(.action-button) { height: 36px; }
+  .app-bar .search-field { --search-field-height: 36px; }
+  .app-bar .toolbar-right { grid-column: 2; grid-row: 1; padding: 0; }
+  .shell-main-surface,
+  .settings-host .settings-outlet { grid-column: 1 / -1; margin: 0 6px; border-radius: 12px 12px 0 0; }
+  .shell-main-surface { padding: 18px; }
+  .settings-host.settings-shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: 56px auto minmax(0, 1fr); }
+  .settings-host .app-bar { grid-template-columns: minmax(0, 1fr); padding: 0 12px; }
+  .settings-host .settings-nav { grid-column: 1 / -1; grid-row: 2; padding: 7px 12px 12px; overflow: visible; }
+  .settings-host .settings-nav h2 { display: none; }
+  .settings-host .settings-nav nav { margin-top: 0; gap: 4px; }
+  .settings-host .settings-nav-item { white-space: nowrap; padding: 0 9px; gap: 7px; }
+  .settings-host .settings-outlet { grid-row: 3; }
+  .settings-host .settings-main { padding: 23px 18px 45px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-navigation-rail { transition: none; }
+}
+
+/* Grid/flex declarations must never expose an inactive shell or hidden control. */
+.shell-layout[hidden],
+.settings-host.settings-shell[hidden],
+.shell-navigation-rail-backdrop[hidden],
+.artists-drawer-button[hidden] { display: none; }

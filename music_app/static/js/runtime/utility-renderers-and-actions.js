@@ -1,10 +1,29 @@
 ﻿function renderProblematicFiles() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  bindProblematicFocusUserInput(els);
+
+  const priorListScrollTop = Number(els.list.scrollTop);
+  const replaceListContents = (html) => {
+    const retainedScrollGeometry = els.list.querySelector?.('[data-problematic-scroll-retainer]') || null;
+    els.list.innerHTML = html;
+    if (retainedScrollGeometry && typeof els.list.appendChild === 'function') {
+      els.list.appendChild(retainedScrollGeometry);
+    }
+    if (Number.isFinite(priorListScrollTop) && priorListScrollTop > 0) {
+      els.list.scrollTop = priorListScrollTop;
+    }
+  };
 
   const items = getFilteredProblematicAlbums();
+  const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
+    ? state.utility.libraryWatchHealthProblems
+    : [];
+  const operationalHtml = operationalItems
+    .map((problem) => buildLibraryWatchHealthProblemRow(problem))
+    .join('');
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length);
+  els.count.textContent = String(items.length + operationalItems.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -31,14 +50,14 @@
   els.detail.removeAttribute?.('aria-busy');
   els.detail.removeAttribute?.('inert');
 
-  if (state.utility.loading) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Loading...</div>';
+  if (state.utility.loading && !state.utility.loaded) {
+    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`);
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">No matching problematic albums found.</div>';
+    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`);
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -46,7 +65,7 @@
   const selectedProblematicMissing = !state.utility.selectedProblematicKey
     || !items.some((item) => item.key === state.utility.selectedProblematicKey);
   if (selectedProblematicMissing && state.utility.deferProblematicAutoSelection && (state.utility.selectedProblemFilters || []).length) {
-    els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, false)).join('');
+    replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, false)).join(''));
     els.detail.innerHTML = '<div class="utility-empty-state">Select an album to inspect its problematic tags.</div>';
     return;
   }
@@ -73,7 +92,7 @@
   }
 
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
-  els.list.innerHTML = items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join('');
+  replaceListContents(operationalHtml + items.map((album) => buildProblematicAlbumListItem(album, album.key === state.utility.selectedProblematicKey)).join(''));
   if (selectedAlbum?.detail_load_failed) {
     els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
     return;
@@ -88,30 +107,85 @@
   initializeRepairSelections(selectedAlbum);
   els.detail.innerHTML = buildProblematicAlbumDetail(selectedAlbum);
   if (state.utility.focusedTrackPath) {
-    const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
-    activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
-    if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
-      const listRect = els.list.getBoundingClientRect();
-      const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
-      if (activeAlbumRect.bottom > listRect.bottom) {
-        els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
-      } else if (activeAlbumRect.top < listRect.top) {
-        els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+    const focusedTrackPath = String(state.utility.focusedTrackPath);
+    const scrollFocusedRowsIntoView = () => {
+      let albumGeometryReady = false;
+      const activeAlbumRow = els.list.querySelector?.('.utility-list-item.is-active');
+      activeAlbumRow?.scrollIntoView?.({ block: 'nearest' });
+      if (activeAlbumRow?.getBoundingClientRect && els.list.getBoundingClientRect) {
+        const listRect = els.list.getBoundingClientRect();
+        const activeAlbumRect = activeAlbumRow.getBoundingClientRect();
+        albumGeometryReady = listRect.bottom > listRect.top
+          && activeAlbumRect.bottom > activeAlbumRect.top;
+        if (activeAlbumRect.bottom > listRect.bottom) {
+          els.list.scrollTop += Math.ceil(activeAlbumRect.bottom - listRect.bottom);
+        } else if (activeAlbumRect.top < listRect.top) {
+          els.list.scrollTop -= Math.ceil(listRect.top - activeAlbumRect.top);
+        }
       }
-    }
-    const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(state.utility.focusedTrackPath)}"]`;
-    const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
-    const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
-    if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
-      const detailRect = els.detail.getBoundingClientRect();
-      const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
-      if (focusedTrackRect.bottom > detailRect.bottom) {
-        els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
-      } else if (focusedTrackRect.top < detailRect.top) {
-        els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+      const focusedTrackSelector = `[data-problematic-track-path="${cssEscape(focusedTrackPath)}"]`;
+      const focusedTrackMatch = els.detail.querySelector?.(focusedTrackSelector);
+      const focusedTrackRow = focusedTrackMatch?.closest?.('[role="row"]') || focusedTrackMatch;
+      let trackGeometryReady = false;
+      if (focusedTrackRow?.getBoundingClientRect && els.detail.getBoundingClientRect) {
+        const detailRect = els.detail.getBoundingClientRect();
+        const focusedTrackRect = focusedTrackRow.getBoundingClientRect();
+        trackGeometryReady = detailRect.bottom > detailRect.top
+          && focusedTrackRect.bottom > focusedTrackRect.top;
+        if (focusedTrackRect.bottom > detailRect.bottom) {
+          els.detail.scrollTop += Math.ceil(focusedTrackRect.bottom - detailRect.bottom);
+        } else if (focusedTrackRect.top < detailRect.top) {
+          els.detail.scrollTop -= Math.ceil(detailRect.top - focusedTrackRect.top);
+        }
       }
+      return {
+        focusedTrackRendered: Boolean(focusedTrackRow),
+        layoutReady: albumGeometryReady && trackGeometryReady,
+      };
+    };
+    const initialFocusedNavigation = scrollFocusedRowsIntoView();
+    const finishFocusedNavigation = (remainingAttempts) => {
+      if (String(state.utility.focusedTrackPath || '') !== focusedTrackPath) return;
+      const result = scrollFocusedRowsIntoView();
+      if (!result.layoutReady &&
+        result.focusedTrackRendered
+        && remainingAttempts > 1
+        && typeof scheduleBrowserAnimationFrame === 'function'
+      ) {
+        scheduleBrowserAnimationFrame(() => finishFocusedNavigation(remainingAttempts - 1));
+      }
+    };
+    if (initialFocusedNavigation.focusedTrackRendered && typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(() => finishFocusedNavigation(3));
     }
-    if (focusedTrackRow) state.utility.focusedTrackPath = '';
+  }
+}
+
+const problematicFocusInputContainers = new WeakSet();
+
+function bindProblematicFocusUserInput(els) {
+  for (const container of [els.list, els.detail]) {
+    if (!container?.addEventListener || problematicFocusInputContainers.has(container)) continue;
+    problematicFocusInputContainers.add(container);
+    const relinquish = () => {
+      if (state.utility.activeTab === 'problematic-files') state.utility.focusedTrackPath = '';
+    };
+    container.addEventListener('wheel', event => {
+      if (!event.ctrlKey && (event.deltaY || event.deltaX)) relinquish();
+    }, { passive: true });
+    container.addEventListener('touchmove', relinquish, { passive: true });
+    container.addEventListener('pointerdown', event => {
+      // Scrollbar/background input belongs to the scroller; an ordinary row
+      // click must retain deferred track navigation until its own action runs.
+      if (event.target === container && event.button === 0) relinquish();
+    });
+    container.addEventListener('keydown', event => {
+      if (event.defaultPrevented || event.altKey || event.metaKey
+        || !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) return;
+      if (event.target?.closest?.('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="slider"], [role="spinbutton"]')) return;
+      if (event.key === ' ' && event.target?.closest?.('button, a[href], [role="button"], [role="checkbox"], [role="switch"]')) return;
+      relinquish();
+    });
   }
 }
 
@@ -381,7 +455,7 @@ function renderUtilityAppearance() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
-  els.count.textContent = '1';
+  els.count.textContent = '5';
   if (els.search) {
     els.search.value = '';
     els.search.disabled = true;
@@ -393,9 +467,32 @@ function renderUtilityAppearance() {
   }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  state.utility.appearanceKey = 'seekbar';
-  els.list.innerHTML = buildUtilityAppearanceListItem('seekbar', 'Seekbar', 'Default or waveform appearance', true);
-  els.detail.innerHTML = buildUtilityAppearanceDetail();
+  const appearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+  if (!appearanceKeys.includes(state.utility.appearanceKey)) state.utility.appearanceKey = 'backgrounds';
+  const selectedKey = state.utility.appearanceKey;
+  const navigationTree = typeof window !== 'undefined' ? window.NavigationTree : null;
+  const labels = { backgrounds: 'Main elements', seekbar: 'Player & Seekbar', 'selection-accent': 'Selection & Hover', alerts: 'Alerts', 'album-page': 'Album page' };
+  els.list.innerHTML = appearanceKeys.map(key => navigationTree?.renderItem
+    ? navigationTree.renderItem({ key, label: labels[key], variant: 'panel', action: true, selected: selectedKey === key, attributes: { 'data-utility-appearance-key': key } })
+    : buildUtilityAppearanceListItem(key, labels[key], '', selectedKey === key)).join('');
+  if (selectedKey === 'backgrounds') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
+  } else if (selectedKey === 'selection-accent') {
+    const appearance = typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
+    if (appearance?.mountSelectionAccent) appearance.mountSelectionAccent(els.detail);
+    else els.detail.innerHTML = '<div class="utility-empty-state">Selection &amp; Hover could not be loaded. Reload this page to try again.</div>';
+  } else if (selectedKey === 'alerts') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlertsAppearanceEditor === 'function') mountAlertsAppearanceEditor(els.detail);
+  } else if (selectedKey === 'album-page') {
+    if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
+    if (typeof mountAlbumPageAppearanceEditor === 'function') mountAlbumPageAppearanceEditor(els.detail);
+  } else {
+    if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+    els.detail.innerHTML = buildUtilityAppearanceDetail();
+    if (typeof mountSeekbarAppearanceEditor === 'function') mountSeekbarAppearanceEditor(els.detail);
+  }
 }
 
 function getSelectedUtilityIntegration() {
@@ -490,6 +587,7 @@ function renderUtilityLogHistory() {
 function renderUtilityModalContent() {
   const els = getUtilityModalElements();
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
   els.detail?.classList.remove('is-loop-detail');
   els.tabs.forEach((tab) => {

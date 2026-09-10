@@ -115,6 +115,7 @@ def test_console_liveness_is_a_noop_away_from_windows():
 
 
 def test_asgi_runner_protects_console_liveness_before_starting_uvicorn(monkeypatch):
+    monkeypatch.setenv("MUSIC_APP_TLS_MODE", "off")
     events: list[object] = []
     fake_uvicorn = types.SimpleNamespace(
         run=lambda target, **kwargs: events.append(("uvicorn", target, kwargs))

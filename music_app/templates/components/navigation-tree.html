@@ -1,0 +1,10 @@
+{% macro navigation_tree_item(label, href='#', key='', selected=false, icon='', count=none, variant='settings', attributes={}, action=false) -%}
+  {% set settings = variant == 'settings' %}
+  {% set tag = 'button' if action else 'a' %}
+  {% set classes = ('settings-nav-item' if settings else 'artist-link') ~ ((' is-active' if settings else ' active') if selected else '') ~ ' navigation-tree-item' ~ (' is-selected' if selected else '') %}
+  {% set attrs %}class="{{ classes }}" data-navigation-tree-item="{{ variant }}" data-navigation-tree-key="{{ key }}" {% if action %}type="submit"{% else %}href="{{ href }}"{% endif %}{% if selected %} aria-current="{{ 'page' if settings else 'true' }}"{% endif %}{% for name, value in attributes.items() %}{% if name in ['data-settings-section', 'data-nav', 'data-sidebar-artist', 'data-sidebar-all-artists'] %} {{ name }}="{{ value }}"{% endif %}{% endfor %}{% endset %}
+  {% set icon_html %}{% if icon %}<span class="navigation-tree-icon" aria-hidden="true">{{ icon }}</span>{% endif %}{% endset %}
+  {% set count_html %}{% if count is not none %}<span class="navigation-tree-count artist-count">{{ count }}</span>{% endif %}{% endset %}
+  {% set template %}{% include "components/navigation-tree-item.html" %}{% endset %}
+  {{ template | format(tag, attrs, icon_html, label | e, count_html, tag) | safe }}
+{%- endmacro %}

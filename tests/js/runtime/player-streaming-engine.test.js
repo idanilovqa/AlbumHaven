@@ -2303,6 +2303,13 @@ test('fresh playback keeps queued-next decoding behind one buffered second of th
   assert.equal(harness.sent('open').length, 2);
   assert.equal(harness.sent('open')[1].path, queuedTrack.path);
   assert.equal(harness.sent('open')[1].role, 'continuity');
+  assert.deepEqual(harness.portMessages('expect-continuity').map((message) => ({
+    generation: message.generation,
+    active: message.active,
+  })), [{
+    generation: current.generation,
+    active: true,
+  }]);
 });
 
 test('zero-start playback also keeps queued-next decoding behind the audible buffer', async () => {
@@ -2806,6 +2813,11 @@ test('playing replacement prepares a clean head and cuts over without clearing a
     type: 'drop-continuity', generation: firstContinuity.generation,
     streamId: firstContinuity.streamId,
   });
+  assert.deepEqual({ ...harness.portMessages('expect-continuity').at(-1) }, {
+    type: 'expect-continuity',
+    generation: firstContinuity.generation,
+    active: false,
+  }, 'cancelling a queued successor clears its matching-generation EOF expectation');
   assert.equal(harness.portMessages('configure').length, 1);
   acceptMetadata(harness, replacement);
   receivePcmAndAssertEnqueue(harness, {

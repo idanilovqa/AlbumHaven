@@ -9,6 +9,7 @@ import {
 const {
   cancelClear: CANCEL_CLEAR_TARGET,
   canonicalPersistence: COVER_LOOKUP_TARGET,
+  manualProviderCover: MANUAL_PROVIDER_COVER,
   notificationActioned: NOTIFICATION_ACTIONED_TARGET,
   notificationActive: ACTIVE_COVER_LOOKUP_TARGET,
   notificationFailed: NOTIFICATION_FAILED_TARGET,
@@ -36,7 +37,7 @@ const ARTIST_CONJUNCTION_TARGET = Object.freeze({
   year: '2006',
 });
 
-test('FTC-COVERS-022 cover gallery loading starts before the task list responds', async ({
+test('FTC-COVERS-022 cover gallery loading starts before the task list responds', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -87,7 +88,7 @@ test('FTC-COVERS-022 cover gallery loading starts before the task list responds'
   });
 });
 
-test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can be canceled and cleared', async ({
+test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can be canceled and cleared', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -102,7 +103,7 @@ test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can 
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(CANCEL_CLEAR_TARGET);
     expect(selectedAlbum).toEqual(CANCEL_CLEAR_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe(Object.values(CANCEL_CLEAR_TARGET).join(' - '));
+    expect(modal.title).toBe(Object.values(CANCEL_CLEAR_TARGET).join(' • '));
   });
 
   await stepLogger.step('Open the cover lookup gallery for the fake album and capture its random subtitle', async () => {
@@ -137,7 +138,7 @@ test('FTC-COVERS-012 fake-album fast cover search appears in the drawer and can 
   });
 });
 
-test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', async ({
+test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -157,7 +158,7 @@ test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', as
     taskTitle = await coverLookupActions.readModalSubtitle();
     expect(taskTitle).not.toEqual('');
     const expectedCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(expectedCover).not.toBeNull();
     await coverLookupActions.enterManualUrls(buildFixtureManualUrls(expectedCover));
@@ -199,7 +200,7 @@ test('FTC-COVERS-007 lookup-start alert does not reposition the cover modal', as
   });
 });
 
-test('FTC-COVERS-007 notification states and bulk clear preserve active work', async ({
+test('FTC-COVERS-007 notification states and bulk clear preserve active work', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -223,7 +224,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', a
     await coverLookupActions.waitForModalReady();
     actionedTaskTitle = await coverLookupActions.readModalSubtitle();
     const expectedCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(expectedCover).not.toBeNull();
     await coverLookupActions.setProviderFixtureMode('normal');
@@ -375,7 +376,7 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', a
   });
 });
 
-test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', async ({
+test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellation, and reload', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -394,7 +395,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
     const selectedAlbum = await galleryActions.selectAlbumDetailsByIdentity(PARTIAL_COVER_LOOKUP_TARGET);
     expect(selectedAlbum).toEqual(PARTIAL_COVER_LOOKUP_TARGET);
     const modal = await trackModalActions.waitForLoadedSummary();
-    expect(modal.title).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' - '));
+    expect(modal.title).toBe(Object.values(PARTIAL_COVER_LOOKUP_TARGET).join(' • '));
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();
@@ -511,7 +512,7 @@ test('FTC-COVERS-013 partial cover results survive drawer reopen, save cancellat
   });
 });
 
-test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally', async ({
+test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens locally', { tag: '@area:cover-providers' }, async ({
   galleryActions,
   coverLookupActions,
   stepLogger,
@@ -578,7 +579,7 @@ test('FTC-COVERS-019 Spotify stays linked while a downloadable provider reopens 
   });
 });
 
-test('FTC-COVERS-011 selected local art remains authoritative after rescan and app restart', async ({
+test('FTC-COVERS-011 selected local art remains authoritative after rescan and app restart', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   freshBrowserSession,
@@ -641,7 +642,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
     expect(await galleryActions.selectAlbumDetailsByIdentity(COVER_LOOKUP_TARGET))
       .toEqual(COVER_LOOKUP_TARGET);
     expect((await trackModalActions.waitForLoadedSummary()).title)
-      .toBe('Mastodon - Crack The Skye - 2009');
+      .toBe('Mastodon • Crack The Skye • 2009');
     const originalDetailCover = await coverLookupActions.readDisplayedImageEvidence(
       trackModalActions.trackModal.detailedCoverImage,
       'initial detail canonical cover',
@@ -917,7 +918,7 @@ test('FTC-COVERS-011 selected local art remains authoritative after rescan and a
   });
 });
 
-test('FTC-COVERS-017 manual lookup progressively retains provider alternatives', async ({
+test('FTC-COVERS-017 manual lookup progressively retains provider alternatives', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   page,
@@ -935,12 +936,12 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     taskTitle = await coverLookupActions.readModalSubtitle();
     const fixtureCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(fixtureCover).not.toBeNull();
     await coverLookupActions.setProviderFixtureMode('normal');
@@ -1004,7 +1005,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     const reopenedGalleryRequests = [];
     page.on('request', (request) => {
       if (
@@ -1042,7 +1043,7 @@ test('FTC-COVERS-017 manual lookup progressively retains provider alternatives',
   });
 });
 
-test('FTC-COVERS-020 provider deadline keeps candidates found by earlier services', async ({
+test('FTC-COVERS-020 provider deadline keeps candidates found by earlier services', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -1054,11 +1055,11 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PROGRESSIVE_CANDIDATE_TARGET))
       .toEqual(PROGRESSIVE_CANDIDATE_TARGET);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.openCoverLookup();
     await coverLookupActions.waitForModalReady();
     const fixtureCover = findFixtureCoverBySubtitle(
-      Object.values(COVER_LOOKUP_TARGET).join(' - '),
+      Object.values(MANUAL_PROVIDER_COVER).join(' - '),
     );
     expect(fixtureCover).not.toBeNull();
     await coverLookupActions.enterManualUrls(buildFixtureManualUrls(fixtureCover));
@@ -1076,7 +1077,7 @@ test('FTC-COVERS-020 provider deadline keeps candidates found by earlier service
   });
 });
 
-test('FTC-COVERS-021 artist conjunction differences still publish a visible remote candidate', async ({
+test('FTC-COVERS-021 artist conjunction differences still publish a visible remote candidate', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,
@@ -1104,7 +1105,7 @@ test('FTC-COVERS-021 artist conjunction differences still publish a visible remo
   });
 });
 
-test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers', async ({
+test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and stops later providers', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1256,7 +1257,7 @@ test('FTC-COVERS-018 automatic lookup applies the first acceptable cover and sto
   });
 });
 
-test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open', async ({
+test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clears after gallery open', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1337,6 +1338,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
   });
 
   await stepLogger.step('Keep different automatic artwork suggestion-only and show its indicator', async () => {
+    await appBarActions.waitForScanAndCoverRefreshIdle();
     await coverLookupActions.setProviderFixtureMode('automatic-scan');
     await coverLookupActions.resetProviderFixtureEvidence();
     await appBarActions.triggerIncrementalScanAndWait();
@@ -1375,7 +1377,7 @@ test('FTC-COVERS-019 automatic improvement preserves a user-owned cover and clea
   });
 });
 
-test('FTC-COVERS-019 later automatic improvement restores the unseen indicator', async ({
+test('FTC-COVERS-019 later automatic improvement restores the unseen indicator', { tag: '@area:cover-providers' }, async ({
   appBarActions,
   coverLookupActions,
   galleryActions,
@@ -1412,7 +1414,7 @@ test('FTC-COVERS-019 later automatic improvement restores the unseen indicator',
   });
 });
 
-test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save', async ({
+test('FTC-COVERS-019 manual lookup leaves the user-owned cover unchanged before Save', { tag: '@area:cover-providers' }, async ({
   coverLookupActions,
   galleryActions,
   stepLogger,

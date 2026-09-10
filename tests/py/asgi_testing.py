@@ -13,6 +13,33 @@ from urllib.parse import urlsplit
 from tests.py.runtime_testing import configure_test_app_paths
 
 
+class _BootstrapOwnerResolver:
+    def resolve(self, _raw_token):
+        from music_app.services.current_actor import ActorState, CurrentActor
+
+        return CurrentActor(
+            state=ActorState.ACTIVE,
+            account_id=1,
+            session_id=1,
+            username_display="Rendref",
+            is_bootstrap_owner=True,
+        )
+
+
+def configure_test_bootstrap_actor(asgi_app) -> None:
+    """Authenticate legacy route-unit requests through the production boundary."""
+
+    if not hasattr(asgi_app.state, "current_actor_resolver"):
+        asgi_app.state.current_actor_resolver = _BootstrapOwnerResolver()
+    if not hasattr(asgi_app.state, "auth_policy_config"):
+        asgi_app.state.auth_policy_config = {
+            "hmac": {
+                "secret": "test-only-policy-origin-key-32-bytes-minimum",
+                "key_version": 1,
+            }
+        }
+
+
 def create_test_asgi_app(tmp_path: Path, monkeypatch):
     configure_test_app_paths(tmp_path, monkeypatch)
 
@@ -20,6 +47,7 @@ def create_test_asgi_app(tmp_path: Path, monkeypatch):
 
     asgi_app = create_asgi_app()
     asgi_app.state.config["TESTING"] = True
+    configure_test_bootstrap_actor(asgi_app)
     return asgi_app
 
 
@@ -127,11 +155,33 @@ async def run_asgi_request_async(
     json_body: Any = None,
     body: bytes = b"",
 ) -> tuple[int, dict[str, str], bytes]:
+    if hasattr(getattr(app, "state", None), "runtime_asset_version"):
+        configure_test_bootstrap_actor(app)
     query_string = urlencode(query or {}, doseq=True).encode("ascii")
     request_body = body
     request_headers = [(b"host", b"testserver")]
     for key, value in (headers or {}).items():
         request_headers.append((key.lower().encode("latin1"), value.encode("latin1")))
+    if hasattr(getattr(app, "state", None), "runtime_asset_version"):
+        from music_app.services.auth_session_csrf import issue_session_csrf
+
+        session = "s" * 43
+        csrf = issue_session_csrf(session, app.state.auth_policy_config)
+        present = {key for key, _value in request_headers}
+        if b"cookie" not in present:
+            request_headers.append(
+                (
+                    b"cookie",
+                    (
+                        f"__Host-album_haven_session={session}; "
+                        f"__Host-album_haven_csrf={csrf}"
+                    ).encode("ascii"),
+                )
+            )
+        if method.upper() not in {"GET", "HEAD", "OPTIONS"} and b"origin" not in present:
+            request_headers.append((b"origin", b"http://testserver"))
+        if method.upper() not in {"GET", "HEAD", "OPTIONS"} and b"x-album-haven-csrf" not in present:
+            request_headers.append((b"x-album-haven-csrf", csrf.encode("ascii")))
     if json_body is not None:
         request_body = json.dumps(json_body).encode("utf-8")
         request_headers.append((b"content-type", b"application/json"))

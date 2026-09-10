@@ -5,6 +5,7 @@ import path from 'node:path';
 const JOSEPH_COVER_FILENAME = 'Neal Morse - The Dreamer - Joseph, Pt. One.png';
 const JOSEPH_PREVIEW_RESPONSE_HASH = '84b7ef18d9c825fcedfb872a40835b7d9667f497936b0ad2ba526ff096531568';
 const JOSEPH_FULL_RESPONSE_HASH = '982c12c0697ed661a18f230290dc81a5a72a950cce2efb5ea8ee184f1693f491';
+const JOSEPH_ZOOMED_DETAIL_HASH = '12efccbc8b10d830762730e24dfe35d8c9738abbbefb0027f8a55592cdd3059c';
 
 export function observeExactCoverTraffic(page) {
   const requestCounts = new Map();
@@ -276,10 +277,10 @@ export async function expectZoomedJosephDetailScreenshot(expect, page, lightbox)
     width: detailSize,
     height: detailSize,
   };
-  await expect(page).toHaveScreenshot('neal-morse-joseph-2023-zoomed-detail.png', {
+  const screenshot = await page.screenshot({
     animations: 'disabled',
     clip,
-    maxDiffPixels: 0,
-    threshold: 0,
   });
+  expect(createHash('sha256').update(screenshot).digest('hex'))
+    .toBe(JOSEPH_ZOOMED_DETAIL_HASH);
 }

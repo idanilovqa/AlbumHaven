@@ -1,10 +1,12 @@
 ﻿restorePlayerAppearance();
 attachModalEvents();
+document.querySelectorAll('[data-account-menu-component]').forEach(attachAccountMenu);
 attachCoverLookupModalEvents();
 attachCoverLookupDeleteConfirmEvents();
 attachUtilityModalEvents();
 attachRepairConfirmEvents();
 attachPlayerEvents();
+if (typeof initCompactPlayer === 'function') initCompactPlayer();
 if (typeof initPlaybackOwnershipCoordinator === 'function') {
   initPlaybackOwnershipCoordinator();
 }

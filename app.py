@@ -50,14 +50,24 @@ def _disable_windows_console_quick_edit_mode(
 
 def _run_asgi_server(*, port: int, reload: bool) -> None:
     import uvicorn
+    from config import Config
+    from music_app.server_tls import local_https_options
 
     _disable_windows_console_quick_edit_mode()
+    tls_options = local_https_options(os.environ, data_dir=Config.DATA_DIR, port=port)
+    if tls_options:
+        print(
+            f"Album Haven local HTTPS: {os.environ['ALBUM_HAVEN_PUBLIC_BASE_URL'].rstrip('/')}/login\n"
+            "A locally generated certificate is used. Your browser will show a certificate warning.",
+            flush=True,
+        )
     uvicorn.run(
         _ASGI_APP_FACTORY_TARGET,
-        host="0.0.0.0",
+        host=tls_options.pop("host", "0.0.0.0"),
         port=port,
         reload=reload,
         factory=True,
+        **tls_options,
     )
 
 

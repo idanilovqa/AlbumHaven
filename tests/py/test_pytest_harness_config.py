@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 import uuid
 
 import pytest
@@ -219,6 +220,34 @@ def test_stale_cleanup_removes_only_owned_dead_process_roots(tmp_path, monkeypat
     assert unowned_root.is_dir()
 
 
+def test_owned_root_cleanup_retries_a_transient_filesystem_lock(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / "workspace-temp"
+    owned_root = workspace_temp / "pytest-444444-deadbeef"
+    _write_owner_marker(owned_root, pid=444444, token="deadbeef")
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def transient_rmtree(path):
+        attempts.append(Path(path))
+        if len(attempts) < 3:
+            raise PermissionError("transient Windows file lock")
+        real_rmtree(path)
+
+    monkeypatch.setattr(
+        pytest_harness,
+        "_workspace_pytest_temp_root",
+        lambda: workspace_temp.resolve(),
+    )
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", transient_rmtree)
+    monkeypatch.setattr(pytest_harness.time, "sleep", lambda _seconds: None)
+
+    assert pytest_harness._remove_owned_generated_pytest_root(
+        owned_root,
+        expected_owner=(444444, "deadbeef"),
+    )
+    assert attempts == [owned_root, owned_root, owned_root]
+
+
 def test_unrelated_workspace_entries_do_not_starve_owned_stale_root_cleanup(tmp_path, monkeypatch):
     workspace_temp = tmp_path / "workspace-temp"
     unrelated_roots = [workspace_temp / f"unrelated-{index:03d}" for index in range(65)]
@@ -260,3 +289,29 @@ def test_owned_cleanup_tolerates_a_windows_style_lock(tmp_path, monkeypatch):
         expected_owner=(444444, "acde1234"),
     )
     assert locked_root.is_dir()
+
+
+def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
+    tmp_path, monkeypatch
+):
+    owned_root = tmp_path / "pytest-444444-acde1234"
+    calls = []
+
+    def remove(path, *, expected_owner):
+        calls.append((path, expected_owner))
+        return len(calls) > 1
+
+    config = SimpleNamespace(
+        _album_haven_generated_basetemp=True,
+        _album_haven_generated_basetemp_token="acde1234",
+        _tmp_path_factory=SimpleNamespace(_basetemp=owned_root),
+    )
+    monkeypatch.setattr(pytest_harness, "_remove_owned_generated_pytest_root", remove)
+
+    pytest_harness.pytest_sessionfinish(SimpleNamespace(config=config), 0)
+    pytest_harness.pytest_unconfigure(config)
+
+    assert calls == [
+        (owned_root, (os.getpid(), "acde1234")),
+        (owned_root, (os.getpid(), "acde1234")),
+    ]

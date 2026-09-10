@@ -133,10 +133,16 @@ test.describe(`${CASE_ID} synthetic-large utility rules and sibling-tab UI`, () 
           checkpointKey: 'utility-appearance-ready',
           checkpointLabel: 'Utility Appearance ready after switching from Rules',
           assertSummary(summary) {
-            expect(summary.itemCount, 'Expected the Appearance tab to show its seekbar entry.').toBeGreaterThan(0);
-            expect(summary.seekbarModeCount, 'Expected both Appearance seekbar mode radios to render.').toBeGreaterThanOrEqual(2);
-            expect(summary.colorInputCount, 'Expected Appearance waveform color inputs to render.').toBeGreaterThanOrEqual(2);
-            expect(summary.detailTitle).toBe('Seekbar');
+            expect(summary.itemCount, 'Expected all five Appearance pages.').toBe(5);
+            expect(summary.sectionLabels).toEqual([
+              'Main elements',
+              'Player & Seekbar',
+              'Selection & Hover',
+              'Alerts',
+              'Album page',
+            ]);
+            expect(summary.seekbarModeCount, 'Player controls stay unmounted on the Main elements page.').toBe(0);
+            expect(summary.detailTitle).toBe('Main elements');
           },
         },
       ];

@@ -14,6 +14,7 @@ from music_app.services.gallery_display import (
 )
 from music_app.services.gallery_scope import normalize_visible_categories
 from music_app.services.library import strip_private_album_preference_overlays
+from music_app.services.navigation_tree import render_navigation_tree_item
 from music_app.services.page_resource_seams import build_album_page_seam
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 from music_app.services.playlist_read_seams import resolve_active_view_surface
@@ -129,6 +130,8 @@ def _build_initial_album_preview(album: dict[str, object], *, public_safe: bool 
         "album_display_metadata": source_album.get("album_display_metadata"),
         "total_duration_seconds": source_album.get("total_duration_seconds"),
         "total_duration_display": source_album.get("total_duration_display"),
+        "inventory_status": source_album.get("inventory_status"),
+        "missing_since": source_album.get("missing_since"),
         "track_count_preview": track_count_preview,
         "tracks": [],
         "has_duplicate_files": bool(source_album.get("has_duplicate_files")),
@@ -248,36 +251,24 @@ def build_startup_sidebar_html(view: dict[str, object]) -> Markup:
     )
     parts: list[str] = []
     if show_all_artists_link:
-        parts.append(
-            '<a class="artist-link {active}" href="{href}" data-nav="1" data-sidebar-all-artists="1">'
-            '<span class="artist-name-label">All artists</span>'
-            '<span class="artist-count">{count}</span>'
-            "</a>".format(
-                active="active" if all_artists_active else "",
-                href="/?surface=albums",
-                count=explicit_artist_count,
-            )
-        )
+        parts.append(render_navigation_tree_item(
+            label="All artists", href="/?surface=albums", key="all-artists",
+            selected=all_artists_active, count=explicit_artist_count,
+            attributes={"data-nav": "1", "data-sidebar-all-artists": "1"},
+        ))
     for item in sidebar:
         if not isinstance(item, dict):
             continue
         artist = str(item.get("artist") or "").strip()
         if not artist:
             continue
-        artist_display = str(item.get("artist_display") or artist)
-        count = safe_int(item.get("count") or 0)
-        parts.append(
-            '<a class="artist-link {active}" href="{href}" data-nav="1" data-sidebar-artist="{artist_attr}">'
-            '<span class="artist-name-label">{artist_display}</span>'
-            '<span class="artist-count">{count}</span>'
-            "</a>".format(
-                active="active" if artist == selected_artist else "",
-                href=escape(build_startup_sidebar_href(view, artist)),
-                artist_attr=escape(artist),
-                artist_display=escape(artist_display),
-                count=count,
-            )
-        )
+        parts.append(render_navigation_tree_item(
+            label=str(item.get("artist_display") or artist),
+            href=build_startup_sidebar_href(view, artist),
+            key=f"artist:{artist}", selected=artist == selected_artist,
+            count=safe_int(item.get("count") or 0),
+            attributes={"data-nav": "1", "data-sidebar-artist": artist},
+        ))
     return Markup("".join(parts))
 
 

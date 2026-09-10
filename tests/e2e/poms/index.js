@@ -7,6 +7,7 @@ export { CoverLookup } from './coverLookup.js';
 export { GalleryPage } from './galleryPage.js';
 export { GlobalPlayer } from './globalPlayer.js';
 export { LibrarySettings } from './librarySettings.js';
+export { LibraryWatchStatus } from './libraryWatchStatus.js';
 export { NavigationPanel } from './navigationPanel.js';
 export { ScanPage } from './scanPage.js';
 export { SettingsModalAppBar } from './settingsModalAppBar.js';

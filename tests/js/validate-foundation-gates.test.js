@@ -39,13 +39,14 @@ function assertWorkflowDrift(validator, workflow, changedWorkflow, expectedError
   assert.match(validator.validateWorkflowContract(changedWorkflow).join('\n'), expectedError);
 }
 
-test('foundation workflow uses a published Linux Chrome pin and clears inherited admin passwords before Windows probes', () => {
+test('foundation workflow uses a published Chrome pin and matches component snapshots to Windows', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8');
   for (const jobName of ['test_js', 'test_components']) {
     const start = workflow.indexOf(`  ${jobName}:`);
     const next = workflow.slice(start + 1).match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
     const job = workflow.slice(start, next ? start + 1 + next.index : workflow.length);
     assert.match(job, /chrome-version:\s*["']151\.0\.7922\.138["']/);
+    if (jobName === 'test_components') assert.match(job, /runs-on:\s*windows-2025/);
   }
   for (const jobName of ['test_node_windows', 'test_python', 'e2e_functional']) {
     const start = workflow.indexOf(`  ${jobName}:`);
@@ -58,6 +59,23 @@ test('foundation workflow uses a published Linux Chrome pin and clears inherited
   const performanceJob = workflow.slice(performanceStart, performanceEnd);
   assert.match(performanceJob, /run-performance-shard\.ps1/);
   assert.doesNotMatch(performanceJob, /name:\s*Write performance foundation version manifest/);
+});
+
+test('dedicated Phase 7 jobs select their pinned Chrome executable', () => {
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const jobName of ['e2e_phase7_auth', 'e2e_phase7_admin']) {
+    const start = workflow.indexOf(`  ${jobName}:`);
+    const next = workflow.slice(start + 1).match(/\n {2}[A-Za-z_][A-Za-z0-9_]*:\r?\n/);
+    const job = workflow.slice(start, next ? start + 1 + next.index : workflow.length);
+    assert.match(job, /PLAYWRIGHT_BROWSER:\s*chrome/);
+    assert.match(job, /PLAYWRIGHT_CHROME_EXECUTABLE/);
+  }
+  for (const configName of ['playwright.phase7-auth.config.js', 'playwright.phase7-admin.config.js']) {
+    const config = fs.readFileSync(path.join(repoRoot, configName), 'utf8');
+    assert.match(config, /resolveBrowserProjectUse\(process\.env\.PLAYWRIGHT_BROWSER \|\| 'chromium'\)/);
+    assert.match(config, /retries:\s*0/);
+    assert.match(config, /trace:\s*'retain-on-failure'/);
+  }
 });
 
 test('foundation validator enforces the approved portable and Windows gate contract', () => {
@@ -100,7 +118,7 @@ test('foundation validator enforces the approved portable and Windows gate contr
     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
     'Total: 2 tests in 2 files',
   ].join('\n')).length, 2);
-  assert.equal(validator.discoverComponentCases(repoRoot).length, 5);
+  assert.equal(validator.discoverComponentCases(repoRoot).length, 56);
 
   assert.deepEqual(
     validator.validatePytestCollection(
@@ -185,7 +203,10 @@ test('foundation validator enforces the approved portable and Windows gate contr
   );
 
   const triggerDrift = workflow.replace(/^on:\r?\n\s+pull_request:/m, 'on:\n  push:\n  pull_request:');
-  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull_request-only/i);
+  assert.match(validator.validateWorkflowContract(triggerDrift).join('\n'), /pull-request-only/i);
+
+  const dispatchDrift = workflow.replace(/^on:\r?\n/m, 'on:\n  workflow_dispatch:\n');
+  assert.match(validator.validateWorkflowContract(dispatchDrift).join('\n'), /pull-request-only/i);
 
   const unguardedWindows = workflow.replace(
     /if:\s*\$\{\{[^\n]*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository[^\n]*\}\}/,
@@ -271,4 +292,24 @@ test('foundation validator enforces the approved portable and Windows gate contr
     validator.validateDependencyContract(unpinnedFfmpeg).join('\n'),
     /imageio-ffmpeg 0\.6\.0/i,
   );
+});
+
+
+test('foundation validator rejects every test family losing its review-success dependency or condition', () => {
+  const validator = require(validatorPath);
+  const workflow = fs.readFileSync(workflowPath, 'utf8');
+  for (const job of [
+    'test_js', 'test_components', 'test_node_windows', 'test_python', 'e2e_production_parity',
+    'e2e_phase7_auth', 'e2e_phase7_admin', 'e2e_functional', 'e2e_performance_ci',
+  ]) {
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /      - review_prerequisites\r?\n/, ''),
+      /review_prerequisites dependency/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /needs\.review_prerequisites\.result == 'success'/, "needs.review_prerequisites.result != 'cancelled'"),
+      /successful review prerequisite/);
+    assertWorkflowDrift(validator, workflow,
+      replaceInJob(workflow, job, /!cancelled\(\)/, 'always()'),
+      /cancellable job condition/);
+  }
 });

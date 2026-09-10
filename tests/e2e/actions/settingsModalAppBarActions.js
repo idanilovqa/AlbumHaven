@@ -10,8 +10,24 @@ export class SettingsModalAppBarActions {
   }
 
   async openSettings() {
-    await this.settingsModalAppBar.settingsButton.click();
+    await this.openAccountMenu();
+    await this.settingsModalAppBar.settingsMenuItem.click();
     await this.waitForOpen();
+  }
+
+  async openAccountMenu() {
+    await this.settingsModalAppBar.settingsButton.click();
+    await expect(this.settingsModalAppBar.accountMenu).toBeVisible();
+  }
+
+  async openAdminPanel() {
+    await this.openAccountMenu();
+    await this.settingsModalAppBar.adminPanelMenuItem.click();
+  }
+
+  async signOut() {
+    await this.openAccountMenu();
+    await this.settingsModalAppBar.signOutMenuItem.click();
   }
 
   async pressSpaceOnFocusedSettingsOpener(options = {}) {

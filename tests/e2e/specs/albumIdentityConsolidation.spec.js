@@ -44,7 +44,7 @@ test.afterEach(async ({ managedAppLifecycle }) => {
   await managedAppLifecycle.restart();
 });
 
-test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', async ({
+test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -229,7 +229,7 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
     await session.tagEditorActions.setTrackNumber(15);
     await session.tagEditorActions.applyAndWaitForSavedFiles();
     await session.trackModalActions.waitForExactAlbumDetails({
-      title: `${ARTIST} - ${SOURCE_ALBUM} - ${FIXTURE_YEAR}`,
+      title: `${ARTIST} • ${SOURCE_ALBUM} • ${FIXTURE_YEAR}`,
       trackTitles: TRACKS.map((track) => track.title),
       displayedTrackNumbers: TRACKS.map((_track, index) => index + 1),
     });
@@ -251,7 +251,7 @@ test('FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release', a
   );
 });
 
-test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks', async ({
+test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks', { tag: '@area:problematic-files' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -324,7 +324,7 @@ test('FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons an
   });
 });
 
-test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity', async ({
+test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity', { tag: ['@area:problematic-files', '@area:tag-edit'] }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,

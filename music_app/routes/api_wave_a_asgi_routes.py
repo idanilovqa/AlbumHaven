@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from collections.abc import Mapping
@@ -42,6 +43,13 @@ from music_app.services.ignored_repairs import load_ignored_repair_keys, save_ig
 from music_app.services.ignored_versions import load_ignored_version_keys, save_ignored_version_keys
 from music_app.services.library import _album_key, album_to_dict
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+from music_app.services.missing_album_removal_postgres import (
+    MissingAlbumNotFound,
+    MissingAlbumReappeared,
+    MissingAlbumRootUnavailable,
+    PostgresMissingAlbumRemovalService,
+)
+from music_app.services.policy_asgi import require_action
 from music_app.services.library_roots import (
     library_root_cache_identity,
     load_library_root_settings,
@@ -78,6 +86,7 @@ from music_app.services.repair_previews import (
 )
 from music_app.services.state import (
     hydrate_library_state_for_config,
+    invalidate_targeted_library_projections,
     run_runtime_state_mutation_for_state,
     start_background_refresh_for_state,
 )
@@ -101,6 +110,73 @@ from music_app.services.edit_state import find_album_dicts_by_track_paths
 
 
 router = APIRouter()
+
+
+@router.post("/api/library/albums/{album_key:path}/confirm-removal")
+async def confirm_missing_album_removal(request: Request, album_key: str) -> JSONResponse:
+    await require_action("library.inventory.manage")(request)
+    normalized_key = str(album_key or "").strip()
+    if not normalized_key:
+        return JSONResponse({"ok": False, "error": "Invalid album key"}, status_code=400)
+    try:
+        health_service = getattr(request.app.state, "library_watch_health_service", None)
+        root_health_check = getattr(health_service, "root_allows_destructive_reconciliation", None)
+        if not callable(root_health_check):
+            raise MissingAlbumRootUnavailable()
+        result = await run_in_threadpool(
+            PostgresMissingAlbumRemovalService(
+                _app_config(request), root_health_check=root_health_check,
+            ).confirm_removal,
+            normalized_key,
+        )
+    except MissingAlbumReappeared:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Album was found again. Refresh the library before removing it.",
+                "code": "album_reappeared",
+            },
+            status_code=409,
+        )
+    except MissingAlbumRootUnavailable:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "The album's library root is unavailable. Reconnect it before removing the album.",
+                "code": "library_root_unavailable",
+            },
+            status_code=409,
+        )
+    except MissingAlbumNotFound:
+        return JSONResponse(
+            {"ok": False, "error": "Album not found", "code": "album_not_found"},
+            status_code=404,
+        )
+    library_state = _library_state(request)
+
+    def remove_from_runtime_albums():
+        albums = library_state.get("albums")
+        if isinstance(albums, list):
+            library_state["albums"] = [
+                album
+                for album in albums
+                if str(
+                    album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
+                ).strip()
+                != normalized_key
+            ]
+
+    def update_runtime_after_removal():
+        run_runtime_state_mutation_for_state(remove_from_runtime_albums)
+        invalidate_targeted_library_projections(
+            library_state,
+            _app_config(request),
+            revision=int(result["library_revision"]),
+            affected_album_keys=(normalized_key,),
+        )
+
+    await run_in_threadpool(update_runtime_after_removal)
+    return JSONResponse({"ok": True, **result})
 
 _EDIT_WRITE_WORKERS = 2
 _STRUCTURAL_EDIT_FIELDS = {"album", "album_artist", "year", "edition", "exception_type"}
@@ -294,14 +370,48 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
         if intent_repository is not None
         else None
     )
-    complete_scoped_persistence = (
-        lambda: intent_repository.complete(
+    scoped_postgres_exception_only = bool(
+        kwargs.get("scoped_postgres_exception_only")
+    )
+    scoped_exception_values = {
+        normalize_exception_value(entry.get("exception_type"))
+        for entry in dict(kwargs.get("updated_file_cache") or {}).values()
+        if isinstance(entry, Mapping)
+    }
+    clears_scoped_exception = (
+        scoped_postgres_exception_only
+        and scoped_exception_values == {""}
+    )
+
+    def persist_scoped_exception_membership() -> object:
+        if not isinstance(config, Mapping):
+            raise RuntimeError(
+                "Scoped PostgreSQL exception persistence requires app configuration."
+            )
+        return persist_structural_tag_edit_for_config(
+            config,
+            changed_paths=set(kwargs.get("changed_paths") or ()),
+            previous_file_entries=dict(
+                kwargs.get("previous_file_cache") or {}
+            ),
+            updated_file_entries=dict(
+                kwargs.get("updated_file_cache") or {}
+            ),
+            changed_field_names=set(
+                kwargs.get("changed_field_names") or ()
+            ),
+            before_commit=before_persistence_commit,
+            rebuild_relation_projection=False,
+        )
+
+    complete_scoped_persistence = None
+    if clears_scoped_exception:
+        complete_scoped_persistence = persist_scoped_exception_membership
+    elif intent_repository is not None:
+        complete_scoped_persistence = lambda: intent_repository.complete(
             tag_edit_intent_id,
             exception_updates=exception_updates,
         )
-        if intent_repository is not None
-        else None
-    )
     record_scoped_persistence_failure = (
         lambda compensation_succeeded, error: (
             intent_repository.mark_terminal(
@@ -318,7 +428,7 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
     rebuild_relation_projection = bool(
         set(kwargs.get("changed_field_names") or ())
         & _RELATION_PROJECTION_EDIT_FIELDS
-    ) and not bool(kwargs.get("scoped_postgres_exception_only"))
+    ) and not scoped_postgres_exception_only
     if find_albums_by_track_paths is None:
         find_albums_by_track_paths = _default_albums_by_track_paths_finder(get_state_provider)
     if find_problematic_album_by_track_paths is None:
@@ -407,13 +517,29 @@ async def library_settings_write(request: Request) -> JSONResponse:
         )
 
     try:
-        result = save_library_settings_and_start_refresh(
-            _app_config(request),
-            settings_payload,
-            library_state=_library_state(request),
-            start_background_refresh=_start_background_refresh_for_asgi_request(request),
-            build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
+        replace_live_watch_roots = getattr(
+            request.app.state,
+            "replace_library_watch_roots",
+            None,
         )
+        write_lock = getattr(request.app.state, "library_settings_write_lock", None)
+        if write_lock is None:
+            write_lock = asyncio.Lock()
+            request.app.state.library_settings_write_lock = write_lock
+        async with write_lock:
+            result = await run_in_threadpool(
+                save_library_settings_and_start_refresh,
+                _app_config(request),
+                settings_payload,
+                library_state=_library_state(request),
+                start_background_refresh=_start_background_refresh_for_asgi_request(request),
+                build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
+                replace_watch_roots=(
+                    replace_live_watch_roots
+                    if callable(replace_live_watch_roots)
+                    else (lambda _roots: None)
+                ),
+            )
     except ValueError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     except LibrarySettingsWorkflowError as exc:

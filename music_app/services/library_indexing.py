@@ -218,6 +218,44 @@ def _apply_cached_local_cover_metadata(
     )
 
 
+def enrich_library_file_entry(
+    entry: dict[str, object],
+    *,
+    path: Path,
+    root_definition: dict[str, object],
+    image_extensions: set[str],
+    exception_overrides: dict[str, object] | None = None,
+    folder_cover_cache: dict[str, object] | None = None,
+    cover_metadata_cache: dict[
+        str,
+        tuple[int | None, int | None, str | None, int | None, int | None],
+    ] | None = None,
+    record_file_error: Callable[..., None] | None = None,
+) -> dict[str, object]:
+    """Apply the same root, exception, and cover enrichment as a full scan."""
+    enriched = dict(entry)
+    enriched["path"] = str(path)
+    enriched["library_root_id"] = str(root_definition.get("id") or "").strip() or None
+    enriched["library_root_category"] = library_category_slug(
+        root_definition.get("category")
+    )
+    apply_exception_override(enriched, dict(exception_overrides or {}))
+    enriched["cover_path"] = _resolve_folder_cover_path(
+        folder=path.parent,
+        existing_cover_value=enriched.get("cover_path"),
+        image_extensions=image_extensions,
+        folder_cover_cache=(folder_cover_cache if folder_cover_cache is not None else {}),
+    )
+    _apply_cached_local_cover_metadata(
+        enriched,
+        cover_metadata_cache=(
+            cover_metadata_cache if cover_metadata_cache is not None else {}
+        ),
+        record_file_error=record_file_error,
+    )
+    return enriched
+
+
 class ScanCancelled(RuntimeError):
     pass
 
@@ -678,20 +716,29 @@ def scan_library_file_cache(
             )
         matched_root = folder_root_definition_cache[track_folder_key]
         if isinstance(matched_root, dict):
-            entry["library_root_id"] = str(matched_root.get("id") or "").strip() or None
-            entry["library_root_category"] = library_category_slug(matched_root.get("category"))
-        apply_exception_override(entry, exception_overrides)
-        entry["cover_path"] = _resolve_folder_cover_path(
-            folder=track_folder,
-            existing_cover_value=entry.get("cover_path"),
-            image_extensions=image_extensions,
-            folder_cover_cache=folder_cover_cache,
-        )
-        _apply_cached_local_cover_metadata(
-            entry,
-            cover_metadata_cache=cover_metadata_cache,
-            record_file_error=record_file_error,
-        )
+            entry = enrich_library_file_entry(
+                entry,
+                path=path,
+                root_definition=matched_root,
+                image_extensions=image_extensions,
+                exception_overrides=exception_overrides,
+                folder_cover_cache=folder_cover_cache,
+                cover_metadata_cache=cover_metadata_cache,
+                record_file_error=record_file_error,
+            )
+        else:
+            apply_exception_override(entry, exception_overrides)
+            entry["cover_path"] = _resolve_folder_cover_path(
+                folder=track_folder,
+                existing_cover_value=entry.get("cover_path"),
+                image_extensions=image_extensions,
+                folder_cover_cache=folder_cover_cache,
+            )
+            _apply_cached_local_cover_metadata(
+                entry,
+                cover_metadata_cache=cover_metadata_cache,
+                record_file_error=record_file_error,
+            )
 
         updated_file_cache[path_str] = entry
         library_state["scan_processed"] = index

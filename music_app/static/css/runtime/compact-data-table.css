@@ -45,6 +45,15 @@
   padding: var(--cdt-row-padding);
 }
 
+.compact-data-table-row--full-span {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.compact-data-table-row--full-span [data-cdt-full-span] {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
 .compact-data-table[data-cdt-frame="outline"] .compact-data-table-header {
   border-bottom: 1px solid rgba(148, 163, 184, 0.18);
 }

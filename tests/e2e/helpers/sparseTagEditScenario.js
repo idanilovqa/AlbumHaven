@@ -30,7 +30,7 @@ async function assertAlbumTrackCounts({
     });
     const summary = await trackModalActions.waitForInteractiveSummary();
     expect(summary.title).toBe(
-      `${FIXTURE_ARTIST} - ${identity.album} - ${identity.year}`,
+      `${FIXTURE_ARTIST} • ${identity.album} • ${identity.year}`,
     );
     expect(summary.trackRows).toBe(identity.trackCount);
     await trackModalActions.close();

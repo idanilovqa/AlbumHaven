@@ -6,7 +6,7 @@ const FIXTURE_YEAR = '2026';
 const DIRTY_ALBUM_VALUE = 'FTC-TAGS-016 Dirty Album Value';
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(FIXTURE_ARTIST)}`;
 
-test('FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pending', async ({
+test('FTC-TAGS-016 tag editor backdrop closes only when no tag changes are pending', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   stepLogger,

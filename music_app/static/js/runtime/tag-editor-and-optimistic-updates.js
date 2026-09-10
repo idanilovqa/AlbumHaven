@@ -672,6 +672,9 @@ async function confirmManualTagEdit() {
     updates,
   );
   closeTagEditConfirmModal();
+  if (typeof claimLocalViewStateNavigation === 'function') {
+    claimLocalViewStateNavigation();
+  }
   const originatingViewStateRevision = readTagEditOriginViewStateRevision();
   const originatingViewRequestUrl = typeof buildApiUrl === 'function'
     ? String(buildApiUrl(state.view) || '').trim()
@@ -720,7 +723,9 @@ async function confirmManualTagEdit() {
   if (typeof applyTagEditsToNonAlbumView === 'function') {
     applyTagEditsToNonAlbumView(album, updates);
   }
-  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums);
+  updateOpenTrackModalAfterTagEdit(album, reconciledOptimisticAlbums, {
+    tagEditMutationClaim,
+  });
   renderView(renderOptions);
   showRepairAlert('Writing tag changes...', 'success', null);
   let failedLogHistoryEntryId = '';
@@ -1530,11 +1535,179 @@ function getTrackModalAlbumIdentity(album) {
   return getTrackModalAlbumRequestKey(album);
 }
 
+function canConfirmMissingAlbumRemoval(album) {
+  return Boolean(album?.allowed_actions?.['library.inventory.manage']);
+}
+
+function buildMissingAlbumRemovalConfirmation(album) {
+  const albumName = String(album?.name || 'this album').trim() || 'this album';
+  return {
+    title: 'Remove album?',
+    message: `Remove “${albumName}” from Album Haven? Its local files are already missing. This removes the album and its Album Haven data. It does not delete files from disk.`,
+    cancelLabel: 'Cancel',
+    acceptLabel: 'Remove album',
+    danger: true,
+  };
+}
+
+const applyMissingAlbumRemovalToViewDefault = function applyMissingAlbumRemovalToViewDefault(albumKey, payload = {}) {
+  const normalizedKey = String(albumKey || '').trim();
+  if (!normalizedKey || !state?.view) return false;
+  const groupFields = ['artist_groups', 'primary_artist_groups', 'family_artist_groups'];
+  groupFields.forEach((field) => {
+    const groups = Array.isArray(state.view[field]) ? state.view[field] : [];
+    state.view[field] = groups.flatMap((group) => {
+      const albums = Array.isArray(group?.albums) ? group.albums : [];
+      const retainedAlbums = albums.filter((album) => {
+        const matches = String(getTrackModalAlbumRequestKey(album) || album?.key || '').trim() === normalizedKey;
+        return !matches;
+      });
+      return retainedAlbums.length ? [{ ...group, albums: retainedAlbums }] : [];
+    });
+  });
+
+  // Mounted groups can be filtered or partial. The canonical view refresh owns
+  // whole-library sidebar membership and counts.
+  if (Number.isFinite(Number(payload.album_count))) {
+    state.view.album_count = Number(payload.album_count);
+  }
+  if (Number.isFinite(Number(payload.artist_count))) {
+    state.view.artist_count = Number(payload.artist_count);
+  }
+  if (state.gallery) {
+    if (typeof rebuildAlbumIndex === 'function') rebuildAlbumIndex(state.view.artist_groups || []);
+    else state.gallery.albumIndex?.delete?.(normalizedKey);
+  }
+  if (state.utility) {
+    state.utility.problematicFiles = (Array.isArray(state.utility.problematicFiles)
+      ? state.utility.problematicFiles
+      : []).filter((album) => String(album?.key || '').trim() !== normalizedKey);
+    if (String(state.utility.selectedProblematicKey || '').trim() === normalizedKey) {
+      state.utility.selectedProblematicKey = '';
+    }
+  }
+  if (typeof renderView === 'function') {
+    const renderOptions = typeof payload?.constructor === 'function'
+      ? new payload.constructor()
+      : {};
+    renderOptions.preserveScroll = true;
+    renderView(renderOptions);
+  }
+  return true;
+};
+if (typeof applyMissingAlbumRemovalToView !== 'function') {
+  var applyMissingAlbumRemovalToView = applyMissingAlbumRemovalToViewDefault;
+}
+
+async function confirmMissingAlbumRemoval(album, options = {}) {
+  if (!album || String(album?.inventory_status || '').trim().toLowerCase() !== 'missing') return false;
+  if (!canConfirmMissingAlbumRemoval(album)) {
+    if (typeof showToast === 'function') {
+      showToast('Ask an owner or administrator to remove this album.', 'info', 3200);
+    }
+    return false;
+  }
+  const accepted = await showAppConfirmDialog(buildMissingAlbumRemovalConfirmation(album));
+  if (!accepted) return false;
+  const albumKey = getTrackModalAlbumRequestKey(album) || String(album?.key || '').trim();
+  try {
+    const response = await fetch(`/api/library/albums/${encodeURIComponent(albumKey)}/confirm-removal`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = {};
+    }
+    const pendingRefreshRequest = state.ui?.pendingViewRequest || (
+      state.busy && state.ui?.activeViewRequestUrl
+        ? { url: state.ui.activeViewRequestUrl, push: state.ui.activeViewRequestPush }
+        : null
+    );
+    if (response.status === 409) {
+      if (typeof fetchAndRender === 'function' && typeof buildUrl === 'function') {
+        const refreshOptions = typeof album?.constructor === 'function'
+          ? new album.constructor()
+          : {};
+        refreshOptions.preserveScroll = true;
+        if (pendingRefreshRequest) {
+          Object.assign(refreshOptions, pendingRefreshRequest.options, {
+            preserveScroll: pendingRefreshRequest.options?.preserveScroll ?? true,
+            interruptCurrent: true,
+            restartIfSameUrl: true,
+          });
+          if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+        }
+        await fetchAndRender(
+          pendingRefreshRequest?.url || buildUrl(state.view),
+          Boolean(pendingRefreshRequest?.push),
+          refreshOptions,
+        );
+      }
+      if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+      const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+      const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+      if (modal?.overlay && !modal.overlay.hidden
+        && getTrackModalAlbumRequestKey(currentAlbum) === albumKey) {
+        invalidateHydratedTrackModalAlbumDetails([currentAlbum]);
+        const loadToken = invalidatePendingTrackModalLoad();
+        const refreshedAlbum = await loadTrackModalAlbumDetails(albumKey);
+        if (refreshedAlbum && !modal.overlay.hidden
+          && loadToken === state.ui.pendingTrackModalLoadToken
+          && getTrackModalAlbumRequestKey(getCurrentTrackModalAlbum()) === albumKey) {
+          openTrackModal(refreshedAlbum, { coverLightboxGallery: state.ui.trackModalCoverLightboxGallery });
+        }
+      }
+      const conflictMessage = String(
+        payload.error || payload.detail || 'Album Haven found this album again.'
+      ).trim() || 'Album Haven found this album again.';
+      if (typeof showToast === 'function') showToast(conflictMessage, 'info', 3200);
+      return false;
+    }
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || 'Unable to remove album from Album Haven.');
+    }
+    const refreshRequest = pendingRefreshRequest || {
+      url: typeof buildUrl === 'function' ? buildUrl(state.view) : '', push: false,
+    };
+    if (typeof claimLocalViewStateNavigation === 'function') claimLocalViewStateNavigation();
+    applyMissingAlbumRemovalToView(albumKey, payload);
+    const modal = typeof getTrackModalElements === 'function' ? getTrackModalElements() : null;
+    const currentAlbum = typeof getCurrentTrackModalAlbum === 'function' ? getCurrentTrackModalAlbum() : null;
+    if (modal?.overlay && !modal.overlay.hidden
+      && getTrackModalAlbumRequestKey(currentAlbum) === albumKey
+      && typeof closeTrackModal === 'function') closeTrackModal();
+    if (refreshRequest.url && typeof fetchAndRender === 'function') {
+      await fetchAndRender(refreshRequest.url, Boolean(refreshRequest.push), {
+        ...refreshRequest.options,
+        preserveScroll: refreshRequest.options?.preserveScroll ?? true,
+        interruptCurrent: true,
+        restartIfSameUrl: true,
+      });
+    }
+    if (typeof loadProblematicFiles === 'function') await loadProblematicFiles(true);
+    if (typeof showToast === 'function') showToast('Album removed from Album Haven.', 'success', 3200);
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Library] Missing album removal failed.', error);
+    if (typeof showToast === 'function') {
+      showToast(error?.message || 'Unable to remove album from Album Haven.', 'error', 3200);
+    }
+    return false;
+  }
+}
+
 function renderTrackModalRelease(album) {
-  const els = getTrackModalElements();
+  let els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  const renderAlbumArtbox = typeof buildAlbumArtboxHtml === 'function'
+    ? buildAlbumArtboxHtml
+    : (config = {}) => String(config.coverHtml || '<div class="cover-placeholder">No cover art</div>');
   const resolvedAlbumKey = getTrackModalAlbumRequestKey(album) || getTrackModalAlbumIdentity(album) || String(album?.key || '');
   const albumKey = escapeHtml(resolvedAlbumKey);
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const candidateSnapshot = album?.cover_candidate_snapshot && typeof album.cover_candidate_snapshot === 'object'
     ? album.cover_candidate_snapshot
     : null;
@@ -1554,9 +1727,21 @@ function renderTrackModalRelease(album) {
   const coverSourceBadge = typeof buildTrackModalCoverSourceBadge === 'function'
     ? buildTrackModalCoverSourceBadge(album?.remote_cover_source || '')
     : '';
-  const headerParts = [album.album_artist || '', album.name || 'Album', album.year || ''].filter(Boolean);
-  els.title.textContent = headerParts.join(' - ');
-  els.subtitle.textContent = '';
+  const albumDetailsLayout = String(
+    document.documentElement?.getAttribute('data-album-details-layout') || 'classic_bar'
+  ).trim().toLowerCase();
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      layout: albumDetailsLayout,
+      artist: album.album_artist || '',
+      album: album.name || 'Album',
+      year: album.year || '',
+      releaseType: album.release_type || 'ALBUM',
+      tags: [album.edition || '', albumMissing ? 'Missing' : ''].filter(Boolean),
+      actionsHtml: buildAlbumDetailsHeaderActionsHtml({ missing: albumMissing }),
+    });
+    els = getTrackModalElements();
+  }
   if (els.folder) {
     els.folder.dataset.album = '';
     els.folder.dataset.albumKey = resolvedAlbumKey;
@@ -1565,7 +1750,22 @@ function renderTrackModalRelease(album) {
     els.editTags.dataset.album = '';
     els.editTags.dataset.albumKey = resolvedAlbumKey;
   }
-  if (albumHasDisplayCover(album)) {
+  if (els.missingWarning) {
+    els.missingWarning.hidden = !albumMissing;
+    els.missingWarning.innerHTML = albumMissing
+      ? buildMissingAlbumDetailsHtml({
+        canRemove: canConfirmMissingAlbumRemoval(album),
+        albumKey,
+      })
+      : '';
+  }
+  if (albumMissing) {
+    els.cover.innerHTML = `
+      <div class="track-modal-cover-shell">
+        ${renderAlbumArtbox({ state: 'missing', label: `${album.name || 'Album'} artwork unavailable` })}
+      </div>
+    `;
+  } else if (albumHasDisplayCover(album)) {
     const coverSrc = buildAlbumDisplayCoverUrl(album);
     const lightboxSrc = typeof buildAlbumLightboxCoverUrl === 'function'
       ? buildAlbumLightboxCoverUrl(album)
@@ -1595,7 +1795,11 @@ function renderTrackModalRelease(album) {
       : ' data-lightbox-gallery="visible"';
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        <button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>
+        ${renderAlbumArtbox({
+          state: 'ready',
+          label: `Album cover for ${album.name}`,
+          coverHtml: `<button class="track-modal-cover-button" type="button" data-open-lightbox="1" data-cover-src="${escapeHtml(lightboxSrc)}" data-cover-preview-src="${escapeHtml(coverSrc)}" data-cover-alt="${escapeHtml(`Album cover for ${album.name}`)}" data-album-key="${albumKey}"${lightboxGalleryAttribute}><span class="track-modal-cover-image-slot"></span></button>`,
+        })}
         ${coverSourceBadge}
         <div class="track-modal-cover-tools">
           <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
@@ -1664,7 +1868,7 @@ function renderTrackModalRelease(album) {
   } else {
     els.cover.innerHTML = `
       <div class="track-modal-cover-shell">
-        <div class="cover-placeholder">No cover art</div>
+        ${renderAlbumArtbox({ state: 'empty', label: `${album.name || 'Album'} has no cover art` })}
         <div class="track-modal-cover-tools">
           <button class="${coverLookupClass}" type="button" data-open-track-modal-cover-lookup="1" data-album-key="${albumKey}" aria-label="${coverLookupLabel}" title="Cover Art Look Up">
             ${coverLookupIcon}
@@ -1676,7 +1880,7 @@ function renderTrackModalRelease(album) {
       </div>
     `;
   }
-  const duplicateSources = getAlbumDuplicateSources(album);
+  const duplicateSources = albumMissing ? [] : getAlbumDuplicateSources(album);
   const duplicateSourceIndex = getTrackModalDuplicateSourceIndex(album, duplicateSources);
   const activeDuplicateSource = duplicateSources[duplicateSourceIndex] || null;
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
@@ -1735,18 +1939,14 @@ function renderTrackModalRelease(album) {
       els.duplicateTabs.innerHTML = '';
     }
   }
-  els.list.innerHTML = buildTrackListHtml(tracks, album);
+  els.list.innerHTML = albumMissing ? '' : buildTrackListHtml(tracks, album, totalLength);
   if (els.footer) {
-    if (bonusGroups.length > 0) {
-      els.footer.innerHTML = `${mainLength ? `<div>Total Main Album Length: ${escapeHtml(mainLength)}</div>` : ''}<div>Bonus Disc Length: ${escapeHtml(bonusLength)}</div>`;
-      els.footer.hidden = false;
-    } else {
-      els.footer.textContent = totalLength ? `Total Length: ${totalLength}` : '';
-      els.footer.hidden = !totalLength;
-    }
+    els.footer.textContent = '';
+    els.footer.hidden = true;
   }
   renderTrackModalTabs(els);
   refreshTrackModalPlaybackState();
+  if (typeof attachSharedPlayer === 'function') attachSharedPlayer();
 }
 
 
@@ -1859,9 +2059,8 @@ function groupAlbumTracks(tracks) {
 }
 
 
-function buildTrackListHtml(tracks, album = null) {
+function buildTrackListHtml(tracks, album = null, totalLength = null) {
   const grouped = groupAlbumTracks(tracks);
-  const parts = [];
   const playback = getPlayerPlaybackSnapshot();
   const currentTrackPath = String(state.player.current?.path || '');
   const trackRows = Array.isArray(album?.track_rows) ? album.track_rows : [];
@@ -1874,22 +2073,19 @@ function buildTrackListHtml(tracks, album = null) {
       .filter(Boolean)
   );
 
-  grouped.groups.forEach((group) => {
-    const groupSeconds = group.tracks.reduce((sum, track) => sum + (Number(track.duration_seconds) || 0), 0);
-    const groupLength = formatAlbumDuration(groupSeconds);
-
-    if (grouped.multiDisc && (group.discLabel || (Number.isInteger(group.discNumber) && group.discNumber > 0))) {
-      let label = group.discLabel || `CD${group.discNumber}`;
-      if (group.isBonus) {
-        label += ` • Bonus Disc`;
-      }
-      if (group.discSubtitle) {
-        label += ` · ${escapeHtml(group.discSubtitle)}`;
-      }
-      parts.push(`<li class="track-disc-header">${label}</li>`);
+  const query = String(state.view?.query || '').trim().toLocaleLowerCase();
+  const componentGroups = grouped.groups.map((group) => {
+    let discLabel = String(group.discLabel || '').trim();
+    if (!discLabel && Number.isInteger(group.discNumber) && group.discNumber > 0) {
+      discLabel = `CD ${group.discNumber}`;
     }
-
-    group.tracks.forEach((track, index) => {
+    discLabel = discLabel.replace(/^CD\s*(\d+)$/i, 'CD $1');
+    if (group.isBonus) {
+      discLabel = group.discSubtitle || (discLabel && !/^CD\s*\d+$/i.test(discLabel) ? discLabel : 'Bonus CD');
+    } else if (group.discSubtitle) {
+      discLabel = `${discLabel} • ${group.discSubtitle}`;
+    }
+    const componentTracks = group.tracks.map((track, index) => {
       const src = `/track?path=${encodeURIComponent(track.path)}`;
       const duration = formatTrackDuration(track.duration_seconds);
       const trackPath = String(track.path || '');
@@ -1898,29 +2094,56 @@ function buildTrackListHtml(tracks, album = null) {
       const currentTimeDisplay = isCurrentTrack
         ? `${formatLoopTime(playback.currentTime || 0)} / ${duration || formatTrackDuration(playback.duration) || '0:00'}`
         : duration;
-      const durationMarkup = currentTimeDisplay
-        ? `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(duration || '')}">${escapeHtml(currentTimeDisplay)}</span>`
-        : (duration ? `<span class="track-duration">${escapeHtml(duration)}</span>` : '');
       const trackValue = getAlbumTrackDisplayNumber(track, index);
-      const utilityJump = track.is_problematic
-        ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(track.path)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-        : '';
       const trackRow = trackRowByPath.get(trackPath) || null;
       const displayTitle = String(trackRow?.title || track.title || '').trim();
       const secondaryArtist = String(trackRow?.secondary_artist || '').trim();
-      const trackArtistLabel = secondaryArtist
-        ? `<span class="track-artist-name">${escapeHtml(secondaryArtist)}</span>`
-        : '';
-      parts.push(`<li value="${trackValue}" data-track-row-path="${escapeHtml(trackPath)}" class="${isCurrentTrack ? 'is-current' : ''}${isActivelyPlaying ? ' is-playing' : ''}"><span class="track-number">${trackValue}.</span><button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.title || '')}" data-track-artist="${escapeHtml(track.artist || track.album_artist || '')}" data-track-album-artist="${escapeHtml(track.album_artist || album?.album_artist || '')}" data-track-album="${escapeHtml(track.album || '')}" data-track-cover="${escapeHtml(track.cover_path || '')}" data-track-duration-seconds="${Number(track.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? 'Pause track' : 'Play track'}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(displayTitle)}${trackArtistLabel}</span>${utilityJump}${durationMarkup}</li>`);
+      return {
+        path: trackPath,
+        src,
+        title: displayTitle,
+        playbackTitle: String(track.title || '').trim(),
+        artist: track.artist || track.album_artist || '',
+        albumArtist: track.album_artist || album?.album_artist || '',
+        album: track.album || album?.name || '',
+        coverPath: track.cover_path || album?.cover_path || '',
+        durationSeconds: Number(track.duration_seconds) || 0,
+        duration: currentTimeDisplay || duration,
+        originalDuration: duration,
+        trackNumber: trackValue,
+        secondaryArtist,
+        isCurrent: Boolean(isCurrentTrack),
+        isPlaying: Boolean(isActivelyPlaying),
+        isProblematic: Boolean(track.is_problematic),
+        isSearchMatch: Boolean(query && displayTitle.toLocaleLowerCase().includes(query)),
+      };
     });
-
-    if (grouped.multiDisc && groupLength) {
-      const lengthLabel = group.isBonus ? 'Bonus Disc Length' : 'Total Length';
-      parts.push(`<li class="track-disc-total">${lengthLabel}: ${escapeHtml(groupLength)}</li>`);
-    }
+    return {
+      discNumber: group.discNumber,
+      discLabel,
+      isBonus: Boolean(group.isBonus),
+      tracks: componentTracks,
+    };
   });
-
-  return parts.join('');
+  if (typeof buildAlbumTrackTableHtml !== 'function') {
+    return componentGroups.flatMap((group) => group.tracks).map((track) => (
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+    )).join('');
+  }
+  const hasBonusDisc = componentGroups.some((group) => group.isBonus);
+  const durationForGroups = (isBonus) => componentGroups
+    .filter((group) => group.isBonus === isBonus)
+    .reduce((total, group) => total + group.tracks.reduce((seconds, track) => (
+      seconds + (Number.isFinite(track.durationSeconds) ? Math.max(0, track.durationSeconds) : 0)
+    ), 0), 0);
+  return buildAlbumTrackTableHtml({
+    groups: componentGroups,
+    multiDisc: grouped.multiDisc,
+    totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
+    mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',
+    bonusLength: hasBonusDisc ? formatTrackDuration(durationForGroups(true)) : '',
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 function buildPlayerTrackPayload(track, album = null) {
@@ -2106,6 +2329,13 @@ function refreshTrackModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
@@ -2117,9 +2347,7 @@ function refreshTrackModalPlaybackState() {
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }

@@ -2,6 +2,16 @@
 
 This directory contains repo-owned Postgres SQL migrations for Album Haven.
 
+Migration `0065_native_player_component_provenance.sql` permits an optional
+`native_components` array in structured player styles and recent sets. Its unique
+values are `surface`, `controls`, `waveform`, and `handles`. An omitted or empty
+array means every component is explicitly customized, preserving older saved
+styles. Named components retain the native player treatment until edited; their
+stored color groups remain complete editor values. The account Appearance API
+validates and round-trips this field with the existing revisioned preferences.
+The migration replaces the existing JSON validator without changing columns,
+saved rows, capabilities, or function privileges.
+
 Use lowercase, zero-padded filenames and apply them in lexical order:
 
 ```text
@@ -49,6 +59,26 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0042_track_distinct_cover_improvement_alerts.sql
 0043_create_local_track_waveform_peaks.sql
 0044_create_tag_edit_intents.sql
+0045_add_non_album_candidate_index.sql
+0046_add_local_auth_lifecycle.sql
+0047_add_auth_preauth_tokens.sql
+0048_add_password_reset_transactions.sql
+0049_enforce_single_use_password_reset_exchange.sql
+0050_add_security_audit_cleanup_index.sql
+0051_add_auth_throttle_cleanup_index.sql
+0052_add_managed_account_invitations.sql
+0053_create_user_appearance_preferences.sql
+0054_add_appearance_palettes_and_player_colors.sql
+0055_waveform_recent_colors.sql
+0056_compact_player_appearance_profiles.sql
+0057_aggregate_appearance_workspace.sql
+0058_album_details_appearance.sql
+0059_alert_appearance_family.sql
+0060_player_aware_interaction_outline.sql
+0061_create_missing_album_removal_function.sql
+0062_narrow_readonly_account_privileges.sql
+0063_replace_missing_album_removal_lock_snapshot.sql
+0064_grant_library_membership_delete.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.
@@ -74,5 +104,43 @@ Section 3 owns the first baseline schema migration. Do not add future-feature re
 `0043_create_local_track_waveform_peaks.sql` adds a compact, track-file-scoped cache for generated stereo waveform peaks. File stat and scan-owned content validators plus the analyzer version invalidate stale results; the table never exposes or duplicates raw media.
 
 `0044_create_tag_edit_intents.sql` adds the durable cross-boundary journal for Edit Tags. Each row records old and requested per-path values before media I/O; unfinished rows are reconciled against real files before startup hydration, and terminal completion is committed with the canonical inventory mutation. The application and migrator retain their bounded journal privileges, while the migration explicitly revokes readonly `SELECT` because the rows contain private paths and tag snapshots.
+
+`0045_add_non_album_candidate_index.sql` adds a narrow partial index for active track files whose generated album marker identifies a non-album candidate, keeping that cold discovery path off the full active-file set.
+
+`0046_add_local_auth_lifecycle.sql` adds normalized managed-account identity and contact fields, focused credentials, hashed reset tokens, durable throttles, bounded revocable sessions, append-only security audit events, and a durable mail outbox. Existing accounts receive unique transitional `pending-account-*` identities with non-routable `.invalid` contact addresses for later owner reconciliation, and all legacy sessions are hashed and explicitly revoked rather than promoted into Phase 7 authentication. Named foreign-key and runtime lookup indexes support the lifecycle queries; explicit application and migrator grants preserve role separation, while readonly access is revoked from secret-adjacent auth and delivery tables.
+
+`0047_add_auth_preauth_tokens.sql` adds short-lived, purpose-bound login preflight state for one-time CSRF enforcement. Only SHA-256 token hashes are stored; consumed and expired rows are queryable for bounded cleanup, and the runtime role receives only the privileges needed to issue, consume, and clean up this state.
+
+`0048_add_password_reset_transactions.sql` adds short-lived, hashed clean-URL reset transactions so raw emailed reset tokens leave the browser address bar before a password is submitted.
+
+`0049_enforce_single_use_password_reset_exchange.sql` makes each emailed password-reset token exchangeable only once. It retains the earliest transaction if a pre-release database contains duplicate exchanges, then enforces the invariant with a unique index.
+
+`0050_add_security_audit_cleanup_index.sql` adds the global UTC timestamp and ID index used by the migrator-owned bounded audit-retention command. It grants no runtime deletion privilege; `album_haven_app` remains append-only for security audit events.
+
+`0051_add_auth_throttle_cleanup_index.sql` adds the expiry and ID index used by the bounded throttle cleanup command. It does not expand privileges; the runtime role already owns the narrow delete permission required to remove expired HMAC-keyed buckets.
+
+`0053_create_user_appearance_preferences.sql` adds two optional RGB background overrides keyed directly by account ID. The primary key also supports account-scoped reads; a null value preserves each surface's existing default. Both values update together. The application role receives only select, insert, and update, while account deletion cascades to preferences. No new sequence, bootstrap-owner lookup, or file-backed fallback is introduced.
+
+`0054_add_appearance_palettes_and_player_colors.sql` extends account appearance with a validated palette ID, one of three panel companions, and an optional complete player-background/waveform-fill/waveform-edge color group. Existing custom background rows remain unchanged. Palette selection excludes conflicting legacy colors, and legacy background writes preserve the player group. Existing account-keyed table privileges and index cover these additions; no new sequence or grant is required.
+
+`0055_waveform_recent_colors.sql` adds a per-account newest-first history of up to five distinct waveform colors. It seeds only persisted custom fill and edge values when adding the column. A bounded immutable helper deduplicates ordered candidates during the same account upsert; explicit selections merge with current server history instead of replacing it with a client snapshot. Constraints reject invalid RGB, null members, duplicates, oversized or multidimensional arrays. Only app and migration roles receive helper execution privileges; existing table grants remain sufficient.
+
+`0056_compact_player_appearance_profiles.sql` adds the Docked/Floating Compact Player choice and scopes Appearance rows by trusted client profile. Existing account rows become `desktop` without changing their saved colors, palette, player group, or waveform history; web desktop and Tauri share that profile. Composite account/profile ownership prevents cross-profile collisions, while constraints reserve independent `mobile`, `tv`, and `apple` rows for future clients. Existing table grants remain sufficient and no client-controlled account or profile field is introduced.
+
+`0057_aggregate_appearance_workspace.sql` stores the revisioned Main elements, Player & Seekbar, and Selection accent workspace in one account/profile row. It migrates the legacy accent and custom player colors, bounds complete player history to five sets, and supplies the conditional-save revision used to prevent lost updates.
+
+`0058_album_details_appearance.sql` adds the account-owned Album Details layout and currently-playing perimeter-animation choices to that same revisioned appearance row. Closed constraints preserve the three approved layouts and enabled/disabled motion choices; no separate preference store or client-selected owner/profile key is introduced.
+
+`0059_alert_appearance_family.sql` adds the account-owned curated alert-family choice to the revisioned appearance row. The closed `ember`, `signal`, and `quiet` values coordinate Error, Warning, and Info treatments; `ember` preserves the approved default red-black alert style.
+
+`0060_player_aware_interaction_outline.sql` replaces the legacy Item hover border and Keyboard focus keys with one source-aware `item_outline` object. Existing rows preserve the visible focus color first, fall back to the hover-border color, and otherwise use the automatic source. Reruns rewrite only rows that still carry either legacy key. The replacement constraint accepts the four retained interaction colors plus the closed automatic, theme, player, or custom outline contract.
+
+`0061_create_missing_album_removal_function.sql` moves confirmed missing-album deletion behind a bounded security-definer function. The application role can execute the function without receiving direct delete privileges on library inventory tables.
+
+`0062_narrow_readonly_account_privileges.sql` removes table-wide readonly access to account identity data and restores only the non-private operational columns needed for approved verification. The sanitized security-audit table remains readable under the deployment's operator-access policy.
+
+`0063_replace_missing_album_removal_lock_snapshot.sql` acquires the inventory publication lock in a separate statement before the volatile missing-album removal function reads inventory. A removal that waits for a publisher sees its committed active files before deciding whether deletion is allowed. The function retains its original guards, result shape, security-definer scope, and execution grants.
+
+`0064_grant_library_membership_delete.sql` grants the application role `DELETE` only on `library.library_memberships` so the existing authorized access-removal transaction can complete. Other runtime and readonly privileges are unchanged.
 
 Set `PGPASSFILE` when passwordless local automation is required. Keep migration SQL idempotent and review query plans for index-sensitive changes.

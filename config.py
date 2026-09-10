@@ -12,6 +12,22 @@ from music_app.services.cover_provider_deadline import (
 )
 from version import RELEASE_VERSION
 
+
+def build_auth_config(environ: dict[str, str] | None = None):
+    """Lazily build auth policy without requiring auth env at module import."""
+
+    from music_app.services.auth_config import build_auth_config as _build
+
+    return _build(os.environ if environ is None else environ)
+
+
+def build_mail_config(environ: dict[str, str] | None = None):
+    """Lazily build SMTP policy without requiring mail env at module import."""
+
+    from music_app.services.mail_config import build_mail_config as _build
+
+    return _build(os.environ if environ is None else environ)
+
 APP_NAME = "Album Haven"
 APP_VERSION = RELEASE_VERSION
 PERSISTENCE_BACKEND_FILE = "file"

@@ -1,0 +1,52 @@
+/* NavigationTree keeps flat link/button semantics and consumer-owned spacing. */
+.navigation-tree { min-width: 0; }
+.navigation-tree-item { min-width: 0; position: relative; }
+button.navigation-tree-item[data-navigation-tree-item="panel"] {
+  width: 100%; text-align: left; font: inherit; cursor: pointer;
+}
+.navigation-tree-label { min-width: 0; }
+.navigation-tree-icon { flex: 0 0 22px; text-align: center; }
+.navigation-tree-item.is-selected {
+  box-shadow: inset var(--navigation-tree-selection-accent-width, 0px) 0 var(--navigation-tree-selection-accent-color, #34ca78);
+}
+.settings-host .navigation-tree-item.is-selected {
+  box-shadow: inset var(--navigation-tree-selection-accent-width, 3px) 0 var(--navigation-tree-selection-accent-color, #34ca78);
+}
+.settings-host .settings-nav-item .navigation-tree-label {
+  width: auto; color: inherit; font-size: inherit; text-align: left;
+}
+.navigation-tree-item:focus-visible, .settings-host .settings-nav-item.navigation-tree-item:focus-visible { outline: 2px solid #8bbfff; outline-offset: 2px; }
+.selection-accent-editor { max-width: 780px; }
+.selection-accent-editor .utility-rule-description { margin-top: 10px; }
+.selection-accent-toggle { display: flex; align-items: center; gap: 10px; margin: 24px 0 18px; font-weight: 700; }
+.selection-accent-toggle input { width: 18px; height: 18px; }
+.selection-accent-colors { display: flex; align-items: end; flex-wrap: wrap; gap: 14px; }
+.selection-accent-colors label { display: grid; gap: 8px; color: var(--muted); font-size: 13px; }
+.selection-accent-colors input { height: 42px; padding: 6px; border: 1px solid var(--border, #42536a); border-radius: 8px; background: var(--panel-2, #17283a); color: var(--text, #e7edf4); }
+.selection-accent-colors input[type=color] { width: 76px; }
+.selection-accent-colors input[type=text] { width: 128px; padding: 0 12px; }
+.selection-accent-editor input:disabled, .selection-accent-editor button:disabled { opacity: .4; cursor: not-allowed; }
+.selection-accent-colors.is-disabled label { color: #718095; }
+.selection-accent-previews { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 20px; }
+.selection-accent-preview { background: var(--app-chrome, #0d1b2a); border: 1px solid var(--border, #ffffff12); border-radius: 12px; padding: 16px 10px; min-width: 0; }
+.selection-accent-preview h4 { margin: 0 12px 18px; font-size: 15px; }
+.selection-accent-preview .navigation-tree-item { display: flex; align-items: center; gap: 12px; min-height: 42px; margin: 3px 0; padding: 10px 13px; border: 0; border-radius: 9px; background: transparent; color: var(--text); text-decoration: none; }
+.selection-accent-preview .navigation-tree-item:hover { background: #ffffff07; }
+.selection-accent-preview .navigation-tree-item.is-selected { background: var(--app-active, #1c3047); }
+.selection-accent-preview .navigation-tree-count { margin-left: auto; font-size: 11px; color: var(--muted); }
+.selection-accent-preview .navigation-tree-icon { color: #8498b0; }
+.selection-accent-help { font-size: 12px; color: var(--muted); margin-top: 14px; line-height: 1.5; }
+.selection-accent-error { color: #ffb2b2; min-height: 18px; font-size: 12px; margin: 8px 0; }
+.selection-accent-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.selection-accent-actions [role=status] { margin-right: auto; color: var(--muted); font-size: 12px; }
+.selection-accent-editor :focus-visible { outline: 2px solid #8bbfff; outline-offset: 2px; }
+@media (max-width: 760px) {
+  #utility-modal[data-active-tab="appearance"] .utility-modal-body { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  #utility-modal[data-active-tab="appearance"] .utility-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+  #utility-modal[data-active-tab="appearance"] .utility-sidebar-search { display: none; }
+  #utility-modal[data-active-tab="appearance"] .utility-list { display: flex; flex-wrap: wrap; gap: 8px; max-height: none; }
+  #utility-modal[data-active-tab="appearance"] .utility-list-item { flex: 1 1 140px; }
+  #utility-modal[data-active-tab="appearance"] .utility-detail { overflow: visible; }
+  .selection-accent-previews { grid-template-columns: minmax(0, 1fr); }
+  .selection-accent-actions [role=status] { flex-basis: 100%; }
+}

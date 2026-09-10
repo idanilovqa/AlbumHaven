@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export function evaluateMountedAlbumWindowTransition({
   editedAlbumNames,
@@ -828,6 +829,14 @@ export class GalleryActions {
       });
       const classification = classifyGalleryAlbumTargetState(lastSnapshot);
       if (classification.status === 'ready') return;
+      if (classification.reason === 'canonical match awaiting virtual attachment') {
+        await this.scrollToAlbumUnderHeading(artistName, albumName, {
+          ...options,
+          waitAtBoundary: true,
+          timeout: Math.max(1, deadline - Date.now()),
+        });
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     throw new Error(
@@ -1087,7 +1096,7 @@ export class GalleryActions {
       throw new Error('Selecting an album requires an exact artist, album, and year.');
     }
 
-    await this.scrollToAlbumUnderHeading(artist, album, options);
+    await this.scrollToAlbumUnderHeading(artist, album, { ...options, year });
     await this.galleryPage.albumCard.clickDetailsByIdentity(artist, album, year);
     return { artist, album, year };
   }
@@ -1137,7 +1146,8 @@ export class GalleryActions {
         { timeout },
       );
       if (!response) {
-        response = await this.galleryPage.page.request.get(
+        response = await authenticatedPageGet(
+          this.galleryPage.page,
           `/album-details?album_key=${encodeURIComponent(requestKey)}`,
           { timeout },
         );

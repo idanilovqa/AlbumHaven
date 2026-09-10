@@ -59,6 +59,53 @@ def default_empty_relation_alias_projection(monkeypatch):
     return original_loader
 
 
+@pytest.fixture(autouse=True)
+def default_empty_missing_album_projection(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    original_loader = PostgresLibraryBrowseRepository._load_missing_album_rows
+    monkeypatch.setattr(
+        PostgresLibraryBrowseRepository,
+        "_load_missing_album_rows",
+        lambda _self, *_args, **_kwargs: [],
+    )
+    return original_loader
+
+
+def test_missing_album_detail_scopes_candidate_query_before_loading_rows(default_empty_missing_album_projection):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    calls = []
+    connection = type("Connection", (), {"execute": lambda self, sql, params=None: calls.append((sql, params)) or _InventoryCursor()})()
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"})
+    assert default_empty_missing_album_projection(repository, "owner::selected", connection=connection) == []
+    assert calls[0][1] == {"album_key": "owner::selected"}
+    query = " ".join(calls[0][0].lower().split())
+    candidate = query.split("missing_albums as (", 1)[1].split("missing_album_featured_artists", 1)[0]
+    assert "local_albums.album_key = %(album_key)s" in candidate
+
+
+def test_missing_artist_query_scopes_candidates_without_filtering_member_files(
+    default_empty_missing_album_projection,
+):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    calls = []
+    connection = type("Connection", (), {"execute": lambda self, sql, params=None: calls.append((sql, params)) or _InventoryCursor()})()
+    repository = PostgresLibraryBrowseRepository({"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://fixture"})
+    assert default_empty_missing_album_projection(
+        repository, artist_names=["Broadcast", "  Former   Name  "], connection=connection,
+    ) == []
+    assert calls[0][1]["artist_keys"] == ["broadcast", "former name"]
+    query = " ".join(calls[0][0].lower().split())
+    candidate = query.split("missing_albums as (", 1)[1].split("missing_album_featured_artists", 1)[0]
+    assert "artist_key = any(%(artist_keys)s::text[])" in candidate
+    assert "having bool_and(library.local_track_files.scan_cache_stale)" in candidate
+    predicate = candidate.split("where", 1)[1].split("group by", 1)[0]
+    assert "scan_cache_stale" not in predicate
+    assert "root_kind" not in predicate
+
+
 class _InventoryCursor:
     def __init__(self, *, row=None, rows=None):
         self._row = row
@@ -3016,6 +3063,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         "selected_artist": "Tender Forever",
         "selected_artist_source": "auto_top_match",
         "direct_match_artists": ["Tender Forever", "Broadcast"],
+        "artist_name_match_artists": ["Tender Forever"],
         "related_match_artists": [],
     }
 
@@ -4164,6 +4212,87 @@ def test_postgres_selected_artist_query_context_rebuilds_filtered_family_sidebar
     assert search_calls == ["neal morse"]
 
 
+@pytest.mark.parametrize("selection", ["implicit", "related-only", "combined"])
+def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(monkeypatch, selection):
+    from music_app.services import library_browse_postgres as browse_module
+
+    matching_primary_row = _browse_album_row(
+        artist="Neal Morse",
+        album_id=1,
+        album_key="neal-morse-transatlantic-demos",
+        title="The Transatlantic Demos",
+    )
+    matching_family_row = _browse_album_row(
+        artist="Transatlantic",
+        album_id=2,
+        album_key="transatlantic-smpte",
+        title="SMPTe",
+    )
+    monkeypatch.setattr(
+        browse_module,
+        "_selected_artist_family_context_from_state",
+        lambda *_args, **_kwargs: {
+            "family_artists": ["Transatlantic"],
+            "alias_to_canonical": {
+                "Neal Morse": "Neal Morse",
+                "Transatlantic": "Transatlantic",
+            },
+            "canonical_to_aliases": {
+                "Neal Morse": ["Neal Morse"],
+                "Transatlantic": ["Transatlantic"],
+            },
+        },
+    )
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        repository._inventory_repository,
+        "load_support_state",
+        lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}},
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_search_rows",
+        lambda *_args, **_kwargs: [matching_primary_row, matching_family_row],
+    )
+    # Explicit primary selection hydrates complete rows rather than search previews.
+    monkeypatch.setattr(repository, "_load_selected_artist_rows",
+                        lambda *_args, **_kwargs: [matching_primary_row])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+
+    payload = repository.build_selected_artist_payload(
+        query_params={
+            "surface": "albums",
+            "q": "transatlantic",
+            "artist": "Neal Morse",
+            "omit_sidebar": "1",
+            **({"related_artist": "Transatlantic"} if selection != "implicit" else {}),
+            **({"primary_filter": "1"} if selection == "combined" else {}),
+        },
+        library_state={},
+    )
+
+    assert [
+        album["name"]
+        for group in payload["primary_artist_groups"]
+        for album in group["albums"]
+    ] == ([] if selection == "related-only" else ["The Transatlantic Demos"])
+    assert [group["artist"] for group in payload["family_artist_groups"]] == (
+        [] if selection == "implicit" else ["Transatlantic"]
+    )
+    if selection != "implicit":
+        assert [album["name"] for group in payload["family_artist_groups"]
+                for album in group["albums"]] == ["SMPTe"]
+    assert [item["display_name"] for item in payload["artist_family_filters"]] == [
+        "Neal Morse",
+        "Transatlantic",
+    ]
+
+
 def test_postgres_selected_artist_query_context_preserves_explicit_collaboration_selection(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -4337,7 +4466,13 @@ def test_postgres_selected_artist_query_primary_filter_hydrates_primary_album_tr
     assert payload["primary_filter_active"] is True
     assert album["preview_only"] is False
     assert album["tracks"][0]["key"] == "cosmic-cathedral-deep-water-01"
-    assert "track_count" not in " ".join(executed_sql)
+    selected_artist_queries = [
+        sql
+        for sql in executed_sql
+        if "target_artists as" in sql and "selected_artist_albums as" in sql
+    ]
+    assert len(selected_artist_queries) == 1
+    assert "track_count" not in selected_artist_queries[0]
 
 
 def test_postgres_search_payload_supports_search_scoped_all_artists():
@@ -6748,6 +6883,21 @@ def test_album_detail_sql_scopes_ignored_repairs_to_requested_album_paths():
     assert "library.ignored_repairs.metadata ->> 'album_key'" in structural_rollup
     assert "library.local_track_files.library_id" not in structural_rollup
     assert "matched_album_ids.album_id = library.local_albums.id" in structural_rollup
+
+
+def test_album_detail_sql_excludes_tracks_without_an_active_file():
+    from music_app.services.library_browse_postgres import _album_detail_sql
+
+    sql = " ".join(_album_detail_sql().split()).lower()
+    detail_joins = sql.split("from library.local_albums", 1)[1]
+
+    assert "join library.local_tracks" in detail_joins
+    assert "left join library.local_tracks" not in detail_joins
+    assert (
+        "join library.local_track_files on library.local_track_files.track_id = "
+        "library.local_tracks.id and library.local_track_files.scan_cache_stale is false"
+    ) in detail_joins
+    assert "metadata #>> '{{scan_cache,stale}}'" not in detail_joins
 
 
 def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_artist_credit(monkeypatch):
@@ -11225,3 +11375,336 @@ def test_root_startup_gallery_and_search_sql_exclude_persisted_non_album_raritie
         assert "non-album rarity" in compact_sql, surface
         assert "library.local_track_files.private_path" in compact_sql, surface
         assert "<> 'non-album rarity'" in compact_sql, surface
+
+
+@pytest.fixture
+def missing_album_browse_repository(monkeypatch):
+    from music_app.services import artist_family_postgres
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    repository = PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        artist_family_postgres, "load_selected_artist_family_projection",
+        lambda *_args, **_kwargs: {"loaded": True, "family_artists": []},
+    )
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+    return repository
+
+
+def _missing_browse_row(*, album_id, title, category, artist="Broadcast", stale=True):
+    row = _browse_album_row(
+        artist=artist, album_id=album_id, album_key=f"missing-{album_id}", title=title,
+    )
+    row.update({
+        "file_library_root_category": category,
+        "file_scan_cache_stale": stale,
+        "file_stale_marked_at": "2026-09-08T18:00:00+00:00" if stale else None,
+    })
+    row["album_metadata"]["root_provenance"] = {
+        "primary_category": category, "categories": [category],
+    }
+    return row
+
+
+@pytest.mark.parametrize("outside_match", ["album", "track", "artist"])
+def test_exact_artist_search_sidebar_includes_other_missing_matches(
+    monkeypatch, missing_album_browse_repository, outside_match,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
+    matching = _missing_browse_row(album_id=2, title="Lost Album", category="main_library", artist="Other Artist")
+    matching[{"album": "album_title", "track": "track_title", "artist": "artist_name"}[outside_match]] = "Broadcast Collaboration"
+    if outside_match == "artist":
+        matching["artist_sort_name"] = "Broadcast Collaboration"
+        matching["album_metadata"].update({
+            "album_artist": "Broadcast Collaboration", "artists": ["Broadcast Collaboration"],
+        })
+    excluded = _missing_browse_row(album_id=3, title="Broadcast Excluded", category="hoard", artist="Excluded Artist")
+    unrelated = _missing_browse_row(album_id=4, title="Unrelated", category="main_library", artist="Unrelated Artist")
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: "Broadcast")
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [matching, excluded, unrelated])
+    monkeypatch.setattr(repository, "build_selected_artist_payload", lambda **_kwargs: {
+        "selected_artist": "Broadcast", "primary_artist_groups": [{"artist": "Broadcast", "albums": [{"key": "active"}]}],
+        "family_artist_groups": [], "search_context": {},
+    })
+
+    payload = repository.build_search_payload(query_params={"q": "Broadcast", "category": ["main_library"]})
+
+    expected_other = "Broadcast Collaboration" if outside_match == "artist" else "Other Artist"
+    assert {row["artist"] for row in payload["artists_sidebar"]} == {"Broadcast", expected_other}
+    assert payload["artist_count"] == 2
+    assert payload["show_all_artists_sidebar_link"] is True
+    assert payload["selected_artist"] == "Broadcast"
+
+
+def test_selected_artist_passes_expanded_owner_scope_to_missing_loader(
+    monkeypatch, missing_album_browse_repository,
+):
+    repository = missing_album_browse_repository
+    calls = []
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **kwargs: calls.append(kwargs) or [])
+    monkeypatch.setattr(repository, "_load_selected_artist_rows", lambda *_args, **_kwargs: [])
+    repository.build_selected_artist_payload(
+        query_params={"artist": "Broadcast", "omit_sidebar": "1"},
+        _relation_alias_maps={
+            "alias_to_canonical": {"Former Name": "Broadcast"},
+            "canonical_to_aliases": {"Broadcast": ["Former Name"]},
+        },
+    )
+    assert len(calls) == 1
+    assert set(calls[0].get("artist_names", [])) == {"Broadcast", "Former Name"}
+    assert calls[0]["connection"] is not None
+
+
+@pytest.mark.parametrize("category", ["main_library", "hoard", "new_arrivals"])
+def test_selected_artist_missing_albums_respect_category_with_active_albums(
+    monkeypatch, missing_album_browse_repository, category,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
+    active["file_library_root_category"] = category
+    missing = [
+        _missing_browse_row(album_id=index, title=f"Missing {value}", category=value)
+        for index, value in enumerate(["main_library", "hoard", "new_arrivals"], start=2)
+    ]
+    monkeypatch.setattr(repository, "_load_selected_artist_rows", lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: missing)
+
+    payload = repository.build_selected_artist_payload(
+        query_params={"artist": "Broadcast", "category": [category], "omit_sidebar": "1"},
+    )
+
+    albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
+    expected_missing = next(row["album_key"] for row in missing if row["file_library_root_category"] == category)
+    assert {album["key"] for album in albums} == {"active", expected_missing}
+    assert payload["album_count"] == 2
+    assert next(album for album in albums if album["key"] == expected_missing)["inventory_status"] == "missing"
+
+
+@pytest.mark.parametrize(
+    ("query", "primary_filter", "expected_missing"),
+    [
+        ("AMBIENT", False, {"missing-2"}),
+        ("Broadcast", False, {"missing-2", "missing-3"}),
+        ("AMBIENT", True, {"missing-2", "missing-3"}),
+        ("Needle Session.flac", False, {"missing-2"}),
+        ("Needle%Session", False, {"missing-2", "missing-3"}),
+        ("Needle_Session", False, {"missing-2", "missing-3"}),
+        (r"Needle\%Session", False, {"missing-3"}),
+        ("PrivateOnlyFolder", False, set()),
+    ],
+)
+def test_selected_artist_missing_albums_follow_active_search_scope(
+    monkeypatch, missing_album_browse_repository, query, primary_filter, expected_missing,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Ambient Active")
+    missing = [
+        _missing_browse_row(album_id=2, title="Ambient Missing", category="main_library"),
+        _missing_browse_row(album_id=3, title="Unrelated Missing", category="main_library"),
+        _missing_browse_row(album_id=4, title="Ambient Excluded", category="hoard"),
+    ]
+    missing[0]["file_private_path"] = r"D:\PrivateOnlyFolder\Needle Session.flac"
+    missing[1]["file_private_path"] = r"D:\PrivateOnlyFolder\Needle%Session.flac"
+    for loader in ("_load_selected_artist_rows", "_load_selected_artist_preview_rows", "_load_search_rows"):
+        monkeypatch.setattr(repository, loader, lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: missing)
+
+    payload = repository.build_selected_artist_payload(query_params={
+        "artist": "Broadcast", "q": query, "category": ["main_library"],
+        "primary_filter": "1" if primary_filter else "0", "omit_sidebar": "1",
+    })
+
+    albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
+    assert {album["key"] for album in albums} == {"active", *expected_missing}
+    assert payload["album_count"] == 1 + len(expected_missing)
+    assert "PrivateOnlyFolder" not in json.dumps([
+        album for album in albums if album.get("inventory_status") == "missing"
+    ])
+
+
+@pytest.mark.parametrize("surface", ["counts", "sidebar", "albums"])
+def test_root_missing_album_categories_keep_counts_and_cards_consistent(
+    monkeypatch, missing_album_browse_repository, surface,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Broadcast", album_id=1, album_key="active", title="Active")
+    aggregate = [{"artist_id": 1, "artist_name": "Broadcast", "album_ids": [1], "album_count": 1}]
+    missing = [
+        _missing_browse_row(album_id=2, title="Visible Missing", category="main_library"),
+        _missing_browse_row(album_id=3, title="Hidden Missing", category="hoard", artist="Other Artist"),
+        # Filtering the active Hoard file first would wrongly classify this album as missing.
+        _missing_browse_row(album_id=4, title="Partly Available", category="main_library"),
+        _missing_browse_row(album_id=4, title="Partly Available", category="hoard", stale=False),
+    ]
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: missing)
+    monkeypatch.setattr(repository, "_load_root_sidebar_rows", lambda *_args, **_kwargs: aggregate)
+    monkeypatch.setattr(repository, "_load_root_startup_rows", lambda *_args, **_kwargs: (aggregate, [active]))
+    monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda *_args, **_kwargs: [active])
+    method = {
+        "counts": repository.build_root_counts_payload,
+        "sidebar": repository.build_root_sidebar_payload,
+        "albums": repository.build_root_album_browse_payload,
+    }[surface]
+
+    payload = method(query_params={"category": ["main_library"]})
+
+    assert payload["album_count"] == 2
+    assert payload["artist_count"] == 1
+    if surface != "counts":
+        assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Broadcast", 2)]
+        assert {
+            album["key"] for group in payload["artist_groups"] for album in group["albums"]
+        } == {"active", "missing-2"}
+
+
+def test_missing_album_search_wildcard_nonmatch_stays_bounded():
+    from music_app.services.library_browse_postgres import _missing_album_projection_payloads
+
+    row = _missing_browse_row(album_id=2, title="a" * 300, category="main_library")
+
+    assert _missing_album_projection_payloads([row], query="%a" * 40 + "z") == []
+
+
+@pytest.mark.parametrize("surface", ["counts", "sidebar", "albums"])
+def test_missing_album_alias_uses_canonical_group_without_changing_credit(
+    monkeypatch, missing_album_browse_repository, surface,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(artist="Canonical", album_id=1, album_key="active", title="Active")
+    aggregate = [{"artist_id": 1, "artist_name": "Canonical", "album_ids": [1], "album_count": 1}]
+    missing = _missing_browse_row(album_id=2, title="Missing", category="main_library", artist="Alias")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing])
+    monkeypatch.setattr(repository, "_load_root_sidebar_rows", lambda *_args, **_kwargs: aggregate)
+    monkeypatch.setattr(repository, "_load_root_startup_rows", lambda *_args, **_kwargs: (aggregate, [active]))
+    monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda *_args, **_kwargs: [active])
+
+    payload = {
+        "counts": repository.build_root_counts_payload,
+        "sidebar": repository.build_root_sidebar_payload,
+        "albums": repository.build_root_album_browse_payload,
+    }[surface](query_params={"category": ["main_library"]})
+
+    assert payload["artist_count"] == 1
+    assert payload["album_count"] == 2
+    if surface != "counts":
+        assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 2)]
+        assert [group["artist"] for group in payload["artist_groups"]] == ["Canonical"]
+        album = next(album for album in payload["artist_groups"][0]["albums"] if album["key"] == "missing-2")
+        assert album["album_artist"] == "Alias"
+        assert album["artists"] == ["Alias"]
+
+
+@pytest.mark.parametrize("all_artists", [False, True])
+@pytest.mark.parametrize("query", ["Canonical", "Other Alias"])
+def test_missing_album_search_matches_canonical_and_alias_artist_names(
+    monkeypatch, missing_album_browse_repository, all_artists, query,
+):
+    repository = missing_album_browse_repository
+    missing = _missing_browse_row(album_id=2, title="Missing", category="main_library", artist="Alias")
+    excluded = _missing_browse_row(album_id=3, title="Hidden", category="hoard", artist="Alias")
+    unrelated = _missing_browse_row(album_id=4, title="Unrelated", category="main_library", artist="Unrelated")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical", "Other Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias", "Other Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_exact_artist_match", lambda *_args, **_kwargs: "Canonical")
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing, excluded, unrelated])
+
+    payload = repository.build_search_payload(query_params={
+        "q": query, "all_artists": "1" if all_artists else "0", "category": ["main_library"],
+    })
+
+    assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 1)]
+    assert payload["album_count"] == 1
+    assert payload["artist_count"] == 1
+    albums = [album for group in payload["artist_groups"] for album in group["albums"]]
+    assert [album["key"] for album in albums] == ["missing-2"]
+    assert albums[0]["album_artist"] == "Alias"
+    assert albums[0]["artists"] == ["Alias"]
+    assert albums[0]["tracks"] == []
+    assert albums[0]["_file_entries"] == []
+    assert "file_private_path" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("all_artists", [False, True])
+@pytest.mark.parametrize("query", ["Needle Album", "Needle Track", "Needle File"])
+def test_general_search_retains_matching_missing_albums(
+    monkeypatch, missing_album_browse_repository, all_artists, query,
+):
+    repository = missing_album_browse_repository
+    missing = _missing_browse_row(album_id=2, title="Needle Album", category="main_library", artist="Alias")
+    missing["track_title"] = "Needle Track"
+    missing["file_private_path"] = "C:/Private Directory/Needle File.flac"
+    excluded = _missing_browse_row(album_id=3, title="Needle Album", category="hoard")
+    unrelated = _missing_browse_row(album_id=4, title="Other Album", category="main_library")
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Alias": "Canonical"},
+        "canonical_to_aliases": {"Canonical": ["Alias"]},
+    })
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [missing, excluded, unrelated])
+
+    payload = repository.build_search_payload(query_params={
+        "q": query, "all_artists": "1" if all_artists else "0", "category": ["main_library"],
+    })
+
+    assert payload["album_count"] == 1
+    assert payload["artist_count"] == 1
+    assert [(row["artist"], row["count"]) for row in payload["artists_sidebar"]] == [("Canonical", 1)]
+    assert [group["artist"] for group in payload["artist_groups"]] == ["Canonical"]
+    album = payload["artist_groups"][0]["albums"][0]
+    assert album["key"] == "missing-2"
+    assert album["album_artist"] == "Alias"
+    assert album["inventory_status"] == "missing"
+    assert album["tracks"] == []
+    assert album["_file_entries"] == []
+    assert "Private Directory" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize("credit_source", ["metadata", "persisted_membership"])
+def test_selected_artist_missing_album_search_preserves_featured_artist_matches(
+    monkeypatch, missing_album_browse_repository, credit_source,
+):
+    repository = missing_album_browse_repository
+    active = _browse_album_row(
+        artist="Primary Artist", album_id=1, album_key="active-collaboration", title="Active Collaboration",
+    )
+    active["album_metadata"]["artists"] = ["Primary Artist", "Guest Singer"]
+    collaboration = _missing_browse_row(
+        artist="Primary Artist", album_id=2, title="Missing Collaboration", category="main_library",
+    )
+    if credit_source == "metadata":
+        collaboration["album_metadata"]["artists"] = ["Primary Artist", "Guest Singer"]
+    else:
+        collaboration["album_featured_artist_names"] = ["Guest Singer"]
+    unrelated = _missing_browse_row(
+        artist="Primary Artist", album_id=3, title="Unrelated Solo Album", category="main_library",
+    )
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [active])
+    monkeypatch.setattr(repository, "_load_missing_album_rows", lambda **_kwargs: [collaboration, unrelated])
+
+    payload = repository.build_selected_artist_payload(query_params={
+        "artist": "Primary Artist", "q": "Guest Singer", "category": ["main_library"],
+        "primary_filter": "0", "omit_sidebar": "1",
+    })
+
+    albums = [album for group in payload["primary_artist_groups"] for album in group["albums"]]
+    assert {album["key"] for album in albums} == {"active-collaboration", "missing-2"}
+    assert payload["album_count"] == 2
+    missing = next(album for album in albums if album["key"] == "missing-2")
+    assert missing["album_artist"] == "Primary Artist"
+    assert missing["artists"] == collaboration["album_metadata"]["artists"]
+    assert "album_featured_artist_names" not in missing
+    assert missing["tracks"] == []
+    assert missing["_file_entries"] == []

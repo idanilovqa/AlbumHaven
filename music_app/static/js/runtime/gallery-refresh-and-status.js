@@ -304,7 +304,13 @@ async function refreshCurrentViewAfterBackgroundCompletion(options = {}) {
     attempt <= BACKGROUND_COMPLETION_VIEW_OWNERSHIP_RETRY_LIMIT;
     attempt += 1
   ) {
-    if (state.busy || hasPendingSidebarNavigation()) return false;
+    const tagEditOwnsGalleryResources = Boolean(
+      typeof hasPendingTagEditViewMutations === 'function'
+      && hasPendingTagEditViewMutations()
+    );
+    if (state.busy || hasPendingSidebarNavigation() || tagEditOwnsGalleryResources) {
+      return false;
+    }
     const originatingRevision = readViewStateRevision();
     const refreshApplied = await fetchAndRender(buildApiUrl(state.view), false, {
       preserveGalleryOptionsMenu: true,
@@ -774,8 +780,13 @@ async function fetchAndRender(url, push = true, options = {}) {
     markStartupFollowup('render_started', requestOptions);
     attachModalEvents();
     state.ui.activeViewPayloadReady = true;
+    const mountedGalleryContainer = document.getElementById('artist-groups');
+    const hasMountedGalleryContent = Boolean(
+      mountedGalleryContainer?.querySelector('.artist-section, .album-card'),
+    );
     const preserveMountedGallery = Boolean(
       retainedCommittedSearchGallery
+      && hasMountedGalleryContent
       && hasEquivalentGalleryRenderTopology(
         retainedCommittedSearchGallery,
         state.view?.artist_groups,
@@ -1329,8 +1340,29 @@ async function browseScannedLibrarySnapshot() {
   }
 }
 
+function watcherHealthRefreshSignature(status) {
+  const health = status?.watcher_health || {};
+  const problems = Array.isArray(health.problems) ? health.problems : [];
+  return JSON.stringify([
+    String(health.state || ''),
+    problems.map(problem => [
+      String(problem?.root_key || ''),
+      String(problem?.state || ''),
+      String(problem?.detected_at || ''),
+      String(problem?.message || ''),
+      Object.entries(problem?.allowed_actions || {}).sort(([left], [right]) => left.localeCompare(right)),
+    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  ]);
+}
+
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
+  const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
+    knownStatus,
+    'inventory_mutation_revision',
+  );
+  const knownInventoryRevision = Number(knownStatus.inventory_mutation_revision || 0);
   const knownBusy = Boolean(
     knownStatus.scan_in_progress
     || knownStatus.relations_in_progress
@@ -1353,6 +1385,38 @@ async function pollStatus() {
     const data = await response.json();
     updateStatusIndicator(data);
     const normalizedStatus = state.status;
+    const currentInventoryRevision = Number(
+      normalizedStatus.inventory_mutation_revision || 0,
+    );
+    const inventoryAdvanced = hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision;
+    if (inventoryAdvanced) {
+      if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+        invalidateAllHydratedTrackModalAlbumDetails();
+      }
+      state.ui.pendingInventoryMutationViewRefresh = true;
+    }
+    const utility = state.utility;
+    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+      utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
+    }
+    const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);
+    if (!utility.loading && requestedRefreshRevision > Number(utility.problematicStatusSyncedRevision || 0)) {
+      try {
+        // An earlier in-flight summary cannot satisfy a later status change.
+        // Failed/superseded loads return null; keep the change pending for the next poll.
+        const refreshedItems = await loadProblematicFiles(true);
+        if (state.utility === utility && Array.isArray(refreshedItems)) {
+          utility.problematicStatusSyncedRevision = requestedRefreshRevision;
+        }
+      } catch (problematicFilesError) {
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
+          problematicFilesError,
+        );
+      }
+    }
     const statusObservationSequence = recordSuccessfulStatusObservation();
 
     const logHistoryRevision = String(
@@ -1490,6 +1554,7 @@ async function pollStatus() {
       if (!normalizedStatus.last_error && !scanWasCancelled) {
         showToast('Library scan complete.', 'success', 3200);
       }
+      state.ui.pendingInventoryMutationViewRefresh = false;
     }
     if (wasCoverPollingBusy && !coverBusyNow) {
       if (shouldAutoRefreshViewAfterCoverCompletion()) {
@@ -1510,6 +1575,32 @@ async function pollStatus() {
         await loadProblematicFiles(true);
       }
       showToast('Album covers updated.', 'success', 3200);
+    }
+    if (
+      state.ui.pendingInventoryMutationViewRefresh
+      && !busyNow
+      && !coverBusyNow
+      && !state.busy
+      && !hasPendingSidebarNavigation()
+    ) {
+      state.ui.pendingInventoryMutationViewRefresh = false;
+      try {
+        const refreshApplied = await refreshCurrentViewAfterBackgroundCompletion({
+          preserveScroll: true,
+          restartIfSameUrl: true,
+        });
+        if (!refreshApplied) {
+          state.ui.pendingInventoryMutationViewRefresh = true;
+        } else if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
+          invalidateAllHydratedTrackModalAlbumDetails();
+        }
+      } catch (inventoryRefreshError) {
+        state.ui.pendingInventoryMutationViewRefresh = true;
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh the gallery after an inventory change.',
+          inventoryRefreshError,
+        );
+      }
     }
     const statusMenu = document.getElementById('status-context-menu');
     const visibleStatusMenuNeedsBusySampling = Boolean(

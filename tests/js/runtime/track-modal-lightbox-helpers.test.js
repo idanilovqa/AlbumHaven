@@ -102,6 +102,7 @@ function loadHelper(options = {}) {
   const trackModalTitle = new FakeElement('track-modal-title');
   const trackModalSubtitle = new FakeElement('track-modal-subtitle');
   const trackModalCover = new FakeElement('track-modal-cover');
+  const trackModalMissingWarning = new FakeElement('track-modal-missing-warning');
   const trackModalDuplicateWarning = new FakeElement('track-modal-duplicate-warning');
   const trackModalDuplicateTabs = new FakeElement('track-modal-duplicate-tabs');
   const trackModalList = new FakeElement('track-modal-list');
@@ -152,6 +153,7 @@ function loadHelper(options = {}) {
     'track-modal-title': trackModalTitle,
     'track-modal-subtitle': trackModalSubtitle,
     'track-modal-cover': trackModalCover,
+    'track-modal-missing-warning': trackModalMissingWarning,
     'track-modal-duplicate-warning': trackModalDuplicateWarning,
     'track-modal-duplicate-tabs': trackModalDuplicateTabs,
     'track-modal-list': trackModalList,
@@ -169,6 +171,7 @@ function loadHelper(options = {}) {
   };
   const documentListeners = new Map();
   const context = {
+    activeTagEditMutationClaim: options.activeTagEditMutationClaim || null,
     virtualGrid: options.virtualGrid,
     AbortController,
     Promise,
@@ -196,6 +199,9 @@ function loadHelper(options = {}) {
       },
     },
     state: {
+      status: {
+        inventory_mutation_revision: Number(options.inventoryMutationRevision || 0),
+      },
       modalReleases: [],
       modalReleaseIndex: 0,
       ui: {
@@ -229,6 +235,7 @@ function loadHelper(options = {}) {
         title: trackModalTitle,
         subtitle: trackModalSubtitle,
         cover: trackModalCover,
+        missingWarning: trackModalMissingWarning,
         duplicateWarning: trackModalDuplicateWarning,
         duplicateTabs: trackModalDuplicateTabs,
         list: trackModalList,
@@ -348,6 +355,9 @@ function loadHelper(options = {}) {
     getAlbumRequestKey(album) {
       return String(album?.request_key || album?.key || '');
     },
+    tagEditViewMutationStillOwnsResources(claim) {
+      return claim === context.activeTagEditMutationClaim;
+    },
     overlayClickStartedOnOverlay() {
       return Boolean(options.overlayClickCloses);
     },
@@ -453,6 +463,129 @@ function createCoverSuspensionHarness(initialTokens = []) {
     },
   };
 }
+
+for (const speculative of [false, true]) {
+  test(`in-flight ${speculative ? 'speculative' : 'foreground'} details cannot publish across inventory revisions`, async () => {
+    const preview = { key: 'revision-album', request_key: 'revision-album', name: 'Revision Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'one', title: 'Old title' }] };
+    const fresh = { ...stale, tracks: [{ path: 'one', title: 'Fresh title' }] };
+    const responses = [];
+    const { context } = loadHelper({
+      initialAlbums: [preview], inventoryMutationRevision: 7,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    await flushMicrotasks();
+    assert.notEqual(context.state.gallery.albumIndex.get(preview.key), stale);
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const freshLoad = context.loadTrackModalAlbumDetails(preview.key);
+    assert.equal(responses.length, 2, 'a request captured under the new revision must run');
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: fresh }) });
+    assert.equal(await freshLoad, fresh);
+    assert.equal(await pending, fresh, 'the original caller also receives current details');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), fresh);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), fresh);
+  });
+}
+
+test('in-flight details preserve an optimistic owner across inventory revisions until settlement', async () => {
+  const preview = { key: 'owned-album', name: 'Owned Album', preview_only: true, tracks: [] };
+  const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+  const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+  const claim = { generation: 1 };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.state.status.inventory_mutation_revision = 8;
+  context.invalidateAllHydratedTrackModalAlbumDetails();
+  responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+  assert.equal(await pending, optimistic);
+  assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+  assert.equal(responses.length, 1, 'an active mutation owns its membership');
+  context.activeTagEditMutationClaim = null;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+  const settledLoad = context.loadTrackModalAlbumDetails(preview.key);
+  const canonical = { ...optimistic, name: 'Canonical Album' };
+  responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await settledLoad, canonical);
+});
+
+for (const speculative of [false, true]) {
+  test(`same-revision ${speculative ? 'speculative' : 'foreground'} hydration retains optimistic ownership until settlement`, async () => {
+    const preview = { key: 'same-revision-owned', name: 'Owned Album', preview_only: true, tracks: [] };
+    const stale = { ...preview, preview_only: false, tracks: [{ path: 'removed' }, { path: 'retained' }] };
+    const optimistic = { ...stale, tracks: [{ path: 'retained' }] };
+    const claim = { generation: 1 };
+    const responses = [];
+    const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+      activeTagEditMutationClaim: claim,
+      onFetchAlbumDetails: () => new Promise(resolve => responses.push(resolve)),
+    });
+    const pending = context.loadTrackModalAlbumDetails(preview.key, { speculative });
+    context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+    responses[0]({ ok: true, status: 200, json: async () => ({ ok: true, album: stale }) });
+    assert.equal(await pending, optimistic, 'the waiting view must not render the pre-edit response');
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), optimistic);
+    assert.equal(responses.length, 1);
+    context.state.status.inventory_mutation_revision = 8;
+    context.invalidateAllHydratedTrackModalAlbumDetails();
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), optimistic, 'the original claim remains attached');
+    context.activeTagEditMutationClaim = null;
+    assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), null);
+    const settled = context.loadTrackModalAlbumDetails(preview.key);
+    const canonical = { ...optimistic, name: 'Canonical Album' };
+    responses[1]({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+    assert.equal(await settled, canonical);
+    assert.equal(context.state.gallery.albumIndex.get(preview.key), canonical);
+  });
+}
+
+test('same-revision hydration may replace a settled optimistic owner', async () => {
+  const preview = { key: 'settled-owner', name: 'Album', preview_only: true, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, tracks: [{ path: 'retained' }] };
+  const canonical = { ...optimistic, name: 'Authoritative album' };
+  const claim = { generation: 1 };
+  let respond;
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    activeTagEditMutationClaim: claim,
+    onFetchAlbumDetails: () => new Promise(resolve => { respond = resolve; }),
+  });
+  const pending = context.loadTrackModalAlbumDetails(preview.key);
+  context.cacheHydratedTrackModalAlbum(preview.key, optimistic, { tagEditMutationClaim: claim });
+  context.activeTagEditMutationClaim = null;
+  respond({ ok: true, status: 200, json: async () => ({ ok: true, album: canonical }) });
+  assert.equal(await pending, canonical);
+  assert.equal(context.getCachedHydratedTrackModalAlbum(preview.key), canonical);
+});
+
+test('revision reload preserves a speculative detail request promoted to foreground', async () => {
+  const preview = { key: 'promoted-album', name: 'Promoted Album', preview_only: true, tracks: [] };
+  const album = { ...preview, preview_only: false, tracks: [{ path: 'track' }] };
+  const responses = [];
+  const { context } = loadHelper({ initialAlbums: [preview], inventoryMutationRevision: 7,
+    onFetchAlbumDetails: ({ requestOptions }) => new Promise(resolve => responses.push({ requestOptions, resolve })),
+  });
+  context.queueTrackModalAlbumDetailsPrewarm(preview.key);
+  assert.equal(responses[0].requestOptions.priority, 'low');
+  const foreground = context.loadTrackModalAlbumDetails(preview.key);
+  context.state.status.inventory_mutation_revision = 8;
+  responses[0].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  await flushMicrotasks();
+  assert.equal(responses.length, 2);
+  assert.equal(responses[1].requestOptions.priority, 'high');
+  context.cancelTrackModalAlbumDetailsPrewarms();
+  assert.equal(responses[1].requestOptions.signal.aborted, false);
+  responses[1].resolve({ ok: true, status: 200, json: async () => ({ ok: true, album }) });
+  assert.equal(await foreground, album);
+});
 
 async function run() {
   {
@@ -877,6 +1010,10 @@ async function run() {
         });
       },
     });
+    const staleMissingWarning = context.getTrackModalElements().missingWarning;
+    staleMissingWarning.hidden = false;
+    staleMissingWarning.innerHTML = '<div role="alert">Album details unavailable</div>';
+
     context.openTrackModal({
       key: 'alpha',
       name: 'Album Alpha',
@@ -894,6 +1031,8 @@ async function run() {
     assert.match(elements.subtitle.textContent, /Loading album details/);
     assert.match(elements.list.innerHTML, /Loading album details/);
     assert.match(elements.cover.innerHTML, /Loading cover art/);
+    assert.equal(elements.missingWarning.hidden, true);
+    assert.equal(elements.missingWarning.innerHTML, '');
     assert.doesNotMatch(elements.cover.innerHTML, /<img/);
     assert.doesNotMatch(elements.cover.innerHTML, /\/cover(?:\?|\.)/);
     assert.deepEqual(context.buildAlbumDisplayCoverUrlCalls, []);
@@ -923,6 +1062,8 @@ async function run() {
     assert.equal(context.state.ui.pendingTrackModalLoadAlbumKey, '');
     assert.equal(elements.title.textContent, '');
     assert.equal(elements.cover.innerHTML, '');
+    assert.equal(elements.missingWarning.hidden, true);
+    assert.equal(elements.missingWarning.innerHTML, '');
     assert.equal(elements.list.innerHTML, '');
     assert.equal(elements.folder.dataset.album, '');
     assert.equal(elements.folder.dataset.albumKey, '');
@@ -1516,6 +1657,138 @@ async function run() {
   }
 
   {
+    const albumAlias = 'watcher::retagged-album';
+    const compactAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Retagged Album',
+      album_artist: 'Watcher Artist',
+      year: 2004,
+      preview_only: true,
+      track_count_preview: 1,
+      tracks: [],
+    };
+    const staleHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Retagged Album\\01 Old title.mp3', title: 'Old title' }],
+    };
+    const freshHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Retagged Album\\01 Old title.mp3', title: 'New title' }],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      fetchedAlbum: freshHydratedAlbum,
+    });
+
+    context.cacheHydratedTrackModalAlbum(albumAlias, staleHydratedAlbum, {
+      aliases: [albumAlias],
+    });
+    context.state.gallery.albumIndex.set(albumAlias, staleHydratedAlbum);
+
+    assert.equal(context.invalidateAllHydratedTrackModalAlbumDetails(), 1);
+    assert.strictEqual(context.state.gallery.albumIndex.get(albumAlias), compactAlbum);
+    const resolvedAlbum = await context.loadTrackModalAlbumDetails(albumAlias);
+    assert.strictEqual(resolvedAlbum, freshHydratedAlbum);
+    assert.equal(resolvedAlbum.tracks[0].title, 'New title');
+  }
+
+  {
+    const albumAlias = 'watcher::revision-aware-album';
+    const compactAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Revision-aware Album',
+      album_artist: 'Watcher Artist',
+      year: 2005,
+      preview_only: true,
+      track_count_preview: 1,
+      tracks: [],
+    };
+    const staleHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Revision-aware Album\\01 Old.mp3', title: 'Old' }],
+    };
+    const freshHydratedAlbum = {
+      ...compactAlbum,
+      preview_only: false,
+      tracks: [{ path: 'D:\\Music\\Watcher Artist\\Revision-aware Album\\01 Fresh.mp3', title: 'Fresh' }],
+    };
+    const { context } = loadHelper({
+      initialAlbums: [compactAlbum],
+      fetchedAlbum: freshHydratedAlbum,
+      inventoryMutationRevision: 7,
+    });
+    context.cacheHydratedTrackModalAlbum(albumAlias, staleHydratedAlbum, {
+      aliases: [albumAlias],
+    });
+
+    context.state.status.inventory_mutation_revision = 8;
+    const resolvedAlbum = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(resolvedAlbum, freshHydratedAlbum);
+    assert.equal(context.fetchCalls.length, 1);
+  }
+
+  {
+    const albumAlias = 'rarity artist::selected track split fixture';
+    const mutationClaim = { generation: 8, resourceKeys: [`album:${albumAlias}`] };
+    const optimisticSourceAlbum = {
+      key: albumAlias,
+      request_key: albumAlias,
+      identity_key: albumAlias,
+      name: 'Selected Track Split Fixture',
+      album_artist: 'Rarity Artist',
+      preview_only: false,
+      tracks: Array.from({ length: 17 }, (_value, index) => ({
+        path: `D:\\Music\\Rarity Artist\\Selected Track Split Fixture\\${index + 2}.mp3`,
+      })),
+    };
+    const staleServerAlbum = {
+      ...optimisticSourceAlbum,
+      tracks: [
+        { path: 'D:\\Music\\Rarity Artist\\Selected Track Split Fixture\\1.mp3' },
+        ...optimisticSourceAlbum.tracks,
+      ],
+    };
+    const { context } = loadHelper({
+      fetchedAlbum: staleServerAlbum,
+      initialAlbums: [optimisticSourceAlbum],
+      inventoryMutationRevision: 7,
+      activeTagEditMutationClaim: mutationClaim,
+    });
+    context.cacheHydratedTrackModalAlbum(albumAlias, optimisticSourceAlbum, {
+      aliases: [albumAlias],
+      tagEditMutationClaim: mutationClaim,
+    });
+
+    context.state.status.inventory_mutation_revision = 8;
+    const pendingResult = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(
+      pendingResult,
+      optimisticSourceAlbum,
+      'an unrelated revision observation must not replace a pending optimistic split with stale server membership',
+    );
+    assert.equal(context.fetchCalls.length, 0);
+
+    context.activeTagEditMutationClaim = null;
+    const settledResult = await context.loadTrackModalAlbumDetails(albumAlias);
+
+    assert.strictEqual(settledResult, staleServerAlbum);
+    assert.equal(
+      context.fetchCalls.length,
+      1,
+      'normal revision invalidation must resume as soon as the optimistic mutation settles',
+    );
+  }
+
+  {
     const removedPath = 'D:\\Synthetic Music\\Rarity Artist\\Two Tracks\\01 Apply Rarity.mp3';
     const siblingPath = 'D:\\Synthetic Music\\Rarity Artist\\Two Tracks\\02 Remain Editable.mp3';
     const staleAlbum = {
@@ -1660,6 +1933,37 @@ async function run() {
     assert.equal(resolvedCompactAlbum?.key, compactYearSplitAlbum.key);
     assert.equal(resolvedCompactAlbum?.year, compactYearSplitAlbum.year);
     assert.equal(resolvedCompactAlbum?.track_count_preview, 1);
+  }
+
+  {
+    const staleRenderedAlbum = {
+      key: 'rarity artist::sparse year edit fixture',
+      name: 'Sparse Year Edit Fixture',
+      album_artist: 'Rarity Artist',
+      year: '2004',
+      edition: '',
+      preview_only: true,
+      track_count_preview: 17,
+    };
+    const durableIndexedAlbum = {
+      ...staleRenderedAlbum,
+      key: 'rarity artist::sparse year edit fixture::year::2004',
+    };
+    const { context } = loadHelper({ initialAlbums: [durableIndexedAlbum] });
+    context.state.modalReleases = [];
+    const staleButton = new context.HTMLElement('stale-year-card');
+    staleButton.setAttribute('data-album-key', staleRenderedAlbum.key);
+    staleButton.setAttribute(
+      'data-album-version-key',
+      context.getTrackModalAlbumVersionKey(staleRenderedAlbum),
+    );
+    staleButton.setAttribute('data-album', JSON.stringify(staleRenderedAlbum));
+
+    assert.strictEqual(
+      context.resolveTrackModalActionAlbum(staleButton),
+      durableIndexedAlbum,
+      'a rendered card must rebind to its durable year key after watcher reconciliation',
+    );
   }
 
   test('openTrackModalForButton must not bypass the current-album identity resolver', () => {

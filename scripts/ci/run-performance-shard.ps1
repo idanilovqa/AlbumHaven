@@ -143,6 +143,9 @@ if ($DatabaseSuffixBase.Length -gt 39) { throw 'Database suffix is too long for 
 $statePath = Join-Path $stateRoot "$ShardName.state.json"
 $setupFailure = $null
 $teardownFailure = $null
+# Matches PROCESS_CLEANUP_FAILURE_EXIT_CODE in ../playwright-exit-codes.cjs.
+$processCleanupFailureExitCode = 2
+$processCleanupFailed = $false
 foreach ($target in $targetNames) { Write-CiJob $target 'initialized' }
 
 try {
@@ -197,20 +200,26 @@ try {
 
             & $nodePath $performanceRunner "--test=$target" --headless "--browser=$Browser" --prepared-fixture "--performance-contract=$PerformanceContract"
             $targetExitCode = $LASTEXITCODE
+            if ($targetExitCode -eq $processCleanupFailureExitCode) {
+                $processCleanupFailed = $true
+            }
             if ($targetExitCode -ne 0) { [void]$failedTargets.Add($target) }
         } catch {
             $targetFailure = $_
             if (-not $failedTargets.Contains($target)) { [void]$failedTargets.Add($target) }
         } finally {
-            try {
-                Wait-TargetPortsClear $targetPort
-            } catch {
-                $targetPortFailure = "target port audit: $($_.Exception.Message)"
-                if (-not $failedTargets.Contains($target)) { [void]$failedTargets.Add($target) }
+            if (-not $processCleanupFailed) {
+                try {
+                    Wait-TargetPortsClear $targetPort
+                } catch {
+                    $targetPortFailure = "target port audit: $($_.Exception.Message)"
+                    if (-not $failedTargets.Contains($target)) { [void]$failedTargets.Add($target) }
+                }
             }
             $conclusion = if ($targetFailure -or $targetExitCode -ne 0 -or $targetPortFailure) { 'failure' } else { 'success' }
             Write-CiJob $target $conclusion
         }
+        if ($processCleanupFailed) { throw "Performance target $target process cleanup is unproven; stopping remaining targets." }
         if ($targetPortFailure) { throw "Performance target $target cleanup failed; shard continuation is unsafe: $targetPortFailure" }
     }
 } catch {
@@ -222,14 +231,14 @@ try {
         }
     }
 } finally {
-    if (Test-Path -LiteralPath $profileSessionRoot) {
+    if (-not $processCleanupFailed -and (Test-Path -LiteralPath $profileSessionRoot)) {
         try {
             Remove-Item -LiteralPath $profileSessionRoot -Recurse -Force
         } catch {
             $teardownFailure = "profile fixture teardown: $($_.Exception.Message)"
         }
     }
-    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+    if (-not $processCleanupFailed -and (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         try {
             & $bootstrap `
                 -Mode Teardown `
@@ -255,6 +264,10 @@ try {
     }
 }
 
+if ($processCleanupFailed) {
+    Write-Host "Process cleanup is unproven; database, prepared fixture, and diagnostics retained at $stateRoot." -ForegroundColor Red
+    exit $processCleanupFailureExitCode
+}
 if ($teardownFailure) { throw "Performance shard teardown failed: $teardownFailure" }
 if ($setupFailure) { throw "Performance shard setup or continuation failed: $setupFailure" }
 

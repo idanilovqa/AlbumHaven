@@ -457,9 +457,23 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   };
   const actions = new AppBarActions({
     page: {
+      url: () => 'http://127.0.0.1:4173/',
+      context: () => ({
+        async cookies() {
+          return [{
+            name: '__Host-album_haven_session',
+            value: 'scan-session',
+            domain: '127.0.0.1',
+            path: '/',
+          }];
+        },
+      }),
       request: {
-        async get(pathname) {
-          assert.equal(pathname, '/status');
+        async get(pathname, options) {
+          assert.equal(pathname, 'http://127.0.0.1:4173/status');
+          assert.deepEqual(options, {
+            headers: { Cookie: '__Host-album_haven_session=scan-session' },
+          });
           interactions.push('status-probe');
           return {
             ok: () => true,
@@ -497,6 +511,93 @@ test('incremental scan actions expose separate busy and completion boundaries', 
   assert.deepEqual(interactions[2].options, { timeout: 10000 });
   assert.equal(interactions[3], 'status-probe');
   assert.equal(interactions[2].selector, '#scan-indicator');
+});
+
+test('incremental scan completion waits for the browser post-scan view refresh', async () => {
+  const actionSource = read('tests/e2e/actions/appBarActions.js');
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/appBarActions.js')).href;
+  const { AppBarActions } = await import(moduleUrl);
+  const interactions = [];
+  const actions = new AppBarActions({});
+  actions.triggerIncrementalScanAndWaitForBusy = async () => {
+    interactions.push('scan-busy');
+  };
+  actions.waitForIncrementalScanComplete = async (options) => {
+    interactions.push(['backend-idle', options]);
+  };
+  actions.waitForIncrementalScanUiSettled = async (options) => {
+    interactions.push(['browser-view-settled', options]);
+  };
+
+  await actions.triggerIncrementalScanAndWait({ timeout: 54321 });
+
+  assert.deepEqual(interactions, [
+    'scan-busy',
+    ['backend-idle', { timeout: 54321 }],
+    ['browser-view-settled', { timeout: 54321 }],
+  ]);
+  const settlementMethod = actionSource.slice(
+    actionSource.indexOf('async waitForIncrementalScanUiSettled'),
+    actionSource.indexOf('async triggerIncrementalScanAndWaitForBusy'),
+  );
+  assert.match(settlementMethod, /activeViewRequestUrl/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefresh/);
+  assert.match(settlementMethod, /pendingScanCompletionViewRefreshRetryScheduled/);
+});
+
+test('functional browser requests explicitly carry secure loopback session cookies', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/helpers/authenticatedPageRequest.js'),
+  ).href;
+  const { authenticatedPageGet } = await import(moduleUrl);
+  const observed = [];
+  const page = {
+    url: () => 'http://127.0.0.1:4173/library',
+    context: () => ({
+      async cookies() {
+        return [
+          {
+            name: '__Host-album_haven_session',
+            value: 'opaque-session',
+            domain: '127.0.0.1',
+            path: '/',
+          },
+          {
+            name: 'album_haven_session_csrf',
+            value: 'csrf-token',
+            domain: '127.0.0.1',
+            path: '/',
+          },
+        ];
+      },
+    }),
+    request: {
+      async get(url, options) {
+        observed.push({ url, options });
+        return { ok: () => true };
+      },
+    },
+  };
+
+  await authenticatedPageGet(page, '/status', {
+    headers: { Accept: 'application/json' },
+    timeout: 1234,
+  });
+
+  assert.deepEqual(observed, [{
+    url: 'http://127.0.0.1:4173/status',
+    options: {
+      headers: {
+        Accept: 'application/json',
+        Cookie: '__Host-album_haven_session=opaque-session; album_haven_session_csrf=csrf-token',
+      },
+      timeout: 1234,
+    },
+  }]);
+  await assert.rejects(
+    authenticatedPageGet(page, 'https://example.com/status'),
+    /same-origin production route/u,
+  );
 });
 
 test('rating authority E2E action observes the real view-data response without interception', async () => {
@@ -718,10 +819,13 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
 
   assert.match(galleryActions, /selectAlbumDetailsByIdentity\(expected/);
   assert.match(galleryActions, /albumCard\.clickDetailsByIdentity\(artist, album, year\)/);
-  assert.match(albumCard, /cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)/);
+  assert.match(albumCard, /const card = this\.cardByIdentity\(artistName, albumName, year\);/);
   assert.doesNotMatch(coverLookup, /clickFirstAlbumDetails\(/);
   assert.match(coverLookup, /COVER_LOOKUP_TEST_TARGETS/);
+  assert.match(coverLookupFixtureData, /manualProviderCover[\s\S]*artist: 'Synthetic Cover Artist'[\s\S]*album: 'Canonical Cover Fixture'[\s\S]*year: '2026'/);
   assert.match(coverLookupFixtureData, /canonicalPersistence[\s\S]*artist: 'Mastodon'[\s\S]*album: 'Crack The Skye'[\s\S]*year: '2009'/);
+  assert.match(coverLookupFixtureData, /notificationNoResult[\s\S]*artist: 'Flaming Row'[\s\S]*album: 'The Pure Shine'[\s\S]*year: '2019'/);
+  assert.match(coverLookup, /manualProviderCover: MANUAL_PROVIDER_COVER[\s\S]*Object\.values\(MANUAL_PROVIDER_COVER\)\.join\(' - '\)/);
   assert.match(coverLookupFixtureData, /notificationActioned[\s\S]*notificationFailed[\s\S]*cancelClear[\s\S]*notificationActive/);
   assert.match(
     coverLookup,
@@ -742,6 +846,10 @@ test('cover lookup and loop journeys select exact seeded albums before feature a
   );
   assert.doesNotMatch(coverLookup, /modal\.firstRemoteMatch\.sha256/);
   assert.match(coverLookupActions, /readRemoteCandidateEvidence\(candidateId/);
+  assert.match(
+    coverLookupActions,
+    /async startSearch\(options = \{\}\)[\s\S]*waitForResponse\([\s\S]*\/utilities\/cover-lookup\/start[\s\S]*Promise\.all\([\s\S]*findBetterButton\.click\(\)[\s\S]*response\.json\(\)[\s\S]*response\.ok\(\)[\s\S]*payload\?\.ok/,
+  );
   assert.match(coverLookupActions, /readCoverLookupProviderEvidence[\s\S]*isCoverLookupCancellationSettledBeforeArchiveWork/);
   assert.match(coverLookupProviderHelpers, /musicbrainzStarted <= 2[\s\S]*cover_art_archive_requests === 0/);
   assert.match(coverLookupProviderHelpers, /Refusing to control a non-loopback cover provider fixture/);
@@ -1120,7 +1228,14 @@ test('automatic cover scans isolate the coverless candidate without weakening la
   const improvementMode = differentArtScenario.indexOf(
     "setProviderFixtureMode('automatic-scan')",
   );
+  const coverRefreshIdleBoundary = differentArtScenario.indexOf(
+    'waitForScanAndCoverRefreshIdle()',
+  );
   const improvementScan = differentArtScenario.indexOf('triggerIncrementalScanAndWait()');
+  assert.ok(
+    coverRefreshIdleBoundary >= 0 && coverRefreshIdleBoundary < improvementMode,
+    'FTC-COVERS-019 must wait for its prior automatic cover refresh before changing provider mode.',
+  );
   assert.ok(
     improvementMode >= 0 && improvementMode < improvementScan,
     'FTC-COVERS-019 must retain automatic-scan for its later Fixture09 different-art phase.',
@@ -1438,7 +1553,7 @@ test('all E2E specs inherit guarded fixtures and cannot create direct browser pa
       const freshBrowserSessionFixture = source.slice(fixtureStart, fixtureEnd);
       assert.match(
         freshBrowserSessionFixture,
-        /freshBrowserSession: async \(\{ browser, testArtifacts \}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
+        /freshBrowserSession: async \(\{\s*browser,\s*testArtifacts,\s*authenticateFreshBrowserSession,\s*storageState,\s*\}, use, testInfo\)[\s\S]*browser\.newContext\([\s\S]*storageState: authenticateFreshBrowserSession \? storageState : \{ cookies: \[\], origins: \[\] \}[\s\S]*installContextRequestInterceptionGuard\(context\)[\s\S]*context\.newPage\(\)[\s\S]*new GalleryActions\(new GalleryPage\(page, testInfo\)\)[\s\S]*new CoverLookupActions\(new CoverLookup\(page, testInfo\)\)[\s\S]*new TrackModalActions\(new TrackModal\(page, testInfo\)\)[\s\S]*restoreInterceptionGuard\(\)[\s\S]*context\.close\(\)[\s\S]*session\.restoreInterceptionGuard\(\)[\s\S]*session\.context\.close\(\)/,
       );
       assert.equal(
         (freshBrowserSessionFixture.match(/\.newContext\s*\(/g) || []).length,
@@ -2524,13 +2639,18 @@ test('album-details selection supports production prewarming without a click-tim
   assert.match(method, /clickDetailsByIdentity/u);
   assert.match(method, /waitForOpenDetailsIdentity/u);
   assert.match(method, /page\.on\('response'/u);
-  assert.match(method, /page\.request\.get/u);
+  assert.match(method, /authenticatedPageGet/u);
   assert.match(method, /\/album-details\?album_key=/u);
   assert.match(method, /Album details identity mismatch/u);
   assert.match(
     albumCard,
-    /waitForOpenDetailsIdentity[\s\S]*exactNormalizedText\(expectedTitle\)[\s\S]*trackModalTrackRowSelector/u,
+    /waitForOpenDetailsIdentity[\s\S]*trackModalTrackRowSelector[\s\S]*waitForOpenDetailsHeaderIdentity/u,
     'The fallback must prove the exact clicked modal identity is fully loaded.',
+  );
+  assert.match(
+    albumCard,
+    /waitForOpenDetailsHeaderIdentity[\s\S]*exactNormalizedText\(title\)/u,
+    'The layout-aware header fallback must prove the exact clicked album title.',
   );
 });
 
@@ -2816,6 +2936,18 @@ test('FTC-COVERS-014 ends visible-cover timing at decode before collecting visua
     /const baselineResponse = await coverTraffic\.waitForResponse\(baseline\.productionSrc\);\s*expectJosephCoverRouteResponse\(expect, baselineResponse\);/,
   );
   assert.doesNotMatch(spec, /page\.(?:route|evaluate|addInitScript|setContent)\s*\(/);
+});
+
+test('FTC-COVERS-015 keeps an exact committed Windows zoom-detail visual digest', () => {
+  const helper = read('tests/e2e/helpers/galleryCoverStabilityHelpers.js');
+  assert.match(
+    helper,
+    /JOSEPH_ZOOMED_DETAIL_HASH = '12efccbc8b10d830762730e24dfe35d8c9738abbbefb0027f8a55592cdd3059c'/u,
+  );
+  assert.match(
+    helper,
+    /createHash\('sha256'\)\.update\(screenshot\)\.digest\('hex'\)/u,
+  );
 });
 
 test('gallery placeholder readiness requires a named intentional no-art scenario', async () => {
@@ -3861,6 +3993,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/galleryActions.js')).href;
   const { GalleryActions } = await import(moduleUrl);
   const selected = [];
+  const scrolled = [];
   const actions = new GalleryActions({
     albumCard: {
       async clickDetailsByIdentity(artist, album, year) {
@@ -3868,7 +4001,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
       },
     },
   });
-  actions.scrollToAlbumUnderHeading = async () => {};
+  actions.scrollToAlbumUnderHeading = async (...args) => scrolled.push(args);
 
   const identity = await actions.selectAlbumDetailsByIdentity({
     artist: 'Mastodon',
@@ -3877,6 +4010,11 @@ test('exact album selection delegates one retrying Playwright click to the ident
   });
 
   assert.deepEqual(selected, [['Mastodon', 'Crack The Skye', '2009']]);
+  assert.deepEqual(scrolled, [[
+    'Mastodon',
+    'Crack The Skye',
+    { year: '2009' },
+  ]]);
   assert.deepEqual(identity, {
     artist: 'Mastodon',
     album: 'Crack The Skye',
@@ -3886,7 +4024,7 @@ test('exact album selection delegates one retrying Playwright click to the ident
   const albumCard = read('tests/e2e/poms/albumCard.js');
   assert.match(
     albumCard,
-    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year, \{ visible: true \}\)[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
+    /clickDetailsByIdentity\(artistName, albumName, year\)[\s\S]*?const card = this\.cardByIdentity\(artistName, albumName, year\);[\s\S]*?card\.locator\(this\.detailsButtonWithinCardSelector\)\.click\(\)/,
   );
 });
 
@@ -4203,7 +4341,7 @@ test('track modal cover readiness rejects loading placeholders and requires a fi
   assert.match(trackModal, /naturalWidth\s*>\s*0/);
   assert.match(trackModal, /getBoundingClientRect\(\)\.width\s*>\s*0/);
   assert.match(trackModal, /albumCoverImage\.evaluateAll/);
-  assert.match(trackModal, /String\(coverPlaceholder\.textContent\s*\|\|\s*''\)\.trim\(\)\s*===\s*'No cover art'/);
+  assert.match(trackModal, /coverPlaceholder\.getAttribute\('data-album-artbox-state'\)\s*===\s*'empty'/);
   assert.doesNotMatch(trackModal, /return coverLoaded \|\| coverPlaceholderVisible/);
 });
 
@@ -4230,7 +4368,10 @@ test('cover lookup hashes only decoded visible currentSrc response evidence', ()
   assert.match(coverLookup, /hasAttribute\('data-cover-visual-state'\)/);
   assert.match(coverLookup, /visualState[\s\S]*=== 'ready'/);
   assert.match(coverLookup, /imageResponseEvidence\.get\(src\)/);
-  assert.doesNotMatch(coverLookup, /\bfetch\s*\(/);
+  assert.match(coverLookup, /sourceUrl\.protocol !== 'blob:'/);
+  assert.match(coverLookup, /sourceUrl\.origin !== location\.origin/);
+  assert.match(coverLookup, /fetch\(expected\.currentSrc, \{ mode: 'same-origin' \}\)/);
+  assert.doesNotMatch(coverLookup, /fetch\((?:src|displayedSource|productionSrc)/);
 });
 
 test('cover lookup rejects a pending gallery blob transition before hashing response evidence', async () => {
@@ -4274,6 +4415,16 @@ test('cover lookup measures exact no-size production cover bytes through the act
   const body = Buffer.from('exact full-size selected cover bytes');
   const requested = [];
   page.url = () => 'http://127.0.0.1:4173/?surface=albums';
+  page.context = () => ({
+    async cookies() {
+      return [{
+        name: '__Host-album_haven_session',
+        value: 'cover-session',
+        domain: '127.0.0.1',
+        path: '/',
+      }];
+    },
+  });
   page.request = {
     async get(url, options) {
       requested.push({ url, options });
@@ -4298,7 +4449,12 @@ test('cover lookup measures exact no-size production cover bytes through the act
   assert.equal(requestedUrl.searchParams.get('path'), 'Mastodon/Crack The Skye/cover.jpg');
   assert.equal(requestedUrl.searchParams.get('v'), 'A'.repeat(64));
   assert.equal(requestedUrl.searchParams.has('size'), false);
-  assert.deepEqual(requested[0].options, { headers: { Accept: 'image/*' } });
+  assert.deepEqual(requested[0].options, {
+    headers: {
+      Accept: 'image/*',
+      Cookie: '__Host-album_haven_session=cover-session',
+    },
+  });
   assert.deepEqual(evidence, {
     src: requestedUrl.toString(),
     coverPath: 'Mastodon/Crack The Skye/cover.jpg',
@@ -4768,6 +4924,55 @@ test('Problematic Files readiness uses one POM-owned condition over the real ren
   }
 });
 
+test('Problematic Files mutation completion ignores matching identities outside its sidebar list', async () => {
+  const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/utilityProblematicFilesActions.js')).href;
+  const { UtilityProblematicFilesActions } = await import(moduleUrl);
+    let disposed = false;
+    let delegated = null;
+    const activeListItem = {
+      async getAttribute() { return 'album-previous'; },
+    };
+    const actions = new UtilityProblematicFilesActions({
+      activeListItem,
+      titleForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Album Previous'; } };
+      },
+      async waitForMutationRemovalAndPreviousSelection(expected, options) {
+        delegated = { expected, options };
+      },
+    });
+    actions.mutationObservation = {
+      async dispose() { disposed = true; },
+    };
+
+    assert.deepEqual(await actions.waitForMutationRemovalAndPreviousSelection({
+      removedKey: 'album-removed',
+      previousKey: 'album-previous',
+      scrollTop: 237,
+    }, { timeout: 4321 }), {
+      key: 'album-previous',
+      title: 'Album Previous',
+    });
+    assert.deepEqual(delegated, {
+      expected: {
+        removedKey: 'album-removed',
+        previousKey: 'album-previous',
+        scrollTop: 237,
+      },
+      options: { timeout: 4321 },
+    });
+    assert.equal(disposed, true);
+
+  const pom = read('tests/e2e/poms/utilityProblematicFilesTab.js');
+  const helper = pom
+    .split('async waitForMutationRemovalAndPreviousSelection', 2)[1]
+    .split('\n  get ', 1)[0];
+  assert.match(helper, /const list = document\.querySelector\(value\.listSelector\)/);
+  assert.match(helper, /list\.querySelectorAll\(value\.itemSelector\)/);
+  assert.match(helper, /list\.querySelector\(value\.activeSelector\)/);
+});
+
 test('Settings measurement prepares the real button action and observes the modal in one POM condition', async () => {
   const moduleUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/settingsModalAppBarActions.js')).href;
   const { SettingsModalAppBarActions } = await import(moduleUrl);
@@ -4945,23 +5150,26 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   }
 
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
-  assert.match(spec, /opened\.playerHeight\)\.toBe\(85\)/);
-  assert.match(spec, /opened\.waveformHeight\)\.toBe\(36\)/);
+  assert.match(
+    spec,
+    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
+  );
+  assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
   assert.match(spec, /opened\.metadataWaveformGap\)\.toBeGreaterThanOrEqual\(3\)/);
-  assert.doesNotMatch(spec, /opened\.waveformHeight\)\.toBeGreaterThanOrEqual\(40\)/);
+  assert.doesNotMatch(spec, /opened\.waveformHeight\)\.toBe\(36\)/);
   assert.match(
     spec,
     /playingPlayerLayout\.coverCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.playCenterY - unavailable\.visual\.timelineCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder must share the compact active-player alignment contract',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
+    'the no-track placeholder keeps its cover, controls, and timeline centered',
   );
   assert.match(
     spec,
-    /playingPlayerLayout\.playCenterY - playingPlayerLayout\.timelineCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
+    /playingPlayerLayout\.timelineCenterY - playingPlayerLayout\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
   assert.match(
     spec,
@@ -5001,6 +5209,7 @@ test('loop action production path exposes the persistent enabled and engaged pod
   const player = read('music_app/static/js/runtime/player-loop-playback.js');
   const utility = read('music_app/static/js/runtime/utility-loop-playback.js');
   const template = read('music_app/templates/index.html');
+  const playbackControlMacro = read('music_app/templates/partials/playback-control-cluster.html');
   const css = read('music_app/static/css/runtime/non-album-and-player.css');
 
   assert.match(controls, /data-loop-action-pod/);
@@ -5012,9 +5221,10 @@ test('loop action production path exposes the persistent enabled and engaged pod
   assert.match(player, /Boolean\(getPlayerPlaybackSnapshot\(\)\.src\s*\|\|\s*state\.player\.current\?\.src\)/);
   assert.match(utility, /mountLoopEditActionControl\s*\(\s*\{[^]*enabled:\s*true/);
   assert.match(
-    template,
-    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="global-player"[^>]*data-loop-action-owner="global-player"[^>]*>\s*<\/span>/,
+    playbackControlMacro,
+    /<span class="loop-play-control-actions player-loop-actions"[^>]*data-loop-action-mount="\{\{ owner_id \}\}"[^>]*data-loop-action-owner="\{\{ owner_id \}\}"[^>]*>\s*<\/span>/,
   );
+  assert.match(template, /playback_control_cluster\('expanded-player', owner_id='global-player'\)/);
   assert.doesNotMatch(css, /\.loop-edit-action:disabled\s*\{[^}]*cursor:\s*(?:wait|progress)/s);
 });
 
@@ -5035,3 +5245,81 @@ test('loop player production markup keeps waveform identities and one timestamp 
   assert.doesNotMatch(css, /\.player-timeline-wrap\.is-waveform(?:\.is-looping)?\s+\.player-timeline\s*\{[^}]*opacity:\s*0\.0[0-9]/s);
   assert.doesNotMatch(utility, /elements\.timeline\.hidden\s*=\s*editor\.active/);
 });
+
+test('compact-player Appearance helper enters the owning Player and Seekbar page before selecting a style', () => {
+  const actions = read('tests/e2e/actions/utilityAppearanceActions.js');
+  const start = actions.indexOf('async saveCompactPlayerStyle(');
+  const end = actions.indexOf('\n  async openSection(', start);
+  assert.ok(start >= 0 && end > start, 'Expected the compact-player Appearance action helper.');
+  const helper = actions.slice(start, end);
+
+  assert.match(
+    helper,
+    /compactPlayerStyle\.buttons\.count\(\)\s*===\s*0[^]*await this\.openSection\('seekbar'\)/,
+    'the shared compact-player control is owned by Player & Seekbar, not the Main elements landing page',
+  );
+  assert.match(
+    helper,
+    /documentRoot[^]*data-compact-player-style[^]*if \(alreadySaved\)/,
+    'an already-saved compact-player style must remain an idempotent action',
+  );
+});
+
+
+test('cover lookup observes exact displayed blob bytes without a network response', async () => {
+  const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+  const vm = require('node:vm');
+  class Image {}
+  const element = Object.assign(new Image(), {
+    currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+    getAttribute: () => '/cover?path=fixture&v=upgraded', hasAttribute: () => false,
+  });
+  const expected = { currentSrc: element.currentSrc, productionSrc: element.getAttribute(), hasVisualState: false };
+  const requests = [];
+  const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+    HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+    fetch: async (url, options) => {
+      requests.push({ url, mode: options.mode });
+      return { ok: true, arrayBuffer: async () => Uint8Array.from([11, 23, 47, 255]).buffer };
+    },
+  });
+  assert.deepEqual(Array.from(await observe(element, expected)), [11, 23, 47, 255]);
+  assert.deepEqual(requests, [{ url: expected.currentSrc, mode: 'same-origin' }]);
+});
+
+for (const failure of ['network-url', 'foreign-blob', 'source-before', 'source-after', 'revision-after', 'decode-after', 'detached-after', 'hidden-after', 'read-error']) {
+  test(`cover lookup displayed blob observation rejects ${failure}`, async () => {
+    const { readDisplayedBlobBytes } = await import(pathToFileURL(path.join(repoRoot, 'tests/e2e/actions/coverLookupActions.js')).href);
+    const vm = require('node:vm');
+    class Image {}
+    let productionSrc = '/cover?path=fixture&v=upgraded';
+    const element = Object.assign(new Image(), {
+      currentSrc: 'blob:http://127.0.0.1:4173/exact-displayed', complete: true, naturalWidth: 480,
+    isConnected: true, getBoundingClientRect: () => ({ width: 240, height: 240 }),
+      getAttribute: () => productionSrc, hasAttribute: () => false,
+    });
+    if (failure === 'network-url') element.currentSrc = 'http://127.0.0.1:4173/cover?path=fixture';
+    if (failure === 'foreign-blob') element.currentSrc = 'blob:https://foreign.invalid/id';
+    const expected = { currentSrc: element.currentSrc, productionSrc, hasVisualState: false };
+    if (failure === 'source-before') element.currentSrc += '-changed';
+    let reads = 0;
+    const observe = vm.runInNewContext(`(${readDisplayedBlobBytes.toString()})`, {
+      HTMLImageElement: Image, URL, location: { origin: 'http://127.0.0.1:4173' }, Uint8Array,
+      fetch: async () => {
+        reads += 1;
+        if (failure === 'read-error') throw new Error('blob read failed');
+        return { ok: true, arrayBuffer: async () => {
+          if (failure === 'source-after') element.currentSrc += '-changed';
+          if (failure === 'revision-after') productionSrc += '-changed';
+          if (failure === 'decode-after') element.complete = false;
+          if (failure === 'detached-after') element.isConnected = false;
+          if (failure === 'hidden-after') element.getBoundingClientRect = () => ({ width: 0, height: 0 });
+          return Uint8Array.from([11, 23]).buffer;
+        } };
+      },
+    });
+    await assert.rejects(observe(element, expected), /blob|changed/i);
+    assert.equal(reads, ['network-url', 'foreign-blob', 'source-before'].includes(failure) ? 0 : 1);
+  });
+}

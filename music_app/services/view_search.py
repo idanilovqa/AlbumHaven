@@ -521,6 +521,7 @@ def build_legacy_search_context(
     direct_match_artists: list[str],
     related_match_artists: list[str],
     search_filters: dict[str, object] | None,
+    artist_name_match_artists: list[str] | None = None,
 ) -> dict[str, object] | None:
     committed_query_text = str(committed_query or "").strip()
     if not committed_query_text:
@@ -558,6 +559,17 @@ def build_legacy_search_context(
         "selected_artist_source": selected_artist_source,
         "direct_match_artists": [str(artist or "").strip() for artist in direct_match_artists if str(artist or "").strip()],
         "related_match_artists": [str(artist or "").strip() for artist in related_match_artists if str(artist or "").strip()],
+        **(
+            {
+                "artist_name_match_artists": [
+                    str(artist or "").strip()
+                    for artist in artist_name_match_artists
+                    if str(artist or "").strip()
+                ]
+            }
+            if artist_name_match_artists is not None
+            else {}
+        ),
     }
 
 
@@ -634,6 +646,8 @@ def artist_search_buckets(all_albums, relation_views, query: str):
     related_albums = []
     direct_artists: set[str] = set()
     related_artists: set[str] = set()
+    direct_album_keys: set[str] = set()
+    artist_name_match_artists: set[str] = set()
 
     if not query:
         return {
@@ -643,6 +657,8 @@ def artist_search_buckets(all_albums, relation_views, query: str):
             "direct_artists_ordered": [],
             "related_artists_ordered": [],
             "matched_artists": set(),
+            "direct_album_keys": direct_album_keys,
+            "artist_name_match_artists": artist_name_match_artists,
         }
 
     query_terms = split_search_terms(query)
@@ -690,14 +706,24 @@ def artist_search_buckets(all_albums, relation_views, query: str):
 
         if is_direct:
             direct_albums.append(album)
+            album_key = str(getattr(album, "key", "") or "").strip()
+            if album_key:
+                direct_album_keys.add(album_key)
             matched_members = [
                 artist for artist in member_artists
                 if artist_alias_matches_query(artist, canonical_to_aliases.get(artist, []), query_terms)
             ]
+            artist_name_match_artists.update(matched_members)
             direct_artists.update(matched_members or member_artists)
             combined_artist = shared_album_display_artist(album, alias_to_canonical)
             if _is_shared_artist_album(album) and combined_artist and not _is_various_album(album):
                 direct_artists.add(combined_artist)
+                if artist_alias_matches_query(
+                    combined_artist,
+                    canonical_to_aliases.get(combined_artist, []),
+                    query_terms,
+                ):
+                    artist_name_match_artists.add(combined_artist)
         elif is_related:
             related_albums.append(album)
             matched_related = [
@@ -725,4 +751,6 @@ def artist_search_buckets(all_albums, relation_views, query: str):
         "direct_artists_ordered": direct_artists_ordered,
         "related_artists_ordered": related_artists_ordered,
         "matched_artists": direct_artists | related_artists,
+        "direct_album_keys": direct_album_keys,
+        "artist_name_match_artists": artist_name_match_artists,
     }

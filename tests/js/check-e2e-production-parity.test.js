@@ -63,12 +63,41 @@ function workflowJobSource(workflow, jobName, nextJobName = null) {
 function workflowStepSource(jobSource, stepName, nextStepName = null) {
   const startMarker = `      - name: ${stepName}`;
   const start = jobSource.indexOf(startMarker);
-  const end = nextStepName === null
-    ? jobSource.length
-    : jobSource.indexOf(`\n      - name: ${nextStepName}`, start);
   assert.notEqual(start, -1, `Missing workflow step ${stepName}`);
-  assert.notEqual(end, -1, `Missing workflow step after ${stepName}: ${nextStepName}`);
+  if (nextStepName !== null) {
+    assert.notEqual(jobSource.indexOf(`\n      - name: ${nextStepName}`, start), -1,
+      `Missing workflow step after ${stepName}: ${nextStepName}`);
+  }
+  // A named later boundary may have new diagnostic steps inserted before it.
+  // Keep assertions scoped to this step, including its own failure policy.
+  const nextStep = jobSource.indexOf('\n      - ', start + startMarker.length);
+  const end = nextStep === -1 ? jobSource.length : nextStep;
   return jobSource.slice(start, end);
+}
+
+for (const newline of ['\n', '\r\n']) {
+  test(`workflow step extraction isolates optional diagnostics (${JSON.stringify(newline)})`, () => {
+    const source = [
+      '      - name: Run Codex',
+      '        uses: ./.tmp/codex-action',
+      '      - name: Encrypt private Codex diagnostics',
+      '        if: always()',
+      '        continue-on-error: true',
+      '        run: encrypt',
+      '      - name: Collect private Codex usage',
+      '        run: collect',
+    ].join(newline);
+    const action = workflowStepSource(source, 'Run Codex', 'Collect private Codex usage');
+    assert.match(action, /uses: \.\/\.tmp\/codex-action/);
+    assert.doesNotMatch(action, /diagnostics|collect|^        (?:if|continue-on-error):/m);
+    for (const policy of ['if: false', 'continue-on-error: true']) {
+      const changed = source.replace('        uses:', `        ${policy}${newline}        uses:`);
+      assert.match(workflowStepSource(changed, 'Run Codex', 'Collect private Codex usage'),
+        /^        (?:if|continue-on-error):/m);
+    }
+    assert.throws(() => workflowStepSource(source, 'Run Codex', 'Missing output guard'),
+      /Missing workflow step after/);
+  });
 }
 
 test('production parity checker module exists', () => {
@@ -96,9 +125,10 @@ contractTest('package and PR gates expose a blocking static production-parity ch
   );
   assert.match(workflow, /^  e2e_production_parity:\r?$/m);
   assert.match(workflow, /run: npm run check:e2e-production-parity/);
-  assert.match(workflow, /needs\.e2e_production_parity\.result == 'success'/);
+  assert.match(workflow, /^\s+- e2e_production_parity\r?$/m);
+  assert.match(workflow, /PRODUCTION_PARITY_RESULT: \$\{\{ needs\.e2e_production_parity\.result \}\}/);
   const functionalJob = workflowJobSource(workflow, 'e2e_functional', 'e2e_performance_ci');
-  const performanceJob = workflowJobSource(workflow, 'e2e_performance_ci', 'pr_agent_review');
+  const performanceJob = workflowJobSource(workflow, 'e2e_performance_ci', 'review_scope');
   for (const job of [functionalJob, performanceJob]) {
     assert.doesNotMatch(job, /if: \$\{\{ false \}\}/);
     assert.match(
@@ -133,8 +163,8 @@ contractTest('portable JavaScript gate forwards the setup-python executable to p
 
 contractTest('hosted review gates fail closed without credentials and run their review actions when configured', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
-  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review');
+  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review_plan');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
   const prAgentCredentialGuard = workflowStepSource(
     prAgentJob,
     'Require OpenAI credential for PR Agent review',
@@ -143,7 +173,7 @@ contractTest('hosted review gates fail closed without credentials and run their 
   const prAgentAction = workflowStepSource(
     prAgentJob,
     'PR Agent action step',
-    'Require PR Agent review output',
+    'Encrypt private PR Agent usage',
   );
   const prAgentOutputGuard = workflowStepSource(prAgentJob, 'Require PR Agent review output');
   const codexCredentialGuard = workflowStepSource(
@@ -151,8 +181,8 @@ contractTest('hosted review gates fail closed without credentials and run their 
     'Require OpenAI credential for Codex review',
     'Checkout',
   );
-  const codexCheckout = workflowStepSource(codexJob, 'Checkout', 'Run Codex');
-  const codexAction = workflowStepSource(codexJob, 'Run Codex', 'Require Codex review output file');
+  const codexCheckout = workflowStepSource(codexJob, 'Checkout', 'Set up Node.js for review coverage');
+  const codexAction = workflowStepSource(codexJob, 'Run Codex', 'Collect private Codex usage');
   const codexOutputGuard = workflowStepSource(
     codexJob,
     'Require Codex review output file',
@@ -175,13 +205,15 @@ contractTest('hosted review gates fail closed without credentials and run their 
   );
   assert.doesNotMatch(prAgentAction, /^        (?:if|continue-on-error):/m);
   assert.match(prAgentAction, /OPENAI_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
-  assert.match(prAgentAction, /github_action_config\.auto_review: "true"/);
+  assert.match(prAgentAction, /github_action_config\.auto_review: "\$\{\{ github\.event\.action != 'synchronize' \}\}"/);
   assert.match(prAgentAction, /github_action_config\.auto_describe: "false"/);
   assert.match(prAgentAction, /github_action_config\.auto_improve: "false"/);
   assert.match(
     prAgentAction,
-    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review", "synchronize"\]'/,
+    /github_action_config\.pr_actions: '\["opened", "reopened", "ready_for_review", "labeled", "unlabeled"\]'/,
   );
+  assert.match(prAgentAction, /github_action_config\.handle_push_trigger: "\$\{\{ github\.event\.action == 'synchronize' \}\}"/);
+  assert.match(prAgentAction, /github_action_config\.push_commands: .*\["\/review -i"\].*\["\/review"\]/);
   assert.match(prAgentAction, /github_action_config\.enable_output: "true"/);
   assert.match(prAgentOutputGuard, /PR_AGENT_REVIEW_OUTPUT: \$\{\{ steps\.pr_agent\.outputs\.review \}\}/);
   assert.match(prAgentOutputGuard, /run: node scripts\/require-pr-agent-review-output\.cjs/);
@@ -193,10 +225,12 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(codexCredentialGuard, /CODEX_OPENAI_API_KEY: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
   assert.match(codexCredentialGuard, /if \[\[ -z "\$\{CODEX_OPENAI_API_KEY:-\}" \]\]; then[\s\S]*?exit 1/);
   assert.doesNotMatch(codexCredentialGuard, /^        continue-on-error:/m);
-  assert.match(codexAction, /- name: Run Codex\r?\n\s+id: run_codex\r?\n\s+uses: openai\/codex-action@v1/);
+  assert.match(codexAction, /- name: Run Codex\r?\n\s+id: run_codex\r?\n\s+uses: \.\/\.tmp\/codex-action/);
   assert.doesNotMatch(codexAction, /^        (?:if|continue-on-error):/m);
   assert.match(codexAction, /openai-api-key: \$\{\{ secrets\.OPENAI_API_KEY \}\}/);
-  assert.match(codexAction, /output-file: codex-output\.md/);
+  assert.match(codexAction, /output-file: \.tmp\/codex-integration\/result\.json/);
+  assert.match(codexJob, /validate-codex-review-batches\.cjs final.*--output codex-output\.md/);
+  assert.match(codexCheckout, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(codexJob, /^      issues: write\r?\n      pull-requests: write$/m);
   assert.match(codexOutputGuard, /run: test -s codex-output\.md/);
   assert.match(codexArtifact, /if: \$\{\{ always\(\) \}\}/);
@@ -206,6 +240,8 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.match(codexArtifact, /if-no-files-found: error/);
   assert.match(codexComment, /uses: actions\/github-script@v7/);
   assert.match(codexComment, /fs\.readFileSync\('codex-output\.md', 'utf8'\)\.trim\(\)/);
+  assert.match(codexComment, /Buffer\.byteLength\(report, 'utf8'\) <= 60000/);
+  assert.match(codexComment, /codex-review-output artifact/);
   assert.match(codexComment, /body,/);
   for (const repositoryControlledStep of [codexCheckout, codexOutputGuard, codexArtifact, codexComment]) {
     assert.doesNotMatch(repositoryControlledStep, /OPENAI_API_KEY|CODEX_OPENAI_API_KEY/);
@@ -214,31 +250,55 @@ contractTest('hosted review gates fail closed without credentials and run their 
   assert.doesNotMatch(workflow, /^  codex_review_comment:/m);
   assert.doesNotMatch(workflow, /needs\.codex_review\.outputs|steps\.run_codex\.outputs/);
   assert.doesNotMatch(codexJob, /[Ss]kip.*(?:credential|key)|if:.*CODEX_OPENAI_API_KEY/);
+
 });
 
-contractTest('hosted review jobs still run after failed E2E guards', () => {
+contractTest('hosted review jobs run after scope and before E2E without test dependencies', () => {
   const workflow = fs.readFileSync(PR_GATES_PATH, 'utf8');
-  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review');
-  const codexJob = workflowJobSource(workflow, 'codex_review');
+  const prAgentJob = workflowJobSource(workflow, 'pr_agent_review', 'codex_review_plan');
+  const codexJob = workflowJobSource(workflow, 'codex_review', 'review_prerequisites');
 
   for (const reviewJob of [prAgentJob, codexJob]) {
     const condition = reviewJob.match(/^    if: .*$/m)?.[0] || '';
-    assert.match(reviewJob, /needs:[\s\S]*?- e2e_functional[\s\S]*?- e2e_performance_ci/);
-    assert.match(condition, /if: \$\{\{ always\(\)/);
-    assert.doesNotMatch(condition, /needs\.e2e_functional\.result/);
-    assert.doesNotMatch(condition, /needs\.e2e_performance_ci\.result/);
+    assert.match(reviewJob, /needs:\s*\r?\n\s+- review_scope/);
+    assert.doesNotMatch(reviewJob, /needs:[\s\S]*?- e2e_/);
+    assert.match(condition, /if: \$\{\{ !cancelled\(\)/);
+    assert.match(condition, /needs\.review_scope\.result == 'success'/);
   }
 });
 
-test('PR Agent review-output guard accepts only a nonempty JSON object', () => {
+test('PR Agent review-output guard accepts the flat clear-finding schema without gating review metadata', () => {
   const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
-
-  assert.deepEqual(parseReviewOutput('{"review":{"key_issues_to_review":[]}}'), {
-    review: { key_issues_to_review: [] },
-  });
-  for (const invalid of [undefined, '', ' ', 'null', '[]', '"review"', '{}', '{broken']) {
-    assert.throws(() => parseReviewOutput(invalid));
+  for (const security of [undefined, 'No', ' none\n', 'FALSE', false]) {
+    const review = {
+      key_issues_to_review: [], security_concerns: security,
+      'estimated_effort_to_review_[1-5]': 5, score: 20, relevant_tests: 'No',
+    };
+    const raw = JSON.stringify(review);
+    assert.deepEqual(parseReviewOutput(raw), JSON.parse(raw));
   }
+});
+
+test('PR Agent review-output guard rejects actionable key issues and security concerns', () => {
+  const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
+  const finding = { relevant_file: 'music_app/routes/auth_asgi.py', issue_header: 'Cookie Invalidation',
+    issue_content: 'An invalid link clears an existing transaction.', start_line: 645, end_line: 655 };
+  for (const review of [
+    { key_issues_to_review: [finding], security_concerns: 'No', score: 100 },
+    { key_issues_to_review: [], security_concerns: 'Cross-site state invalidation: an active flow can be cancelled.' },
+    { key_issues_to_review: [], security_concerns: 'No exposed secrets, but SQL injection remains.' },
+  ]) assert.throws(() => parseReviewOutput(JSON.stringify(review)), /issues|security/i);
+});
+
+test('PR Agent review-output guard rejects missing findings and malformed or unknown schemas', () => {
+  const { parseReviewOutput } = require(PR_AGENT_OUTPUT_GUARD_PATH);
+  for (const invalid of [undefined, '', ' ', 'null', '[]', '"review"', '{}', '{broken',
+    JSON.stringify({ review: { key_issues_to_review: [] } }),
+    JSON.stringify({ 'estimated_effort_to_review_[1-5]': 2 }),
+    ...[null, false, 'No', {}, 0].map(value => JSON.stringify({ key_issues_to_review: value })),
+    ...[null, '', true, 0, [], {}].map(value => JSON.stringify({ key_issues_to_review: [], security_concerns: value })),
+    JSON.stringify({ key_issues_to_review: [], security_findings: ['unrecognized finding schema'] }),
+  ]) assert.throws(() => parseReviewOutput(invalid));
 });
 
 test('PR Agent review-output guard CLI fails closed for missing output', () => {
@@ -255,9 +315,15 @@ test('PR Agent review-output guard CLI fails closed for missing output', () => {
   const valid = childProcess.spawnSync(process.execPath, [PR_AGENT_OUTPUT_GUARD_PATH], {
     cwd: path.dirname(PR_AGENT_OUTPUT_GUARD_PATH),
     encoding: 'utf8',
-    env: { ...process.env, PR_AGENT_REVIEW_OUTPUT: '{"review":{"estimated_effort_to_review_[1-5]":2}}' },
+    env: { ...process.env, PR_AGENT_REVIEW_OUTPUT: '{"key_issues_to_review":[],"security_concerns":"No","estimated_effort_to_review_[1-5]":2}' },
   });
   assert.equal(valid.status, 0, valid.stderr);
+  const findings = childProcess.spawnSync(process.execPath, [PR_AGENT_OUTPUT_GUARD_PATH], {
+    encoding: 'utf8', env: { ...process.env,
+      PR_AGENT_REVIEW_OUTPUT: '{"key_issues_to_review":[{"issue_content":"Must block downstream tests"}],"security_concerns":"No"}' },
+  });
+  assert.equal(findings.status, 1);
+  assert.match(findings.stderr, /::error::PR Agent.*issues/i);
 });
 
 contractTest('allows isolated pre-start setup, generated media, and annotated read-only measurement', () => {

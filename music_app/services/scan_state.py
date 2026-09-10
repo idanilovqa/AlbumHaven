@@ -181,6 +181,7 @@ def refresh_library_state(
     queue_problematic_albums_prewarm: Callable[[], None] | None = None,
     queue_utility_rules_prewarm: Callable[[], None] | None = None,
     queue_mbid_assertion_follow_up: Callable[..., object] | None = None,
+    recover_library_watch_health: Callable[..., int] | None = None,
 ) -> None:
     cfg = config
     log_app_event(cfg, logger, "Library indexing started", level="info", force=force)
@@ -199,6 +200,10 @@ def refresh_library_state(
 
     scan_separate_release_keys = load_separate_release_keys(cfg)
     with cache_lock:
+        requested_scan_mode = str(
+            library_state.get("scan_mode") or "background"
+        )
+        scan_started_at = time.time()
         library_state["scan_generation"] = int(library_state.get("scan_generation") or 0) + 1
         scan_generation = int(library_state.get("scan_generation") or 0)
         library_state["last_error"] = None
@@ -227,7 +232,8 @@ def refresh_library_state(
             should_refresh_relations = False
             skip_scan = False
             library_state["scan_in_progress"] = True
-            library_state["scan_started_at"] = time.time()
+            scan_started_at = time.time()
+            library_state["scan_started_at"] = scan_started_at
             ignore_existing_cache = bool(library_state.pop("rescan_ignore_existing_cache", False))
 
     if skip_scan:
@@ -247,6 +253,16 @@ def refresh_library_state(
     expected_cover_mutation_revision = (
         int(load_cover_mutation_revision())
         if callable(load_cover_mutation_revision)
+        else None
+    )
+    load_inventory_mutation_revision = getattr(
+        scan_cache_adapter,
+        "load_inventory_mutation_revision",
+        None,
+    )
+    expected_inventory_mutation_revision = (
+        int(load_inventory_mutation_revision())
+        if callable(load_inventory_mutation_revision)
         else None
     )
     relations_refreshed_from_disk = False
@@ -406,6 +422,10 @@ def refresh_library_state(
             relation_refresh_options["expected_cover_mutation_revision"] = (
                 expected_cover_mutation_revision
             )
+        if expected_inventory_mutation_revision is not None:
+            relation_refresh_options["expected_inventory_mutation_revision"] = (
+                expected_inventory_mutation_revision
+            )
         refresh_relation_views(**relation_refresh_options)
         with cache_lock:
             generation_is_current = (
@@ -477,6 +497,27 @@ def refresh_library_state(
                 library_state.pop("scan_committed_generation", None)
 
     if scan_completed_successfully and int(library_state.get("scan_generation") or 0) == scan_generation:
+        if (
+            requested_scan_mode == "manual_full_rescan"
+            and recover_library_watch_health is not None
+        ):
+            observed_root_ids = publication_state.get(
+                "observed_library_root_ids"
+            )
+            try:
+                recover_library_watch_health(
+                    scan_mode=requested_scan_mode,
+                    scan_started_at=scan_started_at,
+                    observed_root_ids=(
+                        observed_root_ids
+                        if isinstance(observed_root_ids, (set, list, tuple))
+                        else ()
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Unable to clear recovered library watcher health."
+                )
         finalize_post_scan_actions(
             library_state,
             config=cfg,

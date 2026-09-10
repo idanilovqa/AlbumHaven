@@ -1,7 +1,45 @@
-export async function warmFunctionalBrowser({ browser, baseURL, viewport }) {
+import { readStartupRelationProjectionReadiness } from '../tests/e2e/helpers/startupRelationProjectionReadiness.js';
+
+export async function readAuthenticatedStartupRelationProjectionReadiness({
+  browser,
+  baseURL,
+  viewport,
+  storageState,
+}) {
   const context = await browser.newContext({
     baseURL,
     viewport: viewport || { width: 1440, height: 960 },
+    storageState,
+  });
+  try {
+    const page = await context.newPage();
+    return await readStartupRelationProjectionReadiness({
+      baseURL,
+      async fetchFn(url, options) {
+        if (options?.method !== 'GET') {
+          throw new Error('Startup readiness browser probe only supports GET.');
+        }
+        const response = await page.goto(url.toString(), { waitUntil: 'commit' });
+        if (!response) {
+          throw new Error('Startup readiness browser probe received no response.');
+        }
+        return {
+          ok: response.ok(),
+          status: response.status(),
+          json: () => response.json(),
+        };
+      },
+    });
+  } finally {
+    await context.close();
+  }
+}
+
+export async function warmFunctionalBrowser({ browser, baseURL, viewport, storageState }) {
+  const context = await browser.newContext({
+    baseURL,
+    viewport: viewport || { width: 1440, height: 960 },
+    storageState,
   });
   try {
     const page = await context.newPage();

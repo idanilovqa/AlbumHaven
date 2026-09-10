@@ -43,6 +43,10 @@ function renderTrackModalLoadingState(album) {
       <div class="cover-placeholder">Loading cover art...</div>
     </div>
   `;
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
+  }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
     els.duplicateWarning.innerHTML = '';
@@ -73,6 +77,10 @@ function clearTrackModalRenderedState() {
   }
   if (els.cover) {
     els.cover.innerHTML = '';
+  }
+  if (els.missingWarning) {
+    els.missingWarning.hidden = true;
+    els.missingWarning.innerHTML = '';
   }
   if (els.duplicateWarning) {
     els.duplicateWarning.hidden = true;
@@ -203,7 +211,13 @@ function cacheHydratedTrackModalAlbum(albumKey, album, options = {}) {
   trackModalHydratedAlbumDetailsLru.delete(resolvedAlbum);
   trackModalHydratedAlbumDetailsLru.set(
     resolvedAlbum,
-    { aliases, previewAlbumsByAlias, trustedAliases },
+    {
+      aliases,
+      previewAlbumsByAlias,
+      trustedAliases,
+      inventoryMutationRevision: Number(state?.status?.inventory_mutation_revision || 0),
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    },
   );
   while (trackModalHydratedAlbumDetailsLru.size > TRACK_MODAL_HYDRATED_ALBUM_DETAILS_LIMIT) {
     const oldestAlbum = trackModalHydratedAlbumDetailsLru.keys().next().value;
@@ -257,6 +271,17 @@ function invalidateHydratedTrackModalAlbumDetails(albums) {
   return invalidatedAlbums.size;
 }
 
+function invalidateAllHydratedTrackModalAlbumDetails() {
+  const cachedAlbums = Array.from(trackModalHydratedAlbumDetailsLru.keys()).filter((album) => {
+    const claim = trackModalHydratedAlbumDetailsLru.get(album)?.tagEditMutationClaim;
+    return !(claim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(claim));
+  });
+  if (!cachedAlbums.length) return 0;
+  return invalidateHydratedTrackModalAlbumDetails(cachedAlbums);
+}
+
 function getTrackModalAlbumKeyAliases(albumKey, album = null) {
   const normalizedAlbumKey = String(albumKey || '').trim();
   const indexedAlbum = album || getIndexedAlbum(normalizedAlbumKey);
@@ -305,6 +330,20 @@ function getCachedHydratedTrackModalAlbum(albumKey) {
   if (cachedAlbum && !albumRequiresHydration(cachedAlbum)) {
     const indexedAlbum = getIndexedAlbum(normalizedAlbumKey);
     const cachedEntry = trackModalHydratedAlbumDetailsLru.get(cachedAlbum);
+    const cachedInventoryRevision = Number(cachedEntry?.inventoryMutationRevision || 0);
+    const currentInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
+    const pendingMutationOwnsCachedMembership = Boolean(
+      cachedEntry?.tagEditMutationClaim
+      && typeof tagEditViewMutationStillOwnsResources === 'function'
+      && tagEditViewMutationStillOwnsResources(cachedEntry.tagEditMutationClaim)
+    );
+    if (
+      cachedInventoryRevision !== currentInventoryRevision
+      && !pendingMutationOwnsCachedMembership
+    ) {
+      invalidateHydratedTrackModalAlbumDetails([cachedAlbum]);
+      return null;
+    }
     const trustedAlias = cachedEntry?.trustedAliases?.has(normalizedAlbumKey);
     if (
       indexedAlbum
@@ -386,9 +425,30 @@ function loadTrackModalAlbumDetails(albumKey, options = {}) {
     trackModalSpeculativePrewarmControllers.delete(speculativeController);
     return existingLoad;
   }
+  const requestInventoryRevision = Number(state?.status?.inventory_mutation_revision || 0);
   let load = null;
   load = fetchTrackModalAlbumDetails(normalizedAlbumKey, options)
     .then((album) => {
+      const currentAlbum = getCachedHydratedTrackModalAlbum(normalizedAlbumKey);
+      const currentClaim = trackModalHydratedAlbumDetailsLru.get(currentAlbum)?.tagEditMutationClaim;
+      if (currentClaim && typeof tagEditViewMutationStillOwnsResources === 'function'
+          && tagEditViewMutationStillOwnsResources(currentClaim)) {
+        // A response started before an edit cannot replace its pending membership,
+        // even before that edit advances the inventory revision.
+        return currentAlbum;
+      }
+      if (requestInventoryRevision !== Number(state?.status?.inventory_mutation_revision || 0)) {
+        // Release only this request's aliases before joining or starting a load
+        // under the current revision. Foreground callers never receive stale data.
+        trackModalAlbumDetailsLoads.forEach((mappedLoad, alias) => {
+          if (mappedLoad === load) trackModalAlbumDetailsLoads.delete(alias);
+        });
+        const promotedToForeground = options.speculative === true
+          && options.controller
+          && !trackModalSpeculativeAlbumDetailsLoadControllers.has(load);
+        return loadTrackModalAlbumDetails(normalizedAlbumKey,
+          promotedToForeground ? { ...options, speculative: false } : options);
+      }
       cacheHydratedTrackModalAlbum(normalizedAlbumKey, album);
       getTrackModalAlbumKeyAliases(normalizedAlbumKey, album).forEach((alias) => {
         trackModalAlbumDetailsLoads.set(alias, load);
@@ -531,10 +591,29 @@ function getTrackModalButtonAlbumVersionKey(button) {
     || '';
 }
 
+function parseTrackModalButtonAlbumFallback(button) {
+  if (!(button instanceof HTMLElement)) return null;
+  try {
+    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
+    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function findIndexedTrackModalLogicalRelease(album) {
+  if (!album || !(state?.gallery?.albumIndex instanceof Map)) return null;
+  const matches = Array.from(new Set(state.gallery.albumIndex.values())).filter(
+    (candidate) => trackModalAlbumsShareLogicalRelease(candidate, album),
+  );
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function resolveTrackModalActionAlbum(button) {
   const albumKey = String(getTrackModalButtonAlbumKey(button) || '').trim();
   const albumVersionKey = String(getTrackModalButtonAlbumVersionKey(button) || '').trim();
   const currentAlbum = getCurrentTrackModalAlbum();
+  const fallbackAlbum = parseTrackModalButtonAlbumFallback(button);
   if (albumVersionKey) {
     const currentAlbumVersionKey = getTrackModalAlbumVersionKey(currentAlbum);
     if (currentAlbum && !albumRequiresHydration(currentAlbum) && currentAlbumVersionKey === albumVersionKey) {
@@ -561,13 +640,7 @@ function resolveTrackModalActionAlbum(button) {
     }
   }
   if (currentAlbum) return currentAlbum;
-  if (!(button instanceof HTMLElement)) return null;
-  try {
-    const parsedAlbum = JSON.parse(button.getAttribute('data-album') || 'null');
-    return parsedAlbum && typeof parsedAlbum === 'object' ? parsedAlbum : null;
-  } catch (_error) {
-    return null;
-  }
+  return findIndexedTrackModalLogicalRelease(fallbackAlbum) || fallbackAlbum;
 }
 
 function resolveTrackModalDuplicateSourceAlbum(button) {

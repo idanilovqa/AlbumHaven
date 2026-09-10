@@ -50,6 +50,12 @@ function buildStatusIndicatorTitleParts(data = {}) {
       parts.push(`Current album folder: ${data.covers_current_folder}`);
     }
   }
+  const watcherProblems = Array.isArray(data?.watcher_health?.problems)
+    ? data.watcher_health.problems
+    : [];
+  if (data?.watcher_health?.state === 'warning' || watcherProblems.length) {
+    parts.push('Some library changes may have been missed.');
+  }
   if (!parts.length) {
     parts.push('Library ready');
   }
@@ -60,6 +66,14 @@ function buildStatusIndicatorTitleParts(data = {}) {
     parts.push(`Last scan: ${data.last_scan_display}`);
   }
   return parts;
+}
+
+function resolveStatusIndicatorTone(data = {}) {
+  if (data?.watcher_health?.state === 'warning') return 'warning';
+  if (data.scan_in_progress || data.relations_in_progress || data.covers_in_progress) {
+    return 'busy';
+  }
+  return 'done';
 }
 
 function buildStatusIndicatorTitleText(data = {}) {
@@ -243,8 +257,11 @@ function updateStatusIndicator(data) {
   const relBusy = Boolean(normalizedStatus.relations_in_progress);
   const coverBusy = Boolean(normalizedStatus.covers_in_progress);
   const busy = scanBusy || relBusy || coverBusy;
-  indicator.classList.remove('is-idle', 'is-busy', 'is-done');
+  indicator.classList.remove('is-idle', 'is-busy', 'is-done', 'is-warning');
   indicator.classList.add(busy ? 'is-busy' : 'is-done');
+  if (resolveStatusIndicatorTone(normalizedStatus) === 'warning') {
+    indicator.classList.add('is-warning');
+  }
 
   indicator.title = resolveStatusIndicatorTitleText(indicator, normalizedStatus);
   if (progressEl) {

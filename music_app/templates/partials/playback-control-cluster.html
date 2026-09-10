@@ -1,0 +1,24 @@
+{% macro playback_control_cluster(variant, owner_id='') -%}
+{% if variant == 'expanded-player' %}
+<span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="{{ variant }}">
+  <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
+  <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="{{ owner_id }}" data-loop-action-owner="{{ owner_id }}"></span>
+</span>
+{% elif variant == 'compact-player' %}
+<div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="{{ variant }}">
+  <button class="compact-player-skip" type="button" data-playback-control-action="previous" data-compact-player-previous aria-label="Previous track">
+    <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M18 6l-6 6 6 6"></path>
+      <path d="M11 6l-6 6 6 6"></path>
+    </svg>
+  </button>
+  <button class="compact-player-play" type="button" data-playback-control-action="play-pause" data-compact-player-play aria-label="Play">▶</button>
+  <button class="compact-player-skip" type="button" data-playback-control-action="next" data-compact-player-next aria-label="Next track">
+    <svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path class="compact-player-skip-arrow is-inner" d="M6 6l6 6-6 6"></path>
+      <path d="M13 6l6 6-6 6"></path>
+    </svg>
+  </button>
+</div>
+{% endif %}
+{%- endmacro %}

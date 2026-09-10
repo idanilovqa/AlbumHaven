@@ -16,8 +16,8 @@ const runnerModule = require('../../scripts/run-performance-playwright.cjs');
 const validator = require('../../scripts/ci/validate-performance-matrix.cjs');
 const { EXPECTED } = require('../../scripts/ci/write-foundation-version-manifest.cjs');
 
-const FIXTURE_RELEASE = 'fixtures-v1.0.19';
-const FIXTURE_MANIFEST_SHA256 = 'cb9ed982ec5afd191e77c99f90cc42ecaec228086d9147df4fdd6b1b621b8d51';
+const FIXTURE_RELEASE = 'fixtures-v1.0.22';
+const FIXTURE_MANIFEST_SHA256 = 'f9f357744464acec5b6bfa2f3b7dc69476d1c6df497ab3318399756cd5b9aa75';
 const EXPECTED_SHARDS = [
   { shard: 'synthetic-large-library', fixtureProfile: 'synthetic-large-library', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4173', targets: 'idle-memory,all-artists,artist-family,search-all-artists,utility-rules,selected-artist,search-browse,root-album-browse,app-open-all-artists,rules-focused' },
   { shard: 'utility-problematic-files', fixtureProfile: 'utility-problematic-files', fixtureMode: 'preloaded-release', harness: 'managed-app', basePort: '4253', targets: 'utility-problematic-files,problematic-files-focused' },
@@ -27,7 +27,7 @@ const EXPECTED_SHARDS = [
 
 function performanceJobSource(source = workflow) {
   const start = source.indexOf('  e2e_performance_ci:');
-  const end = source.indexOf('\n  pr_agent_review:', start);
+  const end = source.indexOf('\n  review_scope:', start);
   assert.notEqual(start, -1, 'pr-gates.yml must define e2e_performance_ci');
   assert.notEqual(end, -1, 'e2e_performance_ci must remain independently bounded');
   return source.slice(start, end);
@@ -58,7 +58,7 @@ test('performance validator and shard runner exist', () => {
   assert.equal(fs.existsSync(shardRunnerPath), true, 'Missing scripts/ci/run-performance-shard.ps1');
 });
 
-test('workflow has four literal fixture-profile runners owning all 19 targets once', () => {
+test('workflow has four selectable fixture-profile runners owning all 19 targets once', () => {
   const job = performanceJobSource();
   const rows = validator.parseStaticPerformanceMatrix(workflow);
   assert.deepEqual(rows, EXPECTED_SHARDS);
@@ -66,7 +66,10 @@ test('workflow has four literal fixture-profile runners owning all 19 targets on
   assert.equal(owned.length, 19);
   assert.equal(new Set(owned).size, 19);
   assert.deepEqual(new Set(owned), new Set(contract.targets.map((target) => target.name)));
-  assert.doesNotMatch(job, /matrix:\s*\$\{\{/i);
+  assert.match(job, /shard:\s*\$\{\{\s*fromJSON\(needs\.review_scope\.outputs\.performance_shards_json\)\s*\}\}/);
+  assert.match(job, /resolve-ci-shard\.cjs performance \$\{\{\s*matrix\.shard\s*\}\}/);
+  assert.match(job, /FOCUSED_PERFORMANCE_TARGETS_JSON:\s*\$\{\{\s*needs\.review_scope\.outputs\.focused_performance_targets_json\s*\}\}/);
+  assert.match(job, /FOCUSED_STAGE:\s*\$\{\{\s*needs\.review_scope\.outputs\.focused_stage\s*\}\}/);
   assert.match(job, /fail-fast:\s*false/);
   assert.match(job, /max-parallel:\s*4/);
   assert.deepEqual(
@@ -77,34 +80,20 @@ test('workflow has four literal fixture-profile runners owning all 19 targets on
   assert.doesNotMatch(job, /timeout-minutes:/, 'a multi-target shard must not squeeze later targets into a shared wall-clock budget');
 });
 
-test('validator accepts shards and rejects ownership, compatibility, and case drift', () => {
+test('validator accepts selectable shards and rejects routing and case drift', () => {
   assert.deepEqual(validator.validateWorkflowContract(workflow, contract, runnerModule, testDataMatrix), []);
 
-  const duplicate = workflow.replace(
-    'targets: utility-problematic-files,problematic-files-focused',
-    'targets: utility-problematic-files,idle-memory',
+  const missingResolver = workflow.replace(
+    'resolve-ci-shard.cjs performance',
+    'resolve-ci-shard.cjs disabled',
   );
-  assert.match(validator.validateWorkflowContract(duplicate, contract, runnerModule, testDataMatrix).join('\n'), /owned exactly once|disagree/i);
+  assert.match(validator.validateWorkflowContract(missingResolver, contract, runnerModule, testDataMatrix).join('\n'), /resolve.*checked-in registry/i);
 
-  const workflowLineEndingVariants = [
-    workflow.replace(/\r?\n/g, '\n'),
-    workflow.replace(/\r?\n/g, '\r\n'),
-  ];
-  for (const workflowSource of workflowLineEndingVariants) {
-    const mixedProfile = workflowSource.replace(
-      /(shard: playback-media\r?\n\s+fixtureProfile:) playback-media/,
-      '$1 synthetic-large-library',
-    );
-    assert.notEqual(mixedProfile, workflowSource, 'fixture compatibility mutation must apply on LF and CRLF checkouts');
-    assert.match(validator.validateWorkflowContract(mixedProfile, contract, runnerModule, testDataMatrix).join('\n'), /fixture|compatible/i);
-
-    const mixedHarness = workflowSource.replace(
-      /(shard: utility-problematic-files\r?\n(?:\s+[^\r\n]+\r?\n){2}\s+harness:)\s+[^\r\n]+/,
-      '$1 scan',
-    );
-    assert.notEqual(mixedHarness, workflowSource, 'harness-family mutation must apply on LF and CRLF checkouts');
-    assert.match(validator.validateWorkflowContract(mixedHarness, contract, runnerModule, testDataMatrix).join('\n'), /harness|compatible/i);
-  }
+  const unclassifiedMatrix = workflow.replace(
+    '${{ fromJSON(needs.review_scope.outputs.performance_shards_json) }}',
+    '[synthetic-large-library]',
+  );
+  assert.match(validator.validateWorkflowContract(unclassifiedMatrix, contract, runnerModule, testDataMatrix).join('\n'), /classified checked-in shard names/i);
 
   const missingCaseContract = structuredClone(contract);
   missingCaseContract.targets[0].cases.pop();
@@ -127,7 +116,7 @@ test('validator compares real Playwright discovery with all approved identities'
   assert.match(validator.validateDiscoveredCases(contract, discovered.slice(1)).join('\n'), /undiscovered owned performance case/);
 });
 
-test('profile runners remain PR-only same-repository Windows Chrome jobs capped at four', () => {
+test('profile runners remain same-repository PR-context Windows Chrome jobs capped at four', () => {
   const job = performanceJobSource();
   assert.match(workflow, /^on:\r?\n\s+pull_request:/m);
   assert.doesNotMatch(workflow, /^\s{2}(?:push|schedule|workflow_dispatch|pull_request_target):/m);
@@ -137,8 +126,8 @@ test('profile runners remain PR-only same-repository Windows Chrome jobs capped 
   assert.doesNotMatch(job, /continue-on-error:/);
   assert.match(job, /-Browser\s+chrome/);
   assert.match(job, /run-performance-shard\.ps1/);
-  assert.match(job, /-Targets\s+["']?\$\{\{\s*matrix\.targets\s*\}\}/);
-  assert.match(job, /-BasePort\s+["']?\$\{\{\s*matrix\.basePort\s*\}\}/);
+  assert.match(job, /-Targets\s+["']?\$\{\{\s*steps\.shard\.outputs\.targets\s*\}\}/);
+  assert.match(job, /-BasePort\s+["']?\$\{\{\s*steps\.shard\.outputs\.base_port\s*\}\}/);
 });
 
 test('performance foundations are written only after shared shard PostgreSQL provisioning', () => {
@@ -182,24 +171,28 @@ test('Windows jobs and foundation manifests provision one exact cross-platform C
   }
 });
 
-test('each shard fetches an immutable profile once before pull-request executable code', () => {
+test('each shard fetches an immutable profile or cover seed before pull-request executable code', () => {
   const job = performanceJobSource();
   const trustedCheckout = stepContaining(job, 'github.event.pull_request.base.sha');
   const fixtureFetch = stepContaining(job, 'fetch-test-fixtures.ps1');
-  for (const step of [trustedCheckout, fixtureFetch]) {
-    assert.match(step, /matrix\.fixtureMode\s*==\s*['"]preloaded-release['"]/);
-  }
+  assert.doesNotMatch(trustedCheckout, /\n\s+if:/);
+  assert.doesNotMatch(fixtureFetch, /\n\s+if:/);
   assert.match(trustedCheckout, /persist-credentials:\s*false/);
+  assert.match(fixtureFetch, /-Profile\s+\$\{\{\s*matrix\.shard\s*==\s*'utility-problematic-files'\s*&&\s*'utility-problematic-files'\s*\|\|\s*'synthetic-large-library'\s*\}\}/);
   assert.match(fixtureFetch, new RegExp(`-Release\\s+${FIXTURE_RELEASE.replaceAll('.', '\\.')}`));
   assert.match(fixtureFetch, new RegExp(`-ManifestSha256\\s+${FIXTURE_MANIFEST_SHA256}`));
-  assert.ok(job.indexOf('Fetch preloaded performance fixture') < job.indexOf('Install Node dependencies'));
-  assert.ok(job.indexOf('Fetch preloaded performance fixture') < job.indexOf('Validate performance matrix ownership'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Install Node dependencies'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Resolve performance shard configuration'));
+  assert.ok(job.indexOf('Fetch immutable performance fixture') < job.indexOf('Validate performance matrix ownership'));
+  assert.match(job, /ALBUM_HAVEN_APPROVED_COVER_ROOT=\$approvedCoverRoot/);
+  assert.match(job, /ALBUM_HAVEN_FIXTURE_ROOT= /);
+  assert.match(job, /ALBUM_HAVEN_MEDIA_ROOT= /);
 });
 
 test('each target retains individual result, diagnostics, and foundation artifacts', () => {
   const job = performanceJobSource();
   for (let slot = 1; slot <= 10; slot += 1) {
-    const expression = `\${{ matrix.target${slot} }}`;
+    const expression = `\${{ steps.shard.outputs.target${slot} }}`;
     const result = stepContaining(job, `performance-result-${expression}`);
     const foundation = stepContaining(job, `foundation-versions-performance-${expression}`);
     const diagnostics = stepContaining(job, `performance-diagnostics-${expression}`);
@@ -215,7 +208,7 @@ test('each target retains individual result, diagnostics, and foundation artifac
 
 test('functional shards and all-19 authenticated target artifacts remain present without report jobs', () => {
   assert.match(workflow, /^\s{2}e2e_functional:/m);
-  assert.match(workflow, /validate-functional-shards\.cjs --run-shard=\$\{\{\s*matrix\.shard\s*\}\}/);
-  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*matrix\.target10\s*\}\}/);
+  assert.match(workflow, /validate-functional-shards\.cjs @arguments/);
+  assert.match(workflow, /name:\s*performance-result-\$\{\{\s*steps\.shard\.outputs\.target10\s*\}\}/);
   assert.doesNotMatch(workflow, /^  (?:merge_cloud_reports|deploy_cloud_reports):/m);
 });

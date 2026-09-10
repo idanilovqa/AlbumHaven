@@ -21,8 +21,13 @@ const EXPECTED_FIXTURE_FILENAMES = Array.from(
 );
 const ARTIST_VIEW_URL = `/?surface=albums&artist=${encodeURIComponent(FIXTURE_ARTIST)}`;
 const albumDetailsTitle = (albumName, year = FIXTURE_YEAR) => (
-  `${FIXTURE_ARTIST} - ${albumName} - ${year}`
+  `${FIXTURE_ARTIST} • ${albumName} • ${year}`
 );
+const coverResourceIdentity = (source) => {
+  const url = new URL(String(source || ''));
+  url.searchParams.delete('v');
+  return url.href;
+};
 const SPLIT_ORIGINAL_ALBUM = 'Selected Track Split Fixture';
 const SPLIT_RENAMED_ALBUM = 'Selected Track Split Fixture 2';
 const SPLIT_SECOND_RENAMED_ALBUM = 'Selected Track Split Result B';
@@ -36,7 +41,7 @@ const EXPECTED_SPLIT_TRACK_TITLES = Array.from(
   (_, index) => `Split Track ${index + 1}`,
 );
 
-test('FTC-TAGS-008 completes an album rename before reporting the save task complete', async ({
+test('FTC-TAGS-008 completes an album rename before reporting the save task complete', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -219,7 +224,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
   });
 });
 
-test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', async ({
+test('FTC-TAGS-008 returns one terminal saved response after optimistic rename persistence', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   stepLogger,
@@ -327,7 +332,7 @@ test('FTC-TAGS-008 returns one terminal saved response after optimistic rename p
   }
 });
 
-test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', async ({
+test('FTC-TAGS-008 keeps an accepted terminal failure readable without false success', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   page,
   settingsModalAppBarActions,
@@ -403,7 +408,7 @@ test('FTC-TAGS-008 keeps an accepted terminal failure readable without false suc
   });
 });
 
-test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', async ({
+test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplicate cards', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -517,9 +522,9 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_RENAMED_ALBUM,
     );
-    expect(sourceCover.productionSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(sourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     destinationCoverSrc = destinationCover.productionSrc;
-    expect(destinationCoverSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(destinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
 
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
@@ -663,10 +668,10 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_SECOND_RENAMED_ALBUM,
     );
-    expect(sourceCover.productionSrc).toBe(originalCoverSrc);
-    expect(destinationCover.productionSrc).toBe(destinationCoverSrc);
+    expect(coverResourceIdentity(sourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
+    expect(coverResourceIdentity(destinationCover.productionSrc)).toBe(coverResourceIdentity(destinationCoverSrc));
     secondDestinationCoverSrc = secondDestinationCover.productionSrc;
-    expect(secondDestinationCoverSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(secondDestinationCoverSrc)).toBe(coverResourceIdentity(originalCoverSrc));
 
     await galleryActions.selectAlbumDetailsByIdentity({
       artist: FIXTURE_ARTIST,
@@ -734,12 +739,12 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       year: FIXTURE_YEAR,
     })).toBe(1);
     expect(mergeBackMultiplicity.finalCount).toBe(1);
-    expect((
+    expect(coverResourceIdentity((
       await galleryActions.waitForAlbumCoverReadyUnderHeading(
         FIXTURE_ARTIST,
         SPLIT_ORIGINAL_ALBUM,
       )
-    ).productionSrc).toBe(originalCoverSrc);
+    ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
   });
 
@@ -788,12 +793,12 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       year: FIXTURE_YEAR,
     })).toBe(0);
     expect(mergeBackMultiplicity.finalCount).toBe(1);
-    expect((
+    expect(coverResourceIdentity((
       await galleryActions.waitForAlbumCoverReadyUnderHeading(
         FIXTURE_ARTIST,
         SPLIT_ORIGINAL_ALBUM,
       )
-    ).productionSrc).toBe(originalCoverSrc);
+    ).productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await galleryActions.waitForAlbumHidden(SPLIT_SECOND_RENAMED_ALBUM);
 
     const physicalTags = await readGeneratedMp3AlbumTags({
@@ -818,7 +823,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
       FIXTURE_ARTIST,
       SPLIT_ORIGINAL_ALBUM,
     );
-    expect(freshSourceCover.productionSrc).toBe(originalCoverSrc);
+    expect(coverResourceIdentity(freshSourceCover.productionSrc)).toBe(coverResourceIdentity(originalCoverSrc));
     await freshSession.galleryActions.waitForAlbumHidden(SPLIT_RENAMED_ALBUM);
     await freshSession.galleryActions.waitForAlbumHidden(SPLIT_SECOND_RENAMED_ALBUM);
     await freshSession.galleryActions.selectAlbumDetailsByIdentity({
@@ -836,7 +841,7 @@ test('FTC-TAGS-009 restores tracks from distinct temporary albums without duplic
   });
 });
 
-test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', async ({
+test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through five selected-track moves and restores', { tag: '@area:problematic-files' }, async ({
   freshBrowserSession,
   galleryActions,
   page,
@@ -1366,7 +1371,7 @@ test('FTC-TAGS-015 / FTC-UTIL-PROBLEMS-012 keeps one stable destination through 
       NAVIGATION_FIXTURE_ALBUM,
     );
     await galleryActions.clickAlbumDetailsByAlbumName(NAVIGATION_FIXTURE_ALBUM);
-    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForInteractiveSummary();
     await trackModalActions.expectProblemLinkVisibleForTrack(NAVIGATION_FIXTURE_TRACK);
     const problematicTrackPath = await trackModalActions.readTrackPathByTitle(
       NAVIGATION_FIXTURE_TRACK,

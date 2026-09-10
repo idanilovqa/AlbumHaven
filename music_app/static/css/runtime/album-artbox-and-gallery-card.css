@@ -1,0 +1,48 @@
+.album-card__artbox-trigger {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+.album-artbox {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  place-items: center;
+  border-radius: inherit;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 82%, var(--appearance-player-accent, #55c7ff) 18%), var(--panel));
+}
+.album-artbox > img,
+.album-artbox > .cover-placeholder,
+.album-artbox > .album-artbox__placeholder,
+.album-artbox > .track-modal-cover-button { width: 100%; height: 100%; }
+.album-artbox > img { display: block; object-fit: cover; }
+.album-artbox__placeholder { display: grid; place-items: center; color: var(--muted); }
+.album-artbox--empty,
+.album-artbox--missing { color: color-mix(in srgb, var(--muted) 80%, transparent); }
+.album-artbox__missing-mark { display: grid; place-items: center; width: 40%; max-width: 144px; aspect-ratio: 1; }
+.album-artbox__missing-mark svg { width: 100%; height: 100%; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 12px color-mix(in srgb, currentColor 16%, transparent)); }
+.album-artbox__missing-disc { stroke-width: 2.4; }
+.album-artbox__missing-groove { stroke-width: 1; opacity: 0.28; }
+.album-artbox__missing-label { stroke-width: 1.5; opacity: 0.62; }
+.album-artbox__missing-hub { fill: currentColor; stroke: none; }
+.album-artbox__missing-slash { stroke-width: 3.8; }
+.album-artbox__action {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  width: calc(100% - 20px);
+  pointer-events: none;
+}
+.album-artbox__action .small-alert { max-width: 100%; pointer-events: auto; }

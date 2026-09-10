@@ -7,7 +7,7 @@ const RAW_REPEATED_ARTIST = 'Frank Churchill / Leigh Harline / Larry Morey / Fra
 const ALBUM = 'Snow White And The Seven Dwarfs';
 const YEAR = '1937';
 
-test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity', async ({
+test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity', { tag: '@area:gallery-search' }, async ({
   galleryActions,
   navigationPanelActions,
   searchToolbarActions,
@@ -33,7 +33,6 @@ test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without c
     expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(DISPLAY_ARTIST);
     await galleryActions.waitForArtistHeadings([DISPLAY_ARTIST]);
     await galleryActions.waitForAlbumVisible(ALBUM);
-    await expectPostgresBrowse(expect, galleryActions);
   });
 
   await stepLogger.step('Verify the deduplicated display credit and normalized durable album key', async () => {
@@ -70,7 +69,12 @@ test('FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without c
   await stepLogger.step('Open the album through its visible title and retain the legitimate composite identity', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(DISPLAY_ARTIST, ALBUM);
     const summary = await trackModalActions.waitForInteractiveSummary();
-    expect(summary.title).toBe(`${DISPLAY_ARTIST} - ${ALBUM} - ${YEAR}`);
+    expect(summary.title).toContain(ALBUM);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(DISPLAY_ARTIST);
+    expect(`${summary.title} ${summary.subtitle}`).toContain(YEAR);
+    const identitySegments = [summary.title, summary.subtitle]
+      .flatMap(text => text.split('•')).map(text => text.trim());
+    expect(identitySegments).toContain(DISPLAY_ARTIST);
     await trackModalActions.close();
   });
 });

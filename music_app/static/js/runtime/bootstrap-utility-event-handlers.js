@@ -1,4 +1,13 @@
 ﻿async function handleUtilityBootstrapClick(event) {
+  const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
+  if (removeMissingAlbumButton) {
+    event.preventDefault();
+    const album = getSelectedProblematicAlbum();
+    const runtimeOptions = typeof album?.constructor === 'function' ? new album.constructor() : {};
+    runtimeOptions.source = 'problematic-files';
+    void confirmMissingAlbumRemoval(album, runtimeOptions);
+    return;
+  }
   const repairAlertDismiss = event.target.closest('[data-dismiss-repair-alert="1"]');
   if (repairAlertDismiss) {
     event.preventDefault();
@@ -153,6 +162,7 @@
   if (problematicAlbumButton) {
     event.preventDefault();
     state.utility.selectedProblematicKey = problematicAlbumButton.getAttribute('data-problematic-album-key') || '';
+    state.utility.focusedTrackPath = '';
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
     state.utility.repairSelections = {};
@@ -178,7 +188,14 @@
   const utilityAppearanceButton = event.target.closest('[data-utility-appearance-key]');
   if (utilityAppearanceButton) {
     event.preventDefault();
-    state.utility.appearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
+    const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
+    if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
+      state.utility.appearanceKey = nextAppearanceKey;
+      renderUtilityModalContent();
+    })) return;
+    state.utility.appearanceKey = nextAppearanceKey;
     renderUtilityModalContent();
     return;
   }
@@ -843,21 +860,6 @@ function handleUtilityBootstrapInput(event) {
   if (manualCoverLookupInput) {
     state.coverLookup.modal.manualUrlText = String(manualCoverLookupInput.value || '');
     syncCoverLookupManualControlsUi();
-    return;
-  }
-  const appearanceColor = event.target.closest('[data-appearance-color]');
-  if (appearanceColor) {
-    const color = String(appearanceColor.value || '');
-    if (/^#[0-9a-f]{6}$/i.test(color)) {
-      const field = appearanceColor.getAttribute('data-appearance-color') || 'fill';
-      state.player.appearance = normalizePlayerAppearance({
-        ...state.player.appearance,
-        waveformFillColor: field === 'fill' ? color : state.player.appearance.waveformFillColor,
-        waveformEdgeColor: field === 'edge' ? color : state.player.appearance.waveformEdgeColor,
-      });
-      persistPlayerAppearance();
-      updateWaveformAppearance();
-    }
     return;
   }
   if (handleLibrarySettingsInput(event)) {

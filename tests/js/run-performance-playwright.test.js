@@ -144,7 +144,7 @@ test('scan database configuration preflight fails before launch when dedicated U
       assert.match(error.message, /ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL/);
       assert.match(error.message, /ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL/);
       assert.match(error.message, /album_haven_scan_e2e/);
-      assert.match(error.message, /docs\/postgres-migration-runbook\.md/);
+      assert.match(error.message, /\.env\.example/);
       return true;
     },
   );
@@ -1378,6 +1378,30 @@ test('scan status sample file is removed when the Playwright attempt throws', (t
   assert.ok(samplesPath);
   assert.equal(fs.existsSync(samplesPath), false);
 });
+
+for (const targetInput of ['scan-cold', '']) {
+  test(`performance process cleanup failure stops ${targetInput ? 'repeats' : 'later targets'} and preserves evidence`, (t) => {
+    const originalSpawnSync = childProcess.spawnSync;
+    const samplePaths = [];
+    childProcess.spawnSync = (_command, _args, options) => {
+      const samplePath = options.env.ALBUM_HAVEN_SCAN_STATUS_SAMPLES_PATH;
+      samplePaths.push(samplePath);
+      fs.writeFileSync(samplePath, '{"status":{}}\n', 'utf8');
+      return { status: 2, signal: null, stdout: '', stderr: '' };
+    };
+    t.after(() => {
+      childProcess.spawnSync = originalSpawnSync;
+      for (const samplePath of samplePaths) fs.rmSync(samplePath, { force: true });
+    });
+
+    assert.throws(() => _private.runSequentialPerformanceSuite({
+      browser: 'chrome', group: 'scan', headless: true, repeatCount: 3,
+      targetInput, useLegacyArtifacts: true,
+    }), (error) => error.exitCode === 2);
+    assert.equal(samplePaths.length, 1, 'cleanup failure must prevent later launches');
+    assert.equal(fs.existsSync(samplePaths[0]), true);
+  });
+}
 
 test('non-scan single-target runs preserve an inherited scan status sample path', (t) => {
   usePreloadedFixtureEnv(t, 'idle-memory');
@@ -2622,6 +2646,10 @@ test('runSequentialPerformanceSuite executes the default approved performance ta
   assert.equal(exitCode, 0);
   assert.equal(calls.length, 19);
   assert.equal(calls.every((call) => call.options.windowsHide === true), true);
+  assert.equal(
+    calls.every((call) => call.options.maxBuffer >= 64 * 1024 * 1024),
+    true,
+  );
   assert.equal(
     calls.every((call) => call.options.env.PLAYWRIGHT_OPEN_PERFORMANCE_REPORT === '0'),
     true,

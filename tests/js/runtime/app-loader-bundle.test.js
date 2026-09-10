@@ -36,6 +36,7 @@ function loadStartupAlbumCardRenderer() {
 }
 
 const expectedRuntimeOrder = [
+  'session-csrf-fetch.js',
   'bootstrap-state.js',
   'startup-metrics-helpers.js',
   'response-state-helpers.js',
@@ -51,9 +52,15 @@ const expectedRuntimeOrder = [
   'status-ui-helpers.js',
   'notification-ui-helpers.js',
   'render-markup-helpers.js',
+  'alert-components.js',
+  'album-artbox.js',
+  'gallery-card-component.js',
+  'album-details-components.js',
   'core-state-and-helpers.js',
+  'compact-player-helpers.js',
   'player-streaming-engine.js',
   'shell-navigation-drawer.js',
+  'account-menu.js',
   'bootstrap-refocus-helpers.js',
   'client-preferences-helpers.js',
   'gallery-display-preference-helpers.js',
@@ -62,16 +69,19 @@ const expectedRuntimeOrder = [
   'track-modal-lightbox-helpers.js',
   'player-waveform-peaks.js',
   'loop-range-controls.js',
+  'playback-control-cluster.js',
   'loop-edit-session-expiry.js',
   'player-and-waveform.js',
   'gallery-refresh-and-status.js',
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
   'compact-data-table.js',
+  'album-track-table.js',
   'utility-list-builders.js',
   'problem-exclusion-mutations.js',
   'library-settings.js',
   'cover-lookup-notification-helpers.js',
+  'appearance-backgrounds-bridge.js',
   'utility-renderers-and-actions.js',
   'utility-loop-playback.js',
   'utility-loaders-and-cover-lookup.js',
@@ -83,6 +93,7 @@ const expectedRuntimeOrder = [
   'gallery-cover-load-scheduler.js',
   'virtual-artist-grid.js',
   'player-loop-playback.js',
+  'compact-player-controller.js',
   'track-modal-and-gallery.js',
   'bootstrap-utility-event-handlers.js',
   'bootstrap-gallery-event-handlers.js',
@@ -104,6 +115,7 @@ test('app loader fetches one generated runtime bundle instead of individual runt
   assert.doesNotMatch(appJs, /const scriptPaths = \[/);
   assert.doesNotMatch(appJs, /Promise\.all\(scriptPaths\.map/);
   assert.equal((appJs.match(/window\.fetch\(/g) || []).length, 2);
+  assert.equal(Number(appJs.match(/bundledScriptCount: (\d+)/)?.[1]), RUNTIME_SCRIPT_PATHS.length);
 
   let previousIndex = -1;
   for (const fileName of expectedRuntimeOrder) {
@@ -135,8 +147,13 @@ test('app loader fetches one generated runtime bundle instead of individual runt
   );
   assert.ok(
     bundleJs.indexOf('// BEGIN js/runtime/loop-range-controls.js')
+      < bundleJs.indexOf('// BEGIN js/runtime/playback-control-cluster.js'),
+    'shared loop controls must load before the playback-control renderer',
+  );
+  assert.ok(
+    bundleJs.indexOf('// BEGIN js/runtime/playback-control-cluster.js')
       < bundleJs.indexOf('// BEGIN js/runtime/loop-edit-session-expiry.js'),
-    'shared loop controls must load before loop edit session expiry',
+    'the playback-control renderer must load before loop edit session expiry and consumers',
   );
   assert.ok(
     bundleJs.indexOf('// BEGIN js/runtime/loop-edit-session-expiry.js')

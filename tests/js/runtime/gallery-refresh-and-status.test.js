@@ -34,6 +34,7 @@ function createContext() {
     familyPrefetchPending: false,
     familyForegroundIdleChecks: [],
     speculativeDetailPrewarmCancels: 0,
+    hydratedAlbumDetailInvalidations: 0,
     waveformPeakLoadSuspensions: [],
     waveformPeakLoadResumptions: [],
     prependUtilityLogHistoryEntries: [],
@@ -49,6 +50,12 @@ function createContext() {
   let transitionImage = null;
   const artistGroups = {
     innerHTML: '<section class="artist-section"></section>',
+    querySelector(selector) {
+      return selector === '.artist-section, .album-card'
+        && this.innerHTML.includes('artist-section')
+        ? { className: 'artist-section' }
+        : null;
+    },
     querySelectorAll(selector) {
       return selector === 'img' && transitionImage ? [transitionImage] : [];
     },
@@ -155,6 +162,9 @@ function createContext() {
     },
     cancelTrackModalAlbumDetailsPrewarms() {
       calls.speculativeDetailPrewarmCancels += 1;
+    },
+    invalidateAllHydratedTrackModalAlbumDetails() {
+      calls.hydratedAlbumDetailInvalidations += 1;
     },
     suspendPlayerWaveformPeakLoadsForForegroundView() {
       const suspension = { id: calls.waveformPeakLoadSuspensions.length + 1 };
@@ -1384,6 +1394,51 @@ test('fetchAndRender applies equivalent committed-search state without rebuildin
   assert.equal(calls.animationFrames.length, 1);
   calls.animationFrames[0]();
   assert.equal(calls.renderSidebar, 1);
+});
+
+test('fetchAndRender remounts equivalent canonical search state when the optimistic gallery has no attached content', async () => {
+  const {
+    context,
+    runtimeRenderView,
+    calls,
+    pendingRequests,
+  } = createContext();
+  const retainedGroups = [{
+    artist: 'Cosmic Cathedral',
+    albums: [{ key: 'cosmic-cathedral::deep-water', name: 'Deep Water' }],
+  }];
+  context.state.view = {
+    ...context.state.view,
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  };
+  context.document.getElementById('artist-groups').innerHTML = '';
+  context.renderView = runtimeRenderView;
+
+  const requestPromise = context.fetchAndRender(
+    '/view-data?surface=albums&q=Neal%20Morse&artist=Cosmic%20Cathedral',
+    false,
+    { preserveScroll: true, skipPendingViewTransition: true },
+  );
+  pendingRequests[0].resolveWith({
+    query: 'Neal Morse',
+    selected_artist: 'Cosmic Cathedral',
+    primary_artist_groups: retainedGroups,
+    family_artist_groups: [],
+    artist_groups: retainedGroups,
+    album_count: 1,
+  });
+  await requestPromise;
+
+  assert.equal(
+    calls.renderArtistGroups,
+    1,
+    'Equivalent data must still render when the optimistic virtual gallery never attached.',
+  );
 });
 
 test('q-empty retained-artist reconciliation preserves mounted nodes only for equivalent canonical groups', async () => {
@@ -3084,6 +3139,268 @@ test('pollStatus refreshes the current loaded gallery when a background scan com
     level: 'success',
     durationMs: 3200,
   }]);
+});
+
+test('pollStatus refreshes the loaded gallery when targeted inventory revision advances', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+
+  const statusPromise = context.pollStatus();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[1].url, '/view-data?surface=albums');
+  pendingRequests[1].resolveWith({
+    artist_groups: [{
+      artist: 'Broadcast',
+      albums: [{ key: 'tender-buttons', missing_from_library: true }],
+    }],
+    album_count: 1,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
+  assert.equal(context.state.view.artist_groups[0].albums[0].missing_from_library, true);
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), [
+    '/status',
+    '/view-data?surface=albums',
+  ]);
+  assert.equal(
+    calls.hydratedAlbumDetailInvalidations,
+    2,
+    'inventory refresh invalidates before dispatch and again after applying the canonical payload',
+  );
+  assert.deepEqual(calls.showToast, []);
+});
+
+test('pollStatus defers an inventory refresh while a tag edit owns gallery resources', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.hasPendingTagEditViewMutations = () => true;
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'optimistic-merge' }] }],
+  };
+  context.state.status = {
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 12,
+  };
+
+  const statusPromise = context.pollStatus();
+  assert.equal(pendingRequests.length, 1);
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  for (let attempt = 0; attempt < 5 && pendingRequests.length < 2; attempt += 1) {
+    await flushMicrotasks();
+  }
+  const requestCountBeforeSettlement = pendingRequests.length;
+  if (pendingRequests[1]) {
+    pendingRequests[1].resolveWith({
+      artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'stale-canonical' }] }],
+      album_count: 1,
+    });
+  }
+  await statusPromise;
+  await flushMicrotasks();
+  assert.equal(
+    requestCountBeforeSettlement,
+    1,
+    'the inventory revision must not start a stale gallery request during the edit',
+  );
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(context.state.view.artist_groups[0].albums[0].key, 'optimistic-merge');
+});
+
+test('pollStatus preserves mutation-owned hydrated membership and reconciles it after settlement', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  const albumKey = 'pending-split';
+  const preview = { key: albumKey, name: 'Split', album_artist: 'Artist', preview_only: true, track_count_preview: 18, tracks: [] };
+  const optimistic = { ...preview, preview_only: false, track_count_preview: 17, tracks: Array.from({ length: 17 }, (_, index) => ({ path: `track-${index + 2}` })) };
+  const claim = {};
+  let pending = true;
+  context.Map = Map;
+  context.getAlbumRequestKey = album => album?.key || '';
+  context.getAlbumIdentity = context.getAlbumRequestKey;
+  context.attachGalleryPlaybackContextToAlbum = album => album;
+  context.getTrackModalElements = () => ({});
+  context.state.gallery = { albumIndex: new Map([[albumKey, preview]]) };
+  context.getIndexedAlbum = key => context.state.gallery.albumIndex.get(key);
+  context.tagEditViewMutationStillOwnsResources = candidate => pending && candidate === claim;
+  context.hasPendingTagEditViewMutations = () => pending;
+  context.buildApiUrl = () => '/view-data?surface=albums';
+  context.state.view.artist_groups = [{ artist: 'Artist', albums: [optimistic] }];
+  const status = { scan_in_progress: false, relations_in_progress: false, covers_in_progress: false, inventory_mutation_revision: 12 };
+  context.state.status = { ...status };
+  const cachePath = path.join(path.dirname(helperPath), 'track-modal-lightbox-helpers.js');
+  vm.runInContext(fs.readFileSync(cachePath, 'utf8'), context, { filename: cachePath });
+  context.cacheHydratedTrackModalAlbum(albumKey, optimistic, { aliases: [albumKey], tagEditMutationClaim: claim });
+  context.cacheHydratedTrackModalAlbum('unclaimed', { key: 'unclaimed', tracks: [] });
+
+  const first = context.pollStatus();
+  pendingRequests[0].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  await first;
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), optimistic);
+  assert.equal(context.getIndexedAlbum(albumKey), optimistic);
+  assert.equal(context.getCachedHydratedTrackModalAlbum('unclaimed'), null);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, true);
+  assert.equal(calls.fetchRequests.length, 1);
+
+  pending = false;
+  const second = context.pollStatus();
+  pendingRequests[1].resolveWith({ ...status, inventory_mutation_revision: 13 });
+  for (let attempt = 0; attempt < 10 && pendingRequests.length < 3; attempt += 1) await flushMicrotasks();
+  assert.equal(pendingRequests.length, 3);
+  const canonical = { ...optimistic, name: 'Canonical split' };
+  pendingRequests[2].resolveWith({ ...context.state.view, artist_groups: [{ artist: 'Artist', albums: [canonical] }] });
+  await second;
+  assert.deepEqual(calls.consoleErrors.map(args => args.map(value => String(value))), []);
+  assert.equal(context.state.ui.pendingInventoryMutationViewRefresh, false);
+  assert.equal(context.state.view.artist_groups[0].albums[0].name, 'Canonical split');
+  assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), null);
+});
+
+function watcherRefreshFixture() {
+  const fixture = createContext();
+  fixture.context.scheduleBrowserTimeout = () => {};
+  fixture.context.hasPendingTagEditViewMutations = () => true;
+  fixture.context.state.utility.loaded = true;
+  fixture.context.state.status = {
+    inventory_mutation_revision: 12,
+    watcher_health: { state: 'healthy', problems: [] },
+  };
+  fixture.refreshes = [];
+  fixture.context.loadProblematicFiles = async force => {
+    fixture.refreshes.push(force);
+    return [];
+  };
+  fixture.observe = async (health, inventoryRevision = 12) => {
+    const requestIndex = fixture.pendingRequests.length;
+    const pending = fixture.context.pollStatus();
+    fixture.pendingRequests[requestIndex].resolveWith({
+      inventory_mutation_revision: inventoryRevision,
+      watcher_health: health,
+    });
+    await pending;
+  };
+  return fixture;
+}
+
+function watcherWarning(root = 'root-1', actions = { 'library.refresh': true }) {
+  return { state: 'warning', problems: [{ root_key: root, state: 'overflow',
+    detected_at: '2026-09-10T00:00:00Z', message: 'Run a full scan.', allowed_actions: actions }] };
+}
+
+test('watcher warnings arrive and clear without inventory changes or redundant utility refreshes', async () => {
+  const fixture = watcherRefreshFixture();
+  const warning = watcherWarning();
+  await fixture.observe(warning);
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(JSON.parse(JSON.stringify(warning)));
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(watcherWarning('root-1', {}));
+  assert.deepEqual(fixture.refreshes, [true, true], 'refresh capability changes reach the loaded list');
+  await fixture.observe({ state: 'healthy', problems: [] });
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [true, true, true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 0);
+  assert.equal(Boolean(fixture.context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('watcher health ordering is stable and simultaneous inventory changes refresh the utility once', async () => {
+  const fixture = watcherRefreshFixture();
+  const problems = [...watcherWarning('b').problems, ...watcherWarning('a').problems];
+  await fixture.observe({ state: 'warning', problems }, 13);
+  await fixture.observe({ state: 'warning', problems: [...problems].reverse() }, 13);
+  assert.deepEqual(fixture.refreshes, [true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 1);
+});
+
+test('watcher health changes do not load an unused utility', async () => {
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.utility.loaded = false;
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, []);
+});
+
+test('an older in-flight utility response cannot swallow a watcher health change', async () => {
+  const fixture = watcherRefreshFixture();
+  const utility = fixture.context.state.utility;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['older summary']);
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [], 'do not coalesce the new health into the older request');
+  await utility.loadPromise;
+  utility.loading = false;
+  utility.loadPromise = null;
+  await fixture.observe(watcherWarning());
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'one fresh request follows the old response');
+});
+
+test('a failed health refresh remains pending even when the utility loader clears loaded state', async () => {
+  const fixture = watcherRefreshFixture();
+  let attempts = 0;
+  fixture.context.loadProblematicFiles = async () => {
+    attempts += 1;
+    fixture.context.state.utility.loaded = attempts !== 1;
+    return attempts === 1 ? null : [];
+  };
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 1);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+});
+
+test('pollStatus treats the first inventory revision observation as a baseline', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  context.scheduleBrowserTimeout = () => {};
+  context.state.view = {
+    ...context.state.view,
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'tender-buttons' }] }],
+  };
+
+  const statusPromise = context.pollStatus();
+  pendingRequests[0].resolveWith({
+    scan_in_progress: false,
+    relations_in_progress: false,
+    covers_in_progress: false,
+    inventory_mutation_revision: 13,
+  });
+  await statusPromise;
+  await flushMicrotasks();
+
+  assert.deepEqual(calls.fetchRequests.map((request) => request.url), ['/status']);
 });
 
 test('pollStatus does not launch the awaited root refresh while a sidebar selection is pending', async () => {

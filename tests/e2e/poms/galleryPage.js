@@ -1,5 +1,6 @@
 import { AlbumCard } from './albumCard.js';
 import { BasePage } from './basePage.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
   ProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
@@ -148,6 +149,7 @@ export class GalleryPage extends BasePage {
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
     this.coverReadyStates = page.locator(this.coverReadyStateSelector);
+    this.galleryOptionsButton = page.locator('#gallery-options-button');
     this.productionViewObserver = new ProductionViewObserver(page);
   }
 
@@ -155,6 +157,23 @@ export class GalleryPage extends BasePage {
     const album = this.albumCard.cardByAlbumName(albumName).first();
     if (await album.count() === 0) return false;
     return album.isVisible();
+  }
+
+  async readScrollTop() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the production gallery scroll position
+    return this.galleryScroll.evaluate((element) => element.scrollTop);
+  }
+
+  async readGalleryOptionsAppearance() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real gallery action's palette treatment
+    return this.galleryOptionsButton.evaluate((button) => {
+      const style = getComputedStyle(button);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderColor: style.borderColor,
+        color: style.color,
+      };
+    });
   }
 
   get libraryLoaderSelector() {
@@ -447,7 +466,7 @@ export class GalleryPage extends BasePage {
   }
 
   async readStatusPayload() {
-    const response = await this.page.request.get('/status');
+    const response = await authenticatedPageGet(this.page, '/status');
     if (!response.ok()) {
       throw new Error(`Expected production status telemetry, received HTTP ${response.status()}.`);
     }

@@ -156,7 +156,39 @@ function closeVersionPickerModal() {
 }
 
 function getVisibleNonAlbumTracks() {
-  return Array.isArray(state.view.non_album_tracks) ? state.view.non_album_tracks : [];
+  const view = state.view;
+  const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
+  const selectedArtist = String(view.selected_artist || '').trim();
+  if (!selectedArtist) return tracks;
+  const artistKey = (value) => String(value || '').trim().toLocaleLowerCase();
+  const artists = new Set([
+    selectedArtist,
+    ...(selectedArtist && Array.isArray(view.related_artists) ? view.related_artists : []),
+    ...(Array.isArray(view.artist_groups) ? view.artist_groups : [])
+      .flatMap((group) => [group.artist, group.artist_display]),
+  ].map(artistKey).filter(Boolean));
+  // Family filters carry the server's canonical/alias identities. Expand only
+  // the currently displayed family, since a retained root response can still
+  // contain filters for unrelated artists during navigation.
+  for (const filter of Array.isArray(view.artist_family_filters) ? view.artist_family_filters : []) {
+    const names = [filter?.display_name,
+      ...(Array.isArray(filter?.variation_names) ? filter.variation_names : [])]
+      .map(artistKey).filter(Boolean);
+    if (names.some((name) => artists.has(name))) names.forEach((name) => artists.add(name));
+  }
+  // Folder matching uses the search punctuation/word rules rather than exact
+  // artist identity (for example, "Family_Alias" and "Family Alias").
+  const folderKey = (value) => artistKey(value)
+    .replace(/ß/g, 'ss').replace(/ς/g, 'σ')
+    .replace(/['’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+    .split(/\s+/).map((word) => word.length > 3 && word.endsWith('s') ? word.slice(0, -1) : word)
+    .join(' ');
+  const artistFolders = new Set([...artists].map(folderKey).filter(Boolean));
+  return tracks.filter((track) => (
+    artists.has(artistKey(track.album_artist || track.artist))
+    || String(track.display_path || '').split(/[\\/]/).slice(0, -1)
+      .some((part) => artistFolders.has(folderKey(part)))
+  ));
 }
 
 function getNonAlbumMenuLabel() {
@@ -624,9 +656,13 @@ async function openAlbumInExplorer(album) {
 function getTrackModalElements() {
   return {
     overlay: document.getElementById('track-modal'),
+    header: typeof document.querySelector === 'function'
+      ? document.querySelector('#track-modal > .track-modal-dialog > .track-modal-header')
+      : null,
     title: document.getElementById('track-modal-title'),
     subtitle: document.getElementById('track-modal-subtitle'),
     cover: document.getElementById('track-modal-cover'),
+    missingWarning: document.getElementById('track-modal-missing-warning'),
     duplicateWarning: document.getElementById('track-modal-duplicate-warning'),
     duplicateTabs: document.getElementById('track-modal-duplicate-tabs'),
     list: document.getElementById('track-modal-list'),

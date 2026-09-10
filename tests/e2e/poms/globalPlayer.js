@@ -1,4 +1,7 @@
 import { BasePage } from './basePage.js';
+import { CompactPlayer } from './components/compactPlayer.js';
+import { PlaybackControlCluster } from './components/playbackControlCluster.js';
+import { SharedButton } from './components/sharedButton.js';
 
 export async function readDecodedPlayerCoverCheckpoint(button) {
   if (!(button instanceof HTMLButtonElement) || button.hidden) {
@@ -40,10 +43,22 @@ export class GlobalPlayer extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.appKeyboardSurface = page.locator('body');
+    this.documentRoot = page.locator('html');
     this.player = page.locator('.global-player');
+    this.expandedShell = this.player.locator('.player-shell');
+    this.playerControls = this.player.locator('.player-controls');
+    this.expandedPlaybackControls = new PlaybackControlCluster(
+      this.expandedShell.locator('[data-playback-control-variant="expanded-player"]'),
+    );
+    this.collapse = new SharedButton(
+      this.expandedShell.locator('[data-ui-button-action="player-collapse"]'),
+    );
+    this.compactPlayer = new CompactPlayer(this.player);
+    this.navigationRail = page.locator('#shell-navigation-rail');
     this.mainArea = page.locator('.player-main');
+    this.metadata = page.locator('.player-meta');
     this.coverButton = page.locator(this.coverButtonSelector);
-    this.playButton = page.locator('#player-play');
+    this.playButton = this.expandedPlaybackControls.playPauseButton;
     this.title = page.locator(this.titleSelector);
     this.ownershipSurface = this.title;
     this.albumLink = page.locator('#player-album-link');
@@ -95,6 +110,51 @@ export class GlobalPlayer extends BasePage {
 
   get waveformCanvasSelector() {
     return '#player-waveform-canvas';
+  }
+
+  async readViewCheckpoint() {
+    return this.compactPlayer.readViewCheckpoint();
+  }
+
+  async readExpandedGeometryCheckpoint() {
+    const [
+      player,
+      collapse,
+      cover,
+      play,
+      metadata,
+      timestamp,
+      timeline,
+      waveform,
+    ] = await Promise.all([
+      this.player.boundingBox(),
+      this.collapse.root.boundingBox(),
+      this.coverButton.boundingBox(),
+      this.playButton.boundingBox(),
+      this.metadata.boundingBox(),
+      this.time.boundingBox(),
+      this.timeline.boundingBox(),
+      this.waveformCanvas.boundingBox(),
+    ]);
+    if (!player || !collapse || !cover || !play || !metadata || !timestamp || !timeline) {
+      throw new Error('Expected the expanded player controls, metadata, timestamp, and timeline to have rendered bounds.');
+    }
+    // parity-check: allow-read-only-measurement-evaluate -- read the rendered player edge inset
+    const paddingLeft = await this.player.evaluate((element) => (
+      Number.parseFloat(getComputedStyle(element).paddingLeft) || 0
+    ));
+    return {
+      presentation: String(await this.player.getAttribute('data-player-seekbar-presentation') || ''),
+      paddingLeft,
+      player,
+      collapse,
+      cover,
+      play,
+      metadata,
+      timestamp,
+      timeline,
+      waveform,
+    };
   }
 
   async waitForDecodedCover(options = {}) {
@@ -375,6 +435,8 @@ export class GlobalPlayer extends BasePage {
         if (!(element instanceof HTMLElement)) return null;
         const style = getComputedStyle(element);
         return {
+          borderColor: style.borderColor,
+          boxShadow: style.boxShadow,
           color: style.color,
           cursor: style.cursor,
           display: style.display,
@@ -413,6 +475,14 @@ export class GlobalPlayer extends BasePage {
       mainLeftGapFromPlay: mainAreaBounds.x - (playBounds.x + playBounds.width),
       styles,
     };
+  }
+
+  async readThemedPlayerInkColor() {
+    // parity-check: allow-read-only-measurement-evaluate -- read the production player theme boundary
+    return this.player.evaluate((player) => ({
+      active: document.documentElement.hasAttribute('data-appearance-player'),
+      color: getComputedStyle(player).color,
+    }));
   }
 
   async readMainLoopVisualSnapshot() {

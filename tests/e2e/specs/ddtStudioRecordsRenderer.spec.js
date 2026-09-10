@@ -28,7 +28,7 @@ const TRACKS = Array.from({ length: 16 }, (_, index) => ({
   title: `Студийная запись ${index + 1}`,
 }));
 const SUFFIXES = [2, 3, 4, 5];
-const albumDetailsTitle = (album) => `${ARTIST} - ${album} - ${YEAR}`;
+const albumDetailsTitle = (album) => `${ARTIST} • ${album} • ${YEAR}`;
 
 test.beforeEach(async ({ managedAppLifecycle }) => {
   await restoreDdtStudioRecordsFixture();
@@ -57,7 +57,7 @@ function expectedNames(initialNames, suffixes) {
   ];
 }
 
-test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', async ({
+test('FTC-TAGS-020 keeps the 60-album DDT gallery stable through Studio Records splits and restores', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from html import unescape
 import io
 import json
@@ -201,7 +202,12 @@ def test_runtime_asset_version_is_computed_once_per_asgi_app_and_reused_by_templ
             return context
 
     asgi_app.state.templates = CapturingTemplates()
-    request = SimpleNamespace(app=asgi_app)
+    request = SimpleNamespace(
+        app=asgi_app,
+        cookies={"__Host-album_haven_session": "s" * 43},
+        state=SimpleNamespace(current_actor=asgi_app.state.current_actor_resolver.resolve(None)),
+        client=SimpleNamespace(host="testserver"),
+    )
     first_context = web_asgi._template_response(request, {})
     second_context = web_asgi._template_response(request, {})
 
@@ -382,6 +388,18 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert b'<script src="/static/app.js?v=' + encoded_runtime_asset_version + b'"' in body
     assert (
         b'<script src="/static/js/runtime-bundle.js?v='
+        + encoded_runtime_asset_version
+        + b'"'
+        in body
+    )
+    assert (
+        b'<link rel="stylesheet" href="/static/css/runtime/alert-components.css?v='
+        + encoded_runtime_asset_version
+        + b'"'
+        in body
+    )
+    assert (
+        b'<link rel="stylesheet" href="/static/css/runtime/album-artbox-and-gallery-card.css?v='
         + encoded_runtime_asset_version
         + b'"'
         in body
@@ -965,6 +983,39 @@ def test_build_initial_view_preview_preserves_compact_album_track_count():
     assert "16 tracks" in markup
 
 
+def test_build_initial_view_preview_preserves_missing_album_state_for_gallery_alert():
+    preview = startup_bootstrap.build_initial_view_preview(
+        {
+            "artist_groups": [],
+            "primary_artist_groups": [
+                {
+                    "artist": "Transatlantic",
+                    "artist_display": "Transatlantic",
+                    "albums": [
+                        {
+                            "key": "transatlantic::smpte-the-roine-stolt-mixes",
+                            "name": "SMPTe - The Roine Stolt Mixes",
+                            "album_artist": "Transatlantic",
+                            "year": 2003,
+                            "inventory_status": "missing",
+                            "missing_since": "2026-09-04T18:45:00+00:00",
+                            "tracks": [],
+                            "preview_only": True,
+                        }
+                    ],
+                }
+            ],
+            "family_artist_groups": [],
+            "artists_sidebar": [],
+        }
+    )
+
+    preview_album = preview["primary_artist_groups"][0]["albums"][0]
+
+    assert preview_album["inventory_status"] == "missing"
+    assert preview_album["missing_since"] == "2026-09-04T18:45:00+00:00"
+
+
 def test_startup_sidebar_artist_links_keep_album_surface_contract():
     markup = startup_bootstrap.build_startup_sidebar_html(
         {
@@ -1008,7 +1059,7 @@ def test_startup_sidebar_uses_artist_count_for_all_artists_total():
 
     html = str(markup)
 
-    assert '<span class="artist-count">128</span>' in html
+    assert re.search(r'<span class="[^"]*\bartist-count\b[^"]*">128</span>', html)
     assert 'data-sidebar-home="1"' not in html
 
 
@@ -1545,4 +1596,17 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
     assert "window.MUSIC_APP_INITIAL_VIEW" not in bootstrap_state_js
     assert "window.MUSIC_APP_BOOTSTRAP" not in bootstrap_state_js
     assert "runtime_boot_complete" in startup_metrics_js
-    assert {path.name for path in legacy_js_dir.glob("*.js")} == {"runtime-bundle.js"}
+    assert {path.name for path in legacy_js_dir.glob("*.js")} == {
+        "runtime-bundle.js",
+        "login.js",
+        "password-recovery.js",
+        "account.js",
+        "admin-members.js",
+        "appearance-backgrounds.js",
+        "appearance-palettes.js",
+        "button-component.js",
+        "editor-page.js",
+        "settings-navigation.js",
+        "navigation-tree.js",
+        "selection-accent.js",
+    }

@@ -497,6 +497,44 @@ test('optimistic source split publishes exact full membership for both resulting
   assert.deepEqual(Array.from(suffix.tracks, (track) => track.path), [sourceTracks[0].path]);
 });
 
+test('optimistic year split publishes distinct request keys for every resulting year', () => {
+  const context = loadHelpers();
+  const firstPath = 'D:\\Synthetic Music\\Rarity Artist\\Year Split\\01.mp3';
+  const secondPath = 'D:\\Synthetic Music\\Rarity Artist\\Year Split\\02.mp3';
+  const album = {
+    key: 'rarity artist::year split',
+    name: 'Year Split',
+    album_artist: 'Rarity Artist',
+    year: 2004,
+    tracks: [
+      {
+        path: firstPath,
+        album: 'Year Split',
+        album_artist: 'Rarity Artist',
+        year: 2004,
+      },
+      {
+        path: secondPath,
+        album: 'Year Split',
+        album_artist: 'Rarity Artist',
+        year: 2004,
+      },
+    ],
+  };
+
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [firstPath]: { year: '2014' },
+  });
+
+  assert.deepEqual(
+    Array.from(candidates, (candidate) => candidate.key).sort(),
+    [
+      'rarity artist::year split::year::2004',
+      'rarity artist::year split::year::2014',
+    ],
+  );
+});
+
 test('album-only split preserves raw album-artist credits without an implicit artist edit', () => {
   const context = loadHelpers();
   const firstPath = 'C:\\Music\\ДДТ\\Студийные записи\\01 First.flac';
@@ -608,6 +646,79 @@ test('album-only split preserves server-owned per-track artist rows in optimisti
     JSON.parse(JSON.stringify(suffix?.track_rows || [])),
     [{ path: ddtPath, title: 'Предчувствие гражданской войны', secondary_artist: 'ДДТ' }],
   );
+});
+
+test('single-artist split from Various Artists matches the authoritative album header credit', () => {
+  const context = loadHelpers();
+  const soloPath = 'C:\\Music\\Various Artists\\Signals\\01 Signal.flac';
+  const ensemblePaths = Array.from({ length: 4 }, (_value, index) => (
+    `C:\\Music\\Various Artists\\Signals\\${index + 2} Ensemble.flac`
+  ));
+  const album = {
+    key: 'various artists::signals',
+    name: 'Signals',
+    album_artist: 'Various Artists',
+    tracks: [
+      {
+        path: soloPath,
+        album: 'Signals',
+        artist: 'Solo Voice',
+        album_artist: 'Various Artists',
+        title: 'Signal (feat. Featured Voice)',
+      },
+      ...ensemblePaths.map((path, index) => ({
+        path,
+        album: 'Signals',
+        artist: `Ensemble ${index + 1}`,
+        album_artist: 'Various Artists',
+        title: `Ensemble Signal ${index + 1}`,
+      })),
+    ],
+    track_rows: [
+      {
+        path: soloPath,
+        title: 'Signal',
+        secondary_artist: 'Solo Voice / feat. Featured Voice',
+      },
+      ...ensemblePaths.map((path, index) => ({
+        path,
+        title: `Ensemble Signal ${index + 1}`,
+        secondary_artist: `Ensemble ${index + 1}`,
+      })),
+    ],
+  };
+
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [soloPath]: { album: 'Signals Solo' },
+  });
+  const destination = candidates.find((candidate) => candidate.name === 'Signals Solo');
+
+  assert.equal(destination?.album_artist, 'Solo Voice');
+  assert.equal(destination?.key, 'solo voice::signals solo');
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(destination?.track_rows || [])),
+    [{ path: soloPath, title: 'Signal', secondary_artist: 'feat. Featured Voice' }],
+  );
+});
+
+test('compilation split preserves an explicitly edited destination album artist', () => {
+  const context = loadHelpers();
+  const trackPath = 'C:/Music/Compilation/01 Signal.flac';
+  const album = {
+    key: 'various artists::signals', name: 'Signals', album_artist: 'Various Artists',
+    tracks: [{ path: trackPath, album: 'Signals', artist: 'Solo Voice',
+      album_artist: 'Various Artists', title: 'Signal' }],
+    track_rows: [{ path: trackPath, title: 'Signal', secondary_artist: 'Solo Voice' }],
+  };
+  const [destination] = context.buildOptimisticUpdatedAlbumsFromEdits(album, {
+    [trackPath]: { album: 'Solo Collection', album_artist: 'Curated Ensemble' },
+  });
+  assert.equal(destination.album_artist, 'Curated Ensemble');
+  assert.equal(destination.key, 'curated ensemble::solo collection');
+  assert.equal(destination.tracks[0].artist, 'Solo Voice');
+  assert.equal(destination.tracks[0].album_artist, 'Curated Ensemble');
+  // Editing credit fields invalidates the previous server-rendered credit row.
+  assert.equal(destination.track_rows.length, 0);
 });
 
 test('optimistic album split normalizes legacy album rating into each preference', () => {

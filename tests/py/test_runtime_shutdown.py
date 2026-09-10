@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures.thread import _threads_queues
 import threading
 from pathlib import Path
 
@@ -22,6 +23,30 @@ def runtime_carrier() -> RuntimeShutdownApp:
     return RuntimeShutdownApp()
 
 
+@pytest.fixture(autouse=True)
+def _stub_asgi_lifespan_persistence(monkeypatch):
+    class _TargetedRepositoryStub:
+        backend = "postgres"
+
+    monkeypatch.setattr(
+        "music_app.services.scan_cache_persistence.select_scan_cache_adapter",
+        lambda _config: _TargetedRepositoryStub(),
+    )
+    monkeypatch.setattr(
+        "music_app.services.library_roots.get_library_roots",
+        lambda config: [{
+            "id": "runtime-shutdown-root",
+            "path": str(config["MUSIC_DIR"]),
+            "layout_mode": "artist",
+            "category": "main_library",
+        }],
+    )
+    monkeypatch.setattr(
+        "music_app.services.exception_overrides.load_exception_overrides",
+        lambda _config: {},
+    )
+
+
 def test_runtime_shutdown_tests_do_not_use_flask_fixtures_or_app_context():
     source = Path(__file__).read_text(encoding="utf-8")
 
@@ -33,6 +58,79 @@ def test_runtime_shutdown_tests_do_not_use_flask_fixtures_or_app_context():
     ]
 
     assert not [pattern for pattern in forbidden if pattern in source]
+
+
+@pytest.mark.parametrize("failing_stage", [None, "watcher", "coordinator", "reconciler"])
+def test_library_watch_shutdown_does_not_wait_for_targeted_reconciliation(failing_stage):
+    from contextlib import nullcontext
+    from music_app import _stop_library_watch_runtime
+
+    calls: list[object] = []
+
+    class Stoppable:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def stop(self) -> None:
+            calls.append(self.name)
+            if self.name == failing_stage:
+                raise RuntimeError(f"{self.name} failed")
+
+    class Executor:
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            calls.append(("executor", wait, cancel_futures))
+
+    with pytest.raises(RuntimeError, match=f"{failing_stage} failed") if failing_stage else nullcontext():
+        _stop_library_watch_runtime(
+            watch_service=Stoppable("watcher"),
+            event_coordinator=Stoppable("coordinator"),
+            targeted_reconciler=Stoppable("reconciler"),
+            targeted_executor=Executor(),
+        )
+
+    assert calls == [
+        "watcher",
+        "coordinator",
+        "reconciler",
+        ("executor", False, True),
+    ]
+
+
+def test_targeted_reconciliation_admission_bounds_outstanding_work():
+    from music_app import _BoundedExecutorAdmission
+
+    class PendingFuture:
+        def __init__(self) -> None:
+            self.callbacks = []
+
+        def add_done_callback(self, callback) -> None:
+            self.callbacks.append(callback)
+
+        def complete(self) -> None:
+            for callback in tuple(self.callbacks):
+                callback(self)
+
+    class Executor:
+        def __init__(self) -> None:
+            self.futures = []
+
+        def submit(self, _function, *_args):
+            future = PendingFuture()
+            self.futures.append(future)
+            return future
+
+        def shutdown(self, **_kwargs) -> None:
+            return None
+
+    executor = Executor()
+    admission = _BoundedExecutorAdmission(executor, max_outstanding=2)
+
+    assert admission.submit(lambda: None) is executor.futures[0]
+    assert admission.submit(lambda: None) is executor.futures[1]
+    assert admission.submit(lambda: None) is None
+
+    executor.futures[0].complete()
+    assert admission.submit(lambda: None) is executor.futures[2]
 
 
 def test_create_daemon_executor_uses_daemon_worker_threads():
@@ -47,6 +145,10 @@ def test_create_daemon_executor_uses_daemon_worker_threads():
     assert started_event.wait(timeout=2)
     assert executor._threads
     assert all(thread.daemon for thread in executor._threads)
+    assert all(
+        thread not in _threads_queues
+        for thread in executor._threads
+    )
 
     release_event.set()
     assert future.result(timeout=2) is True
@@ -309,5 +411,136 @@ def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, 
         "lastfm-stop",
         "waveform-shutdown",
         "pcm-shutdown",
+        "runtime-shutdown",
+    ]
+
+
+@pytest.mark.parametrize("startup_fails", [False, True])
+def test_asgi_lifespan_owns_welcome_retry_worker_through_shutdown(monkeypatch, startup_fails):
+    import sys
+    from types import ModuleType, SimpleNamespace
+    from music_app import create_asgi_app
+    from music_app.services import lastfm_retry, library_reconciliation, state as state_module
+
+    calls = []
+    async def stop():
+        await asyncio.sleep(0)
+        calls.append("welcome-stopped")
+    def start(app):
+        assert app.state.config
+        calls.append("welcome-started")
+        return SimpleNamespace(stop=stop)
+    module = ModuleType("music_app.services.auth_welcome_worker")
+    module.start_welcome_retry_worker = start
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setattr(state_module, "hydrate_runtime_library_state_on_startup", lambda _runtime: True)
+    monkeypatch.setattr(state_module, "ensure_runtime_relation_projection_ready", lambda _runtime: None)
+    monkeypatch.setattr(lastfm_retry, "start_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(lastfm_retry, "stop_lastfm_retry_worker", lambda _runtime: None)
+    monkeypatch.setattr(runtime_shutdown, "request_runtime_shutdown", lambda _runtime: calls.append("runtime-stopped"))
+    class Watch:
+        def __init__(self, *_args):
+            pass
+        def start(self):
+            if startup_fails:
+                raise RuntimeError("watch startup failed")
+        def stop(self):
+            pass
+    monkeypatch.setattr(library_reconciliation, "LibraryWatchService", Watch)
+    app = create_asgi_app()
+    async def scenario():
+        if startup_fails:
+            with pytest.raises(RuntimeError, match="watch startup failed"):
+                async with app.router.lifespan_context(app):
+                    pass
+        else:
+            async with app.router.lifespan_context(app):
+                assert calls == ["welcome-started"]
+    asyncio.run(scenario())
+    assert calls == ["welcome-started", "welcome-stopped", "runtime-stopped"]
+
+
+def test_asgi_lifespan_cleans_started_resources_when_watcher_startup_fails(monkeypatch):
+    from music_app import create_asgi_app
+    from music_app.services import (
+        lastfm_retry,
+        library_event_coordinator,
+        library_reconciliation,
+        runtime_shutdown,
+        state as state_module,
+    )
+
+    calls: list[str] = []
+
+    class ExecutorDouble:
+        def shutdown(self, *, wait: bool, cancel_futures: bool) -> None:
+            calls.append(f"executor-stop:{wait}:{cancel_futures}")
+
+    class CoordinatorDouble:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def accept(self, _event) -> None:
+            pass
+
+        def stop(self) -> None:
+            calls.append("coordinator-stop")
+
+    class WatchServiceDouble:
+        def __init__(self, _source, _accept) -> None:
+            pass
+
+        def start(self) -> None:
+            calls.append("watch-start")
+            raise RuntimeError("watch startup failed")
+
+        def stop(self) -> None:
+            calls.append("watch-stop")
+
+    monkeypatch.setattr(
+        state_module, "hydrate_runtime_library_state_on_startup", lambda _runtime: True
+    )
+    monkeypatch.setattr(
+        state_module, "ensure_runtime_relation_projection_ready", lambda _runtime: None
+    )
+    monkeypatch.setattr(
+        lastfm_retry,
+        "start_lastfm_retry_worker",
+        lambda _runtime: calls.append("lastfm-start"),
+    )
+    monkeypatch.setattr(
+        lastfm_retry,
+        "stop_lastfm_retry_worker",
+        lambda _runtime: calls.append("lastfm-stop"),
+    )
+    monkeypatch.setattr(
+        runtime_shutdown, "create_daemon_executor", lambda **_kwargs: ExecutorDouble()
+    )
+    monkeypatch.setattr(
+        runtime_shutdown,
+        "request_runtime_shutdown",
+        lambda _runtime: calls.append("runtime-shutdown"),
+    )
+    monkeypatch.setattr(
+        library_event_coordinator, "LibraryEventCoordinator", CoordinatorDouble
+    )
+    monkeypatch.setattr(library_reconciliation, "LibraryWatchService", WatchServiceDouble)
+
+    app = create_asgi_app()
+
+    async def scenario() -> None:
+        with pytest.raises(RuntimeError, match="watch startup failed"):
+            async with app.router.lifespan_context(app):
+                pass
+
+    asyncio.run(scenario())
+
+    assert calls == [
+        "lastfm-start",
+        "watch-start",
+        "watch-stop",
+        "coordinator-stop",
+        "executor-stop:False:True",
+        "lastfm-stop",
         "runtime-shutdown",
     ]

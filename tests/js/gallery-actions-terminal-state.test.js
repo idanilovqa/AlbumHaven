@@ -75,6 +75,28 @@ test('gallery target classification reports a canonical match only after virtual
   );
 });
 
+test('waitForAlbumVisibleUnderHeading mounts a canonical album detached by virtualization', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  const scrollCalls = [];
+  const actions = new GalleryActions({
+    async readAlbumTargetState() {
+      return settledSnapshot({ canonicalMatch: true });
+    },
+  });
+  actions.scrollToAlbumUnderHeading = async (...args) => scrollCalls.push(args);
+
+  await actions.waitForAlbumVisibleUnderHeading('Neal Morse', 'Joseph: Part One - The Dreamer', {
+    expectedQuery: 'Joseph',
+    timeout: 100,
+  });
+
+  assert.equal(scrollCalls.length, 1);
+  assert.equal(scrollCalls[0][0], 'Neal Morse');
+  assert.equal(scrollCalls[0][1], 'Joseph: Part One - The Dreamer');
+  assert.equal(scrollCalls[0][2].expectedQuery, 'Joseph');
+  assert.ok(scrollCalls[0][2].timeout > 0);
+});
+
 test('gallery target classification rejects an attached DOM match without canonical response evidence', async () => {
   const { classifyGalleryAlbumTargetState } = await import(galleryActionsUrl);
   const snapshot = settledSnapshot({
@@ -91,6 +113,38 @@ test('gallery target classification rejects an attached DOM match without canoni
       return true;
     },
   );
+});
+
+test('canonical detached album above the viewport is found by reversing at the gallery boundary', async () => {
+  const { GalleryActions } = await import(galleryActionsUrl);
+  let scrollTop = 720;
+  const movements = [];
+  const target = { count: async () => Number(scrollTop <= 240) };
+  const actions = new GalleryActions({
+    async readAlbumTargetState() {
+      return settledSnapshot({ canonicalMatch: true, attachedMatch: scrollTop <= 240 });
+    },
+    sectionByArtistHeading() {
+      return { getByRole: () => ({ first: () => target }) };
+    },
+    async waitForGalleryScrollMovement(previous, direction) {
+      assert.equal(Math.sign(scrollTop - previous), direction);
+    },
+  });
+  actions.readGalleryScrollState = async () => ({ scrollTop, maxScrollTop: 720, clientHeight: 320 });
+  actions.scrollGalleryBy = async delta => {
+    movements.push(delta);
+    scrollTop = Math.max(0, Math.min(720, scrollTop + delta));
+  };
+  actions.readAlbumGalleryViewportState = async () => ({
+    attached: scrollTop <= 240, intersects: scrollTop <= 240,
+  });
+
+  await actions.waitForAlbumVisibleUnderHeading('Neal Morse', 'Joseph: Part One - The Dreamer', {
+    expectedQuery: 'Joseph', timeout: 1000, maxAttempts: 4,
+  });
+  assert.deepEqual(movements, [-240, -240]);
+  assert.equal(scrollTop, 240);
 });
 
 test('gallery target classification throws immediately for an idle canonical mismatch with observed state', async () => {

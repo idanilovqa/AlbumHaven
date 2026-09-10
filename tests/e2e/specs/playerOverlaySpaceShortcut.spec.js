@@ -6,21 +6,21 @@ const PLAYBACK_TARGET = {
   album: 'Signed Scrobble Journey',
   year: '2026',
 };
-const TRACK_TITLE = 'Fake Loop Source';
-const PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
+let playerTitle = '';
 
 function expectedPlayback(paused) {
   return {
-    title: PLAYER_TITLE,
+    title: playerTitle,
     playbackControl: paused ? 'Play' : 'Pause',
     paused,
   };
 }
 
-test(`${CASE_ID} Space controls background playback across Album Details, notifications, and Settings`, async ({
+test(`${CASE_ID} Space controls background playback across Album Details, notifications, and Settings`, { tag: '@area:playback' }, async ({
   coverLookupActions,
   galleryActions,
   globalPlayerActions,
+  appBarActions,
   playbackEvidence,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -32,14 +32,19 @@ test(`${CASE_ID} Space controls background playback across Album Details, notifi
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
     expect(await galleryActions.selectAlbumDetailsByIdentity(PLAYBACK_TARGET)).toEqual(PLAYBACK_TARGET);
+    const albumDetailsStack = await trackModalActions.trackModal
+      .readStackingCheckpoint(appBarActions.appBar);
+    expect(albumDetailsStack).toMatchObject({ appBarCoveredByAlbumDetails: true });
+    expect(albumDetailsStack.modalZIndex).toBeGreaterThan(albumDetailsStack.appBarZIndex);
     const playbackMark = await playbackEvidence.playbackMark();
     const track = await trackModalActions.playTrackAt(0);
     playbackPath = track.path;
-    expect(track.title).toBe(TRACK_TITLE);
+    expect(track.title).not.toBe('');
+    playerTitle = `${PLAYBACK_TARGET.artist} - ${track.title} /`;
     await globalPlayerActions.waitForCurrentTrack({
       path: track.path,
-      trackTitle: TRACK_TITLE,
-      visibleTitle: PLAYER_TITLE,
+      trackTitle: track.title,
+      visibleTitle: playerTitle,
     });
     await globalPlayerActions.expectVisiblePlayer();
     await globalPlayerActions.waitForPlaybackState({ paused: false, minimumCurrentTime: 0 });

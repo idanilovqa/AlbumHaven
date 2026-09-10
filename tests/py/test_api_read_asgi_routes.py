@@ -256,6 +256,60 @@ def test_asgi_status_remains_responsive_while_view_data_build_is_blocked(app, as
     assert status_payload["album_total"] == 1
 
 
+def test_asgi_status_projects_watcher_health_outside_lock_and_event_loop(
+    app, asgi_app, monkeypatch
+):
+    from music_app.routes import api_read_asgi_routes as asgi_read_routes
+
+    health_started = Event()
+    heartbeat_ran = Event()
+    release_health = Event()
+    observed = {}
+
+    def project_health(_request):
+        health_started.set()
+        acquired = asgi_app.state.cold_scan_handoff_lock.acquire(blocking=False)
+        observed["handoff_lock_released"] = acquired
+        if acquired:
+            asgi_app.state.cold_scan_handoff_lock.release()
+        assert release_health.wait(timeout=3.0)
+        return {"state": "healthy", "problems": []}
+
+    monkeypatch.setattr(
+        asgi_read_routes,
+        "_project_library_watch_health_for_request",
+        project_health,
+    )
+
+    def observe_heartbeat_then_release():
+        assert health_started.wait(timeout=3.0)
+        observed["heartbeat_before_release"] = heartbeat_ran.wait(timeout=0.5)
+        release_health.set()
+
+    controller = Thread(target=observe_heartbeat_then_release, daemon=True)
+    controller.start()
+
+    async def exercise():
+        request = SimpleNamespace(app=asgi_app)
+        status_task = asyncio.create_task(asgi_read_routes.status(request))
+        await asyncio.sleep(0)
+        heartbeat_ran.set()
+        return await status_task
+
+    try:
+        response = asyncio.run(exercise())
+    finally:
+        release_health.set()
+        controller.join(timeout=3.0)
+
+    assert not controller.is_alive()
+    assert response.status_code == 200
+    assert observed == {
+        "handoff_lock_released": True,
+        "heartbeat_before_release": True,
+    }
+
+
 @pytest.mark.parametrize(
     ("query", "expected_query"),
     [
@@ -3701,6 +3755,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
     asgi_app.state.config = asgi_config
     asgi_app.state.library_state = asgi_library_state
     asgi_app.state.logger = asgi_logger
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: [],
+    )
 
     detail_calls: list[str] = []
     fallback_calls: list[tuple[str, dict[str, object], dict[str, object], object]] = []
@@ -3821,6 +3878,9 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
         "context_music_dir": str(asgi_config["MUSIC_DIR"]),
         "state_album_count": 1,
         "logger_name": "problematic-fallback-logger",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {
@@ -3996,6 +4056,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
     monkeypatch.setattr(asgi_read_routes, "build_problematic_albums_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "build_problematic_album_detail_payload", fail_runtime_fallback)
     monkeypatch.setattr(asgi_read_routes, "PostgresLibraryBrowseRepository", FakePostgresRepository)
+    asgi_app.state.library_watch_health_service = SimpleNamespace(
+        load_problems=lambda: [],
+    )
 
     list_status, _list_headers, list_body = _run_asgi_request(
         asgi_app,
@@ -4045,6 +4108,9 @@ def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_r
         "persistence_backend": "postgres",
         "persistence_seam": "library_browse",
         "view_data_source": "postgres_library_browse",
+        "watcher_health": {"state": "healthy", "problems": []},
+        "operational_items": [],
+        "operational_count": 0,
     }
     assert path_detail_status == 200
     assert _decode_json(path_detail_body) == {

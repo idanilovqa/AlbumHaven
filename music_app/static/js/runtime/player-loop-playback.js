@@ -92,6 +92,7 @@ function updatePlayerUi() {
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
+  if (typeof syncCompactPlayerUi === 'function') syncCompactPlayerUi({ displayTrack, playback, hasTrack, lockedByAnotherTab });
   els.timeline?.parentElement?.classList.toggle('is-looping', state.player.loopActive);
   if (els.timeline?.parentElement) {
     els.timeline.parentElement.classList.toggle('is-idle', !hasTrack || lockedByAnotherTab);
@@ -872,6 +873,9 @@ function attachSharedPlayer() {
     btn.addEventListener('click', () => {
       const src = btn.getAttribute('data-src');
       if (!src) return;
+      if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
+        triggerAlbumTrackPlayActivation(btn);
+      }
       const trackPath = btn.getAttribute('data-track-path') || decodeURIComponent((src.split('path=')[1] || '').split('&')[0] || '');
       const isCurrentTrack = String(state.player.current?.path || '') === String(trackPath || '');
       const playback = getPlayerPlaybackSnapshot();

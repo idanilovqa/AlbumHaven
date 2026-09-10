@@ -1,0 +1,8 @@
+Header
+path$char(9)artist$char(9)album$char(9)date$char(9)discnumber$char(9)tracknumber$char(9)title$char(9)rating$char(9)play_count$char(9)first_played$char(9)last_played$char(9)added$crlf()
+
+Body
+%path%$char(9)%artist%$char(9)%album%$char(9)%date%$char(9)%discnumber%$char(9)%tracknumber%$char(9)%title%$char(9)%rating%$char(9)%play_count%$char(9)%first_played%$char(9)%last_played%$char(9)%added%$crlf()
+
+Footer
+<leave empty>

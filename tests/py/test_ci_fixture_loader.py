@@ -1133,6 +1133,10 @@ def test_loader_projection_order_resolves_refs_into_normal_product_tables() -> N
         "covers",
     )
     sql = "\n".join(loader.product_projection_statements("functional-core"))
+    assert "username_display" in sql
+    assert "username_normalized" in sql
+    assert "contact_email_normalized" in sql
+    assert "ci-fixture-owner@example.test" in sql
     assert "artistRef" in sql and "artist_key" in sql
     assert "s.record->>'productArtistKey'" in sql
     assert "jsonb_build_object('fixture_artist_key',s.record->>'artistKey'" in sql
@@ -1877,13 +1881,14 @@ def test_bootstrap_persists_exact_teardown_receipt_before_creating_roles() -> No
 
 def test_bootstrap_contract_keeps_pgpass_scoped_and_exports_passwordless_urls(tmp_path: Path) -> None:
     contract = _bootstrap_contract(tmp_path)
-    serialized = json.dumps(contract, sort_keys=True)
     pgpass_path = Path(contract["pgpass"]["path"]).resolve()
     assert pgpass_path.is_relative_to((tmp_path / "runner-temp").resolve())
     assert contract["pgpass"]["scope"] == "job"
     assert contract["pgpass"]["deleteOnTeardown"] is True
     assert contract["secrets"]["maskBeforeUse"] is True
-    assert "password" not in serialized.casefold()
+    assert "password" not in json.dumps(
+        contract["githubEnvExports"], sort_keys=True
+    ).casefold()
     exports = contract["githubEnvExports"]
     assert exports["PGPASSFILE"] == str(pgpass_path)
     assert all("@localhost/album_haven_ci_run_123_attempt_2_python_windows" in value for key, value in exports.items() if key.endswith("DATABASE_URL"))

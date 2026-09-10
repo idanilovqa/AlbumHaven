@@ -1,5 +1,5 @@
 ﻿:root {
-  --player-height: 85px;
+  --player-height: 68px;
   color-scheme: light dark;
   --bg: #111827;
   --panel: #1f2937;
@@ -29,30 +29,12 @@ select,
 [contenteditable="true"] {
   caret-color: auto;
 }
-.layout {
-  display: grid;
-  grid-template-columns: 240px 1fr;
-  height: calc(100vh - var(--player-height));
-  min-height: 0;
-}
-.sidebar {
-  height: 100%;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: var(--panel-2);
-  border-right: 1px solid var(--border);
-  padding: 18px 14px;
-}
 .sidebar-top { margin-bottom: 12px; }
 .shell-navigation-rail-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-.shell-navigation-rail-backdrop {
-  display: none;
 }
 .sidebar h2 { margin: 0 0 10px; font-size: 1rem; }
 .artist-list { display: flex; flex-direction: column; gap: 6px; }
@@ -78,10 +60,8 @@ select,
 }
 .artist-link:hover, .artist-link.active { background: var(--panel); border-color: var(--border); }
 .artist-count { color: var(--muted); font-size: 0.9rem; flex: 0 0 auto; white-space: nowrap; align-self: flex-start; }
-.main { padding: 18px 20px 16px; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 h1 { margin: 0 0 14px; font-size: 1.7rem; }
-.toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 input[type='search'] {
   width: min(360px, 42vw);
   min-width: 220px;
@@ -153,10 +133,7 @@ input[type='search'] {
   text-decoration: none;
   cursor: pointer;
 }
-.icon-button { width: 40px; height: 40px; padding: 0; }
-.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.toolbar-left { flex: 1 1 auto; justify-content: flex-start; }
-.toolbar-right { flex: 0 0 auto; margin-left: auto; }
+.icon-button { width: 40px; height: 40px; padding: 0; display: inline-grid; place-items: center; text-decoration: none; }
 .album-open-trigger { cursor: pointer; }
 .album-title-button { appearance: none; border: 0; background: transparent; padding: 0; margin: 0; width: 100%; text-align: left; color: inherit; font: inherit; }
 .album-title-button:hover { color: #93c5fd; }

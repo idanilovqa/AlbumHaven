@@ -191,6 +191,12 @@ def classify_fixture_profile_mode(fixture_profile: str) -> str:
     raise RuntimeError(f"Unsupported isolated E2E fixture profile: {normalized_profile!r}.")
 
 
+def fixture_profile_requires_provider_storage_policy_fixture(
+    fixture_profile: str,
+) -> bool:
+    return str(fixture_profile).strip() not in GENERATED_FIXTURE_PROFILES
+
+
 DDT_STUDIO_RECORDS_FIXTURE_TRACKS = tuple(
     {
         "filename": f"{track_number:02d}. Студийная запись {track_number}.mp3",
@@ -434,6 +440,9 @@ LASTFM_SCROBBLE_ARTIST = "Album Haven Last.fm Fixture"
 LASTFM_SCROBBLE_ALBUM = "Signed Scrobble Journey"
 LASTFM_SCROBBLE_TRACK = "Fake Loop Source"
 LASTFM_SCROBBLE_YEAR = 2026
+TRANSATLANTIC_ARTIST = "Transatlantic"
+TRANSATLANTIC_NEAL_ALBUM = "The Transatlantic Demos"
+NEAL_SCOPE_TRACK_TITLE = "Family Scope Beacon"
 NEAL_MORSE_FAMILY_ARTISTS = (
     JOSEPH_ARTIST,
     "The Neal Morse Band",
@@ -513,7 +522,9 @@ if str(ROOT) not in sys.path:
 from music_app.services.metadata import FILE_METADATA_SCHEMA_VERSION  # noqa: E402
 from tests.e2e.support.isolatedPostgres import (  # noqa: E402
     IsolatedDatabaseOwnershipLock,
+    configure_performance_auth_environment,
     prepare_isolated_database,
+    provision_performance_auth_owner,
     reset_application_tables,
     resolve_isolated_database_urls,
 )
@@ -1634,6 +1645,8 @@ def build_file_cache(
             if artist_index == cover_matching_fixture_artist_index
             else artist_family_fixture_indices[artist_index][1]
             if artist_index in artist_family_fixture_indices
+            else TRANSATLANTIC_ARTIST
+            if artist_index == alias_overflow_artist_index
             else alias_artist_by_index.get(
                 artist_index,
                 search_family_artist_by_index.get(
@@ -1805,6 +1818,8 @@ def build_file_cache(
                 if is_lastfm_scrobble_fixture
                 else JOSEPH_ALBUM
                 if is_joseph_fixture
+                else TRANSATLANTIC_NEAL_ALBUM
+                if artist == JOSEPH_ARTIST and album_index == 2
                 else PROBLEMATIC_TRACK_ALBUM
                 if is_problematic_track_navigation_fixture
                 else f"Comfortably Numb Sidebar Fixture {problematic_sidebar_fixture_number:02d}"
@@ -1924,7 +1939,11 @@ def build_file_cache(
                 if artist == SNOW_WHITE_RAW_ARTIST
                 else artist
             )
-            if artist in MORSE_ALIAS_FIXTURES or artist in NEAL_MORSE_FAMILY_ARTISTS:
+            if (
+                artist in MORSE_ALIAS_FIXTURES
+                or artist in NEAL_MORSE_FAMILY_ARTISTS
+                or artist == TRANSATLANTIC_ARTIST
+            ):
                 album_dir = (
                     library_root
                     / "Progressive Projects"
@@ -2062,6 +2081,12 @@ def build_file_cache(
                 title = f"{album} Track {track_number}"
                 track_artist = artist
                 track_path = album_dir / f"{track_number:02d} - Track {track_number}.mp3"
+                if (
+                    artist == JOSEPH_ARTIST
+                    and album == TRANSATLANTIC_NEAL_ALBUM
+                    and track_index == 0
+                ):
+                    title = NEAL_SCOPE_TRACK_TITLE
                 if is_rarity_fixture:
                     rarity_track = RARITY_FIXTURE_TRACKS[track_index]
                     title = str(rarity_track["title"])
@@ -2439,7 +2464,11 @@ def materialize_fixture_track_files(
             is_cover_candidate_scan_fixture_track = (
                 str(metadata.get("album_artist") or "").strip() == "Mastodon"
                 and str(metadata.get("album") or "").strip()
-                in {"Crack The Skye Fixture 08", "Crack The Skye Fixture 09"}
+                in {
+                    "Crack The Skye",
+                    "Crack The Skye Fixture 08",
+                    "Crack The Skye Fixture 09",
+                }
             )
             is_problematic_encoding_fixture_track = (
                 str(metadata.get("album_artist") or "").strip()
@@ -2955,7 +2984,7 @@ def persist_provider_storage_policy_candidates(
                 height=900,
                 score=0.99 - (index * 0.01),
                 matched_artist="Mastodon",
-                matched_album="Crack The Skye Fixture 10",
+                matched_album="Crack The Skye",
                 matched_year=2009,
                 debug_payload={
                     "source_label": source_label,
@@ -3021,7 +3050,7 @@ def persist_provider_storage_policy_candidates(
             join library.local_artists
               on library.local_artists.id = library.local_albums.artist_id
             where library.local_artists.name = 'Mastodon'
-              and library.local_albums.title = 'Crack The Skye Fixture 10'
+              and library.local_albums.title = 'Crack The Skye'
               and library.local_albums.release_year = 2009
             on conflict (album_id) do update
             set candidates = excluded.candidates,
@@ -4927,12 +4956,14 @@ def resolve_provider_port(cli_port: int | None, environment: dict[str, str] | No
     raise RuntimeError("PLAYWRIGHT_PROVIDER_BASE_URL or PLAYWRIGHT_PROVIDER_PORT is required.")
 
 
-def cleanup_isolated_database() -> None:
+def cleanup_isolated_database(*, lock_only: bool = False) -> None:
     setup_database_url, _runtime_database_url = resolve_isolated_database_urls()
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url,
+        **({"wait_seconds": 0} if lock_only else {}))
     database_lock.acquire()
     try:
-        reset_application_tables(setup_database_url)
+        if not lock_only:
+            reset_application_tables(setup_database_url)
     finally:
         database_lock.release()
 
@@ -4942,10 +4973,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=4173)
     parser.add_argument("--provider-port", type=int)
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--cleanup-lock-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--seed-all-functional-cover-misses", action="store_true")
     args = parser.parse_args()
 
+    if args.cleanup_lock_only:
+        cleanup_isolated_database(lock_only=True)
+        return
     if args.cleanup_only:
         cleanup_isolated_database()
         return
@@ -4975,7 +5010,7 @@ def main() -> None:
     original_failure: BaseException | None = None
     cleanup_failure: Exception | None = None
     database_preparation_started = False
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url)
     try:
         install_shutdown_handlers()
         library_root = configure_isolated_environment(
@@ -4995,7 +5030,8 @@ def main() -> None:
                 library_root,
                 reuse_existing=True,
             )
-            restore_reused_fixture09_user_owned_cover(library_root, cover_specs)
+            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+                restore_reused_fixture09_user_owned_cover(library_root, cover_specs)
             artist_count = int(fixture_config.get("artistCount") or 0)
             album_count = artist_count * int(fixture_config.get("albumsPerArtist") or 0)
             track_count = album_count * int(fixture_config.get("tracksPerAlbum") or 0)
@@ -5029,16 +5065,23 @@ def main() -> None:
             database_preparation_started = True
             prepare_isolated_database(setup_database_url, runtime_database_url)
             persist_fixture_inventory(setup_database_url, library_root, file_cache)
-            provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
-            persist_provider_storage_policy_candidates(
-                setup_database_url,
-                provider_port,
-                provider_storage_policy_spec,
-            )
+            if fixture_profile_requires_provider_storage_policy_fixture(fixture_profile):
+                provider_storage_policy_spec = ensure_provider_storage_policy_cover_spec(cover_specs)
+                persist_provider_storage_policy_candidates(
+                    setup_database_url,
+                    provider_port,
+                    provider_storage_policy_spec,
+                )
             materialize_rating_scan_discovery_track(library_root, loop_source)
             seed_fixture_lastfm_timezone()
-        elif not is_preloaded_fixture:
+        elif (
+            not is_preloaded_fixture
+            and fixture_profile_requires_provider_storage_policy_fixture(fixture_profile)
+        ):
             ensure_provider_storage_policy_cover_spec(cover_specs)
+
+        configure_performance_auth_environment(args.port)
+        provision_performance_auth_owner(runtime_database_url)
 
         if args.prepare_only:
             print(

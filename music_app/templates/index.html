@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -7,17 +7,32 @@
   <title>{{ app_name }} v{{ app_version }}</title>
   <link rel="preload" href="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" as="script">
   <link rel="preload" href="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" as="script">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/base-layout.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/account-menu.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-drawer-and-related.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/compact-data-table.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/alert-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-artbox-and-gallery-card.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-details-components.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/album-track-table.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/utilities.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/non-album-and-player.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/track-modal-and-lightbox.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/cover-lookup-modal.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/shell-persistent-player.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="/static/css/admin-members.css">
+  <link rel="stylesheet" href="/static/css/account.css">
+  <link rel="stylesheet" href="/static/css/settings-navigation.css">
+  <link rel="stylesheet" href="/static/css/app-chrome.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
+  {% include "partials/navigation-tree-assets.html" %}
+  <script src="/static/js/account.js" defer></script>
+  <script src="/static/js/admin-members.js" defer></script>
+  <script src="/static/js/settings-navigation.js" defer></script>
   <script>window.__ALBUM_HAVEN_RUNTIME_ASSET_VERSION__ = {{ runtime_asset_version | tojson }};</script>
   <script src="{{ url_for('static', filename='app.js') }}?v={{ runtime_asset_version }}" defer></script>
   {% if bootstrap_payload %}<script src="{{ url_for('static', filename='js/runtime-bundle.js') }}?v={{ runtime_asset_version }}" defer></script>{% endif %}
+  {% include "partials/appearance-bootstrap.html" %}
 </head>
 <body>
   {% set shell_layout = bootstrap_payload.initial_view.shell_layout if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.shell_layout else {} %}
@@ -32,47 +47,47 @@
   {% set shell_drawer = shell_slots.info_drawer if shell_slots and shell_slots.info_drawer else {} %}
   {% set shell_bottom_player = shell_slots.bottom_player if shell_slots and shell_slots.bottom_player else {} %}
   {% set discovery_center_page = bootstrap_payload.initial_view.discovery_center if bootstrap_payload and bootstrap_payload.initial_view and bootstrap_payload.initial_view.discovery_center else {} %}
+  {% from "partials/app-bar.html" import app_bar with context %}
+  {% from "partials/search-input.html" import search_input %}
+  {% from "partials/button.html" import ui_button, action_button %}
+  {% from "partials/playback-control-cluster.html" import playback_control_cluster %}
   <div class="layout shell-layout" id="app-shell" data-shell-kind="{{ shell_layout.kind or 'shared_media_shell' }}">
-    <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
-      <div class="sidebar-top shell-navigation-rail-header">
-        <h2>Artists</h2>
-      </div>
-      <div class="artist-list" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
-    </aside>
-    <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
-
-    <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
-      <form class="toolbar shell-app-bar" id="search-form" method="get" action="/" data-shell-slot="app_bar" data-shell-content-kind="{{ shell_app_bar.content_kind or 'global_search_toolbar' }}" data-shell-notifications-entry-kind="{{ shell_notifications_surface.entry_kind or 'operational_drawer' }}" data-shell-notifications-badge-kind="{{ shell_notifications_surface.badge_kind or 'operational_notifications' }}" data-shell-notifications-drawer-slot="{{ shell_notifications_surface.drawer_slot or 'info_drawer' }}" data-shell-notifications-default-drawer-kind="{{ shell_notifications_surface.default_drawer_content_kind or shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer' }}" data-shell-notifications-supported-drawer-kinds="{{ (shell_notifications_surface.supported_drawer_content_kinds or [shell_notifications_surface.drawer_content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-discovery-entry-kind="{{ shell_discovery_center_surface.entry_kind or 'drawer_plus_page' }}" data-shell-discovery-drawer-kind="{{ shell_discovery_center_surface.drawer_content_kind or 'discovery_center_preview' }}" data-shell-discovery-page-route="{{ shell_discovery_center_surface.page_route or '/news' }}">
-        <div class="toolbar-left">
-          <div class="search-input-wrap">
-            <input type="search" name="q" id="search-input" value="{{ query }}" placeholder="Search artist, album, or track" aria-label="Search music" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="recent-search-popover" aria-expanded="false">
-            <div class="recent-search-popover" id="recent-search-popover" role="listbox" aria-label="Recent searches" hidden></div>
-          </div>
+    {% call app_bar("library") %}
+        <form class="toolbar-left" id="search-form" method="get" action="/">
+          {{ search_input("search-input", value=query, suggestions_id="recent-search-popover") }}
           {% if effective_selected_artist %}<input type="hidden" name="artist" value="{{ effective_selected_artist }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scope %}<input type="hidden" name="gallery_scope" value="{{ bootstrap_payload.initial_view.gallery_scope }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_display_mode and bootstrap_payload.initial_view.gallery_display_mode != 'cards' %}<input type="hidden" name="gallery_display" value="{{ bootstrap_payload.initial_view.gallery_display_mode }}">{% endif %}
           {% if effective_selected_artist and bootstrap_payload.initial_view.selected_artist_family_display_mode and bootstrap_payload.initial_view.selected_artist_family_display_mode != 'grouped' %}<input type="hidden" name="family_display" value="{{ bootstrap_payload.initial_view.selected_artist_family_display_mode }}">{% endif %}
           {% if bootstrap_payload.initial_view.gallery_scale_percent and bootstrap_payload.initial_view.gallery_scale_percent != 100 %}<input type="hidden" name="gallery_scale_percent" value="{{ bootstrap_payload.initial_view.gallery_scale_percent }}">{% endif %}
           {% for category in bootstrap_payload.initial_view.visible_library_categories or [] %}<input type="hidden" name="category" value="{{ category }}">{% endfor %}
-          <button class="button" type="submit">Apply</button>
-        </div>
+        </form>
         <div class="toolbar-right">
-          <button class="icon-button cover-lookup-drawer-button" type="button" id="cover-lookup-drawer-button" data-toggle-cover-lookup-drawer="1" title="Cover art lookups" aria-label="Cover art lookups">
+          {% call action_button('Cover art lookups', class_name='cover-lookup-drawer-button', id='cover-lookup-drawer-button', title='Cover art lookups', attributes={'data-toggle-cover-lookup-drawer': '1'}) %}
             <span class="cover-lookup-drawer-glyph" aria-hidden="true">
               <img class="cover-lookup-drawer-glyph-default" src="{{ url_for('static', filename='images/cover-lookup-notification-icon-offwhite.png') }}" alt="">
               <img class="cover-lookup-drawer-glyph-hover" src="{{ url_for('static', filename='images/cover-lookup-notification-icon.png') }}" alt="">
             </span>
             <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
-          </button>
-          <button class="status-indicator is-idle" type="button" id="scan-indicator" aria-label="Library status" title="Library ready">
+          {% endcall %}
+          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready') %}
             <span class="status-spinner" aria-hidden="true"></span>
             <span class="status-check" aria-hidden="true">&#10003;</span>
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
-          </button>
-          <button class="icon-button" type="button" id="settings-button" data-open-utilities="1" title="Settings" aria-label="Settings">&#9881;</button>
+          {% endcall %}
+          {% include 'partials/account-menu.html' %}
         </div>
-      </form>
+    {% endcall %}
+    <aside class="sidebar shell-navigation-rail" id="shell-navigation-rail" data-shell-slot="navigation_rail" data-shell-content-kind="{{ shell_rail.content_kind or 'artists_sidebar' }}" data-shell-default-collapsed="{{ 'true' if shell_rail.default_collapsed else 'false' }}" aria-hidden="false">
+      <div class="sidebar-top shell-navigation-rail-header">
+        <h2>Artists</h2>
+      </div>
+      <div class="artist-list navigation-tree" data-navigation-tree="artists" id="sidebar-list" data-startup-preview-mode="{{ startup_preview.mode }}">{{ startup_preview.sidebar_html|safe }}</div>
+    </aside>
+    <button class="shell-navigation-rail-backdrop" type="button" id="shell-navigation-rail-backdrop" data-close-artists-drawer="1" aria-label="Close artists drawer" hidden></button>
+
+    <main class="main shell-main-surface" id="shell-main-surface" data-shell-slot="main_content" data-shell-content-kind="{{ shell_main.content_kind or 'gallery' }}" data-shell-surface-ref="{{ shell_main.surface_ref or 'albums' }}">
 
       {% if last_error %}
       <div class="error" id="last-error">Last scan error: {{ last_error }}</div>
@@ -109,6 +124,7 @@
       </div>
       {% else %}
       <div class="gallery-top-row">
+        <button class="button artists-drawer-button" type="button" id="artists-drawer-button" data-toggle-artists-drawer="1" aria-controls="shell-navigation-rail" aria-expanded="false" hidden>Artists</button>
         <section class="related-box shell-contextual-pane {% if not startup_preview.related_expanded %}is-collapsed{% endif %}" id="related-box" data-shell-slot="contextual_pane" data-shell-content-kind="{{ shell_contextual.content_kind or 'contextual_navigation' }}" data-shell-is-visible="{{ 'true' if shell_contextual.is_visible else 'false' }}" data-shell-active-pane="{{ shell_contextual.active_pane or '' }}" data-shell-supported-panes="{{ (shell_contextual.supported_panes or [])|join(',') }}" data-shell-local-tree-submode="{{ shell_contextual.local_tree.active_submode if shell_contextual.local_tree else '' }}" data-shell-local-tree-submodes="{{ (shell_contextual.local_tree.supported_submodes if shell_contextual.local_tree else [])|join(',') }}" data-shell-splitter-desktop-only="{{ 'true' if shell_contextual.splitter and shell_contextual.splitter.desktop_only else 'false' }}" data-shell-splitter-placement="{{ shell_contextual.splitter.placement if shell_contextual.splitter else '' }}" data-shell-mobile-fallback="{{ shell_contextual.splitter.mobile_fallback if shell_contextual.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_contextual.splitter.state_scope if shell_contextual.splitter else '' }}" {% if startup_preview.has_related %}style="display:block"{% else %}style="display:none"{% endif %}>
           <button class="related-toggle" id="related-toggle" type="button" aria-expanded="{% if startup_preview.related_expanded %}true{% else %}false{% endif %}" aria-controls="related-list-wrap">
             <span class="related-title">Artist Family</span>
@@ -162,13 +178,21 @@
     </main>
   </div>
 
+  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  <main class="settings-host settings-shell" data-settings-host hidden>
+    {{ app_bar() }}
+    {% with allowed_actions = account_menu_allowed_actions, csrf_token = account_menu_csrf_token %}
+      {% include "partials/admin-settings-nav.html" %}
+    {% endwith %}
+    <div class="settings-outlet" data-settings-outlet></div>
+  </main>
   <div class="global-player shell-bottom-player" data-shell-slot="bottom_player" data-shell-content-kind="{{ shell_bottom_player.content_kind or 'global_player' }}" data-shell-is-persistent="{{ 'true' if shell_bottom_player.is_persistent else 'false' }}">
     <div class="player-shell">
-      <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
-      <span class="loop-play-control-cluster player-play-cluster">
-        <button class="loop-play-control-button player-play" type="button" id="player-play" aria-label="Play or pause">Play</button>
-        <span class="loop-play-control-actions player-loop-actions" data-loop-action-mount="global-player" data-loop-action-owner="global-player"></span>
-      </span>
+      <div class="player-controls">
+        {% call ui_button(variant='icon', size='small', action='player-collapse', class_name='player-collapse-button', aria_label='Collapse player', title='Collapse player') %}‹{% endcall %}
+        <button class="player-cover-button" type="button" id="player-cover-button" aria-label="Open album details" hidden></button>
+        {{ playback_control_cluster('expanded-player', owner_id='global-player') }}
+      </div>
       <div class="player-main">
         <div class="player-meta">
           <div class="player-title" id="player-title"></div>
@@ -185,6 +209,11 @@
           </div>
         </div>
       </div>
+    </div>
+    <div class="compact-player-shell" aria-label="Compact player" hidden>
+      {% call ui_button(variant='icon', size='small', action='player-expand', class_name='compact-player-expand', aria_label='Expand player', title='Expand player') %}›{% endcall %}
+      <button class="compact-player-cover" type="button" data-compact-player-cover aria-label="Open album details"></button>
+      {{ playback_control_cluster('compact-player') }}
     </div>
   </div>
 
@@ -223,4 +252,3 @@
   </script>
 </body>
 </html>
-

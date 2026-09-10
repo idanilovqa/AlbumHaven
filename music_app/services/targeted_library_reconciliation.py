@@ -1,0 +1,404 @@
+"""Targeted media parsing and Postgres inventory publication."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+import os
+from pathlib import Path
+from threading import Event, Lock
+from typing import Any
+
+from music_app.services.library_event_coordinator import _stat_signature
+from music_app.services.library_indexing import enrich_library_file_entry
+from music_app.services.library_roots import get_library_roots
+from music_app.services.metadata import read_metadata_for_file
+from music_app.services.save_tasks import structural_tag_edit_resource_keys
+
+
+@dataclass(frozen=True, slots=True)
+class TargetedReconciliationResult:
+    revision: int
+    affected_album_keys: tuple[str, ...]
+    health: str = "healthy"
+
+
+class TargetedLibraryReconciler:
+    """Parse only event-selected media and publish one atomic mutation."""
+
+    def __init__(
+        self,
+        config: dict[str, object],
+        *,
+        repository: Any,
+        root_definitions: Iterable[dict[str, object]] | None = None,
+        metadata_reader: Callable[[Path], dict[str, object]] = read_metadata_for_file,
+        exception_overrides: dict[str, object] | None = None,
+        exception_overrides_provider: (
+            Callable[[], dict[str, object]] | None
+        ) = None,
+        after_commit: Callable[[TargetedReconciliationResult], object] | None = None,
+        reservation_acquirer: Callable[[set[str]], object] | None = None,
+        publication_guard: Callable | None = None,
+        stat_path: Callable[[Path], object] | None = None,
+        wait: Callable[[float], object] | None = None,
+        max_stable_attempts: int = 4,
+        stable_sample_interval: float = 0.1,
+    ) -> None:
+        self._config = config
+        self._repository = repository
+        self._roots = tuple(root_definitions or get_library_roots(config))
+        self._roots_lock = Lock()
+        self._metadata_reader = metadata_reader
+        self._exception_overrides = dict(exception_overrides or {})
+        self._exception_overrides_provider = exception_overrides_provider
+        self._after_commit = after_commit
+        self._reservation_acquirer = reservation_acquirer
+        self._publication_guard = publication_guard
+        self._stop_event = Event()
+        self._stat_path = stat_path or Path.stat
+        self._wait = wait or self._stop_event.wait
+        self._max_stable_attempts = max(2, int(max_stable_attempts))
+        self._stable_sample_interval = max(0.0, float(stable_sample_interval))
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def replace_roots(self, roots: Iterable[dict[str, object]]) -> None:
+        with self._roots_lock:
+            self._roots = tuple(dict(root) for root in roots)
+
+    def reconcile(
+        self,
+        request: object,
+        *,
+        root_healthy: bool = True,
+    ) -> TargetedReconciliationResult:
+        if self._stop_event.is_set():
+            return TargetedReconciliationResult(0, (), "cancelled")
+        root_id = str(getattr(request, "root_id", "") or "").strip()
+        with self._roots_lock:
+            root_definitions = self._roots
+        primary_root = self._root_by_id(root_id, root_definitions)
+        if primary_root is None:
+            return TargetedReconciliationResult(0, (), "invalid_path")
+
+        supported_extensions = {
+            str(extension).casefold()
+            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
+        }
+
+        def is_supported_media(path: Path) -> bool:
+            return not supported_extensions or path.suffix.casefold() in supported_extensions
+
+        deleted_paths = tuple(
+            path
+            for path in (Path(value) for value in getattr(request, "deleted_paths", ()))
+            if is_supported_media(path)
+        )
+        deleted_subtrees = tuple(
+            Path(path) for path in getattr(request, "deleted_subtrees", ())
+        )
+        preserved_subtrees = tuple(
+            Path(path) for path in getattr(request, "preserved_subtrees", ())
+        )
+        moves = tuple(getattr(request, "moves", ()) or ())
+        if not root_healthy and (deleted_paths or deleted_subtrees or moves):
+            return TargetedReconciliationResult(0, (), "root_unhealthy")
+
+        active_targets: list[tuple[Path, dict[str, object]]] = []
+        for path in getattr(request, "paths", ()) or ():
+            candidate = Path(path)
+            if not self._belongs_to_root(candidate, primary_root):
+                return TargetedReconciliationResult(0, (), "invalid_path")
+            if candidate.is_dir():
+                active_targets.extend(
+                    (media_path, primary_root)
+                    for media_path in self._supported_media_descendants(candidate)
+                    if self._belongs_to_root(media_path, primary_root)
+                )
+            elif is_supported_media(candidate):
+                active_targets.append((candidate, primary_root))
+        if not all(self._belongs_to_root(path, primary_root) for path in deleted_paths):
+            return TargetedReconciliationResult(0, (), "invalid_path")
+        if not all(self._belongs_to_root(path, primary_root) for path in deleted_subtrees):
+            return TargetedReconciliationResult(0, (), "invalid_path")
+        if not all(self._belongs_to_root(path, primary_root) for path in preserved_subtrees):
+            return TargetedReconciliationResult(0, (), "invalid_path")
+        for preserved_path in preserved_subtrees:
+            # An overlap can be a single file inside a moved directory. Enumerate
+            # the actual surviving media so missing children remain deletable.
+            if preserved_path.is_file() and is_supported_media(preserved_path):
+                active_targets.append((preserved_path, primary_root))
+            else:
+                active_targets.extend(
+                    (path, primary_root)
+                    for path in self._supported_media_descendants(preserved_path)
+                    if self._belongs_to_root(path, primary_root)
+                )
+
+        normalized_moves: list[dict[str, object]] = []
+        source_subtrees = {root_id: {str(path) for path in deleted_subtrees}}
+        for move in moves:
+            source = Path(getattr(move, "source"))
+            destination = Path(getattr(move, "destination"))
+            source_root_id = str(getattr(move, "source_root_id", root_id) or root_id)
+            destination_root_id = str(
+                getattr(move, "destination_root_id", root_id) or root_id
+            )
+            source_root = self._root_by_id(source_root_id, root_definitions)
+            destination_root = self._root_by_id(destination_root_id, root_definitions)
+            if (
+                source_root is None
+                or destination_root is None
+                or not self._belongs_to_root(source, source_root)
+                or not self._belongs_to_root(destination, destination_root)
+            ):
+                return TargetedReconciliationResult(0, (), "invalid_path")
+            is_directory = bool(getattr(move, "is_directory", False))
+            if is_directory:
+                deleted_subtrees += (source,)
+                source_subtrees.setdefault(source_root_id, set()).add(str(source))
+                for media_path in self._supported_media_descendants(destination):
+                    if self._belongs_to_root(media_path, destination_root):
+                        active_targets.append((media_path, destination_root))
+            else:
+                if is_supported_media(source):
+                    deleted_paths += (source,)
+                if is_supported_media(destination):
+                    active_targets.append((destination, destination_root))
+                if not is_supported_media(source) and not is_supported_media(destination):
+                    continue
+            normalized_moves.append(
+                {
+                    "source_path": str(source),
+                    "destination_path": str(destination),
+                    "source_root_id": source_root_id,
+                    "destination_root_id": destination_root_id,
+                    **({"is_directory": True} if is_directory else {}),
+                }
+            )
+
+        if self._stop_event.is_set():
+            return TargetedReconciliationResult(0, (), "cancelled")
+        if not active_targets and not deleted_paths and not deleted_subtrees and not normalized_moves:
+            return TargetedReconciliationResult(0, ())
+
+        expanded_targets: list[tuple[Path, dict[str, object]]] = list(active_targets)
+        affected_directories: dict[
+            tuple[str, Path], tuple[Path, dict[str, object]]
+        ] = {}
+        for candidate, matched_root in active_targets:
+            album_directory = self._album_directory(candidate, matched_root)
+            directory_key = (
+                str(matched_root.get("id") or ""),
+                album_directory.resolve(strict=False),
+            )
+            affected_directories.setdefault(
+                directory_key,
+                (album_directory, matched_root),
+            )
+        for album_directory, matched_root in affected_directories.values():
+            expanded_targets.extend(
+                (media_path, matched_root)
+                for media_path in self._supported_album_media(album_directory)
+                if self._belongs_to_root(media_path, matched_root)
+            )
+        active_targets = expanded_targets
+
+        folder_cover_cache: dict[str, object] = {}
+        cover_metadata_cache: dict[
+            str,
+            tuple[int | None, int | None, str | None, int | None, int | None],
+        ] = {}
+        active_by_path = {
+            str(candidate.resolve(strict=False)): (
+                candidate.resolve(strict=False),
+                root,
+            )
+            for candidate, root in active_targets
+        }
+        reservation_paths = set(active_by_path)
+        reservation_paths.update(str(path) for path in deleted_paths)
+        for move in normalized_moves:
+            reservation_paths.add(str(move["source_path"]))
+            reservation_paths.add(str(move["destination_path"]))
+        if self._reservation_acquirer is not None and deleted_subtrees:
+            reservation_paths.update(
+                self._repository.load_targeted_subtree_track_paths(source_subtrees)
+            )
+        reservation = None
+        if self._reservation_acquirer is not None and reservation_paths:
+            reservation = self._reservation_acquirer(
+                structural_tag_edit_resource_keys(None, reservation_paths)
+            )
+        try:
+            disposition = self._stable_targets_disposition(active_by_path)
+            if disposition != "ready":
+                return TargetedReconciliationResult(0, (), disposition)
+            exception_overrides = (
+                dict(self._exception_overrides_provider() or {})
+                if self._exception_overrides_provider is not None
+                else self._exception_overrides
+            )
+            active_entries: dict[str, dict[str, object]] = {}
+            for path, matched_root in sorted(
+                active_by_path.values(),
+                key=lambda item: str(item[0]).casefold(),
+            ):
+                if self._stop_event.is_set():
+                    return TargetedReconciliationResult(0, (), "cancelled")
+                entry = self._metadata_reader(path)
+                enriched = enrich_library_file_entry(
+                    entry,
+                    path=path,
+                    root_definition=matched_root,
+                    image_extensions=set(self._config.get("IMAGE_EXTENSIONS") or set()),
+                    exception_overrides=exception_overrides,
+                    folder_cover_cache=folder_cover_cache,
+                    cover_metadata_cache=cover_metadata_cache,
+                )
+                active_entries[str(path)] = enriched
+
+            if self._stop_event.is_set():
+                return TargetedReconciliationResult(0, (), "cancelled")
+            persisted = self._repository.persist_targeted_inventory_mutation(
+                root_id=root_id,
+                active_file_entries=active_entries,
+                deleted_paths=tuple(dict.fromkeys(str(path) for path in deleted_paths)),
+                deleted_subtrees=tuple(dict.fromkeys(str(path) for path in deleted_subtrees)),
+                moves=tuple(normalized_moves),
+                **({"publication_guard": self._publication_guard} if self._publication_guard is not None else {}),
+            )
+            result = TargetedReconciliationResult(
+                int(persisted.get("inventory_mutation_revision") or 0),
+                tuple(
+                    sorted(
+                        {
+                            str(key)
+                            for key in persisted.get("affected_album_keys", ())
+                            if str(key)
+                        }
+                    )
+                ),
+            )
+            if self._after_commit is not None:
+                self._after_commit(result)
+            return result
+        except Exception as exc:
+            from music_app.services.library_watch_health import LibraryRootUnhealthyError
+
+            if isinstance(exc, LibraryRootUnhealthyError):
+                return TargetedReconciliationResult(0, (), "root_unhealthy")
+            raise
+        finally:
+            release = getattr(reservation, "release", None)
+            if callable(release):
+                release()
+
+    def _stable_targets_disposition(self, paths: Iterable[str]) -> str:
+        targets = tuple(sorted((Path(path) for path in paths), key=lambda path: str(path).casefold()))
+        if not targets:
+            return "cancelled" if self._stop_event.is_set() else "ready"
+        previous: dict[Path, tuple[int, int]] = {}
+        for attempt in range(self._max_stable_attempts):
+            current: dict[Path, tuple[int, int]] = {}
+            for path in targets:
+                if self._stop_event.is_set():
+                    return "cancelled"
+                try:
+                    current[path] = _stat_signature(self._stat_path(path))
+                except OSError:
+                    # Never turn a failed expansion read into a partial album
+                    # rebuild or a destructive move/deletion publication.
+                    continue
+            if len(current) == len(targets) and current == previous:
+                return "ready"
+            previous = current
+            if attempt + 1 < self._max_stable_attempts:
+                self._wait(self._stable_sample_interval)
+        return "cancelled" if self._stop_event.is_set() else "stable_write_unavailable"
+
+    def _root_by_id(
+        self,
+        root_id: str,
+        root_definitions: tuple[dict[str, object], ...] | None = None,
+    ) -> dict[str, object] | None:
+        return next(
+            (
+                root
+                for root in (self._roots if root_definitions is None else root_definitions)
+                if str(root.get("id") or "").strip() == root_id
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _belongs_to_root(path: Path, root: dict[str, object]) -> bool:
+        try:
+            path.resolve(strict=False).relative_to(
+                Path(str(root.get("path") or "")).resolve(strict=False)
+            )
+        except (OSError, ValueError):
+            return False
+        return True
+
+    def _supported_album_media(self, directory: Path) -> tuple[Path, ...]:
+        from music_app.services.library import _DISC_FOLDER_RE
+
+        supported = {
+            str(extension).casefold()
+            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
+        }
+        if not supported or not directory.is_dir():
+            return ()
+        media_paths: list[Path] = []
+        for candidate in directory.iterdir():
+            if candidate.is_file() and candidate.suffix.casefold() in supported:
+                media_paths.append(candidate)
+            elif candidate.is_dir() and _DISC_FOLDER_RE.search(candidate.name):
+                media_paths.extend(
+                    media_path
+                    for media_path in candidate.iterdir()
+                    if media_path.is_file()
+                    and media_path.suffix.casefold() in supported
+                )
+        return tuple(media_paths)
+
+    def _supported_media_descendants(self, directory: Path) -> tuple[Path, ...]:
+        supported = {
+            str(extension).casefold()
+            for extension in self._config.get("SUPPORTED_EXTENSIONS", ())
+        }
+        if not supported or not directory.is_dir():
+            return ()
+        paths: list[Path] = []
+        pending = [directory]
+        while pending:
+            if self._stop_event.is_set():
+                return ()
+            # pathlib.rglob suppresses PermissionError and can make an unreadable
+            # subtree appear empty. Publication requires complete enumeration.
+            with os.scandir(pending.pop()) as entries:
+                for entry in entries:
+                    if self._stop_event.is_set():
+                        return ()
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(Path(entry.path))
+                    elif Path(entry.name).suffix.casefold() in supported and entry.is_file():
+                        paths.append(Path(entry.path))
+        return tuple(paths)
+
+    @staticmethod
+    def _album_directory(path: Path, root: dict[str, object]) -> Path:
+        from music_app.services.library import _track_album_container
+
+        resolved_root = Path(str(root.get("path") or "")).resolve(strict=False)
+        album_directory = Path(
+            _track_album_container(path.resolve(strict=False))
+        ).resolve(strict=False)
+        try:
+            album_directory.relative_to(resolved_root)
+        except (OSError, ValueError):
+            return resolved_root
+        return album_directory

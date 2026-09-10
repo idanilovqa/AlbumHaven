@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('../playwright-exit-codes.cjs');
 
 const EXPECTED_CONFIGS = Object.freeze([
   'playwright.config.js',
@@ -10,10 +11,10 @@ const EXPECTED_CONFIGS = Object.freeze([
   'playwright.non-album-rescan.config.js',
 ]);
 const EXPECTED_SHARDS = Object.freeze([
-  ['gallery-search-visual', 35],
+  ['gallery-search-visual', 36],
   ['cover-providers', 18],
   ['metadata-mutations', 13],
-  ['playback-utilities', 25],
+  ['playback-utilities', 30],
 ]);
 const OWNER_RUNTIME_ENV_KEYS = Object.freeze([
   'MUSIC_DIR',
@@ -38,9 +39,24 @@ function caseKey(value) {
     .join('\u0000');
 }
 
+function functionalCaseAreas(ownedCase) {
+  return [...new Set([
+    String(ownedCase.area || '').trim(),
+    ...(Array.isArray(ownedCase.relatedAreas) ? ownedCase.relatedAreas : [])
+      .map((value) => String(value || '').trim()),
+  ].filter(Boolean))];
+}
+
 function parseListOutput(output, config) {
   const cases = [];
   for (const line of String(output || '').split(/\r?\n/)) {
+    if (line.startsWith('ALBUM_HAVEN_FUNCTIONAL_CASE=')) {
+      cases.push({
+        config,
+        ...JSON.parse(line.slice('ALBUM_HAVEN_FUNCTIONAL_CASE='.length)),
+      });
+      continue;
+    }
     const match = line.match(/^\s*\[([^\]]+)\]\s+›\s+(.+?):\d+:\d+\s+›\s+(.+?)\s*$/);
     if (!match) continue;
     cases.push({
@@ -57,11 +73,12 @@ function discoverFunctionalCases(options = {}) {
   const repoRoot = path.resolve(options.repoRoot || path.join(__dirname, '..', '..'));
   const spawnSyncFn = options.spawnSyncFn || spawnSync;
   const cliPath = path.join(repoRoot, 'node_modules', '@playwright', 'test', 'cli.js');
+  const reporterPath = path.join(repoRoot, 'scripts', 'ci', 'playwright-functional-list-reporter.cjs');
   const discovered = [];
   for (const config of EXPECTED_CONFIGS) {
     const result = spawnSyncFn(
       process.execPath,
-      [cliPath, 'test', '--list', '--reporter=line', `--config=${config}`],
+      [cliPath, 'test', '--list', `--reporter=${reporterPath}`, `--config=${config}`],
       {
         cwd: repoRoot,
         env: { ...process.env, PLAYWRIGHT_MANAGED_APP: '1' },
@@ -138,6 +155,14 @@ function validateFunctionalShardContract(contract, discoveredCases) {
 
   const owned = flattenOwnedCases(contract || {});
   for (const ownedCase of owned) {
+    if (!/^[a-z]+(?:-[a-z]+)*$/.test(String(ownedCase.area || ''))) {
+      errors.push(`functional case requires a product area: ${ownedCase.case}`);
+    }
+    for (const area of functionalCaseAreas(ownedCase)) {
+      if (!/^[a-z]+(?:-[a-z]+)*$/.test(area)) {
+        errors.push(`functional case has an invalid product area ${area}: ${ownedCase.case}`);
+      }
+    }
     if (!EXPECTED_CONFIGS.includes(ownedCase.invocationConfig)) {
       errors.push(`unknown functional config: ${ownedCase.invocationConfig}`);
     }
@@ -161,6 +186,15 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   const ownedDuplicates = duplicateKeys(owned);
   if (ownedDuplicates.size > 0) errors.push('duplicate functional case ownership detected');
   const discovered = Array.isArray(discoveredCases) ? discoveredCases : [];
+  for (const discoveredCase of discovered) {
+    if (!Object.hasOwn(discoveredCase, 'areas')) continue;
+    const ownedCase = owned.find((candidate) => caseKey(candidate) === caseKey(discoveredCase));
+    const missingArea = ownedCase && functionalCaseAreas(ownedCase)
+      .find((area) => !discoveredCase.areas?.includes(area));
+    if (missingArea) {
+      errors.push(`functional case is missing native @area:${missingArea} tag: ${ownedCase.case}`);
+    }
+  }
   const discoveredDuplicates = duplicateKeys(discovered);
   if (discoveredDuplicates.size > 0) errors.push('duplicate Playwright functional discovery detected');
 
@@ -172,7 +206,7 @@ function validateFunctionalShardContract(contract, discoveredCases) {
   for (const key of ownedKeys) {
     if (!discoveredKeys.has(key)) errors.push(`orphan or unknown owned functional case: ${key.replaceAll('\u0000', ' | ')}`);
   }
-  if (owned.length !== 91) errors.push(`functional contract owns ${owned.length} cases; expected 91`);
+  if (owned.length !== 97) errors.push(`functional contract owns ${owned.length} cases; expected 97`);
   return errors;
 }
 
@@ -239,6 +273,7 @@ function executionWavesForShard(shard, matrixRows) {
         waves.set(waveNumber, wave);
       }
       const isGlobalMutation = matrixRow.stateMode === 'global-mutation';
+      const isOwnedMutation = matrixRow.stateMode === 'owned-mutation';
       const setupGroup = String(matrixRow.setupGroup || '').trim();
       const appProcessScope = String(matrixRow.appProcessScope || '').trim();
       if (appProcessScope && appProcessScope !== 'isolated') {
@@ -255,9 +290,9 @@ function executionWavesForShard(shard, matrixRows) {
       const invocationKey = [
         invocation.config,
         invocation.project,
-        isGlobalMutation
-          ? ownedCase.case
-          : isIsolatedAppProcess ? setupGroup || ownedCase.case : 'compatible',
+        isGlobalMutation || isOwnedMutation
+          ? caseKey(normalizedCase)
+          : isIsolatedAppProcess ? setupGroup || caseKey(normalizedCase) : 'compatible',
       ].join('\0');
       let groupedInvocation = wave.invocationByKey.get(invocationKey);
       if (!groupedInvocation) {
@@ -267,7 +302,9 @@ function executionWavesForShard(shard, matrixRows) {
           workers: 1,
           baselineMode: isGlobalMutation
             ? 'global-mutation'
-            : isIsolatedAppProcess ? 'isolated-app-process' : 'shared-setup',
+            : isIsolatedAppProcess
+              ? 'isolated-app-process'
+              : isOwnedMutation ? 'owned-mutation' : 'shared-setup',
           appProcessOrder: isIsolatedAppProcess ? appProcessOrder || 'before-shared' : null,
           cases: [],
         };
@@ -297,12 +334,13 @@ function executionWavesForShard(shard, matrixRows) {
     }
     const invocationRank = (invocation) => {
       if (invocation.baselineMode === 'isolated-app-process') {
-        return invocation.appProcessOrder === 'after-shared' ? 2 : 0;
+        return invocation.appProcessOrder === 'after-shared' ? 3 : 0;
       }
       return ({
         'shared-setup': 1,
-        'global-mutation': 3,
-      }[invocation.baselineMode] ?? 4);
+        'owned-mutation': 2,
+        'global-mutation': 4,
+      }[invocation.baselineMode] ?? 5);
     };
     wave.invocations.sort((left, right) => invocationRank(left) - invocationRank(right));
     delete wave.invocationByKey;
@@ -412,22 +450,22 @@ function runFunctionalShard(contract, shardName, options = {}) {
   }
 
   let invocationIndex = 0;
-  for (const [waveIndex, wave] of executionWaves.entries()) {
-    if (waveIndex > 0) {
-      const mediaRestoreResult = runMediaCheckpoint('restore');
-      if (mediaRestoreResult.signal) return { exitCode: 1, signal: mediaRestoreResult.signal };
-      if (mediaRestoreResult.error || mediaRestoreResult.status !== 0) {
-        failed = true;
-        break;
-      }
-      const restoreResult = runCheckpoint('restore');
-      if (restoreResult.signal) return { exitCode: 1, signal: restoreResult.signal };
-      if (restoreResult.error || restoreResult.status !== 0) {
-        failed = true;
-        break;
-      }
-    }
+  execution: for (const wave of executionWaves) {
     for (const invocation of wave.invocations) {
+      if (invocationIndex > 0) {
+        const mediaRestoreResult = runMediaCheckpoint('restore');
+        if (mediaRestoreResult.signal) return { exitCode: 1, signal: mediaRestoreResult.signal };
+        if (mediaRestoreResult.error || mediaRestoreResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
+        const restoreResult = runCheckpoint('restore');
+        if (restoreResult.signal) return { exitCode: 1, signal: restoreResult.signal };
+        if (restoreResult.error || restoreResult.status !== 0) {
+          failed = true;
+          break execution;
+        }
+      }
       invocationIndex += 1;
       const invocationName = [
         `wave-${String(wave.wave).padStart(2, '0')}`,
@@ -435,7 +473,7 @@ function runFunctionalShard(contract, shardName, options = {}) {
         path.basename(invocation.config).replace(/[^a-z0-9]+/gi, '-'),
       ].join('-');
       const testPaths = [...new Set(invocation.cases.map((ownedCase) => normalizeTestPath(ownedCase.test)))];
-      const titlePattern = `(?:${invocation.cases.map((ownedCase) => regexEscape(ownedCase.case)).join('|')})$`;
+      const titlePattern = `(?:${invocation.cases.map((ownedCase) => regexEscape(ownedCase.case)).join('|')})(?:\\s+@area:[a-z-]+)*$`;
       const childEnv = {
         ...checkpointEnv,
         ALBUM_HAVEN_FUNCTIONAL_BROWSER_WARMUP: '1',
@@ -473,6 +511,9 @@ function runFunctionalShard(contract, shardName, options = {}) {
         },
       );
       if (result.signal) return { exitCode: 1, signal: result.signal };
+      if (result.status === PROCESS_CLEANUP_FAILURE_EXIT_CODE) {
+        return { exitCode: PROCESS_CLEANUP_FAILURE_EXIT_CODE, signal: null };
+      }
       if (result.error || result.status !== 0) failed = true;
     }
   }
@@ -524,6 +565,39 @@ function filterFunctionalShardCases(shard, focusedCases = []) {
   };
 }
 
+function selectFunctionalCases(contract, { exactCases = [], areas = [] } = {}) {
+  const requestedCases = new Set(exactCases.map((value) => String(value || '').trim()).filter(Boolean));
+  const requestedAreas = new Set(areas.map((value) => String(value || '').trim()).filter(Boolean));
+  const matchesCase = (title) => [...requestedCases].some((selector) => (
+    title === selector || title.startsWith(`${selector} `)
+  ));
+  const matches = (ownedCase) => (
+    matchesCase(String(ownedCase.case || '').trim())
+    || functionalCaseAreas(ownedCase).some((area) => requestedAreas.has(area))
+  );
+  const shards = (contract.shards || []).map((shard) => ({
+    ...shard,
+    invocations: (shard.invocations || []).map((invocation) => ({
+      ...invocation,
+      cases: (invocation.cases || []).filter(matches),
+    })).filter((invocation) => invocation.cases.length > 0),
+  })).filter((shard) => shard.invocations.length > 0);
+  const selectedCases = shards.flatMap((shard) => shard.invocations)
+    .flatMap((invocation) => invocation.cases);
+  if ((requestedCases.size || requestedAreas.size) && !selectedCases.length) {
+    throw new Error('Focused functional selection did not match any owned case.');
+  }
+  for (const selector of requestedCases) {
+    const matches = selectedCases.filter((ownedCase) => (
+      ownedCase.case === selector || ownedCase.case.startsWith(`${selector} `)
+    ));
+    if (matches.length !== 1) {
+      throw new Error(`Focused case selector ${selector} matched ${matches.length} owned cases; expected exactly one.`);
+    }
+  }
+  return { shards, selectedCases };
+}
+
 function main(argv = process.argv.slice(2)) {
   const repoRoot = path.resolve(path.join(__dirname, '..', '..'));
   const contractPath = path.join(repoRoot, 'tests', 'ci', 'functional-shards.json');
@@ -536,9 +610,30 @@ function main(argv = process.argv.slice(2)) {
   }
   const shardArgument = argv.find((argument) => String(argument).startsWith('--run-shard='));
   if (shardArgument) {
-    const focusedCases = argv
+    let focusedCases = argv
       .filter((argument) => String(argument).startsWith('--run-case='))
       .map((argument) => String(argument).slice('--run-case='.length));
+    const focusedAreas = argv
+      .filter((argument) => String(argument).startsWith('--run-area='))
+      .map((argument) => String(argument).slice('--run-area='.length));
+    if (focusedCases.length || focusedAreas.length) {
+      const selected = selectFunctionalCases(contract, {
+        exactCases: focusedCases,
+        areas: focusedAreas,
+      });
+      const selectedShard = selected.shards.find((shard) => (
+        shard.name === shardArgument.slice('--run-shard='.length)
+      ));
+      const shardCaseNames = (selectedShard?.invocations || []).flatMap((invocation) => (
+        invocation.cases.map((ownedCase) => ownedCase.case)
+      ));
+      if (!selectedShard || focusedCases.some((selector) => !shardCaseNames.some((caseName) => (
+        caseName === String(selector).trim() || caseName.startsWith(`${String(selector).trim()} `)
+      )))) {
+        throw new Error(`Focused selection contains cases not owned by functional shard ${shardArgument.slice('--run-shard='.length)}.`);
+      }
+      focusedCases = shardCaseNames;
+    }
     const result = runFunctionalShard(contract, shardArgument.slice('--run-shard='.length), {
       repoRoot,
       focusedCases,
@@ -564,6 +659,7 @@ module.exports = {
   discoverFunctionalCases,
   executionWavesForShard,
   filterFunctionalShardCases,
+  selectFunctionalCases,
   parseListOutput,
   runFunctionalShard,
   validateFunctionalShardContract,

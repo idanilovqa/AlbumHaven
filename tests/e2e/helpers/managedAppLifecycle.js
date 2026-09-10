@@ -142,24 +142,31 @@ export function createManagedAppLifecycle(options = {}) {
   const requestPath = path.join(controlDirectory, REQUEST_FILE);
   const ackPath = path.join(controlDirectory, ACK_FILE);
   let activeRestart = null;
+  let activeOperation = null;
+  let activeFailureReport = null;
+  let failureAcknowledgment = null;
 
-  async function performRestart() {
+  async function performRestart(operation = 'restart') {
+    if (operation === 'report-failure' && failureAcknowledgment) return failureAcknowledgment;
     const nonce = String(createNonce() || '').trim();
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed app restart requires a valid nonce.');
     }
 
     removeFileIfPresent(ackPath);
-    writeJsonAtomically(requestPath, { nonce });
+    writeJsonAtomically(requestPath, { nonce, ...(operation !== 'restart' ? { operation } : {}) });
     const deadline = now() + timeoutMs;
 
     while (now() <= deadline) {
       const acknowledgment = readAcknowledgment(ackPath);
       if (String(acknowledgment?.nonce || '') === nonce) {
         if (acknowledgment?.status === 'ready') {
+          if (operation === 'report-failure') throw new Error('Managed fixture failure was not acknowledged as terminal.');
           return acknowledgment;
         }
         if (acknowledgment?.status === 'failed') {
+          failureAcknowledgment = acknowledgment;
+          if (operation === 'report-failure') return acknowledgment;
           const phase = String(acknowledgment.phase || 'unknown').replace(/\s+/g, ' ').trim();
           const error = String(acknowledgment.error || 'no error detail')
             .replace(/\s+/g, ' ')
@@ -175,14 +182,44 @@ export function createManagedAppLifecycle(options = {}) {
     throw new Error(`Timed out waiting for managed app restart ${nonce}.`);
   }
 
+  function scheduleRestart(operation) {
+    if (activeRestart && activeOperation === operation) return activeRestart;
+    const previous = activeRestart;
+    const pending = (async () => {
+      if (previous) await previous;
+      return performRestart(operation);
+    })().finally(() => {
+      if (activeRestart === pending) { activeRestart = null; activeOperation = null; }
+    });
+    activeRestart = pending;
+    activeOperation = operation;
+    return pending;
+  }
+
   return {
-    restart() {
-      if (!activeRestart) {
-        activeRestart = performRestart().finally(() => {
-          activeRestart = null;
-        });
+    reportFailure() {
+      if (!activeFailureReport) {
+        activeFailureReport = (async () => {
+          let restartFailure;
+          try { await activeRestart; } catch (error) { restartFailure = error; }
+          let acknowledgment;
+          try {
+            acknowledgment = await performRestart('report-failure');
+          } catch (reportFailure) {
+            if (restartFailure) throw new AggregateError([restartFailure, reportFailure], 'Managed restart and terminal failure reporting failed.');
+            throw reportFailure;
+          }
+          if (restartFailure) throw restartFailure;
+          return acknowledgment;
+        })();
       }
-      return activeRestart;
+      return activeFailureReport;
+    },
+    restart() {
+      return scheduleRestart('restart');
+    },
+    cleanupWatcherFixture() {
+      return scheduleRestart('watcher-cleanup');
     },
   };
 }

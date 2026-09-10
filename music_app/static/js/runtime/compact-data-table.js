@@ -58,6 +58,11 @@ function buildCompactDataTable(config = {}) {
       ))
       .join('')}</div>`;
   const body = rows.map((row) => {
+    const rowClassName = String(row?.className || '')
+      .split(/\s+/)
+      .map((value) => value.trim())
+      .filter((value) => /^[a-zA-Z0-9_-]+$/.test(value))
+      .join(' ');
     const selected = row?.ariaSelected === true ? ' aria-selected="true"' : '';
     const disabled = row?.ariaDisabled === true ? ' aria-disabled="true"' : '';
     const busy = row?.ariaBusy === true ? ' aria-busy="true"' : '';
@@ -67,7 +72,11 @@ function buildCompactDataTable(config = {}) {
         ? ` data-${normalizedName}="${escapeHtml(value || '')}"`
         : '';
     }).join('');
-    return `<div role="row" class="compact-data-table-row" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${selected}${disabled}${busy}>${columns.map((column) => (
+    if (Object.prototype.hasOwnProperty.call(row || {}, 'fullSpanContent')) {
+      const fullSpanLabel = String(row?.ariaLabel || '').trim();
+      return `<div role="row" class="compact-data-table-row compact-data-table-row--full-span${rowClassName ? ` ${rowClassName}` : ''}" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${fullSpanLabel ? ` aria-label="${escapeHtml(fullSpanLabel)}"` : ''}><div role="cell" data-cdt-full-span>${row.fullSpanContent || ''}</div></div>`;
+    }
+    return `<div role="row" class="compact-data-table-row${rowClassName ? ` ${rowClassName}` : ''}" data-cdt-row-key="${escapeHtml(row?.key || '')}"${dataAttributes}${selected}${disabled}${busy}>${columns.map((column) => (
       buildCell(column, row?.cells?.[column.key] || '', 'cell')
     )).join('')}</div>`;
   }).join('');

@@ -21,10 +21,8 @@ function jobSource(jobName, nextJobName) {
 test('Python CI provisions and tears down an exact disposable PostgreSQL 17 database', () => {
   const job = jobSource('test_python', 'e2e_production_parity');
   assert.match(job, /runs-on:\s*windows-2025/);
-  assert.match(
-    job,
-    /if:\s*\$\{\{\s*github\.event\.pull_request\.head\.repo\.full_name\s*==\s*github\.repository\s*\}\}/,
-  );
+  assert.match(job, /needs:\s*[\s\S]*?- review_scope[\s\S]*?- review_prerequisites[\s\S]*?- pr_agent_review[\s\S]*?- codex_review/);
+  assert.match(job, /if:\s*\$\{\{[^\r\n]*!cancelled\(\) && needs\.review_prerequisites\.result == 'success'[^\r\n]*pipeline_mode == 'full'[^\r\n]*github\.event\.pull_request\.head\.repo\.full_name == github\.repository[^\r\n]*\}\}/);
   assert.doesNotMatch(job, /ALBUM_HAVEN_FIXTURES_TOKEN/);
   assert.match(job, /-Mode\s+Provision/);
   assert.match(job, /-Mode\s+Teardown/);
@@ -41,6 +39,7 @@ test('Python CI provisions and tears down an exact disposable PostgreSQL 17 data
 });
 
 test('schema-only bootstrap skips only fixture loading and preserves migrations and privilege probes', () => {
+  assert.match(bootstrap, /Import-Module\s+Microsoft\.PowerShell\.Utility\s+-ErrorAction\s+Stop/);
   assert.match(bootstrap, /\[switch\]\$SkipFixtureLoad/);
   assert.match(
     bootstrap,

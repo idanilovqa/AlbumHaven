@@ -42,7 +42,7 @@ const ORIGINAL_CROSS_DISC_VALUES = new Map([
 ]);
 const INVALID_AUTO_NUMBER_STARTS = ['', '0', '-1', '1.5'];
 
-test('FTC-TAGS-022 derives Start at from filename then deterministic editor position', async ({
+test('FTC-TAGS-022 derives Start at from filename then deterministic editor position', { tag: '@area:tag-edit' }, async ({
   galleryActions,
   settingsModalAppBarActions,
   stepLogger,
@@ -106,7 +106,7 @@ test('FTC-TAGS-022 derives Start at from filename then deterministic editor posi
   });
 });
 
-test('FTC-TAGS-022 restarts one consecutive selection for each disc', async ({
+test('FTC-TAGS-022 restarts one consecutive selection for each disc', { tag: '@area:tag-edit' }, async ({
   freshBrowserSession,
   galleryActions,
   page,

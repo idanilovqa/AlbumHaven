@@ -88,12 +88,11 @@ function buildUtilityLoopEntry(loop) {
       </div>
       <div class="utility-loop-shell" data-utility-loop-shell="${escapeHtml(loop.id || '')}">
         <audio class="utility-loop-audio" data-loop-audio="${escapeHtml(loop.id || '')}" data-original-src="${mediaSrc}" src="${mediaSrc}" preload="none"></audio>
-        <div class="loop-play-control-cluster utility-loop-play-cluster">
-          <button class="loop-play-control-button utility-loop-play" type="button" data-loop-play="${escapeHtml(loop.id || '')}" aria-label="Play or pause">&#9654;</button>
-          <span class="loop-play-control-actions utility-loop-actions">
-            ${buildLoopEditActionControl({ ownerId: `saved-loop-${loopId}`, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}
-          </span>
-        </div>
+        ${renderPlaybackControlCluster({
+          variant: 'saved-loop',
+          ownerId: `saved-loop-${String(loop.id || '')}`,
+          loopId: String(loop.id || ''),
+        })}
         <div class="utility-loop-main" data-saved-loop-main-surface="${loopId}">
           <div class="utility-loop-player-top-row" data-loop-player-top-row>
             <div class="utility-loop-control utility-loop-pitch-control" data-loop-pitch-control="${loopId}" data-loop-pitch-controls="${loopId}" aria-label="Pitch shift">
@@ -179,32 +178,9 @@ function buildUtilityAppearanceListItem(key, title, subtitle, selected) {
 }
 
 function buildUtilityAppearanceDetail() {
-  const appearance = state.player.appearance || getDefaultPlayerAppearance();
-  const waveformSelected = appearance.seekbarMode === 'waveform';
   return `
     <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">Seekbar</h3>
-      <p class="utility-rule-description">Choose the player seekbar style. Waveform keeps loop selection and seek behavior intact.</p>
-      <div class="appearance-section">
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default">
-          <span>Default seekbar</span>
-        </label>
-        <label class="appearance-option">
-          <input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform">
-          <span>Waveform seekbar</span>
-        </label>
-      </div>
-      <div class="appearance-color-grid ${waveformSelected ? '' : 'is-disabled'}">
-        <label class="appearance-color-field">
-          <span>Waveform fill</span>
-          <input type="color" value="${escapeHtml(appearance.waveformFillColor)}" data-appearance-color="fill" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-        <label class="appearance-color-field">
-          <span>Waveform edge</span>
-          <input type="color" value="${escapeHtml(appearance.waveformEdgeColor)}" data-appearance-color="edge" ${waveformSelected ? '' : 'disabled'}>
-        </label>
-      </div>
+      <div data-appearance-seekbar-editor></div>
     </div>
   `;
 }
@@ -573,6 +549,24 @@ function buildUtilityCollapsibleSection(sectionKey, title, contentHtml) {
 }
 
 function buildDetectedProblemsHtml(album) {
+  const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
+  if (albumMissing) {
+    const canRemove = Boolean(album?.allowed_actions?.['library.inventory.manage']);
+    return `
+      <div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
+      <div class="utility-album-problem-list">
+        <div class="utility-problem-level-heading"><span>ALBUM-LEVEL PROBLEMS</span></div>
+        <div class="utility-album-problem-content">
+          <span class="utility-track-problem-chip">Album not found</span>
+        </div>
+      </div>
+      <div class="utility-detected-actions utility-missing-album-actions">
+        ${canRemove
+          ? '<button class="button confirm-modal-danger" type="button" data-remove-missing-album="1">Remove from Album Haven</button>'
+          : '<p>Ask an owner or administrator to remove it.</p>'}
+      </div>
+    `;
+  }
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const albumRows = Array.isArray(album?.album_problem_rows)
     ? album.album_problem_rows
@@ -1009,6 +1003,12 @@ function tagEditViewMutationStillOwnsResources(claim) {
   );
 }
 
+function hasPendingTagEditViewMutations() {
+  return Array.from(tagEditViewMutationResourceClaims.values()).some(
+    (claims) => claims.some((generation) => !settledTagEditViewMutations.has(generation)),
+  );
+}
+
 function pruneSettledTagEditViewMutationClaims() {
   tagEditViewMutationResourceClaims.forEach((claims, resourceKey) => {
     while (claims.length > 1 && settledTagEditViewMutations.has(claims[0])) {
@@ -1220,6 +1220,12 @@ function coalesceUniqueVisibleLogicalAlbumCandidates(
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareTrackPath(logicalMatch, getAlbumTrackPaths(candidate))) {
+      if (
+        originalAlbum
+        && !albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
+      ) {
+        return mergeVisibleAlbumWithOptimisticCandidate(logicalMatch, candidate);
+      }
       return preserveVisibleAlbumRuntimeIdentity(logicalMatch, candidate);
     }
     if (albumsShareRuntimeIdentityAlias(logicalMatch, candidate)) {
@@ -1986,6 +1992,7 @@ function claimProblematicSaveTaskMutation(taskId, originalAlbum, expectedAlbumKe
     albumKey: selectedKey,
     priorKeys: (state.utility.problematicFiles || []).map((album) => String(album?.key || '')).filter(Boolean),
     priorScrollTop: Number(list?.scrollTop || 0),
+    priorScrollHeight: Number(list?.scrollHeight || 0),
   };
   state.utility.problematicMutation = mutation;
   if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
@@ -2026,16 +2033,24 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
     ? getUtilityModalElements()?.list
     : null;
   if (list && mutationOwnsView) {
-    const requiredScrollHeight = priorScrollTop + Number(list.clientHeight || 0);
-    const missingScrollHeight = Math.max(0, requiredScrollHeight - Number(list.scrollHeight || 0));
+    const targetScrollHeight = Math.max(
+      Number(mutation.priorScrollHeight || 0),
+      priorScrollTop + Number(list.clientHeight || 0),
+    );
     const ownerDocument = list.ownerDocument
       || (typeof document !== 'undefined' ? document : null);
-    if (missingScrollHeight > 0 && ownerDocument?.createElement && typeof list.appendChild === 'function') {
-      const retainedContent = ownerDocument.createElement('div');
+    const retainedContent = ownerDocument?.createElement && typeof list.appendChild === 'function'
+      ? ownerDocument.createElement('div')
+      : null;
+    let retainedContentHeight = Math.max(
+      0,
+      targetScrollHeight - Number(list.scrollHeight || 0),
+    );
+    if (retainedContent) {
       retainedContent.setAttribute('data-problematic-scroll-retainer', '');
       retainedContent.setAttribute('aria-hidden', 'true');
-      retainedContent.style.flex = `0 0 ${missingScrollHeight}px`;
-      retainedContent.style.height = `${missingScrollHeight}px`;
+      retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+      retainedContent.style.height = `${retainedContentHeight}px`;
       retainedContent.style.pointerEvents = 'none';
       list.appendChild(retainedContent);
       const releaseRetainedGeometry = () => {
@@ -2048,7 +2063,26 @@ async function settleProblematicSaveTaskMutation(taskId, { reconcileSelection = 
       list.addEventListener?.('wheel', releaseRetainedGeometry, { passive: true });
       list.addEventListener?.('keydown', releaseRetainedGeometry);
     }
-    list.scrollTop = priorScrollTop;
+    const restoreOwnedScroll = () => {
+      if (retainedContent && !retainedContent.isConnected && 'isConnected' in retainedContent) return;
+      if (retainedContent) {
+        const naturalScrollHeight = Math.max(
+          0,
+          Number(list.scrollHeight || 0) - retainedContentHeight,
+        );
+        retainedContentHeight = Math.max(0, targetScrollHeight - naturalScrollHeight);
+        retainedContent.style.flex = `0 0 ${retainedContentHeight}px`;
+        retainedContent.style.height = `${retainedContentHeight}px`;
+      }
+      list.scrollTop = priorScrollTop;
+    };
+    restoreOwnedScroll();
+    if (typeof scheduleBrowserAnimationFrame === 'function') {
+      scheduleBrowserAnimationFrame(() => {
+        restoreOwnedScroll();
+        scheduleBrowserAnimationFrame(restoreOwnedScroll);
+      });
+    }
   }
   return true;
 }
@@ -2128,9 +2162,7 @@ async function watchSaveTask(taskId, context = {}) {
   const canReconcileOriginView = () => (
     originStillOwnsView() && mutationStillOwnsOriginResources()
   );
-  const supersededMutationStillAtOrigin = () => (
-    originStillOwnsView() && !mutationStillOwnsOriginResources()
-  );
+  const mutationWasSuperseded = () => !mutationStillOwnsOriginResources();
   const absoluteScrollPosition = context.absoluteScrollPosition
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollTop))
     && Number.isFinite(Number(context.absoluteScrollPosition.scrollLeft))
@@ -2209,9 +2241,6 @@ async function watchSaveTask(taskId, context = {}) {
       if (data.status === 'completed') {
         const preRefreshVisibleAlbums = collectVisibleAlbumsUnique();
         await refreshLoadedProblematicFilesAfterSaveCompletion();
-        if (problematicMutation) {
-          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
-        }
         const finalizedAlbums = applyExplicitFinalizedAlbumArtistEdits(
           Array.isArray(data.updated_albums) ? data.updated_albums : [],
           context.tagEdits,
@@ -2288,7 +2317,7 @@ async function watchSaveTask(taskId, context = {}) {
               !viewReconciledLocally
               || structuralPartialMembershipRequiresCanonicalRefresh
             )
-            && !supersededMutationStillAtOrigin()
+            && !mutationWasSuperseded()
           ) {
             try {
               viewRefreshed = await fetchAndRender(
@@ -2301,7 +2330,7 @@ async function watchSaveTask(taskId, context = {}) {
                     ? { retainMountedGalleryIfEquivalent: true }
                     : {}),
                   restartIfSameUrl: true,
-                  shouldApplyResponse: () => !supersededMutationStillAtOrigin(),
+                  shouldApplyResponse: () => !mutationWasSuperseded(),
                 },
               );
               if (viewRefreshed && finalizedAlbums.length) {
@@ -2428,6 +2457,9 @@ async function watchSaveTask(taskId, context = {}) {
         if (data.log_entry) {
           await prependUtilityLogHistoryEntry(data.log_entry);
         }
+        if (problematicMutation) {
+          await settleProblematicSaveTaskMutation(normalizedId, { reconcileSelection: true });
+        }
         restoreOwnedAbsoluteScroll();
         if (!consumesProvidedTerminalPayload) {
           showRepairAlert('Library view updated from saved files.', 'success', 1000);
@@ -2437,7 +2469,7 @@ async function watchSaveTask(taskId, context = {}) {
       }
       if (data.status === 'failed') {
         let viewRefreshed = false;
-        if (!supersededMutationStillAtOrigin()) {
+        if (!mutationWasSuperseded()) {
           try {
             viewRefreshed = await fetchAndRender(
               buildApiUrl(state.view),
@@ -2497,18 +2529,18 @@ async function watchSaveTask(taskId, context = {}) {
   settleTagEditViewMutation(tagEditMutationClaim);
 }
 
-function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases) {
+function cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, sourceAliases, options = {}) {
   if (typeof cacheHydratedTrackModalAlbum !== 'function') return;
   candidates.filter((candidate) => candidate !== sourceAliasOwner).forEach((candidate) => {
     const candidateRequestKey = String(getAlbumRequestKey(candidate) || '').trim();
-    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate);
+    cacheHydratedTrackModalAlbum(candidateRequestKey, candidate, options);
   });
   if (!sourceAliasOwner) return;
   const sourceRequestKey = String(getAlbumRequestKey(sourceAliasOwner) || '').trim();
   cacheHydratedTrackModalAlbum(
     sourceRequestKey,
     sourceAliasOwner,
-    { aliases: sourceAliases },
+    { ...options, aliases: sourceAliases },
   );
 }
 
@@ -2579,7 +2611,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     const sourceAliasOwner = candidates.find((candidate) => (
       albumsShareLogicalReleaseIdentity(candidate, originalAlbum)
     )) || candidates[0];
-    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases);
+    cacheTagEditCandidateAlbums(candidates, sourceAliasOwner, aliases, {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    });
     return;
   }
   const currentAlbum = state.modalReleases[state.modalReleaseIndex] || originalAlbum;
@@ -2643,6 +2677,9 @@ function updateOpenTrackModalAfterTagEdit(originalAlbum, updatedAlbums, options 
     candidates,
     sourceAliasOwner === updatedAlbum ? modalAlbum : sourceAliasOwner,
     aliases,
+    {
+      tagEditMutationClaim: options.tagEditMutationClaim || null,
+    },
   );
   if (!currentModalBelongsToMutation) return;
   const releaseSet = getAlbumReleaseSet(modalAlbum);
@@ -3068,3 +3105,15 @@ function getSelectedSeparateReleaseKeys() {
     .map(([key]) => key);
 }
 
+function buildLibraryWatchHealthProblemRow(problem = {}) {
+  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
+  return `
+    <div class="utility-list-item utility-operational-problem" role="status">
+      <div class="utility-operational-problem-copy">
+        <strong>Library watcher needs attention</strong>
+        <span>${escapeHtml('Some library changes may have been missed.')}</span>
+      </div>
+      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
+    </div>
+  `;
+}

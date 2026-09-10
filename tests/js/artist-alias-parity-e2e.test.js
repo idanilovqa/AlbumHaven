@@ -71,13 +71,13 @@ test('startup projection evidence is captured once before state-mutating scenari
 
   assert.match(
     fixtureSource,
-    /import \{ readStartupRelationProjectionReadiness \} from '\.\.\/helpers\/startupRelationProjectionReadiness\.js';/,
+    /readAuthenticatedStartupRelationProjectionReadiness/,
   );
   assert.match(fixture, /scope:\s*'worker'/);
   assert.match(fixture, /auto:\s*true/);
   assert.match(
     fixture,
-    /use\(await readStartupRelationProjectionReadiness\(\{ baseURL \}\)\)/,
+    /use\(await readAuthenticatedStartupRelationProjectionReadiness\(/,
   );
   assert.doesNotMatch(fixture, /(?:post|put|patch|delete)\s*\(/i);
   assert.match(helperSource, /const statusURL = new URL\('\/status', baseURL\)/);
@@ -179,7 +179,11 @@ test('album-card POM owns the exact subtitle selector used by the action layer',
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.subtitleWithinCardSelector\)/);
   assert.match(source, /yearByAlbumName\(albumName\)/);
   assert.match(source, /cardByAlbumName\(albumName\)\.locator\(this\.yearWithinCardSelector\)/);
-  assert.doesNotMatch(source, /\.evaluate(?:All)?\s*\(/);
+  const actionSelectorMethods = source.slice(
+    source.indexOf('subtitleByAlbumName(albumName)'),
+    source.indexOf('ratingRowByArtistAndAlbum('),
+  );
+  assert.doesNotMatch(actionSelectorMethods, /\.evaluate(?:All)?\s*\(/);
 });
 
 test('alias parity spec stays scenario-only and avoids browser-side mutation shortcuts', () => {

@@ -61,6 +61,8 @@ class FakeConnection:
             self.pipeline_execute_counts[-1] += 1
         if "bootstrap_context_ready" in sql:
             return FakeCursor([{"bootstrap_context_ready": 1}] if self._bootstrap_ready else [])
+        if "watch_health_load" in sql:
+            return FakeCursor([{"library_watch_health": {}}])
         if "metadata -> 'scan_cache'" in sql:
             return FakeCursor(self._snapshot_rows)
         if "local_track_files.metadata #> '{scan_cache,file_entry}'" in sql:
@@ -90,6 +92,308 @@ class FakeConnection:
 
 def _normalized_sql(sql):
     return " ".join(sql.casefold().split())
+
+
+def test_targeted_stale_sql_preserves_nested_scan_cache_file_entry():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._mark_targeted_track_files_stale_sql()
+    )
+
+    assert "jsonb_set(" in normalized_sql
+    assert "'{scan_cache}'" in normalized_sql
+    assert "coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)" in normalized_sql
+    assert "jsonb_build_object(" in normalized_sql
+    assert "'stale', true" in normalized_sql
+    assert "'{scan_cache,stale_marked_at}'" in normalized_sql
+    assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
+    assert (
+        "coalesce( nullif(library.library_roots.metadata ->> 'root_id', ''), "
+        "library.local_track_files.metadata ->> 'library_root_id' ) = %(root_id)s"
+        in normalized_sql
+    )
+    assert "private_path = any(%(deleted_paths)s::text[])" in normalized_sql
+    assert "unnest(%(deleted_subtrees)s::text[])" in normalized_sql
+    assert "starts_with(" in normalized_sql
+    assert "private_path <> all(%(active_paths)s::text[])" in normalized_sql
+    assert " like " not in normalized_sql
+
+
+def test_full_scan_stale_sql_preserves_nested_scan_cache_file_entry():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(scan_cache_persistence._mark_stale_track_files_sql())
+
+    assert "jsonb_set(" in normalized_sql
+    assert "coalesce(library.local_track_files.metadata -> 'scan_cache', '{}'::jsonb)" in normalized_sql
+    assert "'stale', true" in normalized_sql
+    assert "metadata || %(stale_metadata)s::jsonb" not in normalized_sql
+
+
+def test_targeted_featured_artist_sync_is_scoped_to_affected_scan_owned_albums():
+    from music_app.services import scan_cache_persistence
+
+    normalized_sql = _normalized_sql(
+        scan_cache_persistence._synchronize_targeted_local_album_featured_artists_sql()
+    )
+    assert "unnest(%(affected_album_keys)s::text[])" in normalized_sql
+    assert "album_id = affected_albums.album_id" in normalized_sql
+    assert "metadata ->> 'source' = %(source)s" in normalized_sql
+    assert "not exists" in normalized_sql
+
+
+def test_targeted_inventory_mutation_uses_shared_lock_and_commits_one_revision(monkeypatch):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    class TargetedConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            normalized = _normalized_sql(sql)
+            if "from library.separate_releases" in normalized:
+                return FakeCursor([{"release_key": "artist::new album"}])
+            if "as album_owner_key" in normalized:
+                return FakeCursor([{
+                    "private_path": active_path, "album_key": "artist::new album",
+                    "album_owner_key": "artist", "album_title": "New Album", "album_artist": "Artist",
+                    "file_entry": {"path": active_path, "mtime": 1.0, "size": 123,
+                                   "album": "New Album", "album_artist": "Artist", "artist": "Artist",
+                                   "title": "Track", "track_number": 1, "disc_number": 1},
+                }])
+            if "as affected_album_key" in normalized:
+                return FakeCursor([{"affected_album_key": "artist::old album"}])
+            if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
+                return FakeCursor([{"inventory_mutation_revision": 7}])
+            return cursor
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = TargetedConnection()
+    observed_separate_release_keys = []
+
+    def build_albums(file_cache, separate_release_keys):
+        observed_separate_release_keys.append(set(separate_release_keys))
+        return scan_cache_persistence.build_albums_from_file_cache(
+            file_cache,
+            separate_release_keys,
+        )
+
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+        build_albums=build_albums,
+    )
+    active_path = "C:/Music/Artist/New Album/01.flac"
+
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={
+            active_path: {
+                "path": active_path,
+                "album": "New Album",
+                "album_artist": "Artist",
+                "artist": "Artist",
+                "title": "Track",
+                "track_number": 1,
+                "disc_number": 1,
+                "duration_seconds": 120,
+                "mtime": 1.0,
+                "size": 123,
+                "library_root_id": "main",
+                "library_root_category": "main-library",
+            }
+        },
+        deleted_paths=("C:/Music/Artist/Old Album/01.flac",),
+        deleted_subtrees=(),
+        moves=(
+            {
+                "source_path": "C:/Music/Artist/Old Album/01.flac",
+                "destination_path": active_path,
+                "source_root_id": "main",
+                "destination_root_id": "main",
+            },
+        ),
+    )
+
+    assert result == {
+        "inventory_mutation_revision": 7,
+        "affected_album_keys": ["artist::new album", "artist::old album"],
+    }
+    assert observed_separate_release_keys == [{"artist::new album"}, {"artist::new album"}]
+    normalized_calls = [_normalized_sql(sql) for sql, _ in connection.executed]
+    lock_index = next(i for i, sql in enumerate(normalized_calls) if "pg_advisory_xact_lock" in sql)
+    upsert_index = next(i for i, sql in enumerate(normalized_calls) if "insert into library.local_track_files" in sql)
+    stale_index = next(i for i, sql in enumerate(normalized_calls) if "private_path = any(%(deleted_paths)s::text[])" in sql)
+    revision_index = next(
+        i
+        for i, sql in enumerate(normalized_calls)
+        if "update library.libraries" in sql and "inventory_mutation_revision" in sql
+    )
+    assert lock_index < upsert_index < stale_index < revision_index
+    assert connection.commit_calls == 1
+    stale_params = next(
+        params
+        for sql, params in connection.executed
+        if "private_path = any(%(deleted_paths)s::text[])" in _normalized_sql(sql)
+    )
+    assert stale_params["active_paths"] == [active_path]
+    featured_sync_params = next(
+        params
+        for sql, params in connection.executed
+        if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+    )
+    assert featured_sync_params["affected_album_keys"] == ["artist::new album"]
+    assert connection.exit_exc_type is None
+
+
+def test_deletion_only_targeted_mutation_does_not_prune_surviving_featured_artists(
+    monkeypatch,
+):
+    from music_app.services import scan_cache_persistence
+    from music_app.services.scan_cache_persistence import PostgresScanCacheAdapter
+
+    class DeletionOnlyConnection(FakeConnection):
+        def execute(self, sql, params=None):
+            cursor = super().execute(sql, params)
+            normalized = _normalized_sql(sql)
+            if "as affected_album_key" in normalized:
+                return FakeCursor([{"affected_album_key": "artist::surviving album"}])
+            if "as inventory_mutation_revision" in normalized and "update library.libraries" in normalized:
+                return FakeCursor([{"inventory_mutation_revision": 8}])
+            return cursor
+
+    monkeypatch.setattr(scan_cache_persistence, "Jsonb", None)
+    connection = DeletionOnlyConnection()
+    adapter = PostgresScanCacheAdapter(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://example"},
+        connect=lambda _url: connection,
+    )
+
+    result = adapter.persist_targeted_inventory_mutation(
+        root_id="main",
+        active_file_entries={},
+        deleted_paths=("C:/Music/Artist/Surviving Album/01.flac",),
+    )
+
+    assert result == {
+        "inventory_mutation_revision": 8,
+        "affected_album_keys": ["artist::surviving album"],
+    }
+    featured_sync_params = next(
+        params
+        for sql, params in connection.executed
+        if "delete from library.local_album_featured_artists" in _normalized_sql(sql)
+    )
+    assert featured_sync_params["affected_album_keys"] == []
+
+
+def test_targeted_inventory_mutation_marks_relation_projection_stale_atomically():
+    from music_app.services import scan_cache_persistence
+
+    sql = scan_cache_persistence._increment_inventory_mutation_revision_sql()
+    normalized = _normalized_sql(sql)
+
+    assert "'{scan_cache,relation_projection,status}'" in normalized
+    assert "to_jsonb('stale'::text)" in normalized
+
+
+def test_targeted_album_upsert_preserves_existing_user_cover_authority():
+    from music_app.services import scan_cache_persistence
+
+    sql = _normalized_sql(
+        scan_cache_persistence._upsert_local_album_sql(
+            preserve_existing_cover_authority=True
+        )
+    )
+
+    assert "cover_selection_origin" in sql
+    assert "then library.local_albums.cover_path" in sql
+    assert "cover_revision" in sql
+
+
+def test_targeted_album_rows_keep_the_existing_identity_for_unchanged_members():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/DDT/Studio Records/02.flac"
+    album_rows = [{
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": "yuri shevchuk / ddt::studio records",
+        "title": "Studio Records",
+        "release_year": 1990,
+    }]
+    featured_rows = [{
+        "album_key": "yuri shevchuk / ddt::studio records",
+        "artist_key": "yuri shevchuk / ddt",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{
+        "album_key": "yuri shevchuk / ddt::studio records",
+        "track_key": path,
+    }]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "yuri shevchuk / ddt::studio records::canonical",
+            "album_title": "Studio Records",
+            "artist_key": "yuri shevchuk / ddt",
+        }],
+    )
+
+    assert album_rows[0] == {
+        "artist_key": "yuri shevchuk / ddt",
+        "album_key": "yuri shevchuk / ddt::studio records::canonical",
+        "title": "Studio Records",
+        "release_year": 1990,
+    }
+    assert featured_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
+    assert featured_rows[0]["artist_key"] == "yuri shevchuk / ddt"
+    assert track_rows[0]["album_key"] == "yuri shevchuk / ddt::studio records::canonical"
+
+
+def test_targeted_album_rows_accept_an_external_album_artist_correction():
+    from music_app.services.scan_cache_persistence import (
+        _remap_targeted_album_identity_rows,
+    )
+
+    path = "C:/Music/New Artist/Studio Records/02.flac"
+    album_rows = [{
+        "artist_key": "new artist",
+        "album_key": "new artist::studio records",
+        "title": "Studio Records",
+    }]
+    featured_rows = [{
+        "album_key": "new artist::studio records",
+        "artist_key": "new artist",
+        "featured_kind": "owner",
+    }]
+    track_rows = [{
+        "album_key": "new artist::studio records",
+        "track_key": path,
+    }]
+
+    _remap_targeted_album_identity_rows(
+        album_rows=album_rows,
+        featured_artist_rows=featured_rows,
+        track_rows=track_rows,
+        existing_memberships=[{
+            "private_path": path,
+            "album_key": "old artist::studio records",
+            "album_title": "Studio Records",
+            "artist_key": "old artist",
+        }],
+    )
+
+    assert album_rows[0]["artist_key"] == "new artist"
+    assert album_rows[0]["album_key"] == "new artist::studio records"
+    assert featured_rows[0]["artist_key"] == "new artist"
+    assert featured_rows[0]["album_key"] == "new artist::studio records"
+    assert track_rows[0]["album_key"] == "new artist::studio records"
 
 
 def test_scan_album_upsert_preserves_structural_release_year_authority():
@@ -989,7 +1293,7 @@ def test_set_based_track_file_sql_preserves_scoped_upsert_contract():
         "file_size_bytes = excluded.file_size_bytes",
         "modified_at = excluded.modified_at",
         "last_seen_at = now()",
-        "metadata = library.local_track_files.metadata || excluded.metadata",
+        "metadata = ( library.local_track_files.metadata || excluded.metadata ) #- '{scan_cache,stale_marked_at}'",
     ):
         assert assignment in sql
 
@@ -1008,7 +1312,8 @@ def test_set_based_track_file_upsert_skips_unchanged_conflict_rows():
         "library.local_track_files.metadata ) is distinct from ( "
         "excluded.track_id, excluded.library_root_id, excluded.relative_path, "
         "excluded.file_size_bytes, excluded.modified_at, "
-        "library.local_track_files.metadata || excluded.metadata )"
+        "(library.local_track_files.metadata || excluded.metadata) "
+        "#- '{scan_cache,stale_marked_at}' )"
     ) in sql
 
 

@@ -5,6 +5,7 @@ const net = require('node:net');
 const http = require('node:http');
 const { randomBytes } = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+const { PROCESS_CLEANUP_FAILURE_EXIT_CODE } = require('./playwright-exit-codes.cjs');
 const { resolveRuntimeFlags } = require('./playwright-runtime-flags.cjs');
 const {
   DEFAULT_PLAYWRIGHT_PYTHON,
@@ -131,6 +132,7 @@ const SAFE_LIFECYCLE_EXIT_REASONS = new Set([
   'fake-database-cleanup-error',
   'managed-scan-cleanup-error',
   'managed-isolated-app-cleanup-error',
+  'owned-process-cleanup-error',
   'owned-temp-cleanup-error',
   'unknown',
 ]);
@@ -172,6 +174,7 @@ function safeLifecycleStage(stage, extraFields = []) {
     status: safeClosedValue(stage.status, SAFE_LIFECYCLE_STAGE_STATUSES),
     error: safeErrorSummary(stage.error),
   };
+  if (stage.mode === 'lock-only') safeStage.mode = 'lock-only';
   for (const field of extraFields) {
     safeStage[field] = safeNonnegativeInteger(stage[field]);
   }
@@ -246,7 +249,23 @@ function finalizeMainResult(result, options = {}) {
   const stderr = options.stderr || process.stderr;
   const requestedExitCode = hasCompletedAuthoritativePassLifecycle(result) ? 0 : 1;
   const priorExitCode = Number(processObject.exitCode || 0);
-  const exitCode = requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
+  const lifecycle = result?.lifecycle || {};
+  const managedAttempt = lifecycle.managedAttempt || {};
+  const processCleanupUnproven = [
+    managedAttempt.scanAppCleanup,
+    managedAttempt.isolatedAppCleanup,
+  ].some((stage) => stage && !['completed', 'not-required'].includes(stage.status))
+    || [
+      'managed-scan-cleanup-error',
+      'managed-isolated-app-cleanup-error',
+      'owned-process-cleanup-error',
+      'fake-database-cleanup-error',
+    ].includes(lifecycle.exitReason);
+  const exitCode = processCleanupUnproven
+    || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    || priorExitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    ? PROCESS_CLEANUP_FAILURE_EXIT_CODE
+    : requestedExitCode === 0 && priorExitCode === 0 ? 0 : 1;
   const diagnostic = buildAuthoritativePassFinalDecisionDiagnostic({
     ...result,
     exitCode,
@@ -734,7 +753,7 @@ function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
   const timeoutMs = Number(options.timeoutMs || ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS);
   const result = runCommandFn(
     resolvePlaywrightPython(childEnv),
-    [ISOLATED_LIBRARY_APP_PATH, '--cleanup-only'],
+    [ISOLATED_LIBRARY_APP_PATH, options.lockOnly ? '--cleanup-lock-only' : '--cleanup-only'],
     {
       cwd: repoRoot,
       env: buildIsolatedLibraryCleanupEnv(childEnv),
@@ -836,7 +855,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
   const sleepFn = options.sleepFn || sleep;
   const nowFn = options.nowFn || Date.now;
   const getLaunchErrorFn = options.getLaunchErrorFn || (() => null);
-  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const healthUrl = `http://127.0.0.1:${port}/health`;
   const deadline = nowFn() + timeoutMs;
 
   while (nowFn() <= deadline) {
@@ -847,7 +866,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
     if (child.exitCode !== null && child.exitCode !== undefined) {
       throw new Error(`Managed scan app exited before readiness with code ${String(child.exitCode)}.`);
     }
-    if (await probeHttpStatusReadyFn(statusUrl, options)) {
+    if (await probeHttpStatusReadyFn(healthUrl, options)) {
       return;
     }
     await sleepFn(pollIntervalMs);
@@ -857,6 +876,7 @@ async function waitForManagedScanAppReady(child, port, options = {}) {
 
 async function startManagedScanApp(childEnv, options = {}) {
   const spawnFn = options.spawnFn || spawn;
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const port = Number(options.port || childEnv.PLAYWRIGHT_PORT || 4174);
   const stdout = options.stdout || process.stdout;
   const stderr = options.stderr || process.stderr;
@@ -883,20 +903,26 @@ async function startManagedScanApp(childEnv, options = {}) {
   child.once('error', (error) => {
     launchError = error;
   });
+  let spawnHandedOff = false;
   try {
+    if (options.onSpawnFn) { options.onSpawnFn(child); spawnHandedOff = true; }
+    child.albumHavenCreationIdentity = readProcessCreationIdentityFn(child.pid);
+    if (!child.albumHavenCreationIdentity) {
+      throw new Error('Managed scan app process had no creation identity after launch.');
+    }
     await waitForManagedScanAppReady(child, port, {
       ...options,
       getLaunchErrorFn: () => launchError,
     });
     return child;
   } catch (error) {
-    try {
-      (options.stopProcessTreeFn || stopProcessTree)(child.pid);
-    } catch (_cleanupError) {
+    if (!spawnHandedOff) {
       try {
-        child.kill();
-      } catch (_killError) {
-        // Preserve the startup error after best-effort cleanup.
+        await stopManagedScanApp(child, port, options);
+      } catch (cleanupError) {
+        const failure = new AggregateError([error, cleanupError], 'Managed scan startup failed and shutdown was not proven.');
+        failure.lifecycle = { exitReason: 'managed-scan-cleanup-error' };
+        throw failure;
       }
     }
     throw error;
@@ -904,15 +930,34 @@ async function startManagedScanApp(childEnv, options = {}) {
 }
 
 async function stopManagedScanApp(child, port, options = {}) {
-  if (!child || (child.exitCode !== null && child.exitCode !== undefined)) {
-    return;
-  }
+  if (!child) return;
+  const expectedCreationIdentity = String(child.albumHavenCreationIdentity || '');
+  const readProcessCreationIdentityFn = options.readProcessCreationIdentityFn || readProcessCreationIdentity;
   const stopProcessTreeFn = options.stopProcessTreeFn || stopProcessTree;
+  const waitForReclaimedProcessesExitedFn = options.waitForReclaimedProcessesExitedFn
+    || waitForReclaimedProcessesExited;
   const waitForPortReleasedFn = options.waitForPortReleasedFn || waitForPortReleased;
-  stopProcessTreeFn(child.pid);
+  if (!expectedCreationIdentity) {
+    await (options.abortManagedIsolatedAppStartupFn || abortManagedIsolatedAppStartup)(child, options);
+  } else {
+    const currentIdentity = readProcessCreationIdentityFn(child.pid);
+    if (currentIdentity && currentIdentity !== expectedCreationIdentity) {
+      throw new Error(`Managed scan app PID ${child.pid} changed creation identity before teardown.`);
+    }
+    if (currentIdentity === expectedCreationIdentity) {
+      stopProcessTreeFn(child.pid, { expectedCreationIdentity });
+      await waitForReclaimedProcessesExitedFn([
+        { pid: child.pid, creationIdentity: expectedCreationIdentity },
+      ], {
+        timeoutMs: RECLAIMED_PROCESS_EXIT_TIMEOUT_MS,
+        pollIntervalMs: 250,
+      });
+    }
+  }
   const released = await waitForPortReleasedFn(port, {
     timeoutMs: Number(options.timeoutMs || MANAGED_SUPPORT_APP_PORT_REUSE_TIMEOUT_MS),
     pollIntervalMs: Number(options.pollIntervalMs || 250),
+    readPortOwningProcessesFn: () => [],
   });
   if (!released) {
     throw new Error(`Managed scan app port ${port} was not reusable after teardown.`);
@@ -950,7 +995,15 @@ function fetchHttpResponseComplete(url, options = {}) {
       settled = true;
       resolve(value);
     };
-    const request = http.get(url, (response) => {
+    const requestBody = options.body === undefined ? null : String(options.body);
+    const headers = { ...(options.headers || {}) };
+    if (requestBody !== null && headers['Content-Length'] === undefined) {
+      headers['Content-Length'] = Buffer.byteLength(requestBody);
+    }
+    const request = http.request(url, {
+      method: String(options.method || 'GET').toUpperCase(),
+      headers,
+    }, (response) => {
       const successful = Number(response.statusCode || 0) >= 200
         && Number(response.statusCode || 0) < 300;
       const chunks = [];
@@ -968,6 +1021,9 @@ function fetchHttpResponseComplete(url, options = {}) {
         ok: successful,
         statusCode: Number(response.statusCode || 0),
         body: Buffer.concat(chunks).toString('utf8'),
+        setCookieHeaders: Array.isArray(response.headers['set-cookie'])
+          ? response.headers['set-cookie']
+          : [],
       }));
       response.once('error', () => finish({
         ok: false,
@@ -980,7 +1036,68 @@ function fetchHttpResponseComplete(url, options = {}) {
       request.destroy();
       finish({ ok: false, statusCode: 0, body: '' });
     });
+    request.end(requestBody);
   });
+}
+
+function cookiePair(setCookieHeaders, name) {
+  const prefix = `${name}=`;
+  const matching = (setCookieHeaders || []).find((header) => String(header).startsWith(prefix));
+  return matching ? String(matching).split(';', 1)[0] : '';
+}
+
+function hiddenFormValue(body, name) {
+  const escapedName = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(body || '').match(
+    new RegExp(`<input[^>]*name=["']${escapedName}["'][^>]*value=["']([^"']+)["']`, 'i'),
+  );
+  return match ? match[1] : '';
+}
+
+async function authenticateFunctionalFixture(port, options = {}) {
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
+    || fetchHttpResponseComplete;
+  const loginPage = await fetchHttpResponseCompleteFn(
+    `${baseUrl}/login?return_to=%2Fhealth`,
+    {
+      method: 'GET',
+      requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    },
+  );
+  const csrfToken = hiddenFormValue(loginPage?.body, 'csrf_token');
+  const preauthCookie = cookiePair(
+    loginPage?.setCookieHeaders,
+    '__Host-album_haven_login_csrf',
+  );
+  if (!loginPage?.ok || !csrfToken || !preauthCookie) {
+    throw new Error('Managed functional fixture could not start a login session.');
+  }
+
+  const body = new URLSearchParams({
+    username: 'rendref',
+    password: 'Phase Seven Performance Passphrase 2026!',
+    csrf_token: csrfToken,
+    return_to: '/health',
+  }).toString();
+  const loginResponse = await fetchHttpResponseCompleteFn(`${baseUrl}/login`, {
+    method: 'POST',
+    requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: preauthCookie,
+      Origin: baseUrl,
+    },
+    body,
+  });
+  const sessionCookie = cookiePair(
+    loginResponse?.setCookieHeaders,
+    '__Host-album_haven_session',
+  );
+  if (Number(loginResponse?.statusCode || 0) !== 303 || !sessionCookie) {
+    throw new Error('Managed functional fixture login was not accepted.');
+  }
+  return { Cookie: sessionCookie };
 }
 
 function collectLocalCoverPreviewUrls(value, baseUrl, found = new Set(), options = {}) {
@@ -1032,12 +1149,15 @@ async function prewarmFunctionalFixture(port, options = {}) {
   const viewUrl = `${baseUrl}/view-data?surface=albums&omit_sidebar=1`;
   const fetchHttpResponseCompleteFn = options.fetchHttpResponseCompleteFn
     || fetchHttpResponseComplete;
+  const requestHeaders = { ...(options.requestHeaders || {}) };
   const indexResponse = await fetchHttpResponseCompleteFn(indexUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: requestHeaders,
   });
   if (!indexResponse?.ok) return false;
   const viewResponse = await fetchHttpResponseCompleteFn(viewUrl, {
     requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+    headers: requestHeaders,
   });
   if (!viewResponse?.ok) return false;
 
@@ -1055,7 +1175,10 @@ async function prewarmFunctionalFixture(port, options = {}) {
     const responses = await Promise.all(
       coverUrls.slice(offset, offset + 4).map((coverUrl) => fetchHttpResponseCompleteFn(
         coverUrl,
-        { requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS },
+        {
+          requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+          headers: requestHeaders,
+        },
       )),
     );
     if (responses.some((response) => !response?.ok)) return false;
@@ -1063,6 +1186,7 @@ async function prewarmFunctionalFixture(port, options = {}) {
   for (const pathname of ['/utilities/problematic-files', '/utilities/rules']) {
     const response = await fetchHttpResponseCompleteFn(`${baseUrl}${pathname}`, {
       requestTimeoutMs: MANAGED_FUNCTIONAL_FIXTURE_WARMUP_TIMEOUT_MS,
+      headers: requestHeaders,
     });
     if (!response?.ok) return false;
   }
@@ -1090,6 +1214,7 @@ async function waitForFunctionalFixtureBackgroundIdle(child, port, options = {})
     }
     const response = await fetchHttpResponseCompleteFn(statusUrl, {
       requestTimeoutMs: Math.min(timeoutMs, 5000),
+      headers: { ...(options.requestHeaders || {}) },
     });
     try {
       lastStatus = response?.ok ? JSON.parse(String(response.body || '')) : null;
@@ -1120,7 +1245,7 @@ async function waitForManagedIsolatedAppReady(child, port, options = {}) {
   const sleepFn = options.sleepFn || sleep;
   const nowFn = options.nowFn || Date.now;
   const getLaunchErrorFn = options.getLaunchErrorFn || (() => null);
-  const statusUrl = `http://127.0.0.1:${port}/status`;
+  const healthUrl = `http://127.0.0.1:${port}/health`;
   const deadline = nowFn() + timeoutMs;
   while (nowFn() <= deadline) {
     const launchError = getLaunchErrorFn();
@@ -1130,12 +1255,12 @@ async function waitForManagedIsolatedAppReady(child, port, options = {}) {
     if (child.exitCode !== null && child.exitCode !== undefined) {
       throw new Error(`Managed isolated app exited before readiness with code ${String(child.exitCode)}.`);
     }
-    if (await probeHttpStatusReadyFn(statusUrl, options)) {
+    if (await probeHttpStatusReadyFn(healthUrl, options)) {
       return;
     }
     await sleepFn(pollIntervalMs);
   }
-  throw new Error(`Timed out after ${timeoutMs} ms waiting for managed isolated app at ${statusUrl}.`);
+  throw new Error(`Timed out after ${timeoutMs} ms waiting for managed isolated app at ${healthUrl}.`);
 }
 
 function waitForDirectChildExit(child, options = {}) {
@@ -1230,11 +1355,17 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
       getLaunchErrorFn: () => launchError,
     });
     if (String(childEnv.ALBUM_HAVEN_FIXTURE_PROFILE || '').trim() === 'functional-core') {
+      const authenticateFunctionalFixtureFn = options.authenticateFunctionalFixtureFn
+        || authenticateFunctionalFixture;
+      const requestHeaders = await authenticateFunctionalFixtureFn(port, {
+        fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+      });
       const prewarmFunctionalFixtureFn = options.prewarmFunctionalFixtureFn
         || prewarmFunctionalFixture;
       const warmed = await prewarmFunctionalFixtureFn(port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
         mediaRoot: childEnv.ALBUM_HAVEN_MEDIA_ROOT,
+        requestHeaders,
       });
       if (!warmed) {
         throw new Error(
@@ -1247,6 +1378,7 @@ async function startManagedIsolatedApp(childEnv, options = {}) {
       );
       await waitForFunctionalFixtureBackgroundIdleFn(child, port, {
         fetchHttpResponseCompleteFn: options.fetchHttpResponseCompleteFn,
+        requestHeaders,
       });
     }
     return child;
@@ -1314,6 +1446,18 @@ function writeJsonAtomically(targetPath, value) {
   }
 }
 
+async function cleanupManagedWatcherFixture(childEnv, options = {}) {
+  const { resolveWritableFixtureMediaRoot } = await import('../tests/e2e/helpers/fixtureMediaRoot.js');
+  const mediaRoot = resolveWritableFixtureMediaRoot(childEnv);
+  const ownedRoot = path.join(mediaRoot, 'cases', 'watcher-reconciliation');
+  const result = (options.runCommandFn || runCommand)(resolvePlaywrightPython(childEnv), [
+    '-m', 'tests.e2e.support.watcherFixture', '--owned-root', ownedRoot,
+  ], { cwd: repoRoot, env: childEnv, timeout: ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS });
+  if (result.error || result.signal || result.status !== 0) {
+    throw new Error('Runner-owned watcher inventory cleanup failed; evidence retained.');
+  }
+}
+
 function createManagedIsolatedAppRestartController(options = {}) {
   const {
     childEnv,
@@ -1340,6 +1484,7 @@ function createManagedIsolatedAppRestartController(options = {}) {
   const ackPath = path.join(controlDirectory, MANAGED_ISOLATED_RESTART_ACK_FILE);
   const startManagedIsolatedAppFn = options.startManagedIsolatedAppFn || startManagedIsolatedApp;
   const stopManagedIsolatedAppFn = options.stopManagedIsolatedAppFn || stopManagedIsolatedApp;
+  const cleanupWatchedInventoryFn = options.cleanupWatchedInventoryFn || cleanupManagedWatcherFixture;
   const onCurrentChildChanged = options.onCurrentChildChanged || (() => {});
   const resolvedAppPort = Number(options.port || ports[0] || childEnv.PLAYWRIGHT_PORT || 4173);
   const resolvedProviderPort = Number(
@@ -1442,7 +1587,12 @@ function createManagedIsolatedAppRestartController(options = {}) {
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
-    return { nonce };
+    const operation = request.operation ?? 'restart';
+    if (!['restart', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
+      throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
+    }
+    return { nonce, operation };
   };
 
   const processPendingRequest = async () => {
@@ -1458,12 +1608,34 @@ function createManagedIsolatedAppRestartController(options = {}) {
         lastProcessedNonce = request.nonce;
         fs.rmSync(ackPath, { force: true });
 
+        if (request.operation === 'report-failure') {
+          phase = 'fixture-cleanup';
+          const error = new Error('Managed fixture cleanup failed; database and fixture evidence retained.');
+          error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+          error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+            fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+          // The catch records the terminal failure before publishing its acknowledgment.
+          throw error;
+        }
+
         if (currentChild) {
           phase = 'stop-current';
           const childToStop = currentChild;
           markCurrentChildStopIntentional(phase);
           await stopManagedIsolatedAppFn(childToStop, managedPorts);
           if (currentChild === childToStop) updateCurrentChild(null);
+        }
+
+        if (request.operation === 'watcher-cleanup') {
+          phase = 'fixture-cleanup';
+          try {
+            await cleanupWatchedInventoryFn(childEnv);
+          } catch (error) {
+            error.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+            error.lifecycle = { exitReason: 'fake-database-cleanup-error',
+              fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
+            throw error;
+          }
         }
 
         phase = 'start-replacement';
@@ -1801,10 +1973,10 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         && cleanupIsolatedLibraryDatabaseFn
       ) {
         if (portReclaimErrors.length > 0) {
-          throw new Error(
+          throw attachLifecycle(new Error(
             'Could not safely snapshot and reclaim all isolated Playwright port owners: '
             + portReclaimErrors.map((error) => String(error?.message || error)).join('; '),
-          );
+          ), 'owned-process-cleanup-error');
         }
         lifecycle.fakeDatabaseCleanup.status = 'running';
         try {
@@ -1957,6 +2129,9 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
         }
       } catch (error) {
         cleanupOutcome = 'failed';
+        if (!portCleanupCompleted) {
+          throw attachLifecycle(error, 'owned-process-cleanup-error');
+        }
         throw error;
       }
     };
@@ -2862,6 +3037,7 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managesScanApp) {
       managedScanChild = await startManagedScanAppFn(childEnv, {
         port: supportAppPort,
+        onSpawnFn: child => { managedScanChild = child; },
       });
     }
     if (managesIsolatedApp) {
@@ -2938,20 +3114,46 @@ async function runManagedPlaywrightAttempt(options = {}) {
     );
     const managedIsolatedAppFailureSignal = managedIsolatedRestartController
       ?.getFailureSignal?.();
-    result = managedIsolatedAppFailureSignal
-      ? await Promise.race([
-        playwrightRunPromise,
-        managedIsolatedAppFailureSignal.then(async (failureError) => {
-          playwrightAbortController.abort(failureError);
-          try {
-            await playwrightRunPromise;
-          } catch (_error) {
-            // The managed-app failure remains authoritative after the owned runner settles.
-          }
-          throw failureError;
-        }),
-      ])
-      : await playwrightRunPromise;
+    let managedAppFailure = null;
+    const preserveManagedAppFailure = (runnerOutcome) => {
+      if (runnerOutcome?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+        || runnerOutcome?.lifecycle?.exitReason === 'owned-process-cleanup-error') {
+        managedAppFailure.exitCode = PROCESS_CLEANUP_FAILURE_EXIT_CODE;
+        managedAppFailure.lifecycle = {
+          ...(managedAppFailure.lifecycle || {}),
+          ...(runnerOutcome.lifecycle || {}),
+          exitReason: 'owned-process-cleanup-error',
+        };
+      }
+      if (runnerOutcome instanceof Error && runnerOutcome !== managedAppFailure) {
+        managedAppFailure.cause = runnerOutcome;
+      }
+      return managedAppFailure;
+    };
+    try {
+      result = managedIsolatedAppFailureSignal
+        ? await Promise.race([
+          playwrightRunPromise,
+          managedIsolatedAppFailureSignal.then(async (failureError) => {
+            managedAppFailure = failureError;
+            playwrightAbortController.abort(failureError);
+            let runnerOutcome;
+            try {
+              runnerOutcome = await playwrightRunPromise;
+            } catch (error) {
+              runnerOutcome = error;
+            }
+            throw preserveManagedAppFailure(runnerOutcome);
+          }),
+        ])
+        : await playwrightRunPromise;
+    } catch (error) {
+      if (managedAppFailure) throw preserveManagedAppFailure(error);
+      throw error;
+    }
+    // Both race branches await the same child. Its settlement may win after the
+    // failure signal; retain the primary app failure and the child's cleanup proof.
+    if (managedAppFailure) throw preserveManagedAppFailure(result);
     if (managedIsolatedRestartController) {
       await managedIsolatedRestartController.close();
       const restartFailure = managedIsolatedRestartController.getFailure?.();
@@ -3015,37 +3217,49 @@ async function runManagedPlaywrightAttempt(options = {}) {
     if (managedIsolatedAppStarted && !managedIsolatedChild && !isolatedCleanupError) {
       managedAttempt.isolatedAppCleanup.status = 'completed';
     }
-    if (managedIsolatedAppStarted && !isolatedCleanupError && !preservesPreloadedDatabase) {
-      const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
-      try {
-        cleanupIsolatedLibraryDatabaseFn(childEnv);
-        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null };
-      } catch (error) {
-        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error) };
-        databaseCleanupError = error instanceof Error ? error : new Error(String(error));
-      }
-    }
     if (restartControllerCleanupError && !isolatedCleanupError) {
       managedAttempt.isolatedAppCleanup.status = 'failed';
       managedAttempt.isolatedAppCleanup.error = safeErrorSummary(restartControllerCleanupError);
       isolatedCleanupError = restartControllerCleanupError;
     }
-    try {
-      const removedRoots = cleanupIsolatedE2ETempRootsFn(
-        os.tmpdir(),
-        ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
-      );
-      managedAttempt.tempCleanup.status = 'completed';
-      managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
-    } catch (error) {
-      managedAttempt.tempCleanup.status = 'failed';
-      managedAttempt.tempCleanup.error = safeErrorSummary(error);
-      if (ownedIsolatedTempRoot) {
-        const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
-        lifecycle.exitReason = 'owned-temp-cleanup-error';
-        if (result) {
-          result.exitCode = 1;
-          result.lifecycle = lifecycle;
+    const processCleanupUnproven = Boolean(
+      scanCleanupError || isolatedCleanupError
+      || result?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || attemptError?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
+      || (result?.lifecycle || attemptError?.lifecycle)?.exitReason === 'owned-process-cleanup-error',
+    );
+    if (managedIsolatedAppStarted && !processCleanupUnproven) {
+      const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+      const cleanupMode = preservesPreloadedDatabase ? { mode: 'lock-only' } : {};
+      try {
+        if (preservesPreloadedDatabase) cleanupIsolatedLibraryDatabaseFn(childEnv, { lockOnly: true });
+        else cleanupIsolatedLibraryDatabaseFn(childEnv);
+        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null, ...cleanupMode };
+      } catch (error) {
+        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error), ...cleanupMode };
+        databaseCleanupError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+    // No retained/skipped lifecycle status exists: pending means intentionally
+    // unperformed here, with the cleanup exit reason preserving the cause.
+    if (!processCleanupUnproven && !databaseCleanupError) {
+      try {
+        const removedRoots = cleanupIsolatedE2ETempRootsFn(
+          os.tmpdir(),
+          ownedIsolatedTempRoot ? [ownedIsolatedTempRoot] : [],
+        );
+        managedAttempt.tempCleanup.status = 'completed';
+        managedAttempt.tempCleanup.removedCount = Array.isArray(removedRoots) ? removedRoots.length : 0;
+      } catch (error) {
+        managedAttempt.tempCleanup.status = 'failed';
+        managedAttempt.tempCleanup.error = safeErrorSummary(error);
+        if (ownedIsolatedTempRoot) {
+          const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+          lifecycle.exitReason = 'owned-temp-cleanup-error';
+          if (result) {
+            result.exitCode = 1;
+            result.lifecycle = lifecycle;
+          }
         }
       }
     }
@@ -3070,8 +3284,11 @@ async function runManagedPlaywrightAttempt(options = {}) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
       lifecycle.managedAttempt = managedAttempt;
       lifecycle.exitReason = 'managed-scan-cleanup-error';
-      scanCleanupError.lifecycle = lifecycle;
-      throw scanCleanupError;
+      const failure = attemptError && attemptError !== scanCleanupError
+        ? new AggregateError([attemptError, scanCleanupError], 'Managed scan attempt failed and shutdown was not proven.')
+        : scanCleanupError;
+      failure.lifecycle = lifecycle;
+      throw failure;
     }
     if (isolatedCleanupError) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
@@ -3251,6 +3468,7 @@ module.exports = {
     assertManagedRealDataDatabaseEnv,
     buildIsolatedLibraryCleanupEnv,
     cleanupIsolatedLibraryDatabase,
+    cleanupManagedWatcherFixture,
     DEFAULT_FAKE_E2E_RUNTIME_DATABASE_URL,
     DEFAULT_FAKE_E2E_SETUP_DATABASE_URL,
     DEFAULT_PLAYWRIGHT_PYTHON,
@@ -3305,6 +3523,7 @@ module.exports = {
     probeHttpStatusReady,
     probeHttpResponseComplete,
     fetchHttpResponseComplete,
+    authenticateFunctionalFixture,
     collectLocalCoverPreviewUrls,
     prewarmFunctionalFixture,
     waitForFunctionalFixtureBackgroundIdle,

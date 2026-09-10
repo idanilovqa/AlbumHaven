@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import logging
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from types import SimpleNamespace
 
 from music_app.services.artist_alias_views import enrich_casefold_artist_alias_views
@@ -89,9 +89,75 @@ from music_app.services.view_search import (
 )
 from music_app.services.client_surfaces import resolve_client_surface_class
 from version import RELEASE_VERSION
+from music_app.services.allowed_actions import AllowedActions
+from music_app.services.library_watch_health import (
+    WATCH_HEALTH_MESSAGE,
+    opaque_root_key,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def project_missing_album_actions(
+    album: dict[str, object],
+    allowed_actions: AllowedActions,
+) -> dict[str, object]:
+    """Attach the server-owned removal affordance for a missing album."""
+
+    payload = dict(album)
+    if payload.get("inventory_status") != "missing":
+        return payload
+    if allowed_actions.allows("library.inventory.manage"):
+        payload["allowed_actions"] = {"library.inventory.manage": True}
+        payload["removal_action_label"] = "Remove from Album Haven"
+    else:
+        payload["allowed_actions"] = {}
+        payload["removal_guidance"] = (
+            "Ask an owner or administrator to remove it."
+        )
+    return payload
+
+
+def project_library_watch_health(
+    problems: Iterable[object],
+    allowed_actions: AllowedActions,
+) -> dict[str, object]:
+    """Project watcher health without exposing root identifiers or paths."""
+
+    projected: list[dict[str, object]] = []
+    for problem in problems:
+        if isinstance(problem, Mapping):
+            root_id = str(problem.get("root_id") or "").strip()
+            state = str(problem.get("state") or "").strip()
+            detected_at = str(problem.get("detected_at") or "").strip()
+        else:
+            root_id = str(getattr(problem, "root_id", "") or "").strip()
+            state = str(getattr(problem, "state", "") or "").strip()
+            detected_at = str(
+                getattr(problem, "detected_at", "") or ""
+            ).strip()
+        if not root_id or state not in {
+            "overflow",
+            "reconciliation_failed",
+            "root_unavailable",
+            "stable_write_unavailable",
+        }:
+            continue
+        item: dict[str, object] = {
+            "state": state,
+            "root_key": opaque_root_key(root_id),
+            "detected_at": detected_at,
+            "message": WATCH_HEALTH_MESSAGE,
+            "allowed_actions": {},
+        }
+        if allowed_actions.allows("library.refresh"):
+            item["allowed_actions"] = {"library.refresh": True}
+        projected.append(item)
+    return {
+        "state": "warning" if projected else "healthy",
+        "problems": projected,
+    }
 
 
 # Keep a small service-backed compatibility seam for focused tests that monkeypatch
@@ -1879,8 +1945,23 @@ def build_view_payload(
     )
     direct_match_artists = set(search_buckets["direct_artists"])
     related_match_artists = set(search_buckets["related_artists"])
+    direct_match_artist_keys = {
+        artist_display_dedupe_key(artist)
+        for artist in direct_match_artists
+        if artist_display_dedupe_key(artist)
+    }
     direct_match_artists_ordered = list(search_buckets.get("direct_artists_ordered", []))
     related_match_artists_ordered = list(search_buckets.get("related_artists_ordered", []))
+    direct_album_keys = {
+        str(album_key or "").strip()
+        for album_key in search_buckets.get("direct_album_keys", set())
+        if str(album_key or "").strip()
+    }
+    artist_name_match_artist_keys = {
+        artist_display_dedupe_key(artist)
+        for artist in search_buckets.get("artist_name_match_artists", set())
+        if artist_display_dedupe_key(artist)
+    }
 
     family_artists: list[str] = []
     primary_artist_groups = []
@@ -2055,7 +2136,24 @@ def build_view_payload(
     ) -> tuple[list[object], set[str], list[object], dict[str, float]]:
         primary_started_at = time.perf_counter()
         if query:
-            target_primary_albums = list(query_artist_group_index.get(target_artist, []))
+            target_artist_key = artist_display_dedupe_key(target_artist)
+            content_match_only = bool(
+                target_artist_key in direct_match_artist_keys
+                and target_artist_key
+                and target_artist_key not in artist_name_match_artist_keys
+            )
+
+            def album_is_in_selected_search_scope(album: object) -> bool:
+                if not content_match_only:
+                    return True
+                album_key = str(getattr(album, "key", "") or "").strip()
+                return bool(album_key and album_key in direct_album_keys)
+
+            target_primary_albums = [
+                album
+                for album in query_artist_group_index.get(target_artist, [])
+                if album_is_in_selected_search_scope(album)
+            ]
             target_primary_album_keys = {
                 str(getattr(album, "key", "") or "")
                 for album in target_primary_albums
@@ -2063,18 +2161,21 @@ def build_view_payload(
             }
             target_family_albums = []
             seen_family_album_keys: set[str] = set()
-            for artist in visible_family_artists:
-                for album in query_artist_group_index.get(artist, []):
-                    album_key = str(getattr(album, "key", "") or "")
-                    if (
-                        not album_key
-                        or album_key in target_primary_album_keys
-                        or album_key in seen_family_album_keys
-                        or is_various_album(album)
-                    ):
-                        continue
-                    seen_family_album_keys.add(album_key)
-                    target_family_albums.append(album)
+            if not content_match_only:
+                for artist in visible_family_artists:
+                    for album in query_artist_group_index.get(artist, []):
+                        if not album_is_in_selected_search_scope(album):
+                            continue
+                        album_key = str(getattr(album, "key", "") or "")
+                        if (
+                            not album_key
+                            or album_key in target_primary_album_keys
+                            or album_key in seen_family_album_keys
+                            or is_various_album(album)
+                        ):
+                            continue
+                        seen_family_album_keys.add(album_key)
+                        target_family_albums.append(album)
             primary_elapsed_ms = round((time.perf_counter() - primary_started_at) * 1000, 2)
             return target_primary_albums, target_primary_album_keys, target_family_albums, {
                 "selected_artist_primary_album_collection_ms": primary_elapsed_ms,
@@ -2758,6 +2859,11 @@ def build_view_payload(
         direct_match_artists=direct_match_artists_ordered,
         related_match_artists=related_match_artists_ordered,
         search_filters=search_filters,
+        artist_name_match_artists=[
+            artist
+            for artist in direct_match_artists_ordered
+            if artist_display_dedupe_key(artist) in artist_name_match_artist_keys
+        ],
     )
 
     ignored_versions_started_at = time.perf_counter()
@@ -3000,7 +3106,11 @@ def build_news_payload(
     return payload
 
 
-def build_status_payload(library_state: dict[str, object] | None = None) -> dict[str, object]:
+def build_status_payload(
+    library_state: dict[str, object] | None = None,
+    *,
+    watcher_health: dict[str, object] | None = None,
+) -> dict[str, object]:
     if library_state is None:
         raise ValueError("library_state is required")
     st = library_state
@@ -3039,4 +3149,10 @@ def build_status_payload(library_state: dict[str, object] | None = None) -> dict
         "last_scan_display": format_timestamp(float(st.get("last_scan") or 0.0)),
         "last_error": st.get("last_error"),
         "album_total": len(st.get("albums", [])),
+        "inventory_mutation_revision": int(
+            st.get("inventory_mutation_revision") or 0
+        ),
+        "watcher_health": watcher_health
+        if isinstance(watcher_health, dict)
+        else {"state": "healthy", "problems": []},
     }

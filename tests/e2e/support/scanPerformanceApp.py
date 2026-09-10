@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import ipaddress
 import json
 import os
@@ -178,13 +177,7 @@ def _scan_database_username(database_url: str) -> str:
 
 
 def _scan_database_lock(database_url: str) -> IsolatedDatabaseOwnershipLock:
-    identity = _scan_database_identity(database_url)
-    identity_digest = hashlib.sha256(repr(identity).encode("utf-8")).hexdigest()[:16]
-    lock_path = Path(tempfile.gettempdir()) / f"{_SCAN_DATABASE_LABEL}-{identity_digest}.lock"
-    return IsolatedDatabaseOwnershipLock(
-        lock_path=lock_path,
-        database_label=_SCAN_DATABASE_LABEL,
-    )
+    return IsolatedDatabaseOwnershipLock(database_url=database_url)
 
 
 def resolve_scan_performance_database_urls(environ: dict[str, str] | None = None) -> tuple[str, str]:

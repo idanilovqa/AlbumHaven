@@ -2,6 +2,16 @@
 
 This directory contains repo-owned Postgres SQL migrations for Album Haven.
 
+Migration `0065_native_player_component_provenance.sql` permits an optional
+`native_components` array in structured player styles and recent sets. Its unique
+values are `surface`, `controls`, `waveform`, and `handles`. An omitted or empty
+array means every component is explicitly customized, preserving older saved
+styles. Named components retain the native player treatment until edited; their
+stored color groups remain complete editor values. The account Appearance API
+validates and round-trips this field with the existing revisioned preferences.
+The migration replaces the existing JSON validator without changing columns,
+saved rows, capabilities, or function privileges.
+
 Use lowercase, zero-padded filenames and apply them in lexical order:
 
 ```text

@@ -135,9 +135,9 @@ Add `.auth/` to `.gitignore`. Auth state files contain session tokens and should
 ### Per-Worker Authentication
 
 **Use when**: Each parallel worker needs its own authenticated session to avoid race conditions for tests that modify server-side state.
-**Avoid when**: Tests are read-only and a modifying shared session is safe, you can use a single shared account.
+**Avoid when**: Tests are read-only and sharing a session is safe; use a single shared account.
 
-> **Sharded runs**: `parallelIndex` resets per shard, so different shards can have workers with the same index. To avoid collisions, include the shard identifier in the username (e.g., `worker-${SHARD_INDEX}-${parallelIndex}@example.com`) by passing a `SHARD_INDEX` environment variable from your CI matrix.
+> **Sharded runs**: `parallelIndex` resets per shard, so include `workerInfo.config.shard.current` in the account identity. The example defaults to shard 1 for an unsharded run.
 
 ```typescript
 // fixtures/auth.ts
@@ -149,21 +149,24 @@ type AuthFixtures = {
 
 export const test = base.extend<{}, AuthFixtures>({
   authenticatedContext: [
-    async ({ browser }, use) => {
-      const context = await browser.newContext();
-      const page = await context.newPage();
-
-      await page.goto("/login");
-      await page
-        .getByLabel("Username")
-        .fill(`worker-${test.info().parallelIndex}@example.com`);
-      await page.getByLabel("Password").fill("secretPass123");
-      await page.getByRole("button", { name: "Log in" }).click();
-      await page.waitForURL("/home");
-      await page.close();
-
-      await use(context);
-      await context.close();
+    async ({ browser }, use, workerInfo) => {
+      const baseURL = workerInfo.project.use.baseURL;
+      if (!baseURL) throw new Error("Configure use.baseURL for worker login.");
+      const shard = workerInfo.config.shard?.current ?? 1;
+      const context = await browser.newContext({ baseURL });
+      try {
+        const page = await context.newPage();
+        await page.goto("/login");
+        await page.getByLabel("Username")
+          .fill(`worker-${shard}-${workerInfo.parallelIndex}@example.com`);
+        await page.getByLabel("Password").fill("secretPass123");
+        await page.getByRole("button", { name: "Log in" }).click();
+        await page.waitForURL("/home");
+        await page.close();
+        await use(context);
+      } finally {
+        await context.close();
+      }
     },
     { scope: "worker" },
   ],
@@ -171,6 +174,8 @@ export const test = base.extend<{}, AuthFixtures>({
 
 export { expect } from "@playwright/test";
 ```
+
+Provision these accounts for the configured shard/worker combinations. Use a separate account namespace for concurrent CI runs sharing one backend. A worker fixture receives [WorkerInfo](https://playwright.dev/docs/test-fixtures#worker-scoped-fixtures) as its third argument; `test.info()` requires an active test. Reusing a worker account does not reset server data between tests: mutating tests must restore their changes or own separate records.
 
 ```typescript
 // tests/settings.spec.ts
@@ -840,7 +845,7 @@ projects: [
 
 **Fix**:
 
-- Use per-worker test accounts: `worker-${test.info().parallelIndex}@example.com`
+- Use the worker fixture's `workerInfo.parallelIndex` and shard identifier for per-worker accounts.
 - Use the per-worker authentication fixture pattern
 - Make tests idempotent
 

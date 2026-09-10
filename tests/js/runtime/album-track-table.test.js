@@ -155,8 +155,10 @@ test('the final table right outline fades into the footer without a corner glow 
     /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table\s*\{[^}]*border-bottom-right-radius:\s*0/s,
   );
   assert.match(css, /\.album-track-table__total\s*\{[^}]*margin:\s*-1px 0 0 auto/s);
-  assert.match(css, /\.album-track-table__total\s*\{[^}]*border-right:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 75%, transparent\)/s);
-  assert.match(css, /\.album-track-table__total\s*\{[^}]*background:\s*linear-gradient\(to left,/s);
+  assert.match(css, /\.album-track-table__total::before\s*\{[^}]*border-right:\s*1px solid color-mix\(in srgb, var\(--album-track-accent\) 75%, transparent\)/s);
+  assert.match(css, /\.album-track-table__total::before\s*\{[^}]*background:\s*linear-gradient\(to left,/s);
+  assert.match(css, /\.album-track-table__total\s*\{[^}]*border-right:\s*1px solid transparent/s);
+  assert.doesNotMatch(css.match(/\.album-track-table__total\s*\{[^}]*\}/s)[0], /mask-image:/);
   assert.match(
     css,
     /\.album-track-table__frame:has\(\.album-track-table__total\)[^{]*\.album-track-table__disc:last-of-type \.compact-data-table::after\s*\{[^}]*position:\s*absolute[^}]*right:\s*-1px[^}]*bottom:\s*-1px[^}]*width:\s*1px[^}]*background:\s*linear-gradient\(to bottom,\s*transparent[\s\S]*var\(--album-track-accent\) 75%/s,

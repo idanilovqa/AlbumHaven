@@ -4956,12 +4956,14 @@ def resolve_provider_port(cli_port: int | None, environment: dict[str, str] | No
     raise RuntimeError("PLAYWRIGHT_PROVIDER_BASE_URL or PLAYWRIGHT_PROVIDER_PORT is required.")
 
 
-def cleanup_isolated_database() -> None:
+def cleanup_isolated_database(*, lock_only: bool = False) -> None:
     setup_database_url, _runtime_database_url = resolve_isolated_database_urls()
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url,
+        **({"wait_seconds": 0} if lock_only else {}))
     database_lock.acquire()
     try:
-        reset_application_tables(setup_database_url)
+        if not lock_only:
+            reset_application_tables(setup_database_url)
     finally:
         database_lock.release()
 
@@ -4971,10 +4973,14 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=4173)
     parser.add_argument("--provider-port", type=int)
     parser.add_argument("--cleanup-only", action="store_true")
+    parser.add_argument("--cleanup-lock-only", action="store_true")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--seed-all-functional-cover-misses", action="store_true")
     args = parser.parse_args()
 
+    if args.cleanup_lock_only:
+        cleanup_isolated_database(lock_only=True)
+        return
     if args.cleanup_only:
         cleanup_isolated_database()
         return
@@ -5004,7 +5010,7 @@ def main() -> None:
     original_failure: BaseException | None = None
     cleanup_failure: Exception | None = None
     database_preparation_started = False
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url)
     try:
         install_shutdown_handlers()
         library_root = configure_isolated_environment(

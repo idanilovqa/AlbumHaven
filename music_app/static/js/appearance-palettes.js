@@ -419,7 +419,8 @@
     if (keys.length === 3 && ['background', 'fill', 'edge'].every(key => Object.hasOwn(value, key))) {
       return { background: hex(value.background), fill: hex(value.fill), edge: hex(value.edge) };
     }
-    if (keys.length !== 4 || !['surface', 'controls', 'waveform', 'handles'].every(key => Object.hasOwn(value, key))) throw new TypeError('Player colors are incomplete.');
+    if (!['surface', 'controls', 'waveform', 'handles'].every(key => Object.hasOwn(value, key)) || keys.some(key => !['surface', 'controls', 'waveform', 'handles', 'native_components'].includes(key))) throw new TypeError('Player colors are incomplete.');
+    if (Object.hasOwn(value, 'native_components') && (!Array.isArray(value.native_components) || value.native_components.length > 4 || new Set(value.native_components).size !== value.native_components.length || value.native_components.some(part => !['surface', 'controls', 'waveform', 'handles'].includes(part)))) throw new TypeError('Invalid native player components.');
     const { surface, controls, waveform, handles } = value;
     if (!surface || !controls || !waveform || !handles || [surface, controls, waveform, handles].some(part => typeof part !== 'object' || Array.isArray(part))) throw new TypeError('Player colors are incomplete.');
     if (!['gradient', 'layered_gradient', 'solid'].includes(surface.mode) || !Number.isFinite(surface.angle) || surface.angle < 0 || surface.angle > 360) throw new TypeError('Player surface is invalid.');
@@ -429,6 +430,7 @@
       controls: { fill: hex(controls.fill), border: hex(controls.border) },
       waveform: { fill: hex(waveform.fill), edge: hex(waveform.edge) },
       handles: { color: hex(handles.color) },
+      ...(Object.hasOwn(value, 'native_components') ? { native_components: [...value.native_components] } : {}),
     };
   }
   function contrastingInk(background) {
@@ -476,7 +478,20 @@
       panel: palette ? palette.panels[index][1] : (value.panel_background_color == null ? '#0E1B2B' : hex(value.panel_background_color)),
       tokens, player: { ...player }, mode: palette?.mode || 'dark' };
   }
-  const api = { palettes, resolveAppearance, normalizePlayerOverride, contrastingInk };
+  // Representative editor colors for native CSS treatments. Only explicit
+  // native_components provenance retains gradients, alpha and local waveform colors.
+  const nativePlayerStyle = Object.freeze({
+    surface: Object.freeze({ mode: 'layered_gradient', angle: 135, start: '#061816', end: '#0F172A' }),
+    controls: Object.freeze({ fill: '#0FA66F', border: '#7CBAA4' }),
+    waveform: Object.freeze({ fill: '#DADDE2', edge: '#494950' }),
+    handles: Object.freeze({ color: '#BBF7D0' }),
+  });
+  function nativePlayerComponents(value) {
+    const style = value.player_style_override;
+    if (!style?.surface) return {};
+    return Object.fromEntries((style.native_components || []).map(component => [component, true]));
+  }
+  const api = { palettes, resolveAppearance, normalizePlayerOverride, contrastingInk, nativePlayerStyle, nativePlayerComponents };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.AlbumHavenAppearancePalettes = api;
 })(typeof window !== 'undefined' ? window : null);

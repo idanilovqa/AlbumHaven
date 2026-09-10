@@ -3,7 +3,7 @@
   'use strict';
   const catalog = typeof module !== 'undefined' && module.exports ? require('./appearance-palettes.js') : scope.AlbumHavenAppearancePalettes;
   const ButtonComponent = typeof module !== 'undefined' && module.exports ? require('./button-component.js') : scope.ButtonComponent;
-  const { palettes, resolveAppearance, normalizePlayerOverride } = catalog;
+  const { palettes, resolveAppearance, normalizePlayerOverride, nativePlayerStyle, nativePlayerComponents } = catalog;
   const keys = ['main_surface_color', 'panel_background_color'];
   const defaults = { main_surface_color: '#111C2C', panel_background_color: '#0E1B2B' };
   const playerThemes = [
@@ -78,16 +78,22 @@
     if (color === null) throw new TypeError('A player color is required.');
     const previousEdge = style.waveform.edge;
     style[group][field] = color;
+    makePlayerComponentsExplicit(style, group);
     if (path === 'surface.start' && style.surface.mode === 'solid') style.surface.end = color;
     if (playerColorPairs[path]) {
       const paired = derivePairedPlayerColor(path, color);
       const [pairedGroup, pairedField] = paired.role.split('.');
       style[pairedGroup][pairedField] = paired.color;
+      makePlayerComponentsExplicit(style, pairedGroup);
       if ((path === 'controls.border' || path === 'waveform.edge') && style.handles.color === previousEdge) {
         style.handles.color = style.waveform.edge;
+        makePlayerComponentsExplicit(style, 'handles');
       }
     }
     return style;
+  }
+  function makePlayerComponentsExplicit(style, ...components) {
+    if (Object.hasOwn(style, 'native_components')) style.native_components = style.native_components.filter(component => !components.includes(component));
   }
   const defaultItemOutline = Object.freeze({ source: 'automatic', color: null });
   const interactionColorKeys = ['item_hover', 'item_selected', 'button_hover_background', 'button_pressed'];
@@ -130,7 +136,7 @@
     if (outline.source === 'theme') return effective.tokens.accent;
     const playerBorder = effective.tokens['player-control-border'] || effective.tokens['waveform-edge'] || effective.tokens['player-ink'];
     if (outline.source === 'player') return playerBorder;
-    return (preference.player_style_override || preference.player_override) ? playerBorder : effective.tokens.accent;
+    return (preference.player_style_override || preference.player_override) && !nativePlayerComponents(preference).controls ? playerBorder : effective.tokens.accent;
   }
   function normalizePreferences(value) {
     if (!value || !keys.every(key => Object.hasOwn(value, key))) throw new TypeError('Invalid appearance response.');
@@ -196,6 +202,7 @@
     const preference = normalizePreferences(value), playerPreference = { ...preference, player_override: preference.player_style_override || preference.player_override };
     const effective = resolveAppearance(playerPreference), style = rootElement.style;
     const themed = Boolean(preference.palette_id), playerThemed = themed || Boolean(playerPreference.player_override);
+    const native = nativePlayerComponents(preference);
     const main = themed ? effective.main : preference.main_surface_color;
     const panel = themed ? effective.panel : preference.panel_background_color;
     for (const [color, variable] of [[main, '--appearance-main-surface'], [panel, '--appearance-panel-background']]) {
@@ -240,8 +247,14 @@
       style.removeProperty('--navigation-tree-selection-accent-color');
     }
     for (const token of playerTokens) {
-      if (playerThemed) style.setProperty('--appearance-' + token, effective.tokens[token]);
+      const component = token.startsWith('waveform-') ? 'waveform' : token === 'player-handle' ? 'handles'
+        : ['play', 'play-ink', 'player-control-border'].includes(token) ? 'controls' : 'surface';
+      if (playerThemed && !native[component]) style.setProperty('--appearance-' + token, effective.tokens[token]);
       else style.removeProperty('--appearance-' + token);
+    }
+    for (const component of Object.keys(nativePlayerStyle)) {
+      if (native[component]) rootElement.setAttribute?.('data-appearance-native-' + component, '');
+      else rootElement.removeAttribute?.('data-appearance-native-' + component);
     }
     if (themed) {
       rootElement.setAttribute?.('data-appearance-palette', preference.palette_id);
@@ -440,6 +453,7 @@
       if (aggregate || Object.hasOwn(draft, 'player_style_override')) {
         const style = effectivePlayerStyle(getState());
         style.waveform = { fill, edge };
+        makePlayerComponentsExplicit(style, 'waveform');
         aggregate = true; draft.player_style_override = normalizePlayerOverride(style); pendingPlayerSet = copy(draft.player_style_override);
       } else {
         draft.player_override = { ...(draft.player_override || resolveAppearance(draft).player), fill, edge };
@@ -646,6 +660,7 @@
     return `<label class="player-style-field">${label}<span><input type="color" data-player-style-color="${path}"><input type="text" maxlength="7" data-player-style-hex="${path}" spellcheck="false" aria-describedby="${id}-error"></span><small class="background-field-error" id="${id}-error" data-player-style-error="${path}" role="status"></small></label>`;
   }
   function effectivePlayerStyle(state) {
+    if (!state.draft.player_style_override && !state.draft.player_override && !state.draft.palette_id) return { ...copy(nativePlayerStyle), native_components: ['surface', 'controls', 'waveform', 'handles'] };
     return copy(state.draft.player_style_override) || {
       surface: { mode: 'gradient', angle: 0, start: state.effective.player.background, end: state.effective.player.background },
       controls: { fill: state.effective.tokens.play, border: state.effective.player.edge },
@@ -741,7 +756,7 @@
     let savedPlayerColors = null;
     const applySavedTheme = preference => {
       applyTheme(preference, root);
-      savedPlayerColors = preference.palette_id || preference.player_override || preference.player_style_override ? resolveAppearance({ ...preference, player_override: preference.player_style_override || preference.player_override }).player : null;
+      savedPlayerColors = !nativePlayerComponents(preference).waveform && (preference.palette_id || preference.player_override || preference.player_style_override) ? resolveAppearance({ ...preference, player_override: preference.player_style_override || preference.player_override }).player : null;
       if (typeof window.CustomEvent === 'function') window.dispatchEvent?.(new window.CustomEvent('album-haven-appearance-change'));
     };
     applySavedTheme(initial);
@@ -1107,7 +1122,7 @@
       editor.addEventListener('input', event => {
         const stylePath = event.target.getAttribute('data-player-style-color') || event.target.getAttribute('data-player-style-hex');
         if (stylePath) { controller.setPlayerStyleColor(stylePath, event.target.value); return; }
-        if (event.target.hasAttribute('data-player-style-angle')) { const style = effectivePlayerStyle(controller.getState()); style.surface.angle = Number(event.target.value); controller.setPlayerStyle(style, { preserveColorErrors: true }); return; }
+        if (event.target.hasAttribute('data-player-style-angle')) { const style = effectivePlayerStyle(controller.getState()); style.surface.angle = Number(event.target.value); makePlayerComponentsExplicit(style, 'surface'); controller.setPlayerStyle(style, { preserveColorErrors: true }); return; }
         const field = event.target.getAttribute('data-player-picker') || event.target.getAttribute('data-player-hex');
         if (field) {
           recoveryMessage = '';
@@ -1128,7 +1143,7 @@
         else if (button.hasAttribute('data-waveform-recent')) { recoveryMessage = ''; controller.setWaveformColor(button.getAttribute('data-waveform-field'), button.getAttribute('data-waveform-recent')); }
         else if (button.hasAttribute('data-player-set-index')) controller.restorePlayerSet(controller.getState().playerRecentSets[Number(button.getAttribute('data-player-set-index'))]);
         else if (button.hasAttribute('data-player-theme')) { const theme = playerThemes.find(item => item.id === button.getAttribute('data-player-theme')); if (theme) controller.setPlayerStyle(theme.style); }
-            else if (button.hasAttribute('data-player-surface-mode')) { const style = effectivePlayerStyle(controller.getState()); style.surface.mode = button.getAttribute('data-player-surface-mode'); if (style.surface.mode === 'solid') style.surface.end = style.surface.start; controller.setPlayerStyle(style, { preserveColorErrors: true }); }
+            else if (button.hasAttribute('data-player-surface-mode')) { const style = effectivePlayerStyle(controller.getState()); style.surface.mode = button.getAttribute('data-player-surface-mode'); if (style.surface.mode === 'solid') style.surface.end = style.surface.start; makePlayerComponentsExplicit(style, 'surface'); controller.setPlayerStyle(style, { preserveColorErrors: true }); }
             else if (button.hasAttribute('data-compact-player-style')) controller.setCompactPlayerStyle(button.getAttribute('data-compact-player-style'));
         else if (button.hasAttribute('data-background-player-mode')) { recoveryMessage = ''; controller.setPlayerMode(button.getAttribute('data-background-player-mode')); }
         else if (button.hasAttribute('data-waveform-restore')) {

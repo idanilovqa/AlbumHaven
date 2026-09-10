@@ -39,6 +39,25 @@ AGGREGATE_DEFAULTS = {
 }
 
 
+@pytest.mark.parametrize("native_components", [[], ["surface", "controls", "waveform"], ["handles"]])
+def test_player_style_preserves_explicit_native_components(native_components):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    style = {**CLASSIC_GREEN_PLAYER_STYLE, "native_components": native_components}
+    normalized = normalize_appearance_preferences(aggregate_write(player_style_override=style, applied_player_set=style))
+    assert normalized["player_style_override"] == style
+    assert normalized["applied_player_set"] == style
+    old = normalize_appearance_preferences(aggregate_write(player_style_override=CLASSIC_GREEN_PLAYER_STYLE))
+    assert "native_components" not in old["player_style_override"]
+
+
+@pytest.mark.parametrize("native_components", [None, "surface", ["surface", "surface"], ["unknown"], [1], {}, ["surface", "controls", "waveform", "handles", "surface"]])
+@pytest.mark.parametrize("field", ["player_style_override", "applied_player_set"])
+def test_player_style_rejects_malformed_native_components(native_components, field):
+    from music_app.services.appearance_preferences_postgres import normalize_appearance_preferences
+    with pytest.raises(ValueError):
+        normalize_appearance_preferences(aggregate_write(**{field: {**CLASSIC_GREEN_PLAYER_STYLE, "native_components": native_components}}))
+
+
 class Connection:
     def __init__(self, row=None):
         self.row = row

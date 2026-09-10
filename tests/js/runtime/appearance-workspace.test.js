@@ -43,6 +43,57 @@ const editableSnapshot = value => {
   return draft;
 };
 
+test('a handle-only edit from native appearance preserves other components after save and reload', async () => {
+  const nativeInitial = { ...initialAppearance(), palette_id: null, player_override: null, player_style_override: null, player_recent_sets: [] };
+  const { controller } = setup({ initial: nativeInitial });
+  controller.setPlayerStyleColor('handles.color', '#123456');
+  assert.equal(controller.getState().draft.player_style_override.surface.mode, 'layered_gradient');
+  assert.equal(await controller.save(), true);
+  const reloaded = setup({ initial: controller.getState().saved }).controller;
+  const attributes = new Map(), properties = new Map();
+  appearance.applyTheme(reloaded.getState().saved, {
+    style: { setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key) },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  for (const component of ['surface', 'controls', 'waveform']) assert.equal(attributes.has(`data-appearance-native-${component}`), true);
+  assert.equal(attributes.has('data-appearance-native-handles'), false);
+  for (const token of ['player', 'play', 'waveform-fill', 'waveform-edge']) assert.equal(properties.has(`--appearance-${token}`), false);
+  assert.equal(properties.get('--appearance-player-handle'), '#123456');
+  assert.equal(properties.get('--appearance-interaction-outline'), appearance.resolveAppearance(nativeInitial).tokens.accent);
+  appearance.clearTheme({
+    style: { setProperty: (key, value) => properties.set(key, value), removeProperty: key => properties.delete(key) },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  assert.equal([...attributes.keys()].some(key => key.startsWith('data-appearance-native-')), false);
+});
+
+test('native waveform edits keep intentional control pairing while preserving the native surface', () => {
+  const { controller } = setup({ initial: { ...initialAppearance(), palette_id: null, player_override: null, player_style_override: null } });
+  controller.setWaveformColor('fill', '#123456');
+  const style = controller.getState().draft.player_style_override;
+  assert.equal(style.surface.mode, 'layered_gradient');
+  assert.equal(style.waveform.fill, '#123456');
+  assert.equal(style.controls.fill, appearance.derivePairedPlayerColor('waveform.fill', '#123456').color);
+  assert.deepEqual(style.native_components, ['surface', 'handles']);
+});
+
+test('old explicit player styles are never inferred native from matching colors', () => {
+  const { nativePlayerStyle } = require('../../../music_app/static/js/appearance-palettes.js');
+  const attributes = new Map();
+  appearance.applyTheme({ ...initialAppearance(), palette_id: null, player_style_override: structuredClone(nativePlayerStyle) }, {
+    style: { setProperty() {}, removeProperty() {} },
+    setAttribute: (key, value) => attributes.set(key, value), removeAttribute: key => attributes.delete(key),
+  });
+  assert.equal([...attributes.keys()].some(key => key.startsWith('data-appearance-native-')), false);
+});
+
+for (const native_components of [null, 'surface', ['surface', 'surface'], ['unknown'], [1], {}, ['surface', 'controls', 'waveform', 'handles', 'surface']]) {
+  test(`player style rejects invalid native component provenance ${JSON.stringify(native_components)}`, () => {
+    const { normalizePlayerOverride } = require('../../../music_app/static/js/appearance-palettes.js');
+    assert.throws(() => normalizePlayerOverride({ ...classicGreen(), native_components }), TypeError);
+  });
+}
+
 function requireMethod(controller, name) {
   assert.equal(typeof controller[name], 'function', `Appearance workspace must expose ${name}()`);
   return controller[name].bind(controller);

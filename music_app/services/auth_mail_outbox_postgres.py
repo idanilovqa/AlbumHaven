@@ -350,6 +350,19 @@ class PostgresPasswordResetOutboxService:
                     raise RuntimeError("Password reset stale-claim context is invalid.")
                 if stale_rows:
                     return AmbiguousPasswordResetClaim(outbox_id=outbox_id)
+                # Account mutations and reset issuance lock this account before
+                # changing credentials or tokens. Wait here, then use a fresh
+                # statement snapshot for every eligibility predicate below.
+                accounts = connection.execute(
+                    """
+                    select account.id from app.accounts account
+                    where account.id = %s
+                    for update of account
+                    """,
+                    (account_id,),
+                ).fetchall()
+                if len(accounts) != 1:
+                    return None
                 rows = connection.execute(
                     """
                     select outbox.id, outbox.account_id,

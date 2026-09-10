@@ -64,8 +64,13 @@ def _color(value: object, *, nullable: bool = True) -> str | None:
 def _player_style(value: object, *, nullable: bool = True) -> dict[str, object] | None:
     if value is None and nullable:
         return None
-    if not isinstance(value, Mapping) or set(value) != {"surface", "controls", "waveform", "handles"}:
+    components = {"surface", "controls", "waveform", "handles"}
+    if not isinstance(value, Mapping) or not components <= set(value) or set(value) - components - {"native_components"}:
         raise ValueError("A complete player style is required.")
+    if "native_components" in value:
+        native = value["native_components"]
+        if not isinstance(native, list) or len(native) > 4 or any(not isinstance(part, str) or part not in components for part in native) or len(set(native)) != len(native):
+            raise ValueError("Invalid native player components.")
     surface, controls, waveform, handles = (value[name] for name in ("surface", "controls", "waveform", "handles"))
     if not all(isinstance(part, Mapping) for part in (surface, controls, waveform, handles)):
         raise ValueError("A complete player style is required.")
@@ -80,6 +85,7 @@ def _player_style(value: object, *, nullable: bool = True) -> dict[str, object] 
         "controls": {"fill": _color(controls["fill"], nullable=False), "border": _color(controls["border"], nullable=False)},
         "waveform": {"fill": _color(waveform["fill"], nullable=False), "edge": _color(waveform["edge"], nullable=False)},
         "handles": {"color": _color(handles["color"], nullable=False)},
+        **({"native_components": list(value["native_components"])} if "native_components" in value else {}),
     }
 
 

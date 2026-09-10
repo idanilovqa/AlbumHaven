@@ -49,7 +49,7 @@ export default defineConfig({
 
   webServer: {
     command: process.env.CI
-      ? 'npx ng build && npx http-server dist/my-app/browser -p 4200 -s'
+      ? 'npx ng build && npx http-server dist/my-app/browser -p 4200 --proxy http://127.0.0.1:4200?'
       : 'npx ng serve',
     url: 'http://localhost:4200',
     reuseExistingServer: !process.env.CI,
@@ -493,11 +493,11 @@ test('no hydration errors', async ({ page }) => {
 | Scenario | Command | Notes |
 |---|---|---|
 | Local dev | `npx ng serve` | Fast rebuild, source maps |
-| CI production | `npx ng build && npx http-server dist/app/browser -p 4200 -s` | Tests production bundle |
+| CI production | `npx ng build && npx http-server dist/app/browser -p 4200 --proxy http://127.0.0.1:4200?` | Tests production bundle with route fallback |
 | CI SSR | `npx ng build --ssr && node dist/app/server/server.mjs` | Tests server-side rendering |
 | Staging | No `webServer` | Point `baseURL` to staging URL |
 
-The `-s` flag on `http-server` enables SPA fallback for Angular Router.
+The `-s` flag on `http-server` only suppresses logging. The documented [catch-all proxy](https://github.com/http-party/http-server#catch-all-redirect) above serves the index page for Angular Router deep links; the trailing `?` is required. Keep the proxy port equal to the server port and verify a direct request to `/admin/settings` returns the application entry page.
 
 ## CDK Overlay Container
 

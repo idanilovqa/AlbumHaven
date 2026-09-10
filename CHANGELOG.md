@@ -2,6 +2,16 @@
 
 ## 0.9.43 - 2026-09-09
 
+- Preserved untouched native player components when saving partial appearance
+  edits, without reinterpreting existing custom styles; kept duration text opaque.
+- Serialized reset-mail claims with account changes, retained newer watcher
+  failures during concurrent writes, and refreshed warnings independently of
+  inventory updates.
+- Restored responsive-test appearance changes, isolated both private-fixture
+  environment inputs, rejected malformed Text Tools columns, and corrected
+  runnable testing-guide examples.
+- Scoped test-runner ownership locks to the actual database so independent
+  fixture databases do not block each other during startup.
 - Retained encrypted review diagnostics for private failure investigation, with
   run and review-unit binding and no plaintext log upload.
 - Reported fixed CI review failure categories without exposing console text or

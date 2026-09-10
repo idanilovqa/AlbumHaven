@@ -50,6 +50,65 @@ async function mount(page, method, options = {}) {
   }, method);
 }
 
+test('native player survives a handle-only save and reload without repainting other components', async ({ page }) => {
+  await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: null, player_style_override: null, player_override: null } });
+  await page.route('**/account/appearance', route => {
+    const payload = route.request().postDataJSON();
+    return route.fulfill({ json: { ...payload, revision: payload.expected_revision + 1 } });
+  });
+  const result = await page.evaluate(async () => {
+    const api = window.AlbumHavenAppearance;
+    const root = document.documentElement;
+    const player = document.querySelector('.global-player');
+    player.insertAdjacentHTML('beforeend', '<button class="loop-play-control-button">Play</button><button class="loop-range-handle is-start"></button><span class="player-title">Title</span>');
+    const paint = () => {
+      const read = (selector, pseudo) => {
+        const style = getComputedStyle(document.querySelector(selector), pseudo);
+        return [style.backgroundImage, style.backgroundColor, style.color, style.borderColor, style.boxShadow];
+      };
+      return { surface: read('.global-player'), controls: read('.loop-play-control-button'), title: read('.player-title'), handle: read('.loop-range-handle', '::after'), waveform: api.getSavedPlayerColors() };
+    };
+    const before = paint();
+    const controller = api.instance.controller;
+    controller.setPlayerStyleColor('handles.color', '#123456');
+    if (!await controller.save()) throw new Error('Handle save failed');
+    api.clearTheme(root);
+    const reloaded = api.createController({ initial: controller.getState().saved });
+    api.applyTheme(reloaded.getState().saved, root);
+    return { before, after: paint() };
+  });
+  expect(result.before.surface[0]).toContain('radial-gradient');
+  for (const component of ['surface', 'controls', 'title', 'waveform']) expect(result.after[component], component).toEqual(result.before[component]);
+  expect(result.after.handle[1]).toBe('rgb(18, 52, 86)');
+  expect(result.after.handle).not.toEqual(result.before.handle);
+});
+
+test('custom controls keep opaque action pods while the player surface remains native', async ({ page }) => {
+  await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: null, player_style_override: null, player_override: null } });
+  const paint = await page.evaluate(() => {
+    const api = window.AlbumHavenAppearance;
+    const player = document.querySelector('.global-player');
+    player.insertAdjacentHTML('beforeend', '<div class="loop-edit-actions"><div class="loop-edit-action-pod"></div><button class="loop-edit-action-enter">Edit</button></div><button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
+    const surface = getComputedStyle(player).backgroundImage;
+    api.instance.controller.setPlayerStyleColor('controls.fill', '#123456');
+    api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
+    const pod = document.querySelector('.loop-edit-action-pod');
+    const idle = document.querySelector('.player-timeline-wrap');
+    const idleBackground = getComputedStyle(idle, '::before').backgroundColor;
+    const style = structuredClone(api.instance.controller.getState().draft.player_style_override);
+    style.native_components.push('waveform');
+    api.instance.controller.setPlayerStyle(style);
+    api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
+    const loop = getComputedStyle(document.querySelector('.player-loop-button'));
+    return { surface, after: getComputedStyle(player).backgroundImage, outline: [loop.outlineStyle, loop.outlineWidth, loop.outlineColor],
+      pod: getComputedStyle(pod).backgroundColor, tail: getComputedStyle(pod, '::after').backgroundColor,
+      idle: idleBackground };
+  });
+  expect(paint.after).toBe(paint.surface);
+  expect(paint.outline).toEqual(['solid', '2px', 'rgb(73, 73, 80)']);
+  for (const component of ['pod', 'tail', 'idle']) expect(paint[component], component).toBe('rgb(7, 24, 39)');
+});
+
 for (const width of [900, 901, 1024, 1280]) {
   test(`Album page workspace fits the production Utilities shell at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

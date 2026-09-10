@@ -1400,7 +1400,7 @@ def test_cleanup_only_reaps_stale_owner_resets_tables_and_releases_without_start
     monkeypatch.setattr(
         isolatedLibraryApp,
         "IsolatedDatabaseOwnershipLock",
-        lambda: isolatedPostgres.IsolatedDatabaseOwnershipLock(lock_path=lock_path, wait_seconds=0),
+        lambda *, database_url: isolatedPostgres.IsolatedDatabaseOwnershipLock(lock_path=lock_path, wait_seconds=0),
     )
 
     def reset(database_url):
@@ -1451,6 +1451,9 @@ def test_isolated_launcher_holds_database_lock_through_startup_and_teardown_clea
     temp_root.mkdir()
 
     class RecordingLock:
+        def __init__(self, *, database_url):
+            assert database_url == "setup"
+
         def acquire(self):
             events.append("lock.acquire")
 
@@ -1650,6 +1653,9 @@ def test_isolated_launcher_preserves_and_reuses_runner_owned_restart_state(
     ).hexdigest()
 
     class RecordingLock:
+        def __init__(self, *, database_url):
+            assert database_url == "setup"
+
         def acquire(self):
             events.append("lock.acquire")
 

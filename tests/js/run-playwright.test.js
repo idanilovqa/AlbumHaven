@@ -4312,6 +4312,41 @@ test('managed isolated readiness failure still stops the spawned app before data
   ]);
 });
 
+test('preloaded managed attempts release only database ownership after proven shutdown', async () => {
+  const events = [];
+  const common = {
+    passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,
+    managesScanApp: false, managesIsolatedApp: true, preservesPreloadedDatabase: true,
+    servesRealApp: false, supportAppPort: 4325, realAppPort: 5001, managedPorts: [],
+    ownedIsolatedTempRoot: '', isHeadless: true, browserName: 'chromium',
+    async startManagedIsolatedAppFn() { return createFakeChildProcess(5959); },
+    async runPlaywrightProcessFn() { return { exitCode: 0, lifecycle: {} }; },
+    async stopManagedIsolatedAppFn() { events.push('stopped'); },
+    cleanupIsolatedLibraryDatabaseFn(_env, options) { assert.equal(options.lockOnly, true); events.push('lock-only'); },
+    cleanupIsolatedE2ETempRootsFn() { events.push('temp'); return []; },
+    reportManagedPortOwnersFn() { return []; },
+  };
+  const result = await _private.runManagedPlaywrightAttempt(common);
+  assert.deepEqual(events, ['stopped', 'lock-only', 'temp']);
+  assert.equal(result.lifecycle.fakeDatabaseCleanup.mode, 'lock-only');
+  assert.equal(_private.buildAuthoritativePassFinalDecisionDiagnostic(result).fakeDatabaseCleanup.mode, 'lock-only');
+  events.length = 0;
+  await assert.rejects(_private.runManagedPlaywrightAttempt({ ...common,
+    async stopManagedIsolatedAppFn() { throw new Error('shutdown unproven'); },
+  }), /shutdown unproven/);
+  assert.deepEqual(events, []);
+});
+
+test('lock-only cleanup command retains the validated scoped database environment', () => {
+  let command;
+  _private.cleanupIsolatedLibraryDatabase({PLAYWRIGHT_PYTHON: 'python-for-test',
+    ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: 'postgresql://album_haven_migrator_job@localhost/album_haven_ci_job',
+    ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: 'postgresql://album_haven_app_job@localhost/album_haven_ci_job',
+  }, {lockOnly:true, runCommandFn(_exe, args, options) {command={args,options};return {status:0};}});
+  assert.deepEqual(command.args, [_private.ISOLATED_LIBRARY_APP_PATH, '--cleanup-lock-only']);
+  assert.match(command.options.env.ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL, /album_haven_ci_job$/);
+});
+
 test('managed isolated cleanup and database failures fail the attempt closed', async () => {
   const common = {
     passthroughArgv: ['test'], childEnv: {}, runTimeoutMs: 1000,

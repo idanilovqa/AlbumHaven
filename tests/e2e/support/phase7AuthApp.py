@@ -448,7 +448,7 @@ def main() -> None:
 
     setup_database_url, runtime_database_url = resolve_isolated_database_urls()
     temp_root = Path(tempfile.mkdtemp(prefix="album-haven-phase7-e2e-"))
-    database_lock = IsolatedDatabaseOwnershipLock()
+    database_lock = IsolatedDatabaseOwnershipLock(database_url=setup_database_url)
     state = CaptureState()
     database_owned = False
     created_servers: list[Any] = []

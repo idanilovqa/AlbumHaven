@@ -1,4 +1,6 @@
-import { expect, test } from '../support/baseFixtures.js';
+import { expect, test as base } from '../support/baseFixtures.js';
+import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
+import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
 import {
   captureResponsiveGalleryScreenshot,
   expectCardsWithinSelectedScale,
@@ -6,6 +8,14 @@ import {
   resolveSelectedScaleCardCeiling,
   waitForResponsiveGalleryLayout,
 } from '../helpers/responsiveGalleryHelpers.js';
+
+const test = base.extend({
+  appearanceBaseline: [async ({ context, managedAppLifecycle }, use) => {
+    await withRestoredAppearanceFixture({
+      username: PERFORMANCE_AUTH_USERNAME, context, managedAppLifecycle,
+    }, use);
+  }, { auto: true }],
+});
 
 const ARTIST = 'Album Rating Contract';
 const RATED_ALBUM = 'Rating Numeric Authority';

@@ -3288,6 +3288,100 @@ test('pollStatus preserves mutation-owned hydrated membership and reconciles it 
   assert.equal(context.getCachedHydratedTrackModalAlbum(albumKey), null);
 });
 
+function watcherRefreshFixture() {
+  const fixture = createContext();
+  fixture.context.scheduleBrowserTimeout = () => {};
+  fixture.context.hasPendingTagEditViewMutations = () => true;
+  fixture.context.state.utility.loaded = true;
+  fixture.context.state.status = {
+    inventory_mutation_revision: 12,
+    watcher_health: { state: 'healthy', problems: [] },
+  };
+  fixture.refreshes = [];
+  fixture.context.loadProblematicFiles = async force => {
+    fixture.refreshes.push(force);
+    return [];
+  };
+  fixture.observe = async (health, inventoryRevision = 12) => {
+    const requestIndex = fixture.pendingRequests.length;
+    const pending = fixture.context.pollStatus();
+    fixture.pendingRequests[requestIndex].resolveWith({
+      inventory_mutation_revision: inventoryRevision,
+      watcher_health: health,
+    });
+    await pending;
+  };
+  return fixture;
+}
+
+function watcherWarning(root = 'root-1', actions = { 'library.refresh': true }) {
+  return { state: 'warning', problems: [{ root_key: root, state: 'overflow',
+    detected_at: '2026-09-10T00:00:00Z', message: 'Run a full scan.', allowed_actions: actions }] };
+}
+
+test('watcher warnings arrive and clear without inventory changes or redundant utility refreshes', async () => {
+  const fixture = watcherRefreshFixture();
+  const warning = watcherWarning();
+  await fixture.observe(warning);
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(JSON.parse(JSON.stringify(warning)));
+  assert.deepEqual(fixture.refreshes, [true]);
+  await fixture.observe(watcherWarning('root-1', {}));
+  assert.deepEqual(fixture.refreshes, [true, true], 'refresh capability changes reach the loaded list');
+  await fixture.observe({ state: 'healthy', problems: [] });
+  await fixture.observe({ state: 'healthy', problems: [] });
+  assert.deepEqual(fixture.refreshes, [true, true, true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 0);
+  assert.equal(Boolean(fixture.context.state.ui.pendingInventoryMutationViewRefresh), false);
+});
+
+test('watcher health ordering is stable and simultaneous inventory changes refresh the utility once', async () => {
+  const fixture = watcherRefreshFixture();
+  const problems = [...watcherWarning('b').problems, ...watcherWarning('a').problems];
+  await fixture.observe({ state: 'warning', problems }, 13);
+  await fixture.observe({ state: 'warning', problems: [...problems].reverse() }, 13);
+  assert.deepEqual(fixture.refreshes, [true]);
+  assert.equal(fixture.calls.hydratedAlbumDetailInvalidations, 1);
+});
+
+test('watcher health changes do not load an unused utility', async () => {
+  const fixture = watcherRefreshFixture();
+  fixture.context.state.utility.loaded = false;
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, []);
+});
+
+test('an older in-flight utility response cannot swallow a watcher health change', async () => {
+  const fixture = watcherRefreshFixture();
+  const utility = fixture.context.state.utility;
+  utility.loading = true;
+  utility.loadPromise = Promise.resolve(['older summary']);
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [], 'do not coalesce the new health into the older request');
+  await utility.loadPromise;
+  utility.loading = false;
+  utility.loadPromise = null;
+  await fixture.observe(watcherWarning());
+  await fixture.observe(watcherWarning());
+  assert.deepEqual(fixture.refreshes, [true], 'one fresh request follows the old response');
+});
+
+test('a failed health refresh remains pending even when the utility loader clears loaded state', async () => {
+  const fixture = watcherRefreshFixture();
+  let attempts = 0;
+  fixture.context.loadProblematicFiles = async () => {
+    attempts += 1;
+    fixture.context.state.utility.loaded = attempts !== 1;
+    return attempts === 1 ? null : [];
+  };
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 1);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+  await fixture.observe(watcherWarning());
+  assert.equal(attempts, 2);
+});
+
 test('pollStatus treats the first inventory revision observation as a baseline', async () => {
   const { context, calls, pendingRequests } = createContext();
   context.scheduleBrowserTimeout = () => {};

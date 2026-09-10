@@ -239,11 +239,11 @@ test('changing only player colors cannot change Main-elements interaction tokens
 test('themed player boundaries preserve floating hover and focus strength', () => {
   const basePlayerRule = cssRule(
     appearanceCss,
-    ':root\\[data-appearance-player\\] \\.global-player(?!:)\\b',
+    ':root\\[data-appearance-player\\]:not\\(\\[data-appearance-native-surface\\]\\) \\.global-player(?!:)\\b',
   );
   const nonFloatingBoundaryRule = cssRule(
     appearanceCss,
-    ':root\\[data-appearance-player\\] \\.global-player:not\\(\\.is-floating-compact\\)',
+    ':root\\[data-appearance-player\\]:not\\(\\[data-appearance-native-surface\\]\\) \\.global-player:not\\(\\.is-floating-compact\\)',
   );
 
   assert.doesNotMatch(

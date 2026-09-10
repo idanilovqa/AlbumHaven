@@ -12404,8 +12404,24 @@ async function browseScannedLibrarySnapshot() {
   }
 }
 
+function watcherHealthRefreshSignature(status) {
+  const health = status?.watcher_health || {};
+  const problems = Array.isArray(health.problems) ? health.problems : [];
+  return JSON.stringify([
+    String(health.state || ''),
+    problems.map(problem => [
+      String(problem?.root_key || ''),
+      String(problem?.state || ''),
+      String(problem?.detected_at || ''),
+      String(problem?.message || ''),
+      Object.entries(problem?.allowed_actions || {}).sort(([left], [right]) => left.localeCompare(right)),
+    ]).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  ]);
+}
+
 async function pollStatus() {
   const knownStatus = state.status || {};
+  const knownWatcherHealth = watcherHealthRefreshSignature(knownStatus);
   const hadKnownInventoryRevision = Object.prototype.hasOwnProperty.call(
     knownStatus,
     'inventory_mutation_revision',
@@ -12436,23 +12452,33 @@ async function pollStatus() {
     const currentInventoryRevision = Number(
       normalizedStatus.inventory_mutation_revision || 0,
     );
-    if (
-      hadKnownInventoryRevision
-      && currentInventoryRevision > knownInventoryRevision
-    ) {
+    const inventoryAdvanced = hadKnownInventoryRevision
+      && currentInventoryRevision > knownInventoryRevision;
+    if (inventoryAdvanced) {
       if (typeof invalidateAllHydratedTrackModalAlbumDetails === 'function') {
         invalidateAllHydratedTrackModalAlbumDetails();
       }
       state.ui.pendingInventoryMutationViewRefresh = true;
-      if (state.utility.loaded) {
-        try {
-          await loadProblematicFiles(true);
-        } catch (problematicFilesError) {
-          console.error(
-            '[AlbumHaven][Watcher] Failed to refresh Problematic Files after an inventory change.',
-            problematicFilesError,
-          );
+    }
+    const utility = state.utility;
+    const healthChanged = knownWatcherHealth !== watcherHealthRefreshSignature(normalizedStatus);
+    if ((utility.loaded || utility.loading) && (inventoryAdvanced || healthChanged)) {
+      utility.problematicStatusRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0) + 1;
+    }
+    const requestedRefreshRevision = Number(utility.problematicStatusRefreshRevision || 0);
+    if (!utility.loading && requestedRefreshRevision > Number(utility.problematicStatusSyncedRevision || 0)) {
+      try {
+        // An earlier in-flight summary cannot satisfy a later status change.
+        // Failed/superseded loads return null; keep the change pending for the next poll.
+        const refreshedItems = await loadProblematicFiles(true);
+        if (state.utility === utility && Array.isArray(refreshedItems)) {
+          utility.problematicStatusSyncedRevision = requestedRefreshRevision;
         }
+      } catch (problematicFilesError) {
+        console.error(
+          '[AlbumHaven][Watcher] Failed to refresh Problematic Files after a status change.',
+          problematicFilesError,
+        );
       }
     }
     const statusObservationSequence = recordSuccessfulStatusObservation();

@@ -206,23 +206,23 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] .settings-host :is(.password-control, .password-control input, .detail-field > input, .detail-field > select, .invitation-copy-fallback, .invitation-copy-fallback input, .account-button:not(.is-primary), .member-avatar) { color: var(--appearance-ink); background: var(--appearance-control); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host .password-control button { color: var(--appearance-accent); }
 /* Player preferences are one saved group, independent of seekbar display mode. */
-:root[data-appearance-player] .global-player { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); }
-:root[data-appearance-player] .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
-:root[data-appearance-player] :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
-:root[data-appearance-player] :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
-:root[data-appearance-player] .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
-:root[data-appearance-player] .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
-:root[data-appearance-player] .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 2px; }
-:root[data-appearance-player] .player-timeline { accent-color: var(--appearance-waveform-fill); }
-:root[data-appearance-player] .player-loop-region { background: color-mix(in srgb, var(--appearance-waveform-fill) 28%, transparent); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-loop-region.loop-range-selection {
+:root[data-appearance-player]:not([data-appearance-native-surface]) .global-player { background: linear-gradient(var(--appearance-player-surface-angle, 0deg), var(--appearance-player-surface-start, var(--appearance-player)), var(--appearance-player-surface-end, var(--appearance-player))); color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) .global-player:not(.is-floating-compact) { border-color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) :is(.player-title, .player-album-link, .player-album-link:hover, .player-time, .player-timeline-wrap.is-idle::after) { color: var(--appearance-player-ink); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) :is(.player-play, .player-loop-button, .player-save-loop) { color: var(--appearance-play-ink); background: var(--appearance-play); border-color: var(--appearance-player-control-border, var(--appearance-waveform-edge)); box-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .loop-range-handle::after { width: 5px; background: var(--appearance-player-handle); border-color: var(--appearance-player-handle); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .player-loop-button.is-active { outline: 2px solid var(--appearance-waveform-edge); outline-offset: 2px; }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-timeline { accent-color: var(--appearance-waveform-fill); }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-loop-region { background: color-mix(in srgb, var(--appearance-waveform-fill) 28%, transparent); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-handles]) .player-loop-region.loop-range-selection {
   border-inline-color: var(--appearance-player-handle);
   background: color-mix(in srgb, var(--appearance-player-handle) 10%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--appearance-player-handle) 82%, transparent);
 }
-:root[data-appearance-player] .player-timeline-wrap.is-idle::before { background: var(--appearance-player); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-cover-button { border-color: var(--appearance-waveform-edge); }
-:root[data-appearance-player] .player-cover-button.is-idle-placeholder { background-color: var(--appearance-player); color: var(--appearance-player-ink); box-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-timeline-wrap.is-idle::before { background: var(--appearance-player); box-shadow: inset 0 0 0 1px var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-waveform]) .player-cover-button { border-color: var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-surface]) .player-cover-button.is-idle-placeholder { background-color: var(--appearance-player); color: var(--appearance-player-ink); box-shadow: none; }
 
 /* Palette choices and supporting controls use the editor-scoped draft tokens. */
 .appearance-palette-editor { padding: 20px; }
@@ -450,15 +450,25 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] .repair-alert.is-error { background: color-mix(in srgb, #ef4444 12%, var(--appearance-panel-background) 88%); }
 :root[data-appearance-palette] .repair-alert-inline-link:hover { color: var(--appearance-accent); }
 :root[data-appearance-palette] :is(.cover-lookup-task-type, .cover-lookup-task-status, .cover-lookup-task-elapsed) { background: var(--appearance-control); color: var(--appearance-ink); border-color: var(--appearance-line); }
-:root[data-appearance-player] .global-player .loop-edit-action-pod { background: var(--appearance-player); border-color: var(--appearance-waveform-edge); box-shadow: none; }
-:root[data-appearance-player] .global-player .loop-edit-action-pod::before { background: var(--appearance-waveform-edge); }
-:root[data-appearance-player] .global-player .loop-edit-action-pod::after { background: var(--appearance-player); }
-:root[data-appearance-player] .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) { color: var(--appearance-player-ink); text-shadow: none; }
-:root[data-appearance-player] .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) .loop-edit-action-icon { filter: none; }
-:root[data-appearance-player] .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-waveform-fill); box-shadow: 0 0 0 1px var(--appearance-waveform-fill); }
-:root[data-appearance-player] .global-player .loop-edit-actions.is-disabled .loop-edit-action-pod { border-color: color-mix(in srgb, var(--appearance-player-ink) 48%, transparent); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-pod { background: var(--appearance-player); border-color: var(--appearance-waveform-edge); box-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-pod::before { background: var(--appearance-waveform-edge); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-action-pod::after { background: var(--appearance-player); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) { color: var(--appearance-player-ink); text-shadow: none; }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player :is(.loop-edit-action-enter, .loop-edit-action-create):not(:disabled) .loop-edit-action-icon { filter: none; }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-actions:not(.is-disabled):hover .loop-edit-action-pod { border-color: var(--appearance-waveform-fill); box-shadow: 0 0 0 1px var(--appearance-waveform-fill); }
+:root[data-appearance-player]:not([data-appearance-native-controls]) .global-player .loop-edit-actions.is-disabled .loop-edit-action-pod { border-color: color-mix(in srgb, var(--appearance-player-ink) 48%, transparent); }
 
 /* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */
+/* Custom controls still need opaque pod/idle surfaces when the player surface
+   inherits native CSS. Keep these fallbacks local, without theming the player. */
+:root[data-appearance-native-surface] .global-player :is(.loop-edit-actions, .player-timeline-wrap.is-idle) {
+  --appearance-player: #071827;
+  --appearance-player-ink: #dcebe3;
+}
+:root[data-appearance-native-waveform] .global-player :is(.loop-edit-actions, .player-loop-button.is-active) {
+  --appearance-waveform-fill: #dadde2;
+  --appearance-waveform-edge: #494950;
+}
 .appearance-background-editor .background-editor-link, .waveform-recovery .button { border: 1px solid var(--appearance-line); border-radius: 7px; padding: 9px 12px; background: var(--appearance-control); color: var(--appearance-ink); font: inherit; font-size: 12px; cursor: pointer; }
 .appearance-background-editor .background-editor-link { margin-top: 12px; }
 .appearance-seekbar-editor { padding: 20px; margin-top: 20px; }

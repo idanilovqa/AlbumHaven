@@ -174,6 +174,7 @@ function safeLifecycleStage(stage, extraFields = []) {
     status: safeClosedValue(stage.status, SAFE_LIFECYCLE_STAGE_STATUSES),
     error: safeErrorSummary(stage.error),
   };
+  if (stage.mode === 'lock-only') safeStage.mode = 'lock-only';
   for (const field of extraFields) {
     safeStage[field] = safeNonnegativeInteger(stage[field]);
   }
@@ -752,7 +753,7 @@ function cleanupIsolatedLibraryDatabase(childEnv = {}, options = {}) {
   const timeoutMs = Number(options.timeoutMs || ISOLATED_LIBRARY_CLEANUP_TIMEOUT_MS);
   const result = runCommandFn(
     resolvePlaywrightPython(childEnv),
-    [ISOLATED_LIBRARY_APP_PATH, '--cleanup-only'],
+    [ISOLATED_LIBRARY_APP_PATH, options.lockOnly ? '--cleanup-lock-only' : '--cleanup-only'],
     {
       cwd: repoRoot,
       env: buildIsolatedLibraryCleanupEnv(childEnv),
@@ -3227,13 +3228,15 @@ async function runManagedPlaywrightAttempt(options = {}) {
       || attemptError?.exitCode === PROCESS_CLEANUP_FAILURE_EXIT_CODE
       || (result?.lifecycle || attemptError?.lifecycle)?.exitReason === 'owned-process-cleanup-error',
     );
-    if (managedIsolatedAppStarted && !processCleanupUnproven && !preservesPreloadedDatabase) {
+    if (managedIsolatedAppStarted && !processCleanupUnproven) {
       const lifecycle = result?.lifecycle || attemptError?.lifecycle || {};
+      const cleanupMode = preservesPreloadedDatabase ? { mode: 'lock-only' } : {};
       try {
-        cleanupIsolatedLibraryDatabaseFn(childEnv);
-        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null };
+        if (preservesPreloadedDatabase) cleanupIsolatedLibraryDatabaseFn(childEnv, { lockOnly: true });
+        else cleanupIsolatedLibraryDatabaseFn(childEnv);
+        lifecycle.fakeDatabaseCleanup = { status: 'completed', error: null, ...cleanupMode };
       } catch (error) {
-        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error) };
+        lifecycle.fakeDatabaseCleanup = { status: 'failed', error: safeErrorSummary(error), ...cleanupMode };
         databaseCleanupError = error instanceof Error ? error : new Error(String(error));
       }
     }

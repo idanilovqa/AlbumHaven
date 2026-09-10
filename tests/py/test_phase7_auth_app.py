@@ -22,6 +22,9 @@ def test_phase7_startup_failure_cleans_only_owned_database_and_closes_bound_serv
     failure = KeyboardInterrupt("startup interrupted") if failure_point == "interrupted_acquire" else RuntimeError("startup failed")
 
     class Lock:
+        def __init__(self, *, database_url):
+            assert database_url == "isolated-setup"
+
         def acquire(self):
             nonlocal acquired
             events.append("acquire")
@@ -79,6 +82,9 @@ def test_phase7_retains_database_fixture_and_ownership_when_secondary_shutdown_i
     primary_error = RuntimeError("original application failure")
 
     class Lock:
+        def __init__(self, *, database_url):
+            assert database_url == "isolated-setup"
+
         def acquire(self): events.append("acquire")
         def release(self): events.append("release")
 
@@ -156,6 +162,9 @@ def test_phase7_drains_control_requests_before_database_release(tmp_path, monkey
     smtp_factory, control_factory = launcher._SMTPServer, launcher._ControlServer
 
     class Lock:
+        def __init__(self, *, database_url):
+            assert database_url == "isolated-setup"
+
         def acquire(self): events.append("acquire")
         def release(self): events.append("release")
 

@@ -113,18 +113,30 @@
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
 .album-track-table [data-cdt-column="duration"] { text-align: right; font-variant-numeric: tabular-nums; }
 .album-track-table__total {
+  position: relative;
+  isolation: isolate;
   width: min(54%, 390px);
   margin: -1px 0 0 auto;
   padding: 12px 12px 10px 28px;
-  border-right: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-right: 1px solid transparent;
+  border-bottom: 1px solid transparent;
   border-left: 0;
   border-top: 0;
   border-radius: 0 0 9px 0;
-  background: linear-gradient(to left, color-mix(in srgb, var(--album-track-accent) 10%, var(--panel, #101a29)) 0%, color-mix(in srgb, var(--album-track-accent) 5%, transparent) 34%, transparent 72%);
   color: var(--appearance-ink, var(--text));
   text-align: right;
   font-weight: 700;
+}
+.album-track-table__total::before {
+  content: '';
+  position: absolute;
+  inset: 0 -1px -1px 0;
+  z-index: -1;
+  pointer-events: none;
+  border-right: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--album-track-accent) 75%, transparent);
+  border-radius: inherit;
+  background: linear-gradient(to left, color-mix(in srgb, var(--album-track-accent) 10%, var(--panel, #101a29)) 0%, color-mix(in srgb, var(--album-track-accent) 5%, transparent) 34%, transparent 72%);
   -webkit-mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
   mask-image: linear-gradient(to left, #000 0%, #000 44%, transparent 100%);
 }

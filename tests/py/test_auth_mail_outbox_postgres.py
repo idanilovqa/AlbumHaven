@@ -566,6 +566,19 @@ def test_password_reset_repository_claim_requires_matching_active_digest_and_is_
     assert not any(value is not None for value in update_params[1:2])
 
 
+def test_password_reset_claim_locks_account_before_reading_token_eligibility(outbox):
+    from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
+    connection = Connection(claim_rows=(_claim_row(id=81,
+        expires_at=NOW + timedelta(minutes=15)),))
+    delivery = PasswordResetDelivery(81, 41, "Rendref+owner@example.test", "s" * 43)
+    assert _reset_service(outbox, connection).claim_password_reset(delivery) is not None
+    statements = [sql for sql, _params in connection.operations]
+    account_lock = next(i for i, sql in enumerate(statements)
+        if "from app.accounts account" in sql and "for update of account" in sql)
+    token_check = next(i for i, sql in enumerate(statements) if "join app.password_reset_tokens" in sql)
+    assert account_lock < token_check
+
+
 def test_password_reset_claim_reconciles_expired_sending_lease_as_unknown(outbox):
     from music_app.services.auth_password_reset_request_postgres import (
         PasswordResetDelivery,

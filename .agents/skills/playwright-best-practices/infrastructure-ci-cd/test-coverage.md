@@ -11,15 +11,15 @@
 
 ## Coverage Setup
 
+[Playwright coverage](https://playwright.dev/docs/api/class-coverage) is available only on Chromium. JavaScript entries contain `source` and V8 `functions` with execution counts; CSS entries contain `text` and used `ranges`. Keep these formats separate. JavaScript ranges can nest and include unexecuted blocks, so summing their lengths does not produce line or byte coverage.
+
 ### Install Dependencies
 
 ```bash
-# For V8 coverage (built into Playwright)
-# No additional dependencies needed
-
-# For Istanbul-based coverage (more features)
-npm install -D nyc @istanbuljs/nyc-config-typescript
+npm install -D @playwright/test v8-to-istanbul istanbul-lib-coverage nyc
 ```
+
+Collection needs no instrumentation package. The reporting examples use [v8-to-istanbul](https://github.com/istanbuljs/v8-to-istanbul) for JavaScript conversion and Istanbul coverage maps for merging execution counts.
 
 ### Basic Configuration
 
@@ -28,355 +28,218 @@ npm install -D nyc @istanbuljs/nyc-config-typescript
 import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
-  use: {
-    // Enable coverage collection
-    contextOptions: {
-      // V8 coverage is automatic with the API below
-    },
-  },
+  outputDir: "test-results",
+  use: { baseURL: "http://127.0.0.1:3000" },
+  projects: [
+    { name: "chromium", use: { browserName: "chromium" } },
+    { name: "firefox", use: { browserName: "firefox" } },
+  ],
 });
 ```
 
 ### V8 Coverage Fixture
 
+Use the test's actual `page`; creating a separate worker page would measure an unused tab. The automatic test fixture starts before the test and stops before Playwright tears down its page. Other browser projects still execute their tests without invoking unsupported coverage APIs.
+
 ```typescript
 // fixtures/coverage.ts
 import { test as base, expect } from "@playwright/test";
-import fs from "fs";
-import path from "path";
-import { randomUUID } from "crypto";
+import fs from "node:fs/promises";
 
-export const test = base.extend<{}, { collectCoverage: void }>({
-  collectCoverage: [
-    async ({ browser }, use) => {
-      // Start coverage for all pages
-      const context = await browser.newContext();
-      const page = await context.newPage();
-
-      await page.coverage.startJSCoverage();
-      await page.coverage.startCSSCoverage();
-
+export const test = base.extend<{ collectCoverage: void }>({
+  collectCoverage: [async ({ page, browserName }, use, testInfo) => {
+    if (browserName !== "chromium") {
       await use();
-
-      // Collect coverage
-      const [jsCoverage, cssCoverage] = await Promise.all([
-        page.coverage.stopJSCoverage(),
-        page.coverage.stopCSSCoverage(),
+      return;
+    }
+    await page.coverage.startJSCoverage({ resetOnNavigation: false });
+    await page.coverage.startCSSCoverage({ resetOnNavigation: false });
+    try {
+      await use();
+    } finally {
+      // Tests using this fixture must leave their page open for collection.
+      const [js, css] = await Promise.all([
+        page.coverage.stopJSCoverage(), page.coverage.stopCSSCoverage(),
       ]);
-
-      // Save coverage data
-      const coverageDir = "./coverage";
-      if (!fs.existsSync(coverageDir)) {
-        fs.mkdirSync(coverageDir, { recursive: true });
-      }
-
-      fs.writeFileSync(
-        path.join(coverageDir, `coverage-${randomUUID()}.json`),
-        JSON.stringify([...jsCoverage, ...cssCoverage])
-      );
-
-      await context.close();
-    },
-    { scope: "worker", auto: true },
-  ],
+      await fs.writeFile(testInfo.outputPath("js-coverage.json"), JSON.stringify(js));
+      await fs.writeFile(testInfo.outputPath("css-coverage.json"), JSON.stringify(css));
+    }
+  }, { auto: true }],
 });
+export { expect };
 ```
+
+Import this fixture in coverage-enabled tests. It instruments only the supplied page, not popups, manually created pages or service workers. `resetOnNavigation: false` does not guarantee retention across browser process changes: collect each document's coverage before navigating away when that coverage is required, and merge those snapshots. For broader cross-browser coverage use build-time Istanbul instrumentation instead.
 
 ## Collecting Coverage
 
 ### Per-Test Coverage
 
 ```typescript
-test("collect coverage for single test", async ({ page }) => {
-  // Start coverage collection
-  await page.coverage.startJSCoverage({
-    resetOnNavigation: false,
-  });
+import { test, expect } from "../fixtures/coverage";
 
-  // Run test
-  await page.goto("/app");
-  await page.getByRole("button", { name: "Submit" }).click();
-  await expect(page.getByText("Success")).toBeVisible();
-
-  // Stop and get coverage
-  const coverage = await page.coverage.stopJSCoverage();
-
-  // Filter to only your source files
-  const appCoverage = coverage.filter((entry) => entry.url.includes("/src/"));
-
-  console.log(`Covered ${appCoverage.length} source files`);
+test("checkout succeeds", async ({ page }) => {
+  await page.goto("/checkout");
+  await page.getByRole("button", { name: "Pay" }).click();
+  await expect(page.getByText("Payment complete")).toBeVisible();
+  // The fixture saves coverage during teardown; do not start it a second time.
 });
 ```
 
 ### Coverage for Specific Files
 
-```typescript
-test("track specific module coverage", async ({ page }) => {
-  await page.coverage.startJSCoverage();
-
-  await page.goto("/checkout");
-  await page.getByRole("button", { name: "Pay" }).click();
-
-  const coverage = await page.coverage.stopJSCoverage();
-
-  // Find coverage for checkout module
-  const checkoutCoverage = coverage.find((c) => c.url.includes("checkout.js"));
-
-  if (checkoutCoverage) {
-    const totalBytes = checkoutCoverage.text?.length || 0;
-    const coveredBytes = checkoutCoverage.ranges.reduce(
-      (sum, range) => sum + (range.end - range.start),
-      0
-    );
-    const percentage = (coveredBytes / totalBytes) * 100;
-
-    console.log(`Checkout module: ${percentage.toFixed(1)}% covered`);
-    expect(percentage).toBeGreaterThan(80);
-  }
-});
-```
+Use the merged Istanbul map below to inspect a module after the run. Missing expected modules must fail the check, rather than silently skipping a threshold. V8 reports scripts loaded by tested pages; a completely unloaded module is absent. For repository-wide coverage, supply a build-generated source inventory and include unloaded files with zero coverage, or use instrumentation with an explicit include-all-sources policy.
 
 ### CSS Coverage
 
-```typescript
-test("collect CSS coverage", async ({ page }) => {
-  await page.coverage.startCSSCoverage();
+CSS remains a separate diagnostic. Its used ranges are sorted and non-overlapping within one entry, so their lengths can be added for that entry. This is text-offset coverage, not JavaScript line coverage. Missing or empty source text cannot yield a useful percentage.
 
-  await page.goto("/app");
-
-  // Interact to trigger different CSS states
-  await page.getByRole("button").hover();
-  await page.getByRole("dialog").waitFor();
-
-  const cssCoverage = await page.coverage.stopCSSCoverage();
-
-  // Find unused CSS
-  for (const entry of cssCoverage) {
-    const totalBytes = entry.text?.length || 0;
-    const usedBytes = entry.ranges.reduce(
-      (sum, range) => sum + (range.end - range.start),
-      0
-    );
-    const unusedPercentage = ((totalBytes - usedBytes) / totalBytes) * 100;
-
-    if (unusedPercentage > 50) {
-      console.warn(`${entry.url}: ${unusedPercentage.toFixed(1)}% unused CSS`);
-    }
+```javascript
+// Inspect one css-coverage.json produced by the fixture.
+const fs = require("node:fs");
+const cssCoverage = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+for (const entry of cssCoverage) {
+  if (typeof entry.text !== "string" || entry.text.length === 0) {
+    console.warn(`${entry.url}: CSS coverage unavailable`);
+    continue;
   }
-});
+  const used = entry.ranges.reduce((sum, range) => sum + range.end - range.start, 0);
+  const unused = 100 * (1 - used / entry.text.length);
+  if (unused > 50) console.warn(`${entry.url}: ${unused.toFixed(1)}% unused CSS`);
+}
 ```
+
+Exercise relevant responsive, hover, focus and dialog states before collection. Never concatenate CSS ranges across snapshots and sum them; overlapping offsets must be unioned for identical stylesheet content.
 
 ## Coverage Reports
 
 ### Converting to Istanbul Format
 
-```typescript
-// scripts/convert-coverage.ts
-import { execSync } from "child_process";
-import fs from "fs";
-import path from "path";
-import v8ToIstanbul from "v8-to-istanbul";
+This example assumes the test server serves original JavaScript directly from the checkout's `/src/` directory. Set `COVERAGE_ORIGIN` to its exact origin. Adapt the URL-to-file mapping for your build; transpiled bundles need matching source maps and original sources. Do not treat generated bundle percentages as TypeScript source coverage.
 
-async function convertCoverage() {
-  const coverageDir = "./coverage";
-  const files = fs.readdirSync(coverageDir).filter((f) => f.endsWith(".json"));
+The converter reads only `js-coverage.json`, provides the captured `source`, and merges every converted map. `Object.assign` would overwrite earlier test coverage for the same file. All inputs must come from the same build and revision; conflicting source content fails explicitly.
 
-  const istanbulCoverage: any = {};
+```javascript
+// scripts/convert-coverage.cjs
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const v8ToIstanbul = require("v8-to-istanbul");
+const { createCoverageMap } = require("istanbul-lib-coverage");
 
-  for (const file of files) {
-    const coverageData = JSON.parse(
-      fs.readFileSync(path.join(coverageDir, file), "utf-8")
-    );
-
-    for (const entry of coverageData) {
-      if (!entry.url.startsWith("file://")) continue;
-
-      const filePath = entry.url.replace("file://", "");
-      const converter = v8ToIstanbul(filePath);
-
-      await converter.load();
-      converter.applyCoverage(entry.functions || []);
-
-      const istanbul = converter.toIstanbul();
-      Object.assign(istanbulCoverage, istanbul);
-    }
+async function rawFiles(directory) {
+  const result = [];
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    const filename = path.join(directory, entry.name);
+    if (entry.isDirectory()) result.push(...await rawFiles(filename));
+    else if (entry.isFile() && entry.name === "js-coverage.json") result.push(filename);
   }
-
-  fs.writeFileSync(
-    path.join(coverageDir, "coverage-final.json"),
-    JSON.stringify(istanbulCoverage)
-  );
+  return result;
 }
 
-convertCoverage();
+async function convertCoverage(directories, origin) {
+  if (!origin) throw new Error("Set COVERAGE_ORIGIN to the test server origin.");
+  const expectedOrigin = new URL(origin).origin;
+  const sourceRoot = path.resolve("src");
+  const map = createCoverageMap({});
+  const sources = new Map();
+  for (const directory of directories) {
+    for (const filename of await rawFiles(directory)) {
+      const entries = JSON.parse(await fs.readFile(filename, "utf8"));
+      for (const entry of entries) {
+        if (!entry.url || !/^https?:/.test(entry.url)) continue;
+        const url = new URL(entry.url);
+        if (url.origin !== expectedOrigin || !url.pathname.startsWith("/src/")) continue;
+        const filePath = path.resolve(sourceRoot, decodeURIComponent(url.pathname.slice(5)));
+        const relative = path.relative(sourceRoot, filePath);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+          throw new Error("Coverage source lies outside src.");
+        }
+        if (typeof entry.source !== "string" || !Array.isArray(entry.functions)) {
+          throw new Error(`Missing JavaScript source/functions: ${url.pathname}`);
+        }
+        if (sources.has(filePath) && sources.get(filePath) !== entry.source) {
+          throw new Error(`Mixed source revisions: ${url.pathname}`);
+        }
+        sources.set(filePath, entry.source);
+        const converter = v8ToIstanbul(filePath, 0, { source: entry.source });
+        await converter.load();
+        converter.applyCoverage(entry.functions);
+        map.merge(converter.toIstanbul());
+      }
+    }
+  }
+  if (map.files().length === 0) throw new Error("No application JavaScript coverage collected.");
+  return map;
+}
+
+async function main() {
+  const directories = process.argv.slice(2);
+  if (!directories.length) throw new Error("Pass at least one raw coverage directory.");
+  const map = await convertCoverage(directories, process.env.COVERAGE_ORIGIN);
+  await fs.mkdir("coverage/istanbul", { recursive: true });
+  await fs.writeFile("coverage/istanbul/coverage-final.json", JSON.stringify(map.toJSON()));
+}
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
+module.exports = { convertCoverage };
 ```
 
 ### Generating HTML Report
 
-```bash
-# Using nyc to generate report
-npx nyc report --reporter=html --reporter=text --temp-dir=./coverage
-```
+Run conversion after all test workers finish. Keep raw files outside NYC's temporary directory so it receives only Istanbul maps. Use fresh job-owned output directories for each run, including when downloading shard artifacts.
 
-```typescript
-// package.json scripts
+```json
 {
   "scripts": {
     "test": "playwright test",
     "test:coverage": "playwright test && npm run coverage:report",
-    "coverage:report": "npx nyc report --reporter=html --reporter=lcov --temp-dir=./coverage"
+    "coverage:report": "node scripts/convert-coverage.cjs test-results && nyc report --reporter=html --reporter=lcov --reporter=text --reporter=json-summary --temp-dir=coverage/istanbul --report-dir=coverage && nyc check-coverage --lines=80 --temp-dir=coverage/istanbul"
   }
 }
 ```
 
 ### Custom Coverage Reporter
 
-```typescript
-// reporters/coverage-reporter.ts
-import type { Reporter, FullResult } from "@playwright/test/reporter";
-import fs from "fs";
-import path from "path";
+A custom summary should read the completed Istanbul map, not raw V8 ranges. Use this after conversion; a test-file `afterAll` can execute before other workers finish.
 
-class CoverageReporter implements Reporter {
-  private coverageData: any[] = [];
-
-  onEnd(result: FullResult) {
-    // Aggregate all coverage files
-    const coverageDir = "./coverage";
-    const files = fs
-      .readdirSync(coverageDir)
-      .filter((f) => f.endsWith(".json"));
-
-    for (const file of files) {
-      const data = JSON.parse(
-        fs.readFileSync(path.join(coverageDir, file), "utf-8")
-      );
-      this.coverageData.push(...data);
-    }
-
-    // Generate summary
-    const summary = this.generateSummary();
-    console.log("\n📊 Coverage Summary:");
-    console.log(`   Files: ${summary.totalFiles}`);
-    console.log(`   Lines: ${summary.lineCoverage.toFixed(1)}%`);
-    console.log(`   Bytes: ${summary.byteCoverage.toFixed(1)}%`);
-
-    if (summary.lineCoverage < 80) {
-      console.warn("⚠️  Coverage below 80% threshold!");
-    }
-  }
-
-  private generateSummary() {
-    let totalBytes = 0;
-    let coveredBytes = 0;
-    const files = new Set<string>();
-
-    for (const entry of this.coverageData) {
-      if (entry.url.includes("/src/")) {
-        files.add(entry.url);
-        totalBytes += entry.text?.length || 0;
-        coveredBytes += entry.ranges.reduce(
-          (sum: number, r: any) => sum + (r.end - r.start),
-          0
-        );
-      }
-    }
-
-    return {
-      totalFiles: files.size,
-      byteCoverage: (coveredBytes / totalBytes) * 100,
-      lineCoverage: (coveredBytes / totalBytes) * 100, // Simplified
-    };
-  }
-}
-
-export default CoverageReporter;
+```javascript
+const fs = require("node:fs");
+const { createCoverageMap } = require("istanbul-lib-coverage");
+const map = createCoverageMap(JSON.parse(fs.readFileSync("coverage/istanbul/coverage-final.json", "utf8")));
+const summary = map.getCoverageSummary();
+console.log(`Files: ${map.files().length}; lines: ${summary.lines.pct}%`);
 ```
 
 ## Coverage Thresholds
 
 ### Enforcing Minimum Coverage
 
-```typescript
-// tests/coverage.spec.ts
-import { test, expect } from "@playwright/test";
-import fs from "fs";
-import path from "path";
+The report command enforces an 80% line threshold over collected application sources. For a required module, fail on missing coverage and check its actual Istanbul line summary:
 
-test.afterAll(async () => {
-  const coverageDir = "./coverage";
-  const files = fs.readdirSync(coverageDir).filter((f) => f.endsWith(".json"));
-
-  let totalBytes = 0;
-  let coveredBytes = 0;
-
-  for (const file of files) {
-    const coverage = JSON.parse(
-      fs.readFileSync(path.join(coverageDir, file), "utf-8")
-    );
-
-    for (const entry of coverage) {
-      if (!entry.url.includes("/src/")) continue;
-      totalBytes += entry.text?.length || 0;
-      coveredBytes += entry.ranges.reduce(
-        (sum: number, r: any) => sum + (r.end - r.start),
-        0
-      );
-    }
-  }
-
-  const coveragePercent = (coveredBytes / totalBytes) * 100;
-
-  // Enforce threshold
-  expect(coveragePercent).toBeGreaterThan(80);
-});
+```javascript
+const path = require("node:path");
+// `map` is the completed coverage map from the summary example.
+const filename = path.resolve("src/checkout.js");
+if (!map.files().includes(filename)) throw new Error("Required checkout coverage missing.");
+const lines = map.fileCoverageFor(filename).toSummary().lines;
+if (!lines.total || Number(lines.pct) < 80) throw new Error("Checkout line coverage below 80%.");
 ```
 
 ### Per-Directory Thresholds
 
-```typescript
-// coverage-check.ts
-interface CoverageThreshold {
-  pattern: RegExp;
-  minCoverage: number;
-}
-
-const thresholds: CoverageThreshold[] = [
-  { pattern: /\/src\/core\//, minCoverage: 90 },
-  { pattern: /\/src\/utils\//, minCoverage: 85 },
-  { pattern: /\/src\/components\//, minCoverage: 70 },
-  { pattern: /\/src\/pages\//, minCoverage: 60 },
-];
-
-function checkThresholds(coverage: any[]): string[] {
-  const violations: string[] = [];
-
-  for (const threshold of thresholds) {
-    const matchingFiles = coverage.filter((c) => threshold.pattern.test(c.url));
-
-    let total = 0;
-    let covered = 0;
-
-    for (const file of matchingFiles) {
-      total += file.text?.length || 0;
-      covered += file.ranges.reduce(
-        (sum: number, r: any) => sum + (r.end - r.start),
-        0
-      );
-    }
-
-    const percent = total > 0 ? (covered / total) * 100 : 0;
-
-    if (percent < threshold.minCoverage) {
-      violations.push(
-        `${threshold.pattern}: ${percent.toFixed(1)}% < ${
-          threshold.minCoverage
-        }%`
-      );
-    }
+```javascript
+const path = require("node:path");
+const { createCoverageMap } = require("istanbul-lib-coverage");
+// `map` is the completed coverage map from the summary example.
+for (const [directory, minimum] of [["src/core", 90], ["src/utils", 85], ["src/components", 70], ["src/pages", 60]]) {
+  const prefix = path.resolve(directory) + path.sep;
+  const selected = createCoverageMap({});
+  for (const filename of map.files()) {
+    if (filename.startsWith(prefix)) selected.addFileCoverage(map.fileCoverageFor(filename));
   }
-
-  return violations;
+  const lines = selected.getCoverageSummary().lines;
+  if (!selected.files().length || !lines.total || Number(lines.pct) < minimum) {
+    throw new Error(`${directory}: missing coverage or line coverage below ${minimum}%.`);
+  }
 }
 ```
 
@@ -384,114 +247,80 @@ function checkThresholds(coverage: any[]): string[] {
 
 ### Merging Coverage Across Shards
 
-```typescript
-// scripts/merge-coverage.ts
-import fs from "fs";
-import { glob } from "glob";
+Download every expected shard's raw results from the same revision into separate directories and verify every shard completed. Run the same converter once with all inputs, then the same NYC report/threshold commands. This merges per-file execution counts before computing percentages and maps paths on the reporting machine.
 
-async function mergeCoverage() {
-  const files = await glob("shard-*/coverage/*.json");
-  const merged = new Map<string, any>();
-
-  for (const file of files) {
-    const data = JSON.parse(fs.readFileSync(file, "utf-8"));
-    for (const entry of data) {
-      if (merged.has(entry.url)) {
-        const existing = merged.get(entry.url);
-        existing.ranges.push(...entry.ranges);
-      } else {
-        merged.set(entry.url, { ...entry });
-      }
-    }
-  }
-
-  fs.writeFileSync(
-    "./coverage/merged.json",
-    JSON.stringify([...merged.values()])
-  );
-}
-
-mergeCoverage();
+```bash
+node scripts/convert-coverage.cjs shard-1/test-results shard-2/test-results
+npx nyc report --reporter=html --reporter=lcov --reporter=json-summary --temp-dir=coverage/istanbul --report-dir=coverage
+npx nyc check-coverage --lines=80 --temp-dir=coverage/istanbul
 ```
 
 ### Incremental Coverage
 
-```typescript
-// Check coverage only for changed files in CI
-import { execSync } from "child_process";
-import fs from "fs";
+Changed-file checks must compare normalized source paths with the merged map; substring URL matching can confuse similarly named files. This example checks directly served JavaScript. For TypeScript, use the source-mapped original file paths instead.
 
-const changedFiles = execSync("git diff --name-only HEAD~1")
-  .toString()
-  .split("\n")
-  .filter((f) => f.endsWith(".ts"));
-
-const coverage = JSON.parse(fs.readFileSync("./coverage/merged.json", "utf-8"));
-
-for (const file of changedFiles) {
-  const entry = coverage.find((c: any) => c.url.includes(file));
-  if (entry) {
-    const percent =
-      (entry.ranges.reduce((s: number, r: any) => s + r.end - r.start, 0) /
-        (entry.text?.length || 1)) *
-      100;
-    console.log(`${file}: ${percent.toFixed(1)}%`);
-  }
+```javascript
+const { execFileSync } = require("node:child_process");
+const path = require("node:path");
+// `map` is the completed coverage map from the summary example.
+const changed = execFileSync("git", ["diff", "--name-only", "--diff-filter=ACMR", "-z", "HEAD~1", "--", "src"], { encoding: "utf8" })
+  .split("\0").filter(filename => filename.endsWith(".js"));
+for (const filename of changed) {
+  const absolute = path.resolve(filename);
+  if (!map.files().includes(absolute)) throw new Error(`Missing changed-file coverage: ${filename}`);
+  const lines = map.fileCoverageFor(absolute).toSummary().lines;
+  if (!lines.total || Number(lines.pct) < 80) throw new Error(`Insufficient line coverage: ${filename}`);
 }
 ```
 
-## CI Integration
+Use the authenticated PR base for a PR-wide check; `HEAD~1` above covers only the latest commit. Incremental checks supplement the full required coverage policy.
 
-### GitHub Actions
+## CI Integration
 
 ```yaml
 # .github/workflows/test.yml
 name: Tests with Coverage
-
 on: [push, pull_request]
-
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      COVERAGE_ORIGIN: http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - run: npm ci
       - run: npx playwright install --with-deps
-
-      - name: Run tests with coverage
-        run: npm run test:coverage
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+      # Configure the project's webServer to serve /src from this revision.
+      - run: npm run test:coverage
+      - name: Retain coverage reports
+        uses: actions/upload-artifact@v4
         with:
-          files: ./coverage/lcov.info
-          fail_ci_if_error: true
-
-      - name: Check coverage threshold
-        run: |
-          COVERAGE=$(cat coverage/coverage-summary.json | jq '.total.lines.pct')
-          if (( $(echo "$COVERAGE < 80" | bc -l) )); then
-            echo "Coverage $COVERAGE% is below 80% threshold"
-            exit 1
-          fi
+          name: coverage
+          path: coverage
+          if-no-files-found: error
 ```
+
+The report command generates HTML, LCOV and JSON summaries and fails the configured threshold. Upload `coverage/lcov.info` to your coverage service if the project uses one. Retain raw results separately when diagnosing incomplete collection or aggregating shards.
 
 ## Anti-Patterns to Avoid
 
-| Anti-Pattern                 | Problem                                | Solution                    |
-| ---------------------------- | -------------------------------------- | --------------------------- |
-| Coverage for coverage's sake | Gaming metrics                         | Focus on critical paths     |
-| 100% coverage target         | Diminishing returns, tests for getters | Set realistic thresholds    |
-| Ignoring coverage drops      | Technical debt                         | Enforce thresholds in CI    |
-| No source map support        | Wrong line numbers                     | Enable source maps in build |
-| Coverage only in CI          | Late feedback                          | Run locally too             |
+| Anti-Pattern | Problem | Solution |
+| --- | --- | --- |
+| Coverage for coverage's sake | Gaming metrics | Focus on critical paths |
+| 100% coverage target | Diminishing returns, tests for getters | Set realistic thresholds |
+| Ignoring coverage drops | Technical debt | Enforce thresholds in CI |
+| No source map support | Wrong source line attribution | Enable matching source maps and sources |
+| Coverage only in CI | Late feedback | Run focused collection locally too |
+| Combining raw JS and CSS | Different formats and denominators | Convert JS; report CSS separately |
+| Overwriting maps or concatenating ranges | Loses tests or double-counts offsets | Merge Istanbul maps from one revision |
+| Empty inventory treated as passing | Missing collection looks green | Fail missing expected coverage |
 
 ## Related References
 
 - **CI/CD**: See [ci-cd.md](ci-cd.md) for pipeline configuration
 - **Performance**: See [performance.md](performance.md) for optimizing coverage collection
+- [Playwright Coverage API](https://playwright.dev/docs/api/class-coverage)
+- [Istanbul coverage map API](https://github.com/istanbuljs/istanbuljs/blob/main/packages/istanbul-lib-coverage/lib/coverage-map.js)

@@ -29,8 +29,15 @@ def convert(source: Path, destination: Path) -> int:
         reader = csv.DictReader(input_stream, delimiter="\t", quoting=csv.QUOTE_NONE)
         if not reader.fieldnames or "path" not in reader.fieldnames:
             raise ValueError("Expected a tab-separated Text Tools export with a path column.")
+        if any(not name for name in reader.fieldnames) or len(set(reader.fieldnames)) != len(reader.fieldnames):
+            raise ValueError("Text Tools header columns must be nonempty and unique.")
         with destination.open("x", encoding="utf-8", newline="\n") as output_stream:
             for row in reader:
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError(
+                        f"Malformed Text Tools row {reader.line_num}: "
+                        f"expected {len(reader.fieldnames)} columns."
+                    )
                 record = {str(key): str(value or "") for key, value in row.items() if key}
                 output_stream.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
                 output_stream.write("\n")

@@ -52,8 +52,10 @@ test('Artist Family filters and gallery options follow the active palette intera
   assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.gallery-options-floating-button\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*color:\s*var\(--appearance-ink\)[^}]*border-color:\s*var\(--appearance-line\)/s);
   assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-box\s*\{[^}]*background:\s*var\(--appearance-card\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
   assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\s*\{[^}]*background:\s*var\(--appearance-control\)[^}]*border-color:\s*var\(--appearance-line\)[^}]*color:\s*var\(--appearance-ink\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip:hover\s*\{[^}]*background:\s*var\(--appearance-item-hover,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
-  assert.match(appearanceCss, /:root\[data-appearance-palette\][^{]*\.related-chip\.active\s*\{[^}]*background:\s*var\(--appearance-item-selected,\s*var\(--appearance-hover\)\)[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root:is\(\[data-appearance-palette\], \[data-appearance-item-hover\]\) \.related-chip:hover\s*\{[^}]*background:\s*var\(--appearance-item-hover,\s*var\(--appearance-hover\)\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\] \.related-chip:hover\s*\{[^}]*color:\s*var\(--appearance-ink\)/s);
+  assert.match(appearanceCss, /:root:is\(\[data-appearance-palette\], \[data-appearance-item-selected\]\) \.related-chip\.active\s*\{[^}]*background:\s*var\(--appearance-item-selected,\s*var\(--appearance-hover\)\)/s);
+  assert.match(appearanceCss, /:root\[data-appearance-palette\] \.related-chip\.active\s*\{[^}]*color:\s*var\(--appearance-ink\)/s);
 });
 
 test('light palettes render the notification glyph with contrast-safe palette ink', () => {

@@ -287,7 +287,9 @@ class LibraryWatchHealthService:
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
         )
         with self._lock:
-            self._pending[root_id] = problem
+            pending = self._pending.get(root_id)
+            if pending is None or pending.detected_at <= problem.detected_at:
+                self._pending[root_id] = problem
         self._store.upsert(problem)
         with self._lock:
             if self._pending.get(root_id) is problem:

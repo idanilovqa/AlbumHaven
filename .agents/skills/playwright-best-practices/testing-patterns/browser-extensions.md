@@ -424,38 +424,48 @@ test("chrome.tabs operations", async ({ context }) => {
 
 ### Context Menus
 
+Chrome's [context menu event](https://developer.chrome.com/docs/extensions/reference/api/contextMenus#event-onClicked) supports listener registration, not programmatic dispatch. Extract the application action into a named function and test its contract directly. This checks action behavior; it does not test Chrome's native menu UI or event delivery.
+
 ```typescript
-test("context menu actions", async ({ context, extensionId }) => {
-  const serviceWorker = await context.waitForEvent("serviceworker");
+// extension/menu-action.ts — application code, not a Chrome API
+type MenuSelection = { menuItemId: string | number; selectionText?: string };
+type SelectionStore = { set: (value: { selection: string }) => Promise<void> };
 
-  // Create context menu
-  await serviceWorker.evaluate(async () => {
-    await chrome.contextMenus.create({
-      id: "test-menu",
-      title: "Test Action",
-      contexts: ["selection"],
-    });
+export async function handleMenuAction(info: MenuSelection, store: SelectionStore) {
+  if (info.menuItemId !== "save-selection" || !info.selectionText) return;
+  await store.set({ selection: info.selectionText });
+}
+```
+
+```typescript
+// extension/service-worker.ts — compile/bundle with the extension
+import { handleMenuAction } from "./menu-action";
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "save-selection", title: "Save selection", contexts: ["selection"],
   });
+});
+chrome.contextMenus.onClicked.addListener((info) => {
+  void handleMenuAction(info, chrome.storage.local).catch(console.error);
+});
+```
 
-  // Simulate context menu click
-  const page = await context.newPage();
-  await page.goto("https://example.com");
+Declare `contextMenus` and `storage` permissions in the extension manifest.
 
-  // Select text
-  await page.evaluate(() => {
-    const range = document.createRange();
-    range.selectNodeContents(document.body.firstChild!);
-    window.getSelection()?.addRange(range);
-  });
+```typescript
+// tests/menu-action.spec.ts — no browser fixture needed
+import { test, expect } from "@playwright/test";
+import { handleMenuAction } from "../extension/menu-action";
 
-  // Trigger context menu action programmatically
-  await serviceWorker.evaluate(async () => {
-    // Simulate the click handler
-    chrome.contextMenus.onClicked.dispatch(
-      { menuItemId: "test-menu", selectionText: "selected text" },
-      { id: 1, url: "https://example.com" },
-    );
-  });
+test("context menu action saves only matching selections", async () => {
+  const writes: Array<{ selection: string }> = [];
+  const store = { set: async (value: { selection: string }) => { writes.push(value); } };
+  await handleMenuAction({ menuItemId: "other", selectionText: "ignored" }, store);
+  await handleMenuAction({ menuItemId: "save-selection" }, store);
+  expect(writes).toEqual([]);
+  await handleMenuAction({ menuItemId: "save-selection", selectionText: "selected text" }, store);
+  expect(writes).toEqual([{ selection: "selected text" }]);
 });
 ```
 

@@ -137,7 +137,9 @@ test('AlbumDetails playback establishes animation through Appearance before asse
   const { cases } = loadAlbumDetailsSpec();
   const callback = [...cases].find(([title]) => title.startsWith('FTC-ALBUM-DETAILS-020'))[1];
   const calls = [], reachedScenario = new Error('the original playback scenario begins');
+  const media = [];
   await assert.rejects(callback({
+    page: { async emulateMedia(options) { media.push({ ...options }); } },
     galleryActions: { async goto() {}, async waitForGalleryReady() {} },
     settingsModalAppBarActions: { async openSettings() {}, async closeSettings() {} },
     utilityTabBarActions: { async openTab() {} },
@@ -153,6 +155,7 @@ test('AlbumDetails playback establishes animation through Appearance before asse
     } },
   }), error => error === reachedScenario);
   assert.deepEqual(calls, [['animation', true], ['save']]);
+  assert.deepEqual(media, [{ reducedMotion: 'no-preference' }]);
 });
 
 test('appearanceControls owns an automatic complete-state fixture tied to its login identity', () => {

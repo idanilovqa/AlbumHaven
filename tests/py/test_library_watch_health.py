@@ -75,6 +75,63 @@ def test_earlier_health_write_does_not_remove_later_failed_pending_event():
     assert [problem.root_id for problem in service.load_problems()] == ["main-root"]
 
 
+def test_delayed_older_insertion_preserves_newer_failed_health_after_scan():
+    from datetime import datetime, timedelta, timezone
+    health = _health_module()
+    captured, release = Event(), Event()
+    older = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    newer = older + timedelta(seconds=20)
+    failures = []
+    calls = 0
+
+    def now():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            captured.set()
+            assert release.wait(2)
+            return older
+        return newer
+
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"}, connect=lambda _url: connection)
+    original_upsert = store.upsert
+
+    def upsert(problem):
+        if problem.detected_at == newer.isoformat():
+            raise OSError("newer write failed")
+        original_upsert(problem)
+
+    store.upsert = upsert
+    service = health.LibraryWatchHealthService(store, now=now)
+    event = health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main-root", Path("C:/Music"))
+
+    def record_older():
+        try:
+            service.record_event(event)
+        except BaseException as error:
+            failures.append(error)
+
+    worker = Thread(target=record_older)
+    worker.start()
+    try:
+        assert captured.wait(2)
+        with pytest.raises(OSError, match="newer write failed"):
+            service.record_event(event)
+    finally:
+        release.set()
+        worker.join(2)
+    assert not worker.is_alive() and failures == []
+    service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main-root"],
+        scan_started_at=older + timedelta(seconds=10))
+    assert [problem.detected_at for problem in service.load_problems()] == [newer.isoformat()]
+    assert not service.root_allows_destructive_reconciliation("main-root")
+    with pytest.raises(health.LibraryRootUnhealthyError):
+        with service.publication_guard(connection, ["main-root"]):
+            pytest.fail("newer failed warning must hold destructive publication")
+
+
 class _Rows:
     def __init__(self, rows):
         self._rows = list(rows)

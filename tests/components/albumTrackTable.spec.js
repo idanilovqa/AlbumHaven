@@ -195,7 +195,22 @@ for (const width of [960, 390]) {
       });
       expect(bounds.left).toBeGreaterThanOrEqual(bounds.frameLeft);
       expect(bounds.right).toBeLessThanOrEqual(bounds.frameRight);
+      const masks = await summary.evaluate(element => {
+        const values = [];
+        for (let ancestor = element; ancestor; ancestor = ancestor.parentElement) {
+          values.push(getComputedStyle(ancestor).maskImage);
+          if (ancestor.classList.contains('album-track-table__frame')) break;
+        }
+        return values;
+      });
+      expect(masks.every(mask => mask === 'none')).toBe(true);
     }
+    const decoration = await frame.locator('.album-track-table__total').evaluate(element => {
+      const style = getComputedStyle(element, '::before');
+      return { mask: style.maskImage, pointerEvents: style.pointerEvents };
+    });
+    expect(decoration.mask).toContain('linear-gradient');
+    expect(decoration.pointerEvents).toBe('none');
     await expect(frame.getByRole('table')).toHaveCount(2);
     await expect(frame.locator('.compact-data-table-header')).toHaveCount(1);
     await expect(frame.getByRole('heading')).toHaveText(['Bonus Disc']);

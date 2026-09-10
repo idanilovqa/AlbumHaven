@@ -737,6 +737,50 @@ def test_live_invitation_mail_rechecks_expiry_after_final_claim_lock(auth_lock_i
         assert stored == {"delivery_status": "sending", "attempt_count": 1, "claimed_at": clock[0]}
 
 
+@pytest.mark.parametrize("mutation", ["disable", "revoke", "eligible"])
+def test_live_reset_mail_rechecks_eligibility_after_account_lock(auth_lock_inventory, mutation):
+    from music_app.services.auth_mail_outbox_postgres import PostgresPasswordResetOutboxService
+    from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery
+    fixture = auth_lock_inventory
+    token = issue_opaque_token()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_credentials
+            (account_id, encoded_hash, hash_policy_version, credential_version)
+            values (%s, '$argon2id$fixture', 1, 1)""", (fixture.target_id,))
+        token_id = connection.execute("""insert into app.password_reset_tokens
+            (account_id, token_hash, credential_version, created_at, expires_at, request_ref)
+            values (%s, %s, 1, %s, %s, 'reset-mail-race') returning id""",
+            (fixture.target_id, token.digest, fixture.now, fixture.now + timedelta(minutes=10))).fetchone()["id"]
+        outbox_id = connection.execute("""insert into app.mail_outbox
+            (account_id, reset_token_id, message_category) values (%s, %s, 'password_reset') returning id""",
+            (fixture.target_id, token_id)).fetchone()["id"]
+    delivery = PasswordResetDelivery(outbox_id, fixture.target_id, "auth.race@example.test", token.raw)
+
+    def change(connection):
+        if mutation == "disable":
+            connection.execute("update app.accounts set is_active = false, disabled_at = %s where id = %s",
+                (fixture.now, fixture.target_id))
+        elif mutation == "revoke":
+            connection.execute("update app.account_credentials set credential_version = 2 where account_id = %s",
+                (fixture.target_id,))
+            connection.execute("update app.password_reset_tokens set revoked_at = %s where id = %s",
+                (fixture.now, token_id))
+
+    results, failures, mutation_error = _overlap_after_account_lock(fixture,
+        lambda connect: PostgresPasswordResetOutboxService(fixture.config, connect=connect,
+            now=lambda: fixture.now).claim_password_reset(delivery), change)
+    assert failures == [] and mutation_error is None and len(results) == 1
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        stored = connection.execute("select delivery_status, attempt_count, claimed_at from app.mail_outbox where id = %s",
+            (outbox_id,)).fetchone()
+    if mutation == "eligible":
+        assert results[0] is not None
+        assert stored == {"delivery_status": "sending", "attempt_count": 1, "claimed_at": fixture.now}
+    else:
+        assert results == [None]
+        assert stored == {"delivery_status": "pending", "attempt_count": 0, "claimed_at": None}
+
+
 def test_live_reset_mail_rechecks_expiry_after_delayed_claim_query(auth_lock_inventory):
     from music_app.services.auth_mail_outbox_postgres import PostgresPasswordResetOutboxService
     from music_app.services.auth_password_reset_request_postgres import PasswordResetDelivery

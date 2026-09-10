@@ -153,16 +153,20 @@ async def confirm_missing_album_removal(request: Request, album_key: str) -> JSO
             status_code=404,
         )
     library_state = _library_state(request)
-    albums = library_state.get("albums")
-    if isinstance(albums, list):
-        library_state["albums"] = [
-            album
-            for album in albums
-            if str(
-                album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
-            ).strip()
-            != normalized_key
-        ]
+
+    def remove_from_runtime_albums():
+        albums = library_state.get("albums")
+        if isinstance(albums, list):
+            library_state["albums"] = [
+                album
+                for album in albums
+                if str(
+                    album.get("key") if isinstance(album, Mapping) else getattr(album, "key", "")
+                ).strip()
+                != normalized_key
+            ]
+
+    run_runtime_state_mutation_for_state(remove_from_runtime_albums)
     invalidate_targeted_library_projections(
         library_state,
         _app_config(request),

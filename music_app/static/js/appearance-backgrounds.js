@@ -481,6 +481,7 @@
         const style = effectivePlayerStyle(getState());
         setPairedPlayerStyleColor(style, path, value);
         promoteAggregate(); draft.player_style_override = normalizePlayerOverride(style); pendingPlayerSet = copy(draft.player_style_override);
+        if (path === 'surface.start') delete errors.player_background;
         delete errors[key]; error = ''; syncInputs(true);
       } catch (failure) { errors[key] = failure.message; }
       notify();

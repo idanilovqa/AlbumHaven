@@ -736,6 +736,26 @@ test('interaction normalization accepts only the current closed shape or the exa
 });
 
 
+test('correcting surface start clears the background alias error and preserves unrelated errors', async () => {
+  const { controller, requests } = setup();
+  controller.setPlayerColor('background', '#BADHEX');
+  controller.setPlayerStyleColor('handles.color', '#INVALID');
+  assert.equal(controller.getState().canSave, false);
+  controller.setPlayerStyleColor('surface.start', '#345678');
+  const state = controller.getState();
+  assert.equal(state.errors.player_background, undefined);
+  assert.equal(state.inputValues.player_background, '#345678');
+  assert.equal(state.inputValues['player_style_surface.start'], '#345678');
+  assert.ok(state.errors['player_style_handles.color']);
+  assert.equal(state.inputValues['player_style_handles.color'], '#INVALID');
+  assert.equal(await controller.save(), false);
+  assert.equal(requests.length, 0);
+  controller.setPlayerStyleColor('handles.color', '#456789');
+  assert.equal(controller.getState().canSave, true);
+  assert.equal(await controller.save(), true);
+  assert.equal(requests[0].payload.player_style_override.surface.start, '#345678');
+});
+
 for (const mode of ['gradient', 'layered_gradient', 'solid']) {
   test(`Main player background edit updates and saves the active ${mode} structured style`, async () => {
     const initial = initialAppearance();

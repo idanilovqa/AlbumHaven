@@ -401,6 +401,25 @@ for (const field of ['fill', 'edge', 'handles.color']) {
   });
 }
 
+test('correcting Player surface start repairs the Main background HEX alias', async ({ page }) => {
+  await mount(page, 'mount', { saved: { player_style_override: {
+    surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
+    controls: { fill: '#24B86B', border: '#86EFAC' },
+    waveform: { fill: '#387F68', edge: '#AFD8C2' },
+    handles: { color: '#AFD8C2' },
+  } } });
+  await page.locator('[data-player-hex="background"]').fill('#BADHEX');
+  await expect(page.locator('[data-background-save]')).toBeDisabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mountSeekbar(document.getElementById('editor'), { getSeekbarMode: () => 'waveform' }));
+  await page.locator('[data-player-tab-group="player"][data-player-tab="surface"]').click();
+  await page.locator('[data-player-style-hex="surface.start"]').fill('#345678');
+  await expect(page.locator('[data-background-save]')).toBeEnabled();
+  await page.evaluate(() => window.AlbumHavenAppearance.instance.mount(document.getElementById('editor')));
+  await expect(page.locator('[data-player-hex="background"]')).toHaveValue('#345678');
+  await expect(page.locator('[data-player-hex="background"]')).toHaveAttribute('aria-invalid', 'false');
+  await expect(page.locator('[data-background-save]')).toBeEnabled();
+});
+
 test('actual Utilities close-button MouseEvent keeps the dirty editor until discard is accepted', async ({ page }) => {
   await mount(page, 'mountSeekbar');
   await page.evaluate(() => {

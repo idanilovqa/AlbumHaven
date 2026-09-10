@@ -85,7 +85,7 @@ def test_create_then_delete_emits_only_deleted_path(tmp_path: Path):
     assert emitted[0].deleted_paths == frozenset({tmp_path / event_path})
 
 
-def test_delete_then_recreate_emits_only_active_path(tmp_path: Path):
+def test_delete_then_recreate_keeps_tombstones_with_active_path(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
 
@@ -101,11 +101,11 @@ def test_delete_then_recreate_emits_only_active_path(tmp_path: Path):
     coordinator.flush()
 
     assert emitted[0].paths == frozenset({tmp_path / event_path})
-    assert emitted[0].deleted_paths == frozenset()
-    assert emitted[0].deleted_subtrees == frozenset()
+    assert emitted[0].deleted_paths == frozenset({tmp_path / event_path})
+    assert emitted[0].deleted_subtrees == frozenset({tmp_path / event_path})
 
 
-def test_delete_then_replacement_move_clears_destination_deletion(tmp_path: Path):
+def test_delete_then_replacement_move_preserves_destination_tombstones(tmp_path: Path):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEventKind
 
@@ -129,19 +129,22 @@ def test_delete_then_replacement_move_clears_destination_deletion(tmp_path: Path
 
     assert len(emitted[0].moves) == 1
     assert emitted[0].moves[0].destination == tmp_path / replaced_path
-    assert emitted[0].deleted_paths == frozenset()
-    assert emitted[0].deleted_subtrees == frozenset()
+    assert emitted[0].paths == frozenset({tmp_path / replaced_path})
+    assert emitted[0].deleted_paths == frozenset({tmp_path / replaced_path})
+    assert emitted[0].deleted_subtrees == frozenset({tmp_path / replaced_path})
 
 
-def test_cross_root_replacement_move_clears_destination_group_deletion(
+def test_cross_root_replacement_overflow_preserves_destination_cleanup(
     tmp_path: Path,
 ):
     from music_app.services.library_event_coordinator import LibraryEventCoordinator
     from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
 
     emitted = []
+    health = []
     coordinator = LibraryEventCoordinator(
         emit_request=emitted.append,
+        emit_health_event=health.append,
         max_pending_groups=1,
         max_pending_entries=2,
         stat_path=lambda _path: (100, 10),
@@ -149,10 +152,10 @@ def test_cross_root_replacement_move_clears_destination_group_deletion(
     )
     source = tmp_path / "Source Root" / "replacement.tmp"
     destination = tmp_path / "Destination Root" / "Artist" / "Album" / "01.flac"
-    coordinator.accept(
+    assert coordinator.accept(
         LibraryEvent(LibraryEventKind.DELETED, "destination-root", destination)
-    )
-    coordinator.accept(
+    ) is True
+    assert coordinator.accept(
         LibraryEvent(
             LibraryEventKind.MOVED,
             "source-root",
@@ -160,13 +163,52 @@ def test_cross_root_replacement_move_clears_destination_group_deletion(
             destination=destination,
             destination_root_id="destination-root",
         )
-    )
+    ) is False
+    assert coordinator._pending_entry_count == 2
+    assert len(coordinator._pending) == 1
+    assert {event.root_id for event in health} == {"source-root", "destination-root"}
+    assert all(event.kind is LibraryEventKind.OVERFLOW for event in health)
     coordinator.flush()
 
     assert len(emitted) == 1
-    assert emitted[0].moves[0].destination == destination
-    assert emitted[0].deleted_paths == frozenset()
-    assert emitted[0].deleted_subtrees == frozenset()
+    assert emitted[0].moves == ()
+    assert emitted[0].paths == frozenset()
+    assert emitted[0].deleted_paths == frozenset({destination})
+    assert emitted[0].deleted_subtrees == frozenset({destination})
+    assert coordinator._pending_entry_count == 0
+
+
+def test_cross_root_replacement_overflow_preserves_source_cleanup(tmp_path: Path):
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+
+    emitted = []
+    health = []
+    coordinator = LibraryEventCoordinator(
+        emit_request=emitted.append, emit_health_event=health.append,
+        max_pending_groups=1, max_pending_entries=2,
+        stat_path=lambda _path: (100, 10), wait=lambda _seconds: None,
+    )
+    source = tmp_path / "Source" / "01.flac"
+    destination = tmp_path / "Destination" / "01.flac"
+    try:
+        assert coordinator.accept(LibraryEvent(LibraryEventKind.DELETED, "source", source))
+        assert not coordinator.accept(LibraryEvent(
+            LibraryEventKind.MOVED, "source", source, destination=destination,
+            destination_root_id="destination",
+        ))
+        assert coordinator._pending_entry_count == 2
+        assert len(coordinator._pending) == 1
+        assert {event.root_id for event in health} == {"source", "destination"}
+        assert all(event.kind is LibraryEventKind.OVERFLOW for event in health)
+        coordinator.flush()
+        assert len(emitted) == 1
+        assert emitted[0].deleted_paths == emitted[0].deleted_subtrees == frozenset({source})
+        assert emitted[0].moves == ()
+        assert emitted[0].paths == frozenset()
+        assert coordinator._pending_entry_count == 0
+    finally:
+        coordinator.stop()
 
 
 def test_created_child_preserves_pending_deleted_directory_ancestor(tmp_path: Path):
@@ -411,7 +453,17 @@ def test_entry_budget_counts_coalesced_changes_and_releases_flushed_work(tmp_pat
         LibraryEventKind.MOVED, tmp_path, "Artist/Album/02.flac",
         destination="Artist/Album/renamed.flac",
     )
-    for event in (deleted, second, deleted, replacement, move, move):
+    for event in (deleted, second, deleted):
+        assert coordinator.accept(event) is True
+    assert coordinator.accept(replacement) is False
+    assert coordinator._pending_entry_count == 3
+    coordinator.flush()
+    assert len(emitted) == 1
+    assert emitted[0].paths == frozenset({second.path})
+    assert emitted[0].deleted_paths == emitted[0].deleted_subtrees == frozenset({deleted.path})
+    assert emitted[0].moves == ()
+    assert coordinator._pending_entry_count == 0
+    for event in (replacement, move, move):
         assert coordinator.accept(event) is True
     assert coordinator.accept(_event(
         LibraryEventKind.CREATED, tmp_path, "Artist/Album/03.flac"
@@ -421,10 +473,10 @@ def test_entry_budget_counts_coalesced_changes_and_releases_flushed_work(tmp_pat
     )) is False
     coordinator.flush()
 
-    assert len(emitted) == 1
-    assert emitted[0].paths == frozenset({replacement.path, tmp_path / "Artist/Album/03.flac"})
-    assert emitted[0].deleted_paths == emitted[0].deleted_subtrees == frozenset()
-    assert [(item.source, item.destination) for item in emitted[0].moves] == [
+    assert len(emitted) == 2
+    assert emitted[1].paths == frozenset({replacement.path, tmp_path / "Artist/Album/03.flac"})
+    assert emitted[1].deleted_paths == emitted[1].deleted_subtrees == frozenset()
+    assert [(item.source, item.destination) for item in emitted[1].moves] == [
         (move.path, move.destination)
     ]
     assert coordinator._pending_entry_count == 0

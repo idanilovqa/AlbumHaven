@@ -419,6 +419,76 @@ def test_live_admin_route_rejects_actor_session_revoked_during_authority_lock(au
 
 
 
+def test_live_invitation_completion_rolls_back_all_mutations_when_final_audit_fails(auth_lock_inventory):
+    from music_app.services.auth_invitation_lifecycle_postgres import PostgresInvitationLifecycleService
+    from music_app.services.auth_invitation_models import InvitationCompletionOutcome
+    fixture = auth_lock_inventory
+    invitation, reset = issue_opaque_token(), issue_opaque_token()
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        connection.execute("""insert into app.account_invitation_tokens
+            (account_id, token_hash, created_at, expires_at, request_ref)
+            values (%s, %s, %s, %s, 'invitation-rollback')""",
+            (fixture.target_id, invitation.digest, fixture.now, fixture.now + timedelta(hours=1)))
+        # Reset token versions reference the account, not a credential row.
+        # Invitation activation requires that the first credential is absent.
+        connection.execute("""insert into app.password_reset_tokens
+            (account_id, token_hash, credential_version, created_at, expires_at, request_ref)
+            values (%s, %s, 1, %s, %s, 'invitation-rollback-reset')""",
+            (fixture.target_id, reset.digest, fixture.now, fixture.now + timedelta(minutes=20)))
+
+    def snapshot(connection, *, include_audit=True):
+        state = {
+            "account": connection.execute("select * from app.accounts where id = %s", (fixture.target_id,)).fetchall(),
+            "credentials": connection.execute("select * from app.account_credentials where account_id = %s", (fixture.target_id,)).fetchall(),
+            "invitations": connection.execute("select * from app.account_invitation_tokens where account_id = %s order by id", (fixture.target_id,)).fetchall(),
+            "transactions": connection.execute("""select transaction.* from app.account_invitation_transactions transaction
+                join app.account_invitation_tokens token on token.id = transaction.invitation_token_id
+                where token.account_id = %s order by transaction.id""", (fixture.target_id,)).fetchall(),
+            "resets": connection.execute("select * from app.password_reset_tokens where account_id = %s order by id", (fixture.target_id,)).fetchall(),
+        }
+        if include_audit:
+            state["audit"] = connection.execute("select * from app.security_audit_events where target_account_id = %s order by id", (fixture.target_id,)).fetchall()
+        return state
+
+    observed = []
+
+    class FailingFinalAudit(PostgresSecurityAuditRepository):
+        def append_in_transaction(self, connection, **kwargs):
+            audit_id = super().append_in_transaction(connection, **kwargs)
+            # Runtime can append audit events but intentionally cannot read them.
+            observed.append({**snapshot(connection, include_audit=False), "audit_id": audit_id})
+            raise RuntimeError("injected final invitation audit failure")
+
+    def service(audit):
+        return PostgresInvitationLifecycleService(fixture.config, clock=lambda: fixture.now,
+            breached_checker=lambda _password: False, audit_repository=audit,
+            password_hasher=lambda *_args, **_kwargs: PasswordCredential("$argon2id$invitation-fixture", 1))
+
+    failing = service(FailingFinalAudit())
+    transaction = failing.exchange_invitation_token(invitation.raw, request_ref="invitation-rollback-exchange")
+    assert transaction is not None
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        before = snapshot(connection)
+    assert before["credentials"] == []
+    assert before["invitations"][0]["consumed_at"] is None
+    assert before["transactions"][0]["consumed_at"] is None
+    assert before["resets"][0]["revoked_at"] is None
+    with pytest.raises(RuntimeError, match="Account invitation completion failed"):
+        failing.complete_invitation(transaction.raw_token, new_password="invitation rollback fixture password",
+            request_ref="invitation-rollback-complete")
+    assert len(observed) == 1, "the failure must occur after the real audit insertion"
+    assert len(observed[0]["credentials"]) == 1
+    assert observed[0]["invitations"][0]["consumed_at"] == fixture.now
+    assert observed[0]["transactions"][0]["consumed_at"] == fixture.now
+    assert observed[0]["resets"][0]["revoked_at"] == fixture.now
+    assert observed[0]["audit_id"] > 0
+    with isolatedPostgres._connect(fixture.setup_url) as connection:
+        assert snapshot(connection) == before
+    assert failing.validate_transaction(transaction.raw_token)
+    assert service(PostgresSecurityAuditRepository()).complete_invitation(transaction.raw_token,
+        new_password="invitation rollback fixture password", request_ref="invitation-retry-complete") is InvitationCompletionOutcome.SUCCESS
+
+
 def test_live_reset_completion_rolls_back_all_mutations_when_final_audit_fails(auth_lock_inventory):
     from music_app.services.auth_password_reset_lifecycle_postgres import PostgresPasswordResetLifecycleService
     from music_app.services.auth_sessions_postgres import PostgresAuthSessionService

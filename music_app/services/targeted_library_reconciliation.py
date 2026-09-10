@@ -186,13 +186,13 @@ class TargetedLibraryReconciler:
 
         expanded_targets: list[tuple[Path, dict[str, object]]] = list(active_targets)
         affected_directories: dict[
-            tuple[str, str], tuple[Path, dict[str, object]]
+            tuple[str, Path], tuple[Path, dict[str, object]]
         ] = {}
         for candidate, matched_root in active_targets:
             album_directory = self._album_directory(candidate, matched_root)
             directory_key = (
                 str(matched_root.get("id") or ""),
-                str(album_directory.resolve(strict=False)).casefold(),
+                album_directory.resolve(strict=False),
             )
             affected_directories.setdefault(
                 directory_key,

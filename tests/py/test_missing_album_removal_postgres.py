@@ -324,6 +324,74 @@ def test_confirm_removal_route_is_registered_and_owner_can_remove(monkeypatch, t
     assert app.state.library_state["targeted_inventory_album_keys"] == (ALBUM_KEY,)
 
 
+def test_removal_runtime_update_serializes_with_scan_publication(monkeypatch, tmp_path):
+    from threading import Event, Lock, Thread
+    from music_app.routes import api_wave_a_asgi_routes
+    from music_app.services import state as runtime_state
+
+    app = create_test_asgi_app(tmp_path, monkeypatch)
+    cache_lock = Lock()
+    monkeypatch.setattr(runtime_state, "_CACHE_LOCK", cache_lock)
+    read_started, publication_attempted = Event(), Event()
+    failures = []
+    committed = []
+    published = [{"key": "retained", "title": "Updated by scan"}, {"key": "new-album"}]
+
+    class Service:
+        def __init__(self, _config, *, root_health_check=None):
+            pass
+
+        def confirm_removal(self, album_key):
+            assert not cache_lock.locked(), "database work must precede the cache lock"
+            committed.append(album_key)
+            return {"removed_album_key": album_key, "library_revision": 22}
+
+    class InterleavedAlbums(list):
+        def __iter__(self):
+            assert committed == [ALBUM_KEY]
+            read_started.set()
+            assert publication_attempted.wait(2), "scan publication did not attempt the lock"
+            return super().__iter__()
+
+    app.state.library_state["albums"] = InterleavedAlbums([
+        {"key": ALBUM_KEY}, {"key": "retained", "title": "Old metadata"},
+    ])
+    monkeypatch.setattr(api_wave_a_asgi_routes, "PostgresMissingAlbumRemovalService", Service)
+
+    def publish_scan():
+        try:
+            assert read_started.wait(2)
+            # If removal has no cache lock, publish before its stale assignment.
+            # Otherwise announce contention, then publish after removal releases.
+            if cache_lock.acquire(blocking=False):
+                try:
+                    app.state.library_state["albums"] = published
+                finally:
+                    cache_lock.release()
+                    publication_attempted.set()
+            else:
+                publication_attempted.set()
+                with cache_lock:
+                    app.state.library_state["albums"] = published
+        except BaseException as error:
+            failures.append(error)
+            publication_attempted.set()
+
+    publisher = Thread(target=publish_scan)
+    publisher.start()
+    try:
+        status, _headers, body = run_asgi_request(
+            app, "POST", f"/api/library/albums/{ALBUM_KEY}/confirm-removal",
+        )
+    finally:
+        read_started.set()
+        publisher.join(2)
+    assert not publisher.is_alive() and failures == []
+    assert status == 200 and decode_json(body)["removed_album_key"] == ALBUM_KEY
+    assert app.state.library_state["albums"] == published
+    assert app.state.library_state["inventory_mutation_revision"] == 22
+
+
 @pytest.mark.parametrize(
     ("request_album_key", "expected_album_key"),
     (

@@ -155,14 +155,14 @@ class LibraryEventCoordinator:
                 return False
             updates: dict[tuple[str, Path], _PendingGroupUpdate] = {}
             if event.kind is LibraryEventKind.MOVED and event.destination is not None:
-                self._clear_superseded_deletions(
+                self._preserve_replacement_targets(
                     event.destination_root_id or event.root_id,
                     event.destination,
                     updates,
                     is_directory=event.is_directory,
                 )
             elif event.kind is not LibraryEventKind.DELETED:
-                self._clear_superseded_deletions(
+                self._preserve_replacement_targets(
                     event.root_id, event.path, updates, is_directory=event.is_directory,
                 )
             self._coalesce(
@@ -214,17 +214,19 @@ class LibraryEventCoordinator:
             )
         return updates[group_key]
 
-    def _clear_superseded_deletions(
+    def _preserve_replacement_targets(
         self, root_id: str, live_path: Path, updates, *, is_directory: bool,
     ) -> None:
         for group in self._pending.values():
             if group.root_id != root_id:
                 continue
-            if live_path in group.deleted_paths or live_path in group.deleted_subtrees:
-                update = self._group_update(updates, root_id, group.directory)
-                update.set_path("deleted_subtrees", live_path, False)
-                update.set_path("deleted_paths", live_path, False)
-            if any(parent in group.deleted_subtrees for parent in live_path.parents):
+            # A replacement may change file/directory type or omit old children.
+            # Retain deletion scopes; reconciliation excludes only actual live
+            # files from the same mutation, including Windows' ambiguous deletes.
+            if (
+                live_path in group.deleted_paths or live_path in group.deleted_subtrees
+                or any(parent in group.deleted_subtrees for parent in live_path.parents)
+            ):
                 self._group_update(updates, root_id, group.directory).set_active_path(
                     live_path, is_directory=is_directory,
                 )
@@ -245,7 +247,6 @@ class LibraryEventCoordinator:
             return
         if event.kind is LibraryEventKind.MOVED and event.destination is not None:
             update.set_path("active_paths", event.path, False)
-            update.set_path("deleted_paths", event.path, False)
             move = TargetedMove(
                 event.path,
                 event.destination,
@@ -255,8 +256,6 @@ class LibraryEventCoordinator:
             )
             update.moves[(move.source, move.destination)] = move
             return
-        update.set_path("deleted_paths", event.path, False)
-        update.set_path("deleted_subtrees", event.path, False)
         update.set_active_path(event.path, is_directory=event.is_directory)
 
     def _schedule_flush_locked(self) -> None:

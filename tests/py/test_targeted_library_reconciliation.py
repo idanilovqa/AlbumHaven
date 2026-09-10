@@ -353,6 +353,37 @@ def test_targeted_reconciler_enumerates_each_affected_directory_once(tmp_path):
     }
 
 
+def test_targeted_reconciler_expands_distinct_casefold_colliding_directories(tmp_path):
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    albums = [root / "Artist" / name for name in ("Straße", "Strasse")]
+    for album in albums:
+        album.mkdir(parents=True)
+        for name in ("01.flac", "02.flac"):
+            (album / name).write_bytes(b"media")
+    assert not albums[0].samefile(albums[1])
+    assert str(albums[0]).casefold() == str(albums[1]).casefold()
+    repository = RecordingRepository()
+    parsed = []
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=[{"id": "main", "path": root}],
+        wait=lambda _seconds: None,
+        metadata_reader=lambda path: parsed.append(path) or {
+            "path": str(path), "album": path.parent.name, "artist": "Artist",
+        },
+    )
+    try:
+        reconciler.reconcile(_request(paths=tuple(album / "01.flac" for album in albums)))
+    finally:
+        reconciler.stop()
+
+    expected = {album / name for album in albums for name in ("01.flac", "02.flac")}
+    assert set(parsed) == expected
+    assert set(repository.calls[0]["active_file_entries"]) == {str(path) for path in expected}
+
+
 def test_targeted_reconciler_holds_track_reservations_while_reading_and_persisting(
     tmp_path,
 ):
@@ -1114,6 +1145,80 @@ class StatefulTargetedRepository(RecordingRepository):
                    for root_id, path, subtree in deletions)
         })
         return result
+
+
+@pytest.mark.parametrize("old_directory,delete_directory", [(False, False), (True, False), (True, True)],
+                         ids=["old-file", "file-typed-directory-delete", "directory-delete"])
+@pytest.mark.parametrize("new_directory", [False, True], ids=["new-file", "new-directory"])
+@pytest.mark.parametrize("replacement", ["created", "move", "cross-root-move"])
+def test_coalesced_replacement_removes_missing_descendants_and_preserves_live_files(
+    tmp_path, old_directory, new_directory, delete_directory, replacement,
+):
+    import shutil
+    from music_app.services.library_event_coordinator import LibraryEventCoordinator
+    from music_app.services.library_reconciliation import LibraryEvent, LibraryEventKind
+    from music_app.services.targeted_library_reconciliation import TargetedLibraryReconciler
+
+    root = tmp_path / "Music"
+    source_root = tmp_path / "Source" if replacement == "cross-root-move" else root
+    source_id = "source" if replacement == "cross-root-move" else "main"
+    target = root / "Artist" / "Album.flac"
+    source = source_root / "Replacement.flac"
+
+    def populate(path, directory, *, old=False):
+        files = (path / "01.flac", path / "02.flac") if directory and old else (
+            (path / "01.flac",) if directory else (path,)
+        )
+        for track in files:
+            track.parent.mkdir(parents=True, exist_ok=True)
+            track.write_bytes(b"media")
+
+    populate(target, old_directory, old=True)
+    if replacement != "created":
+        populate(source, new_directory)
+    roots = [{"id": "main", "path": root}]
+    if source_id != "main":
+        roots.append({"id": source_id, "path": source_root})
+
+    def persisted_files():
+        return {
+            (entry["id"], track.resolve()) for entry in roots
+            for track in entry["path"].rglob("*.flac") if track.is_file()
+        }
+
+    repository = StatefulTargetedRepository(persisted_files())
+    reconciler = TargetedLibraryReconciler(
+        {"SUPPORTED_EXTENSIONS": {".flac"}, "IMAGE_EXTENSIONS": set()},
+        repository=repository, root_definitions=roots, wait=lambda _seconds: None,
+        metadata_reader=lambda path: {
+            "path": str(path), "album": path.parent.name, "artist": "Artist",
+        },
+    )
+    coordinator = LibraryEventCoordinator(emit_request=reconciler.reconcile, wait=lambda _seconds: None)
+    try:
+        if old_directory:
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        assert coordinator.accept(LibraryEvent(
+            LibraryEventKind.DELETED, "main", target, is_directory=delete_directory,
+        ))
+        if replacement == "created":
+            populate(target, new_directory)
+            event = LibraryEvent(LibraryEventKind.CREATED, "main", target, is_directory=new_directory)
+        else:
+            source.rename(target)
+            event = LibraryEvent(
+                LibraryEventKind.MOVED, source_id, source, destination=target,
+                destination_root_id="main", is_directory=new_directory,
+            )
+        assert coordinator.accept(event)
+        coordinator.flush()
+        assert repository.active_files == persisted_files()
+        assert coordinator._pending_entry_count == 0
+    finally:
+        coordinator.stop()
+        reconciler.stop()
 
 
 @pytest.mark.parametrize("names", [("Z", "A", "M"), ("A", "Z", "M")], ids=["reverse", "forward"])

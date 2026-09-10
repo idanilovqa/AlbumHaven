@@ -156,9 +156,40 @@ def test_delayed_older_insertion_preserves_newer_failed_health_after_scan():
             pytest.fail("newer failed warning must hold destructive publication")
 
 
+@pytest.mark.parametrize("warning_kind", ["root_unavailable", "reconciliation_failed"])
+def test_new_warning_after_recovery_is_preserved_with_the_same_clock_tick(warning_kind):
+    from datetime import datetime, timezone
+    from music_app.services.library_event_coordinator import CoordinatorProblem
+
+    health = _health_module()
+    connection = _HealthConnection()
+    store = health.PostgresLibraryWatchHealthStore(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+        connect=lambda _url: connection,
+    )
+    tick = datetime(2026, 9, 10, tzinfo=timezone.utc)
+    service = health.LibraryWatchHealthService(store, now=lambda: tick)
+    service.record_event(health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music")))
+    assert service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"]) == 1
+    assert service.root_allows_destructive_reconciliation("main")
+
+    if warning_kind == "root_unavailable":
+        service.record_event(health.LibraryEvent(health.LibraryEventKind.ROOT_UNAVAILABLE, "main", Path("C:/Music")))
+    else:
+        service.record_problem(CoordinatorProblem("reconciliation_failed", "main"))
+
+    assert not service.root_allows_destructive_reconciliation("main")
+    [problem] = service.load_problems()
+    assert (problem.state, problem.detected_at) == (warning_kind, tick.isoformat())
+    with pytest.raises(health.LibraryRootUnhealthyError):
+        with service.publication_guard(connection, ["main"]):
+            pytest.fail("a new warning must block destructive publication")
+
+
+@pytest.mark.parametrize("cutoff_offset_seconds", [0, 1], ids=["same-tick", "later-cutoff"])
 @pytest.mark.parametrize("pause_at", ["before_pending", "before_persistence"])
 @pytest.mark.parametrize("clear_fails", [False, True], ids=["recovered", "recovery-failed"])
-def test_recovery_cutoff_rejects_delayed_old_records_only_after_success(pause_at, clear_fails):
+def test_recovery_cutoff_rejects_delayed_old_records_only_after_success(pause_at, clear_fails, cutoff_offset_seconds):
     from datetime import datetime, timedelta, timezone
     from threading import Lock, current_thread
     health = _health_module()
@@ -207,10 +238,10 @@ def test_recovery_cutoff_rejects_delayed_old_records_only_after_success(pause_at
         if clear_fails:
             with pytest.raises(OSError, match="clear failed"):
                 service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"],
-                    scan_started_at=old + timedelta(seconds=1))
+                    scan_started_at=old + timedelta(seconds=cutoff_offset_seconds))
         else:
             service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"],
-                scan_started_at=old + timedelta(seconds=1))
+                scan_started_at=old + timedelta(seconds=cutoff_offset_seconds))
     finally:
         release.set()
         writer.join(2)

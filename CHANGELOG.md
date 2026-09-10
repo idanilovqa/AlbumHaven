@@ -2,6 +2,8 @@
 
 ## 0.9.43 - 2026-09-10
 
+- Preserved new watcher failures after recovery when the system clock reports
+  the same timestamp, while continuing to discard delayed older warnings.
 - Kept status requests responsive while startup pages build their PostgreSQL
   bootstrap payloads.
 - Kept pointer-driven player layout changes free of stale focus highlights while

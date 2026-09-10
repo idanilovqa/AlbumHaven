@@ -262,6 +262,7 @@ class LibraryWatchHealthService:
         self._lock = Lock()
         self._persistence_lock = Lock()
         self._recovered_before: dict[str, str] = {}
+        self._recovery_generation: dict[str, int] = {}
 
     def record_event(self, event: LibraryEvent) -> bool:
         if event.kind not in _HEALTH_EVENT_KINDS:
@@ -283,13 +284,20 @@ class LibraryWatchHealthService:
         root_id = str(raw_root_id or "").strip()
         if not root_id:
             return False
+        with self._lock:
+            recovery_generation = self._recovery_generation.get(root_id, 0)
         problem = LibraryWatchHealthProblem(
             root_id=root_id,
             state=state,
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
         )
         with self._lock:
-            if problem.detected_at <= self._recovered_before.get(root_id, ""):
+            # Wall-clock ticks can repeat. Only a recovery completed during
+            # this record operation can make its captured warning obsolete.
+            if (
+                recovery_generation != self._recovery_generation.get(root_id, 0)
+                and problem.detected_at <= self._recovered_before.get(root_id, "")
+            ):
                 return True
             pending = self._pending.get(root_id)
             if pending is None or pending.detected_at <= problem.detected_at:
@@ -361,6 +369,7 @@ class LibraryWatchHealthService:
             )
             with self._lock:
                 for root_id in normalized:
+                    self._recovery_generation[root_id] = self._recovery_generation.get(root_id, 0) + 1
                     # A caller may have captured an old timestamp before this
                     # recovery but not yet published its pending warning.
                     self._recovered_before[root_id] = max(

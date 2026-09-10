@@ -1,4 +1,4 @@
-﻿async function handleUtilityBootstrapClick(event) {
+async function handleUtilityBootstrapClick(event) {
   const removeMissingAlbumButton = event.target.closest('#utility-modal [data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
     event.preventDefault();
@@ -167,6 +167,7 @@
         && !state.utility.focusedTrackPath && state.utility.showRepairedDisplay) return;
     state.utility.selectedProblematicKey = selectedKey;
     state.utility.focusedTrackPath = '';
+    state.utility.proposalSelections = {};
     state.utility.deferProblematicAutoSelection = false;
     state.utility.showRepairedDisplay = true;
     state.utility.repairSelections = {};
@@ -408,7 +409,7 @@
   const revertVersionExceptionButton = event.target.closest('[data-revert-version-exception]');
   if (revertVersionExceptionButton) {
     event.preventDefault();
-    revertVersionException(revertVersionExceptionButton.getAttribute('data-revert-version-exception') || '');
+    openRuleRevertConfirm({ kind: 'version-exception', key: revertVersionExceptionButton.getAttribute('data-revert-version-exception') || '' });
     return;
   }
 
@@ -422,7 +423,7 @@
       ...(Array.isArray(problemRule?.album_items) ? problemRule.album_items : []),
       ...(Array.isArray(problemRule?.file_items) ? problemRule.file_items : []),
     ].find((item) => String(item?.row_key || '') === rowKey);
-    if (ruleItem && !ruleItem.pending) queueProblemExclusionRevert(ruleItem);
+    if (ruleItem && !ruleItem.pending) openRuleRevertConfirm({ kind: 'problem-exclusion', key: rowKey, item: ruleItem });
     return;
   }
 
@@ -539,6 +540,27 @@
     return;
   }
 
+  const albumProblem = event.target.closest('[data-album-problem-type]');
+  if (albumProblem) {
+    event.preventDefault();
+    if (albumProblem.disabled) return;
+    const type = albumProblem.getAttribute('data-album-problem-type');
+    const keys = getIgnorableProblemRows(getSelectedProblematicAlbum()).filter(item => normalizeProblemFilterReason(item.reason) === type).map(item => item.row_key);
+    const enabled = !keys.every(key => state.utility.problemExclusionSelections?.[key]);
+    const selected = { ...(state.utility.problemExclusionSelections || {}) };
+    keys.forEach(key => { if (enabled) selected[key] = true; else delete selected[key]; });
+    state.utility.problemExclusionSelections = selected;
+    syncProblemExclusionSelection();
+    return;
+  }
+  const suggestion = event.target.closest('[data-problem-suggestion-id]');
+  if (suggestion) {
+    event.preventDefault();
+    if (state.utility.proposalSuppressClick) { state.utility.proposalSuppressClick = false; return; }
+    if (!suggestion.disabled) toggleProblemSuggestion(suggestion.getAttribute('data-problem-suggestion-id'));
+    syncProblemSuggestionSelection();
+    return;
+  }
   const repairChoiceButton = event.target.closest('[data-repair-choice]');
   if (repairChoiceButton) {
     event.preventDefault();
@@ -587,6 +609,9 @@
     }
     return;
   }
+
+  const applySuggestions = event.target.closest('[data-apply-problem-suggestions]');
+  if (applySuggestions) { event.preventDefault(); if (!applySuggestions.disabled) openProblemSuggestionsConfirm(); return; }
 
   const repairOpenButton = event.target.closest('[data-open-repair-confirm="1"]');
   if (repairOpenButton) {
@@ -817,7 +842,7 @@
 
 function renderUtilityModalContentAndRestoreProblemExclusionFocus(rowKey) {
   const normalizedRowKey = String(rowKey || '');
-  renderUtilityModalContent();
+  syncProblemExclusionSelection();
   if (!normalizedRowKey || typeof document === 'undefined') return;
   const matchingPill = Array.from(
     document.querySelectorAll?.('[data-problem-exclusion-row-key]') || [],
@@ -968,6 +993,21 @@ function coverLookupSelectionChanged(before, after) {
 }
 
 function handleUtilityBootstrapMouseDown(event) {
+  const suggestion = event.target.closest('[data-problem-suggestion-id]');
+  if (suggestion && event.button === 0 && !suggestion.disabled) {
+    event.preventDefault();
+    const id = suggestion.getAttribute('data-problem-suggestion-id');
+    const visible = getVisibleProblemSuggestions();
+    const index = visible.findIndex(item => item.id === id);
+    if (index < 0) return;
+    const selected = !state.utility.proposalSelections?.[id];
+    state.utility.proposalDrag = { type: visible[index].type, startIndex: index, selected };
+    state.utility.proposalSuppressClick = true;
+    toggleProblemSuggestion(id, { selected });
+    suggestion.focus?.();
+    syncProblemSuggestionSelection();
+    return;
+  }
   const coverLookupTaskButton = event.target.closest('[data-open-cover-lookup-task]');
   state.coverLookup.taskOpenSelectionGesture = coverLookupTaskButton && event.button === 0
     ? {
@@ -1102,6 +1142,17 @@ function handleUtilityBootstrapKeyDown(event) {
 }
 
 function handleUtilityBootstrapMouseOver(event) {
+  if (state.utility.proposalDrag) {
+    const suggestion = event.target.closest('[data-problem-suggestion-id]');
+    const drag = state.utility.proposalDrag;
+    const visible = getVisibleProblemSuggestions();
+    const index = visible.findIndex(item => item.id === suggestion?.getAttribute('data-problem-suggestion-id'));
+    if (index >= 0 && visible[index].type === drag.type) {
+      extendProblemSuggestionRange(drag.type, drag.startIndex, index, drag.selected);
+      syncProblemSuggestionSelection();
+    }
+    return;
+  }
   if (state.utility.problemExclusionDrag) {
     const pill = event.target.closest('[data-problem-exclusion-scope="file"]');
     if (!pill) return true;
@@ -1111,11 +1162,11 @@ function handleUtilityBootstrapMouseOver(event) {
     if (Number.isInteger(rowIndex) && rowIndex !== drag.lastIndex) {
       state.utility.problemExclusionClearOnClick = false;
     }
-    if (reason !== drag.reason || !Number.isInteger(rowIndex)) return true;
+    if (normalizeProblemFilterReason(reason) !== normalizeProblemFilterReason(drag.reason) || !Number.isInteger(rowIndex)) return true;
     if (rowIndex === drag.lastIndex) return true;
     if (extendProblemExclusionRange(reason, drag.startIndex, rowIndex)) {
       drag.lastIndex = rowIndex;
-      renderUtilityModalContent();
+      syncProblemExclusionSelection();
     }
     return true;
   }
@@ -1144,6 +1195,8 @@ function handleUtilityBootstrapMouseOver(event) {
 }
 
 function handleUtilityBootstrapMouseUp(event) {
+  state.utility.proposalDrag = null;
+  if (state.utility.proposalSuppressClick) setTimeout(() => { state.utility.proposalSuppressClick = false; }, 0);
   const selectionGesture = state.coverLookup.taskOpenSelectionGesture;
   state.coverLookup.taskOpenSelectionGesture = null;
   state.coverLookup.suppressOpenTaskId = '';

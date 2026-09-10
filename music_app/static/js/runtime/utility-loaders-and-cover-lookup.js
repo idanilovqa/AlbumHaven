@@ -1104,6 +1104,8 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   if (resetSelection) {
     state.utility.selectedProblematicKey = '';
     state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
     state.utility.pendingRepairAction = '';
     state.utility.focusedTrackPath = '';
     state.utility.showRepairedDisplay = true;
@@ -1284,6 +1286,44 @@ function openRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   const action = state.utility.pendingRepairAction || 'repair';
+  if (action === 'suggestions') {
+    const pending = state.utility.pendingProblemSuggestions;
+    if (!pending?.proposals?.length) return;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Apply suggested edits?'; }
+    if (els.text) els.text.textContent = pending.proposals.map(proposal => {
+      const track = (getSelectedProblematicAlbum()?.tracks || []).find(item => item.path === proposal.path);
+      return `${track?.title || getFilenameFromPath(proposal.path)} — ${formatProblemSuggestionLabel(proposal)}`;
+    }).join('\n');
+    if (els.cancel) { els.cancel.textContent = 'Cancel'; els.cancel.disabled = false; }
+    if (els.accept) { els.accept.textContent = 'Apply'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
+  if (action === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending) return;
+    const rule = (state.utility.rules || []).find(item => item.key === 'version-exceptions');
+    const target = pending.item || (rule?.albums || []).find(item => item.key === pending.key) || {};
+    const label = target.target_label || target.filename || target.album || target.name || pending.key;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Revert rule?'; }
+    if (els.text) els.text.textContent = `Revert the rule for ${label}? ${pending.kind === 'problem-exclusion' ? 'This problem can appear again in Problems.' : 'This album can appear in version groups again.'}`;
+    if (els.cancel) els.cancel.textContent = 'No';
+    if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
   const selectedRows = action === 'repair' ? getSelectedRepairRowKeys() : [];
   const ignoredRows = action === 'detected' ? getIgnoredRepairRowKeys() : [];
   const separateRows = action === 'separate-release' ? getSelectedSeparateReleaseKeys() : [];
@@ -1317,8 +1357,13 @@ function openRepairConfirmModal() {
       els.text.textContent = 'This will treat the selected year mismatch as separate releases and rebuild the album list. Are you sure?';
       if (els.accept) els.accept.textContent = 'Yes, apply';
     } else if (isExclusionConfirmation) {
-      els.text.textContent = 'Are you sure? This will create an exclusion rule';
-      if (els.accept) els.accept.textContent = 'Exclude';
+      const album = getSelectedProblematicAlbum();
+      const selected = new Set(ignoredRows);
+      const targets = [];
+      (album?.album_problem_rows || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${album.name || 'Album'} — ${item.display_reason || item.reason}`));
+      (album?.track_problem_rows || []).forEach(row => (row.ignorable_reasons || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${row.filename || getFilenameFromPath(row.path)} — ${item.reason}`)));
+      els.text.textContent = `Create an exclusion rule for ${targets.join('; ')}? These problems will be hidden. You can revert this rule in Rules.`;
+      if (els.accept) els.accept.textContent = 'Create Exception';
     } else {
       els.text.textContent = 'No problem exclusions are selected.';
       if (els.accept) els.accept.textContent = 'Yes, apply';
@@ -1336,6 +1381,8 @@ function closeRepairConfirmModal() {
   if (!els.overlay) return;
   els.overlay.hidden = true;
   state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
   state.utility.pendingRepairAction = '';
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

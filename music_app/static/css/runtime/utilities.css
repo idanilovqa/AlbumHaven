@@ -1,4 +1,4 @@
-﻿.utility-modal {
+.utility-modal {
   position: fixed;
   inset: 0;
   background: rgba(3, 7, 18, 0.72);
@@ -986,7 +986,8 @@
   }
 
   #repair-confirm-modal[data-confirm-mode="exclusion"] .confirm-modal-text {
-    white-space: nowrap;
+    white-space: pre-line;
+    overflow-wrap: anywhere;
   }
 
   #utility-modal[data-active-tab="problematic-files"] .utility-modal-dialog {
@@ -1697,3 +1698,39 @@
 .tag-editor-track-list {
   --tag-editor-selection-fill: var(--selection-body-background);
 }
+
+/* Shared selectable-label proposal intent, adopted by Settings tables. */
+:root .alert-label[data-label-intent="proposal"] {
+  --alert-edge: var(--success);
+}
+:root[data-alert-family="quiet"] .alert-label[data-label-intent="proposal"] {
+  --alert-edge: var(--muted);
+}
+.utility-album-problem-labels,
+.utility-suggestion-labels {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.utility-album-problem-labels { margin: 12px 0 20px; }
+.utility-detected-table .alert-label {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+  border-radius: 6px;
+  min-height: 26px;
+}
+.utility-detected-table .compact-data-table { width: 100%; --cdt-mobile-min-width: 560px; }
+.utility-detected-table .compact-data-table-cell { min-width: 0; align-content: start; }
+.utility-detected-table .utility-track-problem-file { white-space: normal; overflow-wrap: anywhere; }
+.utility-detected-actions { gap: 10px; flex-wrap: wrap; }
+.utility-exception-action { color: var(--appearance-error); }
+.utility-problem-suggestion { user-select: none; touch-action: pan-y; }
+.utility-detail-context-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+
+.utility-rule-problem-labels { flex-wrap: wrap; }.utility-rule-target { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.utility-rule-target > .album-artbox { width: 44px; height: 44px; flex: 0 0 44px; }
+.utility-rule-target .utility-rule-album-title,
+.utility-rule-target .utility-rule-album-meta { display: block; }
+#repair-confirm-text { white-space: pre-line; }

@@ -268,9 +268,9 @@ function renderUtilityRules() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Rules';
   els.count.textContent = String(rules.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Rules';
+    els.search.value = state.utility.rulesSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Filter album, filename, or reason';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;

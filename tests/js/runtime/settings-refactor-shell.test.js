@@ -45,6 +45,7 @@ function harness() {
   };
   context.window = context;
   vm.createContext(context);
+  vm.runInContext(read('music_app/static/js/button-component.js'), context);
   vm.runInContext(read('music_app/static/js/navigation-tree.js'), context, { filename: 'navigation-tree.js' });
   for (const file of ['album-artbox', 'problematic-album-helpers', 'loop-range-controls', 'playback-control-cluster', 'player-and-waveform', 'utility-list-builders', 'utility-loop-playback', 'bootstrap-utility-event-handlers']) {
     vm.runInContext(read(`music_app/static/js/runtime/${file}.js`), context, { filename: `${file}.js` });

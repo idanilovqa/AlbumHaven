@@ -189,6 +189,8 @@ function loadHelpers() {
     lastMergedPayload: null,
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(
     orderAlbumTracksHelperSource,
     context,
@@ -490,6 +492,8 @@ function loadProblematicTrackNavigationHelpers() {
     { filename: compactDataTablePath },
   );
   vm.runInContext(alertComponentsSource, context, { filename: alertComponentsPath });
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { album, context, trackPath };
 }
@@ -6020,6 +6024,7 @@ test('detected problem rows expose their track path as stable DOM identity', () 
 
 test('detected problem rows preserve each server-owned disc missing-number label', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const discOnePath = 'C:\\Music\\Artist Alpha\\Album Alpha\\Disc 1\\03 Third.flac';
   const discTwoPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\Disc 2\\04 Fourth.flac';
   const album = {
@@ -6055,6 +6060,7 @@ test('detected problem rows preserve each server-owned disc missing-number label
 
 test('detected problems do not promote track reasons into an empty album-level section', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
     problem_reasons: ['Undecoded characters'],
     album_problem_rows: [],
@@ -6070,16 +6076,17 @@ test('detected problems do not promote track reasons into an empty album-level s
   });
 
   const albumSection = html.slice(
-    html.indexOf('utility-album-problem-content'),
-    html.indexOf('utility-track-problem-table'),
+    html.indexOf('utility-album-problem-labels'),
+    html.indexOf('utility-detected-table'),
   );
   assert.doesNotMatch(albumSection, /Undecoded characters/);
   assert.match(html, /01 The Temple of the Living God\.flac/);
   assert.match(html, /Undecoded characters/);
 });
 
-test('album-only detected problems explain the tag context and omit the empty track section', () => {
+test('album-only detected problems explain tag context above the three-column empty table', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
     problem_reasons: ['Undecoded characters'],
     album_problem_rows: [{
@@ -6091,10 +6098,11 @@ test('album-only detected problems explain the tag context and omit the empty tr
   });
 
   assert.match(html, /Undecoded characters \("\?" in Album\)/);
-  assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS|problematic-track-problems/);
-  assert.equal((html.match(/>Exclude the problem</g) || []).length, 1);
+  assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS/);
+  assert.match(html, /problematic-track-problems/);
+  assert.equal((html.match(/>Create Exception</g) || []).length, 1);
   assert.ok(
-    html.indexOf('utility-detected-actions') > html.indexOf('utility-album-problem-list'),
+    html.indexOf('utility-detected-actions') > html.indexOf('utility-album-problem-labels'),
     'the shared exclusion action must follow the album-level problem section',
   );
 });
@@ -6124,8 +6132,9 @@ test('problem exclusion selection stays independent from Suggested Edits Apply o
   );
 });
 
-test('Problematic Files detail renders the approved album-first compact table contract', () => {
+test('Problematic Files detail renders the approved three-column compact table contract', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   context.state.coverLookup = { optimisticAlbumCovers: {} };
   for (const file of ['modal-and-overlay-helpers.js', 'album-artbox.js']) {
     const sourcePath = path.join(__dirname, '../../../music_app/static/js/runtime', file);
@@ -6180,35 +6189,32 @@ test('Problematic Files detail renders the approved album-first compact table co
     1,
     'the expanded detail must expose exactly one visible Detected Problems heading',
   );
-  assert.ok(html.indexOf('ALBUM-LEVEL PROBLEMS') < html.indexOf('TRACK-LEVEL PROBLEMS'));
-  assert.match(
-    html,
-    /TRACK-LEVEL PROBLEMS[^]*>1</,
-    'the track-level badge must count visible track rows rather than aggregate problem reasons',
-  );
+  assert.doesNotMatch(html, /ALBUM-LEVEL PROBLEMS|TRACK-LEVEL PROBLEMS/);
+  assert.ok(html.indexOf('Missing cover art') < html.indexOf('role="table"'));
   assert.deepEqual(
     album.album_problem_rows.map((row) => row.reason),
     ['Missing cover art', 'Missing year', 'Missing track number'],
   );
-  assert.equal(context.lastCompactTableConfig.frame, 'inset');
+  assert.equal(context.lastCompactTableConfig.frame, 'outline');
   assert.equal(context.lastCompactTableConfig.mobile, 'preserve');
   assert.equal(context.lastCompactTableConfig.overflow, 'local');
-  assert.equal(context.lastCompactTableConfig.columns, 'minmax(220px,.42fr) minmax(300px,.58fr)');
+  assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.columnsConfig, (column) => column.label),
-    ['Filename', 'Reason'],
+    ['Track / file', 'Problems', 'Suggested edits'],
   );
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.rows, (row) => row.key),
     ['C:\\Music\\Artist Alpha\\Album Alpha\\01 First.flac'],
   );
   assert.ok(html.indexOf('Missing year') < html.indexOf('Missing track number'));
-  assert.equal((html.match(/>Exclude the problem</g) || []).length, 1);
-  assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|>Problems<|overflow menu|Not a problem|data-open-repair-confirm/);
+  assert.equal((html.match(/>Create Exception</g) || []).length, 1);
+  assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|overflow menu|Not a problem|data-open-repair-confirm/);
 });
 
 test('Problematic Files routes static and selectable reasons through AlertLabel', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   context.state.utility.problemExclusionSelections = {
     'opaque-album-cover': true,
     'opaque-file-year': true,
@@ -6230,7 +6236,7 @@ test('Problematic Files routes static and selectable reasons through AlertLabel'
   });
 
   assert.equal((html.match(/alert-label alert-label--error/g) || []).length, 4);
-  assert.match(html, /alert-label--error[^>]*utility-problem-exclusion-pill is-active[^>]*data-problem-exclusion-row-key="opaque-album-cover"[^>]*aria-pressed="true"/);
+  assert.match(html, /alert-label--error[^>]*utility-problem-exclusion-pill is-active[^>]*data-album-problem-type="Missing cover art"[^>]*aria-pressed="true"/);
   assert.match(html, /data-problem-exclusion-scope="file"[^>]*data-problem-exclusion-row-key="opaque-file-year"[^>]*aria-pressed="true"/);
   assert.match(html, /data-problem-exclusion-reason="Missing track number"[^>]*aria-pressed="false"[^>]*aria-disabled="true" disabled/);
 });

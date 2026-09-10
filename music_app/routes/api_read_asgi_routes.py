@@ -61,11 +61,13 @@ def _project_missing_album_actions_for_request(
 ) -> object:
     allowed_actions = allowed_actions_for_request(
         request,
-        ("library.inventory.manage",),
+        ("library.inventory.manage", "library.files.edit_tags", "library.rules.manage", "library.files.open_location", "library.covers.fetch"),
     )
 
     def visit(value: object) -> None:
         if isinstance(value, dict):
+            if "suggested_edits" in value:
+                value["allowed_actions"] = allowed_actions.as_payload()
             if value.get("inventory_status") == "missing":
                 value.update(project_missing_album_actions(value, allowed_actions))
             for nested in tuple(value.values()):

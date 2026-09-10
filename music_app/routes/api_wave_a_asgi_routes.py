@@ -1236,6 +1236,25 @@ def _edit_tags_queue_finalize_save_task_builder(
     return queue_finalize_with_postgres_album_finder
 
 
+def _with_problem_suggestion_outcomes(result: ResponseValue, proposal_ids: list[str]) -> ResponseValue:
+    """Project the existing batch result only after authoritative finalization."""
+    original = result[0] if isinstance(result, tuple) else result
+    response = dict(original)
+    if response.get("ok") and response.get("save_task_status") == "completed":
+        outcome = "committed"
+    elif response.get("proposal_status") == "stale":
+        outcome = "stale"
+    elif (response.get("save_task_id") or response.get("save_task_status")) and response.get("save_task_status") != "completed":
+        outcome = "recovery_pending"
+    elif response.get("edit_outcome") in {"failed_rolled_back", "recovery_pending"}:
+        outcome = response["edit_outcome"]
+    else:
+        outcome = "rejected"
+    response["proposal_outcomes"] = [{"id": identifier, "status": outcome}
+                                     for identifier in dict.fromkeys(value for value in proposal_ids if isinstance(value, str))]
+    return (response, result[1]) if isinstance(result, tuple) else response
+
+
 def _authoritative_edit_tags_response(
     result: ResponseValue,
     *,
@@ -1657,6 +1676,56 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
             )
         ),
     }
+    if "proposal_ids" in payload:
+        from pathlib import Path
+        from music_app.services.metadata import read_editable_tag_values
+        from music_app.services.problem_suggestions import validate_problem_suggestions, _FIELDS
+
+        def validate_proposals(st, submitted_updates):
+            paths = {str(path) for path in submitted_updates}
+            if _is_selected_postgres_library_browse_request(request):
+                repository = PostgresLibraryBrowseRepository(config)
+                entries = repository.build_problem_suggestion_entries_by_paths(paths)
+                aliases = repository._load_relation_alias_maps().get("alias_to_canonical", {})
+            else:
+                entries = {path: st.get("file_cache", {}).get(path) for path in paths}
+                aliases = (st.get("relation_views") or {}).get("alias_to_canonical", {})
+
+            def read_physical(path):
+                source = Path(path)
+                before = source.stat()
+                tags = read_editable_tag_values(source, set(_FIELDS))
+                after = source.stat()
+                if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                    raise ValueError("Source changed while reading")
+                return {**tags, "mtime": after.st_mtime, "size": after.st_size}
+
+            verified = validate_problem_suggestions(payload.get("proposal_ids"), entries,
+                alias_to_canonical=aliases, read_metadata=read_physical)
+            if set(verified) != paths:
+                raise ValueError("Suggestion targets changed")
+            # The submitted fields determine reservation resources; they must exactly
+            # describe the recomputed batch, never add an unreserved structural edit.
+            normalized = lambda values: {path: {field: str(value) for field, value in fields.items()} for path, fields in values.items()}
+            if normalized(verified) != normalized(submitted_updates):
+                raise ValueError("Suggestion updates changed")
+            album_key = str(album.get("key") or album.get("album_ref") or "")
+            if _is_selected_postgres_library_browse_request(request):
+                detail = repository.build_problematic_file_detail_payload(album_key)
+            else:
+                from music_app.services.repair_previews import build_problematic_album_detail_payload
+                detail = build_problematic_album_detail_payload(album_key, config=config, library_state=st, logger=logger)
+            eligible_ids = {row["id"] for row in (detail or {}).get("suggested_edits", [])}
+            if not set(payload["proposal_ids"]).issubset(eligible_ids):
+                raise ValueError("Suggestions are no longer eligible")
+            previous_entries = st.get("file_cache") or {}
+            st["file_cache"] = {**previous_entries, **{
+                path: {**(previous_entries.get(path) or {}), **entry}
+                for path, entry in entries.items()
+            }}
+            return verified
+
+        handler_options["validate_proposals"] = validate_proposals
     structural_tag_edit_reservation = (
         await acquire_structural_tag_edit_reservation_async(
             reservation_resource_keys
@@ -1674,4 +1743,6 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
     )
     if _is_selected_postgres_library_browse_request(request) and _has_edit_tags_media_write_fields(payload):
         result = _selected_postgres_media_write_response(result)
+    if isinstance(payload.get("proposal_ids"), list):
+        result = _with_problem_suggestion_outcomes(result, payload["proposal_ids"])
     return _json_response(result)

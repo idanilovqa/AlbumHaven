@@ -222,6 +222,8 @@ function createContext(stateOverrides = {}) {
   };
 
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(utilityListBuildersSource, context, {
     filename: utilityListBuildersPath,
   });
@@ -412,7 +414,7 @@ test('Problematic Files handler leaves Album Details missing-album actions to th
   assert.deepEqual(calls.missingAlbumRemovalConfirms, []);
 });
 
-test('Rules revert passes the complete current exclusion item to the optimistic queue', async () => {
+test('Rules revert preserves the complete current exclusion item for confirmation', async () => {
   const rowKey = 'album::neal-morse-question-2005::undecoded-characters';
   const ruleItem = {
     row_key: rowKey,
@@ -442,7 +444,8 @@ test('Rules revert passes the complete current exclusion item to the optimistic 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.deepEqual(queued, [ruleItem]);
+  assert.deepEqual(queued, []);
+  assert.equal(context.state.utility.pendingRuleRevert.item, ruleItem);
 });
 
 test('pointer activation opens exclusion confirmation from the semantic click only', async () => {
@@ -507,10 +510,11 @@ test('separate releases has an independent enabled action without a problem excl
       key: 'artist::album',
       years: [1988, 1992],
     },
+    allowed_actions: { 'library.rules.manage': true },
   });
 
   assert.match(html, /data-open-separate-release-confirm="1"/);
-  assert.match(html, />Apply separate releases<\/button>/);
+  assert.match(html, />Apply separate releases<\/span>/);
   assert.doesNotMatch(
     html.match(/<button[^>]*data-open-separate-release-confirm="1"[^>]*>/)?.[0] || '',
     /\bdisabled\b/,
@@ -540,7 +544,7 @@ test('separate releases action opens its own confirmation even with a problem ex
   assert.equal(context.state.utility.pendingRepairAction, 'separate-release');
 });
 
-test('exclusion confirmation contains only the approved sentence and Cancel or Exclude actions', () => {
+test('exclusion confirmation names the affected problem and its reversible effect', () => {
   const dialogAttributes = new Map([
     ['aria-labelledby', 'repair-confirm-title'],
     ['aria-describedby', 'repair-confirm-text'],
@@ -579,13 +583,14 @@ test('exclusion confirmation contains only the approved sentence and Cancel or E
   };
   vm.createContext(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+  context.getSelectedProblematicAlbum = () => ({ name: 'Album', album_problem_rows: [{ row_key: 'opaque-row-key', reason: 'Missing year' }] });
 
   context.openRepairConfirmModal();
 
   assert.equal(elements.overlay.hidden, false);
-  assert.equal(elements.text.textContent, 'Are you sure? This will create an exclusion rule');
+  assert.match(elements.text.textContent, /Album.*Missing year.*hidden.*revert/);
   assert.equal(elements.cancel.textContent, 'Cancel');
-  assert.equal(elements.accept.textContent, 'Exclude');
+  assert.equal(elements.accept.textContent, 'Create Exception');
   assert.equal(elements.title.hidden, true);
   assert.equal(elements.title.textContent, '');
   assert.equal(elements.dialog.getAttribute('aria-labelledby'), 'repair-confirm-text');
@@ -702,6 +707,7 @@ test('canceling exclusion confirmation restores focus to Exclude the problem', (
     getRepairConfirmElements() { return elements; },
     getSelectedRepairRowKeys() { return []; },
     getSelectedSeparateReleaseKeys() { return []; },
+    getSelectedProblematicAlbum() { return { name: 'Album', album_problem_rows: [{ row_key: 'opaque-row-key', reason: 'Missing year' }] }; },
   };
   vm.createContext(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });

@@ -29,13 +29,15 @@ function attachUtilityModalEvents() {
   bindOverlayPointerOrigin(els.overlay);
   els.close?.addEventListener('click', closeUtilityModal);
   els.search?.addEventListener('input', () => {
-    if (state.utility.activeTab !== 'problematic-files') return;
-    state.utility.searchQuery = els.search.value || '';
+    if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else return;
     renderUtilityModalContent();
   });
   els.search?.addEventListener('search', () => {
-    if (state.utility.activeTab !== 'problematic-files') return;
-    state.utility.searchQuery = els.search.value || '';
+    if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
+    else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
+    else return;
     renderUtilityModalContent();
   });
   els.overlay.addEventListener('click', (event) => {

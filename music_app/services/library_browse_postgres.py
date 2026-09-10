@@ -1601,6 +1601,9 @@ class PostgresLibraryBrowseRepository:
             if projected_items:
                 first_album = projected_items[0][1]
                 first_key = str(first_album.get("key") or "")
+                first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
+                    connection=connection
+                ).get("alias_to_canonical", {})
                 initial_detail = _problematic_album_detail_payload(first_album)
                 if initial_detail is None:
                     raise RuntimeError(
@@ -1633,6 +1636,9 @@ class PostgresLibraryBrowseRepository:
                 if isinstance(track, Mapping)
             }
             if album_track_paths & normalized_paths:
+                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
+                    "alias_to_canonical", {}
+                )
                 return _problematic_album_detail_payload(album)
         return None
 
@@ -1644,6 +1650,7 @@ class PostgresLibraryBrowseRepository:
         for album in albums:
             if str(album.get("key") or "") not in requested_keys:
                 continue
+            album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
             return _problematic_album_detail_payload(album)
         missing_albums = _missing_album_projection_payloads(
             self._load_missing_album_rows(album_key=str(album_key or ""))
@@ -1651,6 +1658,16 @@ class PostgresLibraryBrowseRepository:
         if missing_albums:
             return _problematic_album_detail_payload(missing_albums[0])
         return None
+
+    def build_problem_suggestion_entries_by_paths(self, track_paths: set[str]) -> dict[str, dict[str, object]]:
+        """Read original inventory tags, without presentation fallbacks, in this library."""
+        paths = _normalized_track_paths(track_paths)
+        return {
+            str(row.get("file_private_path")): _problematic_file_entry_from_row(row)
+            for item in self._load_album_rows_by_track_paths(paths)
+            for row in [_row_mapping(item)]
+            if str(row.get("file_private_path")) in paths
+        } if paths else {}
 
     def build_album_payloads_by_track_paths(self, track_paths: set[str]) -> list[dict[str, object]]:
         normalized_paths = _normalized_track_paths(track_paths)
@@ -3003,6 +3020,8 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         raw_year = row_payload.get("album_release_year")
     return {
         "path": track_path,
+        "mtime": file_entry.get("mtime"),
+        "size": file_entry.get("size"),
         "album": required_text_value("album", "file_album", row_payload.get("album_title")),
         "album_artist": required_text_value(
             "album_artist",
@@ -3835,6 +3854,8 @@ def _problematic_album_summary_payload(
 
 
 def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, object] | None:
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
     album_scope_reasons = _problematic_album_scope_reasons(album)
     track_problem_rows = _problematic_track_problem_rows(album)
     summary = _problematic_album_summary_payload(
@@ -3878,6 +3899,14 @@ def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, 
         "root_provenance": dict(_row_json_mapping(album.get("root_provenance"))),
         "tracks": list(album.get("tracks") or []),
         "repair_preview_rows": repair_preview.get("preview_rows", []),
+        "suggested_edits": [
+            proposal
+            for entry in album.get("_file_entries", [])
+            if isinstance(entry, dict)
+            for proposal in build_problem_suggestions(str(entry.get("path") or ""), entry, alias_to_canonical=album.get("_suggestion_aliases"))
+            if not _problem_reason_is_ignored(set(album.get("_ignored_repair_keys") or ()), proposal['path'], proposal['reason'], scope="file", legacy_field=proposal['field'])
+            and not _problem_reason_is_ignored(set(album.get("_ignored_repair_keys") or ()), album_problem_identity, proposal['reason'], scope="album")
+        ],
         "track_problem_rows": track_problem_rows,
         "track_order_issues": _track_order_issues(album),
         "problematic_track_paths": [

@@ -477,12 +477,14 @@ async function queueProblemExclusionRevert(item) {
       ) + 1;
       state.utility.loaded = false;
       renderUtilityModalContent();
+      return true;
     } catch (error) {
       console.error('[AlbumHaven][Utilities] Failed to revert problem exclusion.', error);
       await waitForProblematicUtilityRenderFrame();
       rollbackProblemExclusionMutation(operation);
       renderUtilityModalContent();
       showToast('Failed to revert problem exclusion', 'error', 3200);
+      return false;
     }
   });
 }

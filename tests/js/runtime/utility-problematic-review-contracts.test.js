@@ -279,7 +279,7 @@ test('Rules keeps the 88px Actions header semantic but visually hidden on deskto
   assert.match(hiddenActionHeaderCss, /overflow\s*:\s*hidden/);
 });
 
-test('390px exclusion confirmation uses its own wide one-line approved sentence mode', () => {
+test('390px exclusion confirmation keeps its scoped layout and identifies the affected problem', () => {
   const overlayAttributes = new Map();
   const elements = {
     overlay: {
@@ -306,6 +306,7 @@ test('390px exclusion confirmation uses its own wide one-line approved sentence 
     getRepairConfirmElements() { return elements; },
     getSelectedRepairRowKeys() { return []; },
     getSelectedSeparateReleaseKeys() { return ['artist::album']; },
+    getSelectedProblematicAlbum() { return { name: 'Album', album_problem_rows: [{ row_key: 'opaque-row-key', reason: 'Missing year' }] }; },
   };
   vm.createContext(context);
   vm.runInContext(loaderSource, context, { filename: loaderPath });
@@ -326,10 +327,11 @@ test('390px exclusion confirmation uses its own wide one-line approved sentence 
     '#repair-confirm-modal[data-confirm-mode="exclusion"] .confirm-modal-text',
   );
   assert.equal(overlayAttributes.get('data-confirm-mode'), 'exclusion');
-  assert.equal(elements.text.textContent, 'Are you sure? This will create an exclusion rule');
+  assert.match(elements.text.textContent, /Album.*Missing year.*hidden.*revert/);
   assert.match(overlayRule, /padding-inline\s*:\s*18px/);
   assert.match(dialogRule, /width\s*:\s*(?:100%|min\([^;]*100%[^;]*\))/);
-  assert.match(textRule, /white-space\s*:\s*nowrap/);
+  assert.match(textRule, /white-space\s*:\s*pre-line/);
+  assert.match(textRule, /overflow-wrap\s*:\s*anywhere/);
 });
 
 test('problem pill rerender restores focus to the equivalent selected pill', () => {

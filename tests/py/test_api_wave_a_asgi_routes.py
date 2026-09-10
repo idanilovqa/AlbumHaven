@@ -67,6 +67,59 @@ def _make_asgi_app():
     return create_asgi_app()
 
 
+@pytest.mark.parametrize('scenario', ['foreign', 'stale', 'forged-values', 'revoked-proposal'])
+def test_suggested_tag_apply_revalidates_scoped_target_and_physical_tags_before_io(app, asgi_app, monkeypatch, tmp_path, scenario):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services import metadata
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
+    source = tmp_path / 'proposal-track.flac'
+    source.write_bytes(b'fixture metadata source')
+    track_path = str(source)
+    stat = source.stat()
+    entry = {'path': track_path, 'mtime': stat.st_mtime, 'size': stat.st_size, 'artist': 'JosÃ©', 'album': 'Album', 'album_artist': 'Artist', 'title': 'Song', 'disc_number': 1, 'track_number': 1, 'year': 2008}
+    proposal = next(item for item in build_problem_suggestions(track_path, entry) if item['field'] == 'artist')
+    app.config['ALBUM_HAVEN_APP_DATABASE_URL'] = 'postgresql://album_haven_app@localhost/app'
+    app.config['PERSISTENCE_BACKENDS'] = {'library_browse': 'postgres'}
+    reads = []
+
+    class Repository:
+        def __init__(self, config):
+            pass
+
+        def build_problem_suggestion_entries_by_paths(self, paths):
+            assert paths == {track_path}
+            return {} if scenario == 'foreign' else {track_path: entry}
+
+        def _load_relation_alias_maps(self):
+            return {'alias_to_canonical': {}}
+
+        def build_problematic_file_detail_payload(self, album_key):
+            assert album_key == 'album-alpha'
+            return {'key': album_key, 'suggested_edits': [] if scenario == 'revoked-proposal' else [proposal]}
+
+    def read_physical(path, fields):
+        reads.append(str(path))
+        assert scenario != 'foreign', 'foreign target must not read physical media'
+        return {**entry, 'artist': 'Changed externally' if scenario == 'stale' else entry['artist']}
+
+    monkeypatch.setattr(routes, 'PostgresLibraryBrowseRepository', Repository)
+    monkeypatch.setattr(metadata, 'read_editable_tag_values', read_physical)
+    monkeypatch.setattr(routes, '_apply_repairs_worker', lambda *_args: pytest.fail('invalid proposal cannot write'))
+    monkeypatch.setattr(routes, 'create_save_task', lambda *_args: pytest.fail('invalid proposal cannot queue save'))
+    monkeypatch.setattr(routes, 'validate_structural_tag_edit_for_config', lambda **_kwargs: None)
+    status, _, body = _run_asgi_request(asgi_app, 'POST', '/utilities/edit-tags', json_body={
+        'confirmed': True, 'proposal_ids': [proposal['id']],
+        'album': {'key': 'album-alpha', 'name': 'Album', 'album_artist': 'Artist', 'tracks': [{'path': track_path}]},
+        'updates': {track_path: {'artist': 'Forged desired value' if scenario == 'forged-values' else 'José'}},
+    })
+    payload = _decode_json(body)
+    assert status == 409
+    assert payload['ok'] is False
+    assert payload['proposal_status'] == 'stale'
+    assert reads == ([] if scenario == 'foreign' else [track_path])
+
+
 def _complete_mocked_edit_tags_save_task(**kwargs):
     from music_app.services.save_tasks import update_save_task
     from music_app.services.exception_overrides import set_track_exception_overrides

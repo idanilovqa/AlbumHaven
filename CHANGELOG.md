@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.44 - 2026-09-12
+
+- Reworked the Gallery bar, artist-family selection, album-type controls, and
+  artist information panels; kept selection, search, and direct navigation in sync.
+- Balanced gallery card widths and cover-only layouts, added hover years with
+  a border opening, and restored startup totals, recent searches, and cover sizing.
+- Shared album headers, track tables, playback icons, and problem labels with
+  loose tracks; preserved version-tab identity and loaded tracks on first open.
+- Refined saved-loop controls and the combined waveform, retained regular seeking
+  while waveform data loads, and allowed failed waveform requests to recover.
+- Kept player controls and highlights stable during pointer interactions and
+  limited sticky appearance previews to the player while preserving saved colors.
+- Corrected soundtrack totals for tracks credited to multiple artists, including
+  the 14-track Mulan soundtrack, without merging equal-duration tracks.
+- Added account-scoped warning dismissal backed by Postgres. Library/Scan keeps
+  unresolved watcher health visible, and new warning events restore the alert.
+- Preserved track playback and text selection during double-click and drag actions,
+  and kept album identity and artwork fixed while scrolling modal tracks.
+- Expanded isolated real-application regression coverage. PR2 uses the owner's
+  hosted-review waiver; all required test suites must pass before publication.
+
 ## 0.9.43 - 2026-09-10
 
 - Preserved new watcher failures after recovery when the system clock reports

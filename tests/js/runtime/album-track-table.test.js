@@ -74,8 +74,8 @@ test('AlbumTrackTable reserves a headerless problem column immediately before Le
     }],
   });
 
-  assert.match(html, /--cdt-columns: 34px 36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
-  assert.match(html, /data-cdt-column="play" aria-hidden="true"/);
+  assert.match(html, /--cdt-columns: 36px minmax\(0, 1fr\) 20px minmax\(54px, auto\)/);
+  assert.doesNotMatch(html, /data-cdt-column="play"/);
   assert.match(html, /data-cdt-column="title"[^>]*>Track<\/div><div data-cdt-column="problem" data-cdt-action aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"/);
   assert.match(html, /data-cdt-column="title"[^>]*><span[^>]*>Problem Track<\/span><\/div><div role="cell" data-cdt-column="problem" data-cdt-action><button class="track-problem-link"/);
   assert.match(html, /data-cdt-column="problem" data-cdt-action><button[\s\S]*data-open-track-problematic="1"[\s\S]*aria-label="Open this track in Problematic Files">!<\/button><\/div><div role="cell" data-cdt-column="duration"/);
@@ -102,14 +102,14 @@ test('AlbumTrackTable Loose Tracks variant inserts File path before the existing
     totalLength: '4:05',
   });
 
-  assert.match(html, /--cdt-columns: 34px 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.match(html, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
   assert.match(html, /aria-label="Loose tracks — Non-album rarity"/);
   assert.match(html, /album-track-table__disc-heading[^>]*>Non-album rarity<\/h4>/);
-  assert.match(html, /data-cdt-column="play"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
+  assert.match(html, /data-cdt-column="number"[^>]*>#<[\s\S]*data-cdt-column="title"[^>]*>Track<[\s\S]*data-cdt-column="path"[^>]*>File path<[\s\S]*data-cdt-column="problem"[^>]*aria-hidden="true"[\s\S]*data-cdt-column="duration"[^>]*>Length/);
   assert.match(html, /class="album-track-table__secondary">Guest Artist<\/span>/);
   assert.match(html, /data-cdt-column="path"[^>]*><span class="album-track-table__path" title="Artist\/Rare\.flac">Artist\/Rare\.flac<\/span>/);
   assert.match(html, /data-cdt-column="problem" data-cdt-action><\/div><div role="cell" data-cdt-column="duration"/);
-  assert.match(html, /class="album-track-table__total">Total Length: 4:05<\/div>/);
+  assert.match(html, /class="album-track-table__total"><div class="album-track-table__aggregate-total">Total Length: 4:05<\/div><\/div>/);
 });
 
 test('AlbumTrackTable splits a main disc and bonus disc into separate tables without a CD 1 label', () => {
@@ -250,4 +250,41 @@ test('per-track Play hover uses the main player Play color without affecting dis
     css,
     /\.album-track-table__play:hover:not\(:disabled\)\s*\{[^}]*outline:\s*2px solid var\(--album-track-play-hover\)[^}]*outline-offset:\s*2px/s,
   );
+});
+
+test('track number shares one cell with its original animated play control', () => {
+  const row = loadTrackTable().buildAlbumTrackTableRow({path:'song',trackNumber:7});
+  assert.equal(row.cells.play, undefined);
+  assert.match(row.cells.number.content, /album-track-table__number">7</);
+  assert.match(row.cells.number.content, /play-track-button/);
+});
+
+test('row double-click clears its word highlight and starts playback without toggling playing tracks', () => {
+  const context = loadTrackTable();
+  let plays = 0;
+  let cleared = 0;
+  const textNode = {};
+  const selection = {anchorNode:textNode, focusNode:textNode, removeAllRanges(){cleared++;}};
+  const row = {
+    dataset:{trackPlaying:''},
+    ownerDocument:{getSelection:()=>selection},
+    contains:node=>node===textNode,
+    querySelector:()=>({click(){plays++;}}),
+  };
+  const event = {target:{closest:()=>null}, currentTarget:row, preventDefault(){}};
+  context.handleAlbumTrackRowDoubleClick(event);
+  assert.equal(plays,1);
+  assert.equal(cleared,1);
+  row.dataset.trackPlaying='true';
+  context.handleAlbumTrackRowDoubleClick(event);
+  assert.equal(plays,1);
+  assert.equal(cleared,2);
+  selection.anchorNode={};
+  context.handleAlbumTrackRowDoubleClick(event);
+  assert.equal(cleared,2);
+  row.dataset.trackPlaying='';
+  event.target.closest=()=>({});
+  context.handleAlbumTrackRowDoubleClick(event);
+  assert.equal(plays,1);
+  assert.equal(cleared,2);
 });

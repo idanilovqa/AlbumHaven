@@ -8,6 +8,7 @@
 .gallery-bar__summary { display: block; margin-top: 2px; color: var(--muted); font-size: .72rem; }
 .gallery-bar__actions { display: flex; align-items: center; gap: 8px; }
 .gallery-action-button { width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--app-control, var(--panel)); color: var(--text); cursor: pointer; }
+.gallery-view-choice:not(:disabled):not([aria-disabled='true']) { cursor: pointer; }
 .gallery-action-button svg, .gallery-view-choice svg, #gallery-sources-button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; }
 .gallery-action-button:hover, .gallery-action-button:focus-visible { border-color: var(--appearance-interaction-outline, var(--appearance-play)); outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play)); outline-offset: 1px; color: var(--appearance-interaction-outline, var(--appearance-play)); }
 .gallery-info-button { width: 30px; height: 30px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
@@ -162,3 +163,70 @@
 @media (max-width: 480px) {
   .artist-info-overlay__image { width: 132px; height: 132px; flex-basis: 132px; }
 }
+
+/* Approved GalleryCard hover year: bare luminous type and a real border gap. */
+@property --gallery-year-gap {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 0px;
+}
+.album-card[data-gallery-release-year] {
+  --gallery-year-gap: 0px;
+  overflow: visible;
+  transition: --gallery-year-gap 220ms ease, border-color 240ms ease, box-shadow 280ms ease, transform 240ms ease;
+}
+.album-card[data-gallery-release-year] > .cover { border-radius: 13px 13px 0 0; }
+.album-card[data-gallery-release-year][data-gallery-display="covers"] > .cover { border-radius: 13px; }
+
+.album-card[data-gallery-release-year]:hover { --gallery-year-gap: 34px; border-top-color: transparent; }
+.gallery-card__hover-year {
+  position: absolute;
+  z-index: 5;
+  top: 3px;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(.94);
+  color: #fff;
+  -webkit-text-stroke: 1px #000;
+  paint-order: stroke fill;
+  font-size: 18px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  line-height: 1;
+  white-space: nowrap;
+  background: none;
+  text-shadow: 0 1px 2px #000e, 0 0 2px #000b, 0 0 8px color-mix(in srgb, var(--appearance-player-accent, #55c7ff) 35%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms ease, transform 220ms ease;
+}
+.album-card:hover > .gallery-card__hover-year { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.album-card[data-gallery-release-year] .gallery-card__focus-title { border-radius: 0 0 13px 13px; }
+.album-card[data-gallery-release-year] > .album-body { border-radius: 0 0 13px 13px; }
+@media (prefers-reduced-motion: reduce) {
+  .album-card[data-gallery-release-year], .gallery-card__hover-year { transition: none; }
+}
+.album-card[data-gallery-release-year] > .cover::after { display: none; }
+.gallery-card__year-frame {
+  position: absolute; inset: 0; z-index: 2; box-sizing: border-box;
+  border: 5px solid #f8f4eaf0;
+  border-radius: inherit; pointer-events: none;
+  opacity: 0; transition: opacity 240ms ease;
+  clip-path: polygon(0 0, calc(50% - var(--gallery-year-gap)) 0, calc(50% - var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 12px, calc(50% + var(--gallery-year-gap)) 0, 100% 0, 100% 100%, 0 100%);
+  box-shadow: inset 0 0 1px #fffaf059, 0 0 26px 6px #f1e6cc2e;
+}
+.album-card:is(:hover, :focus-within) .gallery-card__year-frame { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .gallery-card__year-frame { transition: none; } }
+/* Blue break points travel with the opening gap; the frame stays pearl. */
+.gallery-card__hover-year::before, .gallery-card__hover-year::after {
+  content: '';
+  position: absolute;
+  top: calc(50% - 2px);
+  width: 6px;
+  height: 4px;
+  border-radius: 2px;
+  background: #def5ff;
+  box-shadow: 0 0 4px #55c7ff, 0 0 9px 2px #55c7ff99;
+}
+.gallery-card__hover-year::before { right: calc(50% + var(--gallery-year-gap)); }
+.gallery-card__hover-year::after { left: calc(50% + var(--gallery-year-gap)); }

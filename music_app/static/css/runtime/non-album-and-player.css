@@ -1677,7 +1677,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 body.modal-open { overflow: hidden; }
 .status-indicator.is-warning .status-check,
 .status-indicator.is-warning .status-refresh {
-  color: var(--star-on);
+  color: var(--success);
 }
 
 .utility-operational-problem {

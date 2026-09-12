@@ -787,3 +787,11 @@ test('Artist Family drag selection paints one state and never retoggles a crosse
   paint.visit('already-on', true);
   assert.deepEqual(toggled, ['first', 'second', 'first', 'second']);
 });
+
+test('partial root gallery summary uses known totals instead of preview album count', () => {
+  const context = loadRuntime();
+  const preview = {artistCount:7,albumCount:7};
+  assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals({initial_view_partial:true,artist_count:120,album_count:900},preview))), {artistCount:120,albumCount:900});
+  assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:false,artist_count:120,album_count:900},preview),preview);
+  assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:true,selected_artist:'Artist'},preview),preview);
+});

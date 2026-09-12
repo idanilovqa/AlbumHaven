@@ -111,7 +111,7 @@
 }
 
 /* Suppress selection paint outside the origin before the browser draws a drag. */
-:root.panel-text-selection-active body *:not(.panel-selection-origin):not(.panel-selection-origin *) {
+:root.panel-text-selection-active body *:not(.panel-selection-origin):not(.panel-selection-origin *):not(:has(.panel-selection-origin)) {
   -webkit-user-select: none !important;
   user-select: none !important;
 }
@@ -120,7 +120,10 @@
   -webkit-user-select: text;
   user-select: text;
 }
-:root.panel-text-selection-active *:not(.panel-selection-origin):not(.panel-selection-origin *)::selection {
+:root.panel-text-selection-active *:not(.panel-selection-origin):not(.panel-selection-origin *):not(:has(.panel-selection-origin))::selection {
   background: transparent;
   color: inherit;
 }
+
+:root.panel-text-selection-active .panel-selection-origin::selection,
+:root.panel-text-selection-active .panel-selection-origin *::selection { background: Highlight; color: HighlightText; }

@@ -1,4 +1,4 @@
-﻿function handleGalleryBootstrapClick(event) {
+function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -202,7 +202,10 @@
     if (Number.isInteger(index) && state.modalReleases[index]) {
       state.modalReleaseIndex = index;
       hideVersionContextMenu();
-      renderTrackModalRelease(state.modalReleases[index]);
+      openTrackModal(state.modalReleases[index], {
+        coverLightboxGallery: state.ui.trackModalCoverLightboxGallery !== false,
+        releaseSet: { releases: state.modalReleases.slice(), selectedIndex: index },
+      });
     }
     return;
   }

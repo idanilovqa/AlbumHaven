@@ -155,7 +155,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/ddtRemixesRenderer.spec.js",
-              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five Ремиксы rerenders",
+              "case": "FTC-TAGS-015 preserves the surrounding DDT gallery through five \u0420\u0435\u043c\u0438\u043a\u0441\u044b rerenders",
               "area": "tag-edit"
             },
             {
@@ -289,6 +289,27 @@
               "project": "functional",
               "test": "tests/e2e/specs/gallerySoundtrackDuration.spec.js",
               "case": "FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
+              "case": "FTC-GALLERY-031 preserves startup totals, search suggestions, covers and hover-year interactions",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
+              "case": "FTC-GALLERY-032 hydrates version tracks and preserves table playback, selection and fixed modal identity",
+              "area": "album-details"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/galleryInteractionRegressions.spec.js",
+              "case": "FTC-GALLERY-033 acknowledges warning alerts without hiding Scan health and resurfaces new warnings",
               "area": "gallery-search"
             }
           ]

@@ -4152,3 +4152,21 @@ test('keyboard opening uses the same positioned search popup path as focus', () 
   assert.equal(opens, 1);
   assert.equal(context.state.ui.recentSearchActiveIndex, 0);
 });
+
+
+test('version selection hydrates the selected preview through the modal opener', () => {
+  const {context} = createContext();
+  const version = {key:'anniversary-preview',tracks:[],track_count:17};
+  context.state.modalReleases = [{key:'original'},version];
+  let opened;
+  context.openTrackModal = (album, options) => { opened = {album,options}; };
+  context.handleGalleryBootstrapClick({
+    target:{closest: selector => selector === '[data-track-tab-index]' ? {getAttribute:()=> '1'} : null},
+    preventDefault() {},
+  });
+  assert.equal(opened.album, version);
+  assert.equal(context.state.modalReleaseIndex, 1);
+  assert.equal(opened.options.coverLightboxGallery, true);
+  assert.equal(opened.options.releaseSet.selectedIndex, 1);
+  assert.equal(opened.options.releaseSet.releases[1], version);
+});

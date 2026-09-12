@@ -418,8 +418,8 @@ function updateGalleryMainChrome() {
     scrollTop: scroll.scrollTop,
     galleryBarBottom: bar.offsetHeight + 12,
     primaryArtist,
-    artistCount: model.totals.artistCount,
-    albumCount: model.totals.albumCount,
+    artistCount: resolveGallerySummaryTotals(state.view, model.totals).artistCount,
+    albumCount: resolveGallerySummaryTotals(state.view, model.totals).albumCount,
     groups: sections,
   });
   const name = bar.querySelector('[data-gallery-context-name]');

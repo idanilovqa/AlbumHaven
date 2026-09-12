@@ -36,8 +36,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
-      number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -62,7 +61,6 @@ function buildAlbumTrackTableHtml(config = {}) {
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
     const columnsConfig = [
-      { key: 'play', label: 'Play', header: 'absent' },
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
@@ -74,8 +72,8 @@ function buildAlbumTrackTableHtml(config = {}) {
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: showPath
-        ? '34px 36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
@@ -107,4 +105,17 @@ function triggerAlbumTrackPlayActivation(button) {
   button.addEventListener?.('animationend', () => {
     button.classList.remove('album-track-table__play--activating');
   }, { once: true });
+}
+
+function handleAlbumTrackRowDoubleClick(event) {
+  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
+  const row = event.currentTarget;
+  event.preventDefault();
+  // Double-click is playback; ordinary drag selection remains native and copyable.
+  const selection = row.ownerDocument.getSelection();
+  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) {
+    selection.removeAllRanges();
+  }
+  if (row.dataset.trackPlaying === 'true') return;
+  row.querySelector('.play-track-button')?.click();
 }

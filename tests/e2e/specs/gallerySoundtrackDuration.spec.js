@@ -6,7 +6,7 @@ const GALLERY_DURATION = '56m 18s';
 
 // Fixture: 13 x 240s + 258s = 3378s, eight credited artists plus Various Artists.
 // Equal durations must remain separate tracks; SUM(DISTINCT duration) is invalid.
-test('FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits', async ({
+test('FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits', { tag: '@area:gallery-search' }, async ({
   page, galleryActions, searchToolbarActions, navigationPanelActions,
   trackModalActions, stepLogger,
 }) => {

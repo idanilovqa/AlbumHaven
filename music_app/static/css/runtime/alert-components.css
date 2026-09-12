@@ -169,3 +169,9 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   .alert-label,
   .on-page-alert__actions .ui-button { transition: none; }
 }
+
+#library-warning-button { color: var(--appearance-warning, #f59e0b); }
+#library-warning-button[hidden], #library-scan-warning[hidden] { display: none; }
+.library-warning-panel { width: min(440px, calc(100vw - 32px)); padding: 0; }
+.library-warning-panel .on-page-alert { margin: 0; }
+#library-scan-warning { max-width: 620px; margin: 16px auto; text-align: left; }

@@ -2898,7 +2898,7 @@ function ensureStatusContextMenu() {
   menu.id = 'status-context-menu';
   menu.className = 'status-context-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button>';
+  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button><button type="button" class="status-context-menu-item" data-status-role="scan-page" data-status-action="go-to-scan-page">Open Library/Scan</button>';
   document.body.appendChild(menu);
   return menu;
 }
@@ -2945,6 +2945,8 @@ function syncStatusContextMenu() {
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
     syncStatusContextButtonPresentation(primaryButton, primaryAction);
   }
+  const scanPageButton = menu.querySelector('[data-status-role="scan-page"]');
+  if (scanPageButton) scanPageButton.hidden = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress || state.status?.covers_in_progress);
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
@@ -3014,6 +3016,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   syncStatusContextMenu();
+  if (typeof renderLibraryWarning === 'function') renderLibraryWarning(normalizedStatus);
   const indicator = document.getElementById('scan-indicator');
   if (!indicator) return;
   ensureStatusIndicatorHoverSnapshotBehavior(indicator);
@@ -3038,6 +3041,77 @@ function updateStatusIndicator(data) {
 }
 
 // END js/runtime/status-ui-helpers.js
+
+// BEGIN js/runtime/library-warning-ui.js
+
+function libraryWarningPresentation(health = {}, dismissedToken = '') {
+  const warning = health.state === 'warning';
+  const token = String(health.warning_token || '');
+  return { warning, token, showIcon: warning && !(health.dismissed || (token && token === dismissedToken)) };
+}
+
+function renderLibraryWarning(data = {}) {
+  const health = data.watcher_health || {};
+  const model = libraryWarningPresentation(health, state.ui.dismissedLibraryWarningToken);
+  const trigger = document.getElementById('library-warning-button');
+  const panel = document.getElementById('library-warning-panel');
+  const scanNotice = document.getElementById('library-scan-warning');
+  if (!trigger || !panel || !scanNotice) return;
+  trigger.hidden = !model.showIcon;
+  if (!trigger.innerHTML) trigger.innerHTML = buildAlertIconHtml('warning');
+  const message = 'Some library changes may have been missed. Run a full rescan to reconcile the library. Dismissing this alert does not resolve the warning.';
+  const notice = buildOnPageAlertHtml({severity:'warning',title:'Library watcher needs attention',message,
+    actionsHtml: (health.problems || []).some(p => p.allowed_actions?.['library.refresh'] === true)
+      ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
+  scanNotice.hidden = !model.warning;
+  if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
+  if (panel.dataset.warningToken !== model.token || !panel.innerHTML) {
+    panel.dataset.warningToken = model.token;
+    panel.innerHTML = buildOnPageAlertHtml({severity:'warning',title:'Library watcher needs attention',message,
+      actionsHtml: ButtonComponent.renderButton({label:'Open Library/Scan',attributes:{'data-library-warning-scan':'1'}})
+        + ButtonComponent.renderButton({label:'Dismiss',attributes:{'data-dismiss-library-warning':'1'}})});
+  }
+  if (!model.showIcon && galleryMainSurfaceController?.current?.()?.key === 'library-warning') {
+    closeGalleryMainSurface(false);
+  }
+  if (!model.warning) state.ui.dismissedLibraryWarningToken = '';
+}
+
+async function dismissLibraryWarning(button) {
+  const panel = document.getElementById('library-warning-panel');
+  const token = panel?.dataset.warningToken || '';
+  if (!token || button.disabled) return;
+  button.disabled = true;
+  try {
+    const response = await fetch('/account/library-warning/dismiss', {method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({token})});
+    if (!response.ok) throw new Error(response.status === 409
+      ? 'The library warning changed. Please review the latest warning.' : 'Unable to dismiss the warning. Please try again.');
+    state.ui.dismissedLibraryWarningToken = token;
+    closeGalleryMainSurface(false);
+    renderLibraryWarning(state.status);
+    document.getElementById('scan-indicator')?.focus();
+  } catch (error) {
+    showRepairAlert(error.message, 'error', null);
+  } finally { button.disabled = false; }
+}
+
+function handleLibraryWarningClick(event) {
+  const trigger = event.target.closest?.('#library-warning-button');
+  if (trigger) {
+    event.preventDefault();
+    openGalleryMainSurface('library-warning', trigger, document.getElementById('library-warning-panel'));
+    return true;
+  }
+  const dismiss = event.target.closest?.('[data-dismiss-library-warning]');
+  if (dismiss) { event.preventDefault(); void dismissLibraryWarning(dismiss); return true; }
+  if (event.target.closest?.('[data-library-warning-scan]')) {
+    event.preventDefault(); closeGalleryMainSurface(false); openScanPage(); return true;
+  }
+  return false;
+}
+
+// END js/runtime/library-warning-ui.js
 
 // BEGIN js/runtime/notification-ui-helpers.js
 
@@ -3679,18 +3753,29 @@ function resolveGalleryBarContext(config = {}) {
     : summaryContext;
 }
 
+function resolveGallerySummaryTotals(view, mountedTotals) {
+  if (!view.initial_view_partial || view.selected_artist || view.query) return mountedTotals;
+  return {
+    artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : mountedTotals.artistCount,
+    albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : mountedTotals.albumCount,
+  };
+}
+
 // END js/runtime/gallery-main-state.js
 
 // BEGIN js/runtime/gallery-card-component.js
 
 function buildGalleryCardHtml(config = {}) {
   const displayMode = String(config.displayMode || 'cards') === 'covers' ? 'covers' : 'cards';
+  const releaseYear = displayMode === 'covers' ? String(config.year ?? '').trim() : '';
   const openAttributes = `data-open-tracklist="1" data-album-key="${escapeHtml(config.albumKey || '')}" data-album-version-key="${escapeHtml(config.albumVersionKey || '')}" data-album="${escapeHtml(config.albumFallback || '')}"`;
   return `
-    <section class="album-card" data-gallery-display="${displayMode}" data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
+    <section class="album-card" data-gallery-display="${displayMode}"${releaseYear ? ` data-gallery-release-year="${escapeHtml(releaseYear)}"` : ''} data-gallery-card-key="${escapeHtml(config.identity || '')}" data-gallery-card-render-key="${escapeHtml(config.renderKey || '')}">
       <button class="album-card__artbox-trigger album-open-trigger cover" type="button" ${openAttributes} aria-label="${escapeHtml(config.openLabel || `Open ${config.title || 'album'} tracklist`)}">
         ${String(config.artboxHtml || '')}
+        ${releaseYear ? '<span class="gallery-card__year-frame" aria-hidden="true"></span>' : ''}
       </button>
+      ${releaseYear ? `<span class="gallery-card__hover-year" aria-hidden="true">${escapeHtml(releaseYear)}</span>` : ''}
       ${displayMode === 'covers'
         ? `<span class="gallery-card__focus-title">${escapeHtml(config.title || '')}</span>`
         : buildGalleryCardInfoHtml({ ...config, openAttributes })}
@@ -4392,7 +4477,11 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
+  if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
+    virtualGrid.onResize();
+  }
   setDomPropertyIfChanged(backButton, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(browseButton, 'hidden', !canBrowseScanned);
@@ -4606,7 +4695,7 @@ function installPanelSelectionBoundary() {
   document.addEventListener('pointerdown', event => {
     release();
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
-    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface') : null;
+    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
     if (origin) {
       origin.classList.add('panel-selection-origin');
       document.documentElement.classList.add('panel-text-selection-active');
@@ -5055,8 +5144,8 @@ function updateGalleryMainChrome() {
     scrollTop: scroll.scrollTop,
     galleryBarBottom: bar.offsetHeight + 12,
     primaryArtist,
-    artistCount: model.totals.artistCount,
-    albumCount: model.totals.albumCount,
+    artistCount: resolveGallerySummaryTotals(state.view, model.totals).artistCount,
+    albumCount: resolveGallerySummaryTotals(state.view, model.totals).albumCount,
     groups: sections,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
@@ -10471,7 +10560,17 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
-  const releaseSet = getAlbumReleaseSet(albumWithPlaybackContext);
+  // Edition hydration must not rebuild the tabs around a different base name.
+  const preserved = options.releaseSet;
+  const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
+  const releaseSet = preservedAlbum
+    && getAlbumRequestKey(preservedAlbum) === getAlbumRequestKey(albumWithPlaybackContext)
+    ? {
+      releases: preserved.releases.map((release, index) => index === preserved.selectedIndex
+        ? { ...albumWithPlaybackContext, tabLabel: release.tabLabel } : release),
+      selectedIndex: preserved.selectedIndex,
+    }
+    : getAlbumReleaseSet(albumWithPlaybackContext);
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = releaseSet.selectedIndex;
   hideVersionContextMenu();
@@ -14239,8 +14338,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
-      number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
@@ -14265,7 +14363,6 @@ function buildAlbumTrackTableHtml(config = {}) {
       || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
     );
     const columnsConfig = [
-      { key: 'play', label: 'Play', header: 'absent' },
       { key: 'number', label: '#' },
       { key: 'title', label: 'Track' },
       ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
@@ -14277,8 +14374,8 @@ function buildAlbumTrackTableHtml(config = {}) {
       ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
       columns: showPath
-        ? '34px 36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
-        : '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
+        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
       columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
@@ -14310,6 +14407,19 @@ function triggerAlbumTrackPlayActivation(button) {
   button.addEventListener?.('animationend', () => {
     button.classList.remove('album-track-table__play--activating');
   }, { once: true });
+}
+
+function handleAlbumTrackRowDoubleClick(event) {
+  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
+  const row = event.currentTarget;
+  event.preventDefault();
+  // Double-click is playback; ordinary drag selection remains native and copyable.
+  const selection = row.ownerDocument.getSelection();
+  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) {
+    selection.removeAllRanges();
+  }
+  if (row.dataset.trackPlaying === 'true') return;
+  row.querySelector('.play-track-button')?.click();
 }
 
 // END js/runtime/album-track-table.js
@@ -31737,7 +31847,13 @@ function attachSharedPlayer() {
   document.querySelectorAll('.play-track-button').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
+    const trackRow = btn.closest?.('.album-track-table__row');
+    if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
+      trackRow.dataset.doubleClickBound = '1';
+      trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
+    }
+    btn.addEventListener('click', (event) => {
+      const focusTimeline = event?.isTrusted !== false;
       const src = btn.getAttribute('data-src');
       if (!src) return;
       if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
@@ -31748,7 +31864,7 @@ function attachSharedPlayer() {
       const playback = getPlayerPlaybackSnapshot();
       const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
       if (isLoadedCurrentTrack) {
-        togglePlayerPlayback();
+        togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
         updatePlayerUi();
         return;
       }
@@ -31777,7 +31893,7 @@ function attachSharedPlayer() {
           console.warn('[AlbumHaven][Playback] Track selection failed.', error);
         });
       }
-      focusPlayerTimeline();
+      if (focusTimeline) focusPlayerTimeline();
     });
   });
 }
@@ -33386,7 +33502,7 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
 
 // BEGIN js/runtime/bootstrap-gallery-event-handlers.js
 
-﻿function handleGalleryBootstrapClick(event) {
+function handleGalleryBootstrapClick(event) {
   if (typeof handleGalleryMainClick === 'function' && handleGalleryMainClick(event)) return;
   const removeMissingAlbumButton = event.target.closest('[data-remove-missing-album="1"]');
   if (removeMissingAlbumButton) {
@@ -33590,7 +33706,10 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
     if (Number.isInteger(index) && state.modalReleases[index]) {
       state.modalReleaseIndex = index;
       hideVersionContextMenu();
-      renderTrackModalRelease(state.modalReleases[index]);
+      openTrackModal(state.modalReleases[index], {
+        coverLightboxGallery: state.ui.trackModalCoverLightboxGallery !== false,
+        releaseSet: { releases: state.modalReleases.slice(), selectedIndex: index },
+      });
     }
     return;
   }
@@ -35279,6 +35398,7 @@ function handleGalleryBootstrapPopState() {
 // Keep this file as a thin registration seam; feature logic belongs in
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
+  if (handleLibraryWarningClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();

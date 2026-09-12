@@ -50,6 +50,7 @@ const expectedRuntimeOrder = [
   'markup-format-helpers.js',
   'loader-status-helpers.js',
   'status-ui-helpers.js',
+  'library-warning-ui.js',
   'notification-ui-helpers.js',
   'render-markup-helpers.js',
   'alert-components.js',

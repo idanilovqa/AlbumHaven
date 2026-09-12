@@ -1323,3 +1323,21 @@ function loadHelpers(origin = 'http://localhost:5000') {
   });
   assert.equal(html.includes('artist-link active'), false);
 }
+
+// Dismissed health warnings must remain reachable from the idle Library menu.
+{
+  const context = loadHelpers();
+  const scanPage = {hidden: true};
+  const menu = {querySelector: selector => selector === '[data-status-role="scan-page"]' ? scanPage : null};
+  context.ensureStatusContextMenu = () => menu;
+  for (const status of [{}, {watcher_health: {state: 'warning', dismissed: true}}]) {
+    context.state.status = status;
+    context.syncStatusContextMenu();
+    assert.equal(scanPage.hidden, false);
+  }
+  for (const busy of ['scan_in_progress', 'relations_in_progress', 'covers_in_progress']) {
+    context.state.status = {[busy]: true};
+    context.syncStatusContextMenu();
+    assert.equal(scanPage.hidden, true);
+  }
+}

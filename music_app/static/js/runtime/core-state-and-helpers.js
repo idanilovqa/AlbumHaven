@@ -571,7 +571,11 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
+  if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {
+    virtualGrid.onResize();
+  }
   setDomPropertyIfChanged(backButton, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(phaseGuide, 'hidden', !scanPageVisible);
   setDomPropertyIfChanged(browseButton, 'hidden', !canBrowseScanned);

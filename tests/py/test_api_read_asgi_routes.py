@@ -290,7 +290,7 @@ def test_asgi_status_projects_watcher_health_outside_lock_and_event_loop(
     controller.start()
 
     async def exercise():
-        request = SimpleNamespace(app=asgi_app)
+        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace())
         status_task = asyncio.create_task(asgi_read_routes.status(request))
         await asyncio.sleep(0)
         heartbeat_ran.set()

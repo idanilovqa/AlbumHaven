@@ -162,3 +162,13 @@
   box-shadow: inset 0 0 26px color-mix(in srgb, var(--album-track-accent) 18%, transparent),
     0 0 18px color-mix(in srgb, var(--album-track-accent) 28%, transparent);
 }
+
+.album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
+.album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
+.album-track-table__number { font-variant-numeric: tabular-nums; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__play { opacity: 1; }
+.album-track-table__title, .album-track-table__path { user-select: text; }
+.album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
+
+.album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }

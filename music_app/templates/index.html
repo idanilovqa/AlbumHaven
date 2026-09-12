@@ -78,6 +78,8 @@
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
           {% endcall %}
+          {% call action_button('Library warning', id='library-warning-button', title='Library warning', hidden=true, attributes={'aria-controls': 'library-warning-panel', 'aria-expanded': 'false'}) %}{% endcall %}
+          <div class="gallery-anchored-menu library-warning-panel" id="library-warning-panel" role="group" aria-label="Library warning" hidden></div>
           {% call action_button('Sources', id='gallery-sources-button', title='Sources', attributes={'data-gallery-sources-anchor': '1', 'aria-controls': 'gallery-sources-menu', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>{% endcall %}
           <div class="gallery-anchored-menu" id="gallery-sources-menu" data-anchored-surface="sources" role="group" aria-label="Sources" hidden>
             <span class="gallery-menu-title">Sources</span>
@@ -133,7 +135,7 @@
       </div>
 
       <section class="gallery-bar" data-gallery-bar aria-label="Gallery controls">
-        <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>Gallery</span></div><span class="gallery-bar__summary" data-gallery-context-summary>0 artists · 0 albums</span></div>
+        <div class="gallery-bar__context"><div class="gallery-bar__title"><span data-gallery-context-name>Gallery</span></div><span class="gallery-bar__summary" data-gallery-context-summary>{{ bootstrap_payload.initial_view.artist_count | default(0) }} artists · {{ bootstrap_payload.initial_view.album_count | default(0) }} albums</span></div>
         <div class="gallery-bar__actions">
           <button class="gallery-action-button" type="button" data-gallery-bar-action="artist-family" aria-label="Artist Family" aria-controls="artist-family-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 19c.5-3.5 2.2-5.2 5-5.2s4.5 1.7 5 5.2M14 14.5c3.5-.8 5.8.8 6.5 4.5"/></svg></button>
           <div class="gallery-view-cluster unfolding-action-button" id="gallery-view-cluster-options" data-gallery-view-cluster>
@@ -168,6 +170,7 @@
           Preparing scan...
           {% endif %}
         </div>
+        <div id="library-scan-warning" hidden></div>
         <div class="library-loader-progress" id="library-loader-progress"></div>
         <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
           <li><strong>Discovering music files</strong><span>Enumerates candidate files in your local library.</span></li>

@@ -824,16 +824,16 @@ html .cover-lookup-drawer {
   box-shadow: inset var(--navigation-tree-selection-accent-width, 3px) 0 0 var(--navigation-tree-selection-accent-color, var(--accent)) !important;
 }
 /* A defined transparent starting edge prevents currentColor flashing on hover. */
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button) {
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button) {
   outline: 1px solid transparent !important;
   outline-offset: -1px !important;
   transition: background-color 150ms ease !important;
 }
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button):hover:not(:disabled):not([aria-disabled="true"]) {
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button):hover:not(:disabled):not([aria-disabled="true"]) {
   outline-color: color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
   box-shadow: none !important;
 }
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .recent-search-option, .utility-problem-filter-option, .utility-loop-speed-menu button):is(:focus, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-active):not(:disabled):not([aria-disabled="true"]) {
+:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button):is(:focus, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-active):not(:disabled):not([aria-disabled="true"]) {
   outline-color: color-mix(in srgb, var(--text, #eee) 50%, var(--panel, #171717)) !important;
   box-shadow: none !important;
 }
@@ -867,4 +867,13 @@ html .cover-lookup-drawer {
 }
 @media (max-width: 700px) {
   .player-preview-dock::before { inset: -14px -14px 0; }
+}
+
+/* Search suggestions use neutral interaction colors, independent of accent. */
+:root .recent-search-option:is(:hover, :focus, [aria-selected="true"], .is-active):not(:disabled) {
+  color: var(--appearance-ink, var(--text)) !important;
+  background: color-mix(in srgb, var(--appearance-ink, var(--text)) 8%, var(--panel)) !important;
+  border-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
 }

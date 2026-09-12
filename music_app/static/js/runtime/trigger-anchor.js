@@ -97,7 +97,7 @@ function installPanelSelectionBoundary() {
   document.addEventListener('pointerdown', event => {
     release();
     gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
-    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface') : null;
+    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
     if (origin) {
       origin.classList.add('panel-selection-origin');
       document.documentElement.classList.add('panel-text-selection-active');

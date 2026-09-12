@@ -2232,3 +2232,18 @@ run().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+
+
+test('switching a preview edition hydrates tracks without reordering or relabeling the open release tabs', async () => {
+  const original = {key:'original', name:'Original album', tabLabel:'Original - 1998', tracks:[{path:'original-track'}]};
+  const preview = {key:'edition', name:'Different edition name', preview_only:true, tracks:[], tabLabel:'Anniversary - 2018'};
+  const hydrated = {...preview, preview_only:false, tracks:[{path:'edition-track'}]};
+  const {context} = loadHelper({initialAlbums:[original, preview], fetchedAlbum:hydrated});
+  context.state.modalReleases = [original, preview];
+  context.openTrackModal(preview, {releaseSet:{releases:[original, preview], selectedIndex:1}});
+  await flushMicrotasks();
+  assert.deepEqual(Array.from(context.state.modalReleases, release=>release.key), ['original','edition']);
+  assert.deepEqual(Array.from(context.state.modalReleases, release=>release.tabLabel), ['Original - 1998','Anniversary - 2018']);
+  assert.equal(context.state.modalReleaseIndex, 1);
+  assert.equal(context.renderTrackModalReleaseAlbums.at(-1).tracks[0].path, 'edition-track');
+});

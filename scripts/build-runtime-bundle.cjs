@@ -19,6 +19,7 @@ const RUNTIME_SCRIPT_PATHS = [
   'js/runtime/markup-format-helpers.js',
   'js/runtime/loader-status-helpers.js',
   'js/runtime/status-ui-helpers.js',
+  'js/runtime/library-warning-ui.js',
   'js/runtime/notification-ui-helpers.js',
   'js/runtime/render-markup-helpers.js',
   'js/runtime/alert-components.js',

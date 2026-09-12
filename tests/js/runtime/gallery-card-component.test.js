@@ -94,7 +94,7 @@ test('No info GalleryCard renders cover plus a title revealed by hover or keyboa
   assert.match(html, /class="[^"]*gallery-card__focus-title[^"]*"/);
   assert.match(html, />Tender Buttons</);
   assert.doesNotMatch(html, /Broadcast/);
-  assert.doesNotMatch(html, />2005</);
+  assert.match(html, /class="gallery-card__hover-year"[^>]*>2005<\/span>/);
   assert.doesNotMatch(html, /14 tracks/);
   assert.doesNotMatch(html, />40m</);
 });
@@ -109,4 +109,20 @@ test('the live virtual gallery delegates complete card markup to GalleryCard', (
   assert.match(source, /buildSmallAlertHtml\(/);
   assert.match(source, /Album not found/);
   assert.doesNotMatch(source, /Album deleted/);
+});
+
+test('hover year omits unknown values and safely renders supplied release years', () => {
+  const context = loadGalleryCard();
+  for (const year of [undefined, null, '', '   ']) {
+    assert.doesNotMatch(context.buildGalleryCardHtml({ year, displayMode: 'covers' }), /gallery-card__hover-year/);
+  }
+  for (const displayMode of ['covers']) {
+    const html = context.buildGalleryCardHtml({ year: '2005', displayMode });
+    assert.match(html, /class="gallery-card__hover-year"[^>]*>2005<\/span>/);
+    assert.match(html, /data-gallery-release-year="2005"/);
+  }
+  assert.doesNotMatch(context.buildGalleryCardHtml({ year: '<img src=x>', displayMode: 'covers' }), /<img src=x>/);
+  const cards = context.buildGalleryCardHtml({ year: '2005', displayMode: 'cards' });
+  assert.doesNotMatch(cards, /gallery-card__hover-year|gallery-card__year-frame|data-gallery-release-year/);
+  assert.match(cards, />2005<\/div>/);
 });

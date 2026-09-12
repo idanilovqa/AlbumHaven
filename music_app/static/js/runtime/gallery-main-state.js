@@ -191,3 +191,11 @@ function resolveGalleryBarContext(config = {}) {
     ? { kind: 'artist', artist: current.artist, albumCount: current.albumCount }
     : summaryContext;
 }
+
+function resolveGallerySummaryTotals(view, mountedTotals) {
+  if (!view.initial_view_partial || view.selected_artist || view.query) return mountedTotals;
+  return {
+    artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : mountedTotals.artistCount,
+    albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : mountedTotals.albumCount,
+  };
+}

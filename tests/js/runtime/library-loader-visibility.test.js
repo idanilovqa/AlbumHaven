@@ -836,3 +836,16 @@ test('shouldShowLibraryLoader stays visible for a sidebar-only root preview whil
     awaitingInitialDataRefresh: true,
   }), true);
 });
+
+test('revealing the gallery recalculates columns after a hidden search render', () => {
+  const {context, scroll} = createLoaderRenderFixture();
+  let resized = 0;
+  context.virtualGrid = {onResize(){resized++;}};
+  scroll.hidden = true;
+  scroll.clientWidth = 1600;
+  context.renderLibraryLoader({});
+  assert.equal(scroll.hidden, false);
+  assert.equal(resized, 1);
+  context.renderLibraryLoader({});
+  assert.equal(resized, 1);
+});

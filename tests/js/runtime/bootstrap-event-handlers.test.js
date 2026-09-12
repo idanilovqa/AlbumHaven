@@ -16,6 +16,7 @@ function createContext({
   const listeners = {};
   const calls = [];
   const context = {
+    handleLibraryWarningClick() { return false; },
     document: {
       addEventListener(name, callback) {
         listeners[name] = callback;

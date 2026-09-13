@@ -10,7 +10,7 @@ const defaults = () => ({
   main_surface_color: null, panel_background_color: null,
   palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked',
   album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled',
-  alert_family: 'ember',
+  alert_family: 'ember', loop_control_style: 'capsule',
 });
 const green = () => ({ background: '#112820', fill: '#79B390', edge: '#DCEBE3' });
 const steel = () => ({ background: '#14283B', fill: '#8BAED1', edge: '#B9CADD' });
@@ -63,9 +63,9 @@ test('light palettes render the notification glyph with contrast-safe palette in
   assert.match(appearanceCss, /:root\[data-appearance-mode='light'\] \.cover-lookup-drawer-glyph::before\s*\{[^}]*background:\s*var\(--appearance-ink\)[^}]*mask-image:\s*url\('\/static\/images\/cover-lookup-notification-icon-offwhite\.png'\)/s);
 });
 
-test('the approved eleven palettes expose three panel companions and coordinated player colors', () => {
+test('the approved twelve palettes expose three panel companions and coordinated player colors', () => {
   assert.deepEqual(runtime().palettes.map(palette => palette.id), [
-    'steelblue', 'navy', 'powderblue', 'graphite', 'slate', 'midnight',
+    'steelblue', 'navy', 'harbor-mint', 'powderblue', 'graphite', 'slate', 'midnight',
     'black', 'blackgray', 'paper', 'silver', 'coollight',
   ]);
   for (const palette of runtime().palettes) {
@@ -87,6 +87,7 @@ test('every Main elements palette provides a coordinated selection accent', () =
   assert.deepEqual(Object.fromEntries(runtime().palettes.map(palette => [palette.id, palette.selectionAccent])), {
     steelblue: '#8BAED1',
     navy: '#91B4E3',
+    'harbor-mint': '#52D7AA',
     powderblue: '#4F7398',
     graphite: '#8A96A3',
     slate: '#7896B4',
@@ -282,12 +283,12 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('automatic'),
     player_style_override: null,
-  }, themeEffective), themeEffective.tokens.accent);
+  }, themeEffective), themeEffective.tokens.play);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('automatic'),
     player_style_override: customPlayer,
-  }, playerEffective), customPlayer.controls.border);
+  }, playerEffective), playerEffective.tokens.play);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('theme'),
@@ -297,7 +298,7 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('player'),
     player_style_override: customPlayer,
-  }, playerEffective), customPlayer.controls.border);
+  }, playerEffective), playerEffective.tokens.play);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('custom'),
@@ -325,7 +326,47 @@ test('saved theme application publishes the resolved player-aware interaction ou
     player_style_override: customPlayer,
   }, root);
 
-  assert.equal(properties.get('--appearance-interaction-outline'), customPlayer.controls.border);
+  assert.equal(properties.get('--appearance-interaction-outline'), runtime().resolveAppearance({
+    ...defaults(), palette_id: 'steelblue', player_override: customPlayer,
+  }).tokens.play);
+});
+
+test('Harbor Mint resolves the approved surfaces, mint controls and player for every companion', () => {
+  const api = runtime();
+  const palette = api.palettes.find(item => item.id === 'harbor-mint');
+  assert.ok(palette, 'Harbor Mint must be selectable');
+  assert.equal(palette.name, 'Harbor Mint');
+  const companions = ['#0E1B29', '#091522', '#1D3445'];
+  companions.forEach((panel, panel_index) => {
+    const effective = api.resolveAppearance({ ...defaults(), palette_id: 'harbor-mint', panel_index });
+    assert.equal(effective.main, '#111E2C');
+    assert.equal(effective.panel, panel);
+    for (const [role, color] of Object.entries({
+      ink: '#E6EDF5', muted: '#9AAFC2', control: '#203043',
+      accent: '#52D7AA', play: '#52D7AA', player: '#0E1B29',
+    })) assert.equal(effective.tokens[role], color, role);
+    assert.deepEqual(effective.player, { background: '#0E1B29', fill: '#52D7AA', edge: '#9AAFC2' });
+  });
+});
+
+test('Harbor Mint saves its companion while retaining custom player colors through reset', async () => {
+  const { controller, requests, applied } = setup({ initial: { ...defaults(), player_override: green() } });
+  controller.setPalette('harbor-mint');
+  controller.setPanelIndex(2);
+  const expected = { ...defaults(), palette_id: 'harbor-mint', panel_index: 2, player_override: green() };
+  assert.deepEqual(applied, []);
+  assert.deepEqual(runtime().resolveAppearance(controller.getState().draft).player, green());
+  assert.equal(await controller.save(), true);
+  assert.deepEqual(requests, [{ method: 'PUT', payload: expected }]);
+  assert.deepEqual(applied, [expected]);
+  controller.reset();
+  assert.deepEqual(controller.getState().draft, { ...defaults(), player_override: green() });
+  controller.cancel();
+  assert.deepEqual(controller.getState().draft, expected);
+  controller.setPlayerMode('palette');
+  assert.deepEqual(runtime().resolveAppearance(controller.getState().draft).player, {
+    background: '#0E1B29', fill: '#52D7AA', edge: '#9AAFC2',
+  });
 });
 
 

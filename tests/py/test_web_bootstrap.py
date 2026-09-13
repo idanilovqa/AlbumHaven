@@ -1520,6 +1520,10 @@ def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi
         def load_loops(self):
             return list(persisted_loops)
 
+        def load_scoped_loops(self, **scope):
+            assert scope == {"account_id": 1, "library_id": 1}
+            return list(persisted_loops)
+
         def save_loops(self, loops):
             persisted_loops[:] = [dict(item) for item in loops]
 
@@ -1532,11 +1536,11 @@ def test_asgi_track_and_loop_media_routes_preserve_private_file_policy(app, asgi
     track_path.parent.mkdir(parents=True, exist_ok=True)
     track_path.write_bytes(b"track-bytes")
 
-    loop_path = (loops_dir(app.config) / "loop-1.mp3").resolve()
+    loop_path = (loops_dir(app.config, account_id=1, library_id=1) / "loop-1.mp3").resolve()
     loop_path.write_bytes(b"loop-bytes")
     save_loops(app.config, [{"id": "loop-1", "path": str(loop_path)}])
 
-    preview_path = (loop_previews_dir(app.config) / "loop-1_pplus1.mp3").resolve()
+    preview_path = (loop_previews_dir(app.config, account_id=1, library_id=1) / "loop-1_pplus1.mp3").resolve()
     preview_path.write_bytes(b"preview-bytes")
 
     track_status, _track_headers, track_body = run_asgi_request(

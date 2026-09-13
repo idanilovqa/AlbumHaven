@@ -620,7 +620,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
-    if (String(state.ui.activeViewRequestUrl || '') === apiUrl) {
+    if (
+      String(state.ui.activeViewRequestUrl || '') === apiUrl
+      && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
+        === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+    ) {
       const activeController = state.ui.activeViewRequestController;
       if (
         restartIfSameUrl
@@ -668,8 +672,10 @@ async function fetchAndRender(url, push = true, options = {}) {
   let viewRendered = false;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
+  const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
+  state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -712,6 +718,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       payloadTier: String(data?.payload_tier || ''),
     });
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+      return false;
+    }
+    // A response dispatched before a tag edit must not replace its optimistic view.
+    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -899,6 +909,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (state.ui.activeViewRequestId === requestId) {
       state.ui.activeViewRequestController = null;
+      state.ui.activeViewRequestTagEditMutationRevision = null;
       state.ui.activeViewRequestUrl = '';
       state.ui.activeViewRequestPush = false;
       state.ui.activeViewRequestStartupRefresh = false;
@@ -1451,33 +1462,6 @@ async function pollStatus() {
       if (state.ui.lastStatusErrorToastIdentity !== lastErrorText) {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;
         showToast(`Last scan error: ${escapeHtml(lastErrorText)}`, 'error', 4800);
-      }
-      const scanGeneration = Number(normalizedStatus.scan_generation) || 0;
-      const historyIdentity = `${scanGeneration}:${lastErrorText}`;
-      if (state.ui.lastStatusErrorHistoryIdentity !== historyIdentity) {
-        state.ui.lastStatusErrorHistoryIdentity = historyIdentity;
-        try {
-          const historyPersistence = prependUtilityLogHistoryEntry({
-            id: `library-status-error:${scanGeneration}`,
-            action: 'Library status error',
-            level: 'error',
-            error: lastErrorText,
-            scan_generation: scanGeneration,
-            scan_phase: String(normalizedStatus.scan_phase || ''),
-            scan_outcome: scanOutcome,
-          });
-          Promise.resolve(historyPersistence).catch((historyError) => {
-            console.error(
-              '[AlbumHaven][History] Failed to persist a library status error.',
-              historyError,
-            );
-          });
-        } catch (historyError) {
-          console.error(
-            '[AlbumHaven][History] Failed to persist a library status error.',
-            historyError,
-          );
-        }
       }
     } else {
       state.ui.lastStatusErrorToastIdentity = '';

@@ -25,7 +25,7 @@
     }
     if (selected) values['aria-current'] = settings ? 'page' : 'true';
     const attrs = Object.entries(values).map(([name, value]) => name + '="' + escape(value) + '"').join(' ');
-    const identity = wide ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + escape(subtitle) + (year ? ' · ' + escape(year) : '') + '</span>' : escape(label);
+    const identity = wide || (panel && (subtitle || year)) ? '<span class="utility-list-item-title">' + escape(label) + '</span><span class="utility-list-item-meta">' + escape(subtitle) + (year ? (subtitle ? ' · ' : '') + escape(year) : '') + '</span>' : escape(label);
     const slots = [tag, attrs, wide ? '<span class="navigation-tree-artwork">' + artworkHtml + '</span>' : icon ? '<span class="navigation-tree-icon" aria-hidden="true">' + escape(icon) + '</span>' : '', identity,
       (count === null ? '' : '<span class="navigation-tree-count artist-count"' + (countHidden ? ' hidden' : '') + '>' + escape(count) + '</span>') + (wide ? trailingHtml : ''), tag];
     let index = 0;

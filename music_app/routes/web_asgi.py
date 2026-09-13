@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from music_app.services.loop_request_scope import saved_loop_scope
+from music_app.services.loops import get_loop
+
 import asyncio
 import hashlib
 import logging
@@ -182,6 +185,7 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
         asset_paths = (
             static_root / "app.js",
             static_root / "js" / "runtime-bundle.js",
+            static_root / "js" / "navigation-tree.js",
             static_root / "js" / "audio-worklets" / "gapless-playback-processor.js",
             *runtime_stylesheets,
         )
@@ -1107,7 +1111,7 @@ async def track(request: Request, path: str = "") -> FileResponse:
 
 @router.get("/loops/media/{loop_id}")
 async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
-    resolved = resolve_loop_media_path(_app_config(request), loop_id)
+    resolved = resolve_loop_media_path(_app_config(request), loop_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
     return _conditional_file_response(request, resolved, no_cache=True)
@@ -1115,7 +1119,7 @@ async def saved_loop_media(request: Request, loop_id: str) -> FileResponse:
 
 @router.get("/loops/pitch-preview/{preview_id}")
 async def saved_loop_pitch_preview(request: Request, preview_id: str) -> FileResponse:
-    resolved = resolve_loop_preview_path(_app_config(request), preview_id)
+    resolved = resolve_loop_preview_path(_app_config(request), preview_id, **(await saved_loop_scope(request)))
     if resolved is None:
         return _not_found()
     return _conditional_file_response(request, resolved, no_cache=True)
@@ -1156,7 +1160,12 @@ def _cover_response(request: Request, path: str, size: str | None) -> Response:
 
 
 @router.get("/cover")
-async def cover(request: Request, path: str = "", size: str | None = None) -> Response:
+async def cover(request: Request, path: str = "", size: str | None = None, loop_id: str = "") -> Response:
+    if loop_id:
+        item = get_loop(_app_config(request),loop_id,**(await saved_loop_scope(request)))
+        if item is None or not item.get('cover_path'):
+            return _not_found()
+        path = str(item['cover_path'])
     return await asyncio.get_running_loop().run_in_executor(
         _COVER_RESPONSE_EXECUTOR,
         _cover_response,

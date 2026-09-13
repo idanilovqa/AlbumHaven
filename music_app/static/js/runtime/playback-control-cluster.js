@@ -19,7 +19,7 @@
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = 'capsule' } = {}) {
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule' } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }

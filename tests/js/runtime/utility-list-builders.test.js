@@ -395,6 +395,7 @@ function loadLoopBuilderHelpers() {
   };
   vm.createContext(context);
   vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-and-waveform.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -2204,6 +2205,47 @@ test('applyUpdatedAlbumsToCurrentView restores compact source membership from th
     [sourceAlias],
     'the compact gallery index must fall back to the hydrated modal cache by the same alias',
   );
+});
+
+test('album-name merge keeps all sixteen tracks visible before canonical refresh', () => {
+  const context = loadHelpers();
+  const artist = 'DDT';
+  const name = 'Studio Records';
+  const makeAlbum = (albumName, start, count) => ({
+    key: `ddt::${albumName.toLowerCase()}`,
+    album_ref: `ddt::${albumName.toLowerCase()}`,
+    name: albumName, album_artist: artist, artists: [artist], display_artist: artist,
+    year: 1988, edition: null, preview_only: false, track_count_preview: count,
+    total_duration_seconds: count * 4,
+    tracks: Array.from({ length: count }, (_, index) => ({
+      path: `owned-track-${start + index}.mp3`, title: `Track ${start + index}`,
+      album: albumName, album_artist: artist, artist, year: 1988, edition: null,
+      track_number: start + index, disc_number: 1, duration_seconds: 4,
+    })),
+  });
+  const destination = makeAlbum(name, 1, 13);
+  const original = makeAlbum(`${name} merge candidate`, 14, 3);
+  const groups = [{ artist, albums: [destination, original] }];
+  context.state.view = {
+    ...context.state.view, selected_artist: artist, related_artists: [],
+    artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [],
+  };
+  context.getAlbumRequestKey = album => album.album_ref || album.key;
+  context.getAlbumIdentity = album => album.key;
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  context.formatAlbumDuration = () => '';
+  context.findVisibleAlbumByTrackPaths = () => original;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  const updates = Object.fromEntries(original.tracks.map(track => [track.path, { album: name }]));
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(original, updates);
+  context.applyUpdatedAlbumsToCurrentView(candidates, { originalAlbum: original, tagEdits: updates, skipRender: true });
+  for (const key of ['artist_groups', 'primary_artist_groups']) {
+    const albums = context.state.view[key].flatMap(group => group.albums);
+    assert.equal(albums.length, 1);
+    assert.equal(albums[0].tracks.length, 16);
+    assert.equal(albums[0].track_count_preview, 16);
+    assert.equal(new Set(albums[0].tracks.map(track => track.path)).size, 16);
+  }
 });
 
 test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist source projections during restore', () => {
@@ -6084,7 +6126,7 @@ test('detected problems do not promote track reasons into an empty album-level s
   assert.match(html, /Undecoded characters/);
 });
 
-test('album-only detected problems explain tag context above the three-column empty table', () => {
+test('album-only detected problems show explanatory text without an empty table or unused actions', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
@@ -6099,12 +6141,9 @@ test('album-only detected problems explain tag context above the three-column em
 
   assert.match(html, /Undecoded characters \("\?" in Album\)/);
   assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS/);
-  assert.match(html, /problematic-track-problems/);
-  assert.equal((html.match(/>Create Exception</g) || []).length, 1);
-  assert.ok(
-    html.indexOf('utility-detected-actions') > html.indexOf('utility-album-problem-labels'),
-    'the shared exclusion action must follow the album-level problem section',
-  );
+  assert.match(html, /Only album-level problems found\. No per-track problems\./);
+  assert.doesNotMatch(html, /problematic-track-problems|utility-detected-table/);
+  assert.doesNotMatch(html, />Create Exception<|>Apply All</);
 });
 
 test('problem exclusion selection stays independent from Suggested Edits Apply or ignore state', () => {
@@ -6385,7 +6424,7 @@ test('Problematic Files accepts a path-free stable-write warning', () => {
   );
 });
 
-test('Problematic Files keeps watcher health mounted when there are zero problematic albums', () => {
+test('Problematic Files excludes library-wide warnings from album rows and counts', () => {
   const elements = {
     overlay: {},
     list: { innerHTML: '', scrollTop: 0 },
@@ -6424,9 +6463,8 @@ test('Problematic Files keeps watcher health mounted when there are zero problem
 
   context.renderProblematicFiles();
 
-  assert.equal(elements.count.textContent, '1');
-  assert.match(elements.list.innerHTML, /Some library changes may have been missed\./);
-  assert.match(elements.list.innerHTML, /data-status-action="full-rescan"/);
+  assert.equal(elements.count.textContent, '0');
+  assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
   assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
@@ -6669,34 +6707,42 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
     /pointer-events:\s*none/,
     'the saved range remains a real pointer-driven editing surface',
   );
-  assert.doesNotMatch(
-    `${savedPodRule}\n${savedActionRule}`,
-    /pointer-events:\s*none/,
-    'the overlaid pod and its buttons must retain their normal pointer hit behavior',
-  );
+  assert.match(savedPodRule, /pointer-events:\s*none/,
+    'the structural overlay must not intercept the native Play button');
+  assert.doesNotMatch(savedActionRule, /pointer-events:\s*none/,
+    'visible saved action buttons inherit the engaged action owner hit behavior');
+  assert.match(playRule, /pointer-events:\s*auto/);
+  assert.match(css, /\.loop-edit-actions\s*\{[^}]*pointer-events:\s*none/s,
+    'folded actions remain inert');
+  assert.match(css, /\.loop-edit-actions\[data-loop-action-engaged="true"\]\s*\{[^}]*pointer-events:\s*auto/s,
+    'only the engaged action owner restores native action hit behavior');
   assert.doesNotMatch(playRule, /(?:top|inset-block-start):\s*-\d/);
-  assert.match(playRule, /top:\s*0/);
+  assert.match(playRule, /top:\s*4px/);
+  assert.match(css, /\[data-loop-control-style="companion"\]\s+\.loop-play-control-button\s*\{[^}]*top:\s*0/s);
   assert.match(playRule, /width:\s*var\(--loop-play-control-size\)/);
   assert.match(css, /\.utility-loop-main\.is-loop-editing\s+\.utility-loop-pitch-control\s*\{[^}]*display:\s*none/s);
   assert.doesNotMatch(css, /\.utility-loop-main\.is-loop-editing\s+\.utility-loop-time\s*\{[^}]*display:\s*none/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*border:\s*0/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*background:\s*transparent/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\.utility-loop-entry:first-child\s*\{[^}]*padding-top:\s*0/s);
+  assert.doesNotMatch(css, /\.utility-loop-entry:first-child\s*\{[^}]*padding-top:\s*0/s);
   assert.match(css, /\.utility-loop-group-main\s*\{[^}]*padding-top:\s*0/s);
-  assert.match(css, /\.utility-loop-entry:first-child\s+\.utility-loop-shell\s*\{[^}]*padding-top:\s*0/s);
-  assert.match(css, /\.utility-loop-entry\s*\{[^}]*padding:\s*11px\s+0/s);
+  assert.doesNotMatch(css, /\.utility-loop-entry:first-child\s+\.utility-loop-shell\s*\{[^}]*padding-top:\s*0/s);
+  assert.match(css, /\.utility-loop-entry\s*\{[^}]*padding:\s*16px\s+18px\s+24px/s);
 });
 
 function loadLogHistoryBuilderHelpers() {
   const persistedEntries = [];
+  const stale = [];
   const context = {
+    window: {},
     state: {
       utility: {
         activeTab: 'log-history',
         logHistory: [],
         logHistoryLoaded: false,
         selectedLogHistoryId: '',
+        logHistoryController: { markStale: revision => stale.push(revision) },
       },
     },
     escapeHtml(value) {
@@ -6723,11 +6769,13 @@ function loadLogHistoryBuilderHelpers() {
     renderUtilityModalContent() {},
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-log-history-ui.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, persistedEntries };
+  return { context, persistedEntries, stale };
 }
 
-test('log history detail identifies the browser source and exposes explicit export', () => {
+test('log history detail identifies the sanitized server source and exposes Copy log', () => {
   const { context } = loadLogHistoryBuilderHelpers();
   const html = context.buildUtilityLogHistoryDetail({
     id: 'entry-1',
@@ -6737,21 +6785,20 @@ test('log history detail identifies the browser source and exposes explicit expo
     source_label: 'This browser',
     files: [],
   });
-  assert.match(html, /This browser/);
-  assert.match(html, /data-export-log-history="1"/);
-  assert.match(html, />Export Logs</);
+  assert.match(html, /this_browser/);
+  assert.match(html, /data-log-history-action="copy"/);
+  assert.match(html, /aria-label="Copy log"/);
 });
 
-test('immediate operation events are persisted before updating the visible log history', async () => {
-  const { context, persistedEntries } = loadLogHistoryBuilderHelpers();
+test('immediate operation events mark the captured history stale without persisting or inserting them', async () => {
+  const { context, persistedEntries, stale } = loadLogHistoryBuilderHelpers();
   const entry = {
     id: 'operation-entry-1',
     action: 'Cover update completed',
     timestamp: '2026-07-24T18:19:20.000Z',
   };
   await context.prependUtilityLogHistoryEntry(entry);
-  assert.deepEqual(persistedEntries, [entry]);
-  assert.equal(context.state.utility.logHistory.length, 1);
-  assert.equal(context.state.utility.logHistory[0].source, 'this_browser');
-  assert.equal(context.state.utility.logHistoryStorageStatus.persistent, true);
+  assert.deepEqual(persistedEntries, []);
+  assert.equal(context.state.utility.logHistory.length, 0);
+  assert.deepEqual(stale, ['new-activity']);
 });

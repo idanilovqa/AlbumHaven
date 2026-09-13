@@ -1,4 +1,5 @@
 import { BasePage } from './basePage.js';
+import { readThemeColorChannels } from './settingsModalAppBar.js';
 
 function exactNormalizedText(value) {
   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -6,6 +7,23 @@ function exactNormalizedText(value) {
 }
 
 export class TagEditor extends BasePage {
+  async readApplyTheme() {
+    // parity-check: allow-read-only-measurement-evaluate -- compare the shared primary footer button with its inherited theme tokens
+    const colors = await this.applyButton.evaluate(async element => {
+      await Promise.all(element.getAnimations()
+        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map(animation => animation.finished));
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        expectedBackground: style.getPropertyValue('--appearance-primary-button').trim(),
+        ink: style.color,
+        expectedInk: style.getPropertyValue('--appearance-primary-button-ink').trim(),
+      };
+    });
+    return Object.fromEntries(Object.entries(colors).map(([key, value]) => [key, readThemeColorChannels(value)]));
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.overlay = page.locator('#tag-editor-modal');

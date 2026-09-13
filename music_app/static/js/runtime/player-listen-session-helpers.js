@@ -1,5 +1,62 @@
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
+let measuredPlaybackDeviceId = '';
+
+function newMeasuredPlaybackId() {
+  if (typeof crypto === 'undefined') return '';
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto.getRandomValues !== 'function') return '';
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+function getMeasuredPlaybackDeviceId() {
+  if (measuredPlaybackDeviceId) return measuredPlaybackDeviceId;
+  const key = 'album-haven-playback-device-id';
+  const stored = typeof getLocalStorageItem === 'function' ? getLocalStorageItem(key) : '';
+  measuredPlaybackDeviceId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stored || '')
+    ? stored : newMeasuredPlaybackId();
+  if (measuredPlaybackDeviceId && typeof setLocalStorageItem === 'function') setLocalStorageItem(key, measuredPlaybackDeviceId);
+  return measuredPlaybackDeviceId;
+}
+
+function breakMeasuredListenSegment(session) {
+  if (session?.measurement) session.measurement.contiguous = 0;
+}
+
+function recordMeasuredStreamingFrames(roleState, message, sampleRate) {
+  if (!roleState || !Number.isInteger(message?.frames) || message.frames <= 0
+      || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
+  if (!roleState.measuredListenSession) {
+    if (roleState.role === 'continuity' && roleState.continuityOptions?.kind === 'queued-next') {
+      roleState.measuredListenSession = createListenSession(roleState.track);
+    } else {
+      const current = state.player.listenSession || ensureListenSession();
+      if (!current || String(current.track?.path || '') !== String(roleState.track?.path || '')) return;
+      roleState.measuredListenSession = current;
+    }
+  }
+  const session = roleState.measuredListenSession;
+  if (!session?.measurement || ['pending', 'done', 'failed'].includes(session.completionState)) return;
+  const elapsed = message.frames / sampleRate;
+  session.measurement.total += elapsed;
+  session.measurement.contiguous += elapsed;
+  session.measurement.longest = Math.max(session.measurement.longest, session.measurement.contiguous);
+}
+
+function buildMeasuredCompletionFields(session, { advance = false, finalized = false } = {}) {
+  const measurement = session?.measurement;
+  if (!measurement?.deviceId || !measurement.sessionId) return {};
+  if (advance) measurement.sequence = (Number(measurement.sequence) || 0) + 1;
+  return {
+    measurement_version: 'rendered-pcm-v1', device_id: measurement.deviceId,
+    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized,
+    measured_listened_seconds: Math.round(measurement.total * 1000) / 1000,
+    max_measured_contiguous_seconds: Math.round(measurement.longest * 1000) / 1000,
+  };
+}
 
 function getListenSessionDuration(session) {
   const duration = Number(session?.duration_seconds || 0);
@@ -28,7 +85,7 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session)) > MIN_RECORDED_LISTEN_SECONDS;
+  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0) > MIN_RECORDED_LISTEN_SECONDS;
 }
 
 function clearListenPauseMarker(session) {
@@ -41,6 +98,7 @@ function clearListenPauseMarker(session) {
 function markListenSessionPaused(currentTime = null) {
   const session = state.player.listenSession;
   if (!session) return;
+  breakMeasuredListenSegment(session);
   session.paused_at = isoNow();
   session.paused_at_unix_ms = Date.now();
   session.pause_offset_seconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
@@ -65,6 +123,7 @@ function buildNowPlayingPayload(track, session = null) {
   if (!track) return null;
   const activeSession = session || state.player.listenSession;
   return {
+    ...buildMeasuredCompletionFields(activeSession),
     path: String(track.path || ''),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
@@ -131,9 +190,15 @@ async function maybeSplitListenSessionAfterLongPause(track = null) {
 }
 
 async function resumeListenSessionPlayback(track = null, currentTime = null) {
-  await maybeSplitListenSessionAfterLongPause(track);
+  const split = await maybeSplitListenSessionAfterLongPause(track);
   const session = ensureListenSession(track);
   if (!session) return null;
+  if (split) {
+    for (const role of Object.values(state.player.streaming?.roles || {})) {
+      if (role && (role.role === 'current' || role.continuityOptions?.kind !== 'queued-next')
+          && String(role.track?.path || '') === String(session.track?.path || '')) role.measuredListenSession = session;
+    }
+  }
   clearListenPauseMarker(session);
   beginListenSegment(currentTime);
   return session;
@@ -148,6 +213,7 @@ function beginListenSegment(currentTime = null) {
 }
 
 function closeListenSegment(currentTime = null, session = state.player.listenSession) {
+  breakMeasuredListenSegment(session);
   if (!session || !session.segmentActive) return;
   const endSeconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
   const startSeconds = Math.max(0, Number(session.activeSegmentStartSeconds || 0));
@@ -190,9 +256,15 @@ async function maybeScrobbleListenSession(session) {
   if (session.scrobblePending) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
+  session.scrobblePayload ||= {
+    ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true }),
+    total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
+    max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
+  };
   const scrobblePromise = postPlaybackSession(
     '/playback/session/scrobble',
-    buildNowPlayingPayload(session.track, session),
+    session.scrobblePayload,
   ).then(() => {
     session.scrobbled = true;
     return true;
@@ -210,11 +282,13 @@ async function maybeScrobbleListenSession(session) {
 }
 
 function startListenSession(track) {
-  if (!track) {
-    state.player.listenSession = null;
-    return;
-  }
-  state.player.listenSession = {
+  state.player.listenSession = createListenSession(track);
+}
+
+function createListenSession(track) {
+  if (!track) return null;
+  return {
+    measurement: { deviceId: getMeasuredPlaybackDeviceId(), sessionId: newMeasuredPlaybackId(), total: 0, contiguous: 0, longest: 0 },
     track: {
       path: String(track.path || ''),
       title: String(track.title || ''),
@@ -277,8 +351,9 @@ async function finalizeListenSession(reason, options = {}) {
   if (scrobbleEligible && !session.scrobbled) {
     await maybeScrobbleListenSession(session);
   }
-  const payload = {
+  const payload = session.completionPayload || {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: totalListened,
@@ -293,6 +368,7 @@ async function finalizeListenSession(reason, options = {}) {
       end_seconds: Number(segment.end_seconds || 0),
     })),
   };
+  session.completionPayload = payload;
   try {
     await postPlaybackSession('/playback/session/complete', payload);
     session.completionState = 'done';
@@ -331,6 +407,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
   session.completionState = 'pending';
   const payload = {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
@@ -349,7 +426,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
     if (navigator?.sendBeacon) {
       const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       navigator.sendBeacon('/playback/session/complete', body);
-      if (payload.scrobble_eligible && !payload.scrobbled) {
+      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
         navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
       }
     }

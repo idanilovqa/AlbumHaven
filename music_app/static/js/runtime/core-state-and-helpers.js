@@ -184,6 +184,11 @@ const state = {
     rulesLoading: false,
     rulesLoadPromise: null,
       loops: [],
+      loopsSearchQuery: '',
+      loopOrderPending: {},
+      loopViewGeneration: 0,
+      loopDataGeneration: 0,
+      loopMutationGeneration: 0,
       selectedLoopGroupKey: '',
       selectedLoopDetailMode: 'group',
       collapsedLoopGroups: {},
@@ -550,6 +555,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
   const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
@@ -563,7 +569,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
-  const canBrowseScanned = shouldShow
+  const canBrowseScanned = shouldShow && !hasSearch
     && !pendingViewTransition
     && (
       finalizingActiveScan
@@ -608,13 +614,14 @@ function renderLibraryLoader(data = {}, options = {}) {
   );
   if (!shouldShow) return;
 
-  if (hasSearch && !isLoadingState && !forcedScanPageVisible && !scanPageVisible) {
+  if (hasSearch && !pendingViewTransition && !scanPageVisible) {
     spinner.hidden = true;
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
     browseButton.hidden = true;
-    if (actions) actions.hidden = Boolean(!cancelButton || cancelButton.hidden);
+    if (cancelButton) cancelButton.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 

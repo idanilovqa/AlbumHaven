@@ -34,7 +34,11 @@ def test_shell_menu_uses_policy_projection_and_session_bound_csrf(monkeypatch, c
 
     context = web_asgi._template_response(request, {})
 
-    assert calls == [(request, ("accounts.read",))]
+    assert calls == [
+        (request, ("accounts.read",)),
+        (request, ("library.loops.create",)),
+    ]
+    assert context["playback_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"] is allowed
     assert context["account_menu_allowed_actions"].allows("accounts.read") is can_manage
     assert matches_session_csrf(session, context["account_menu_csrf_token"], config)

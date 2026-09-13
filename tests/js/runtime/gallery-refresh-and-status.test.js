@@ -6,6 +6,83 @@ const vm = require('node:vm');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-refresh-and-status.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const tagMutationSource = fs.readFileSync(path.join(path.dirname(helperPath), 'utility-list-builders.js'), 'utf8');
+
+test('a deferred gallery refresh cannot overwrite a newer optimistic tag mutation', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const album = { key: 'artist::release', name: 'Release', album_artist: 'Artist', tracks: [] };
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  const navigationRevision = context.state.ui.viewStateRevision;
+  assert.equal(context.state.ui.pendingViewTransition, true);
+  context.claimTagEditViewMutation(album, ['owned-track.mp3'], {
+    'owned-track.mp3': { album: 'Release' },
+  });
+  const optimisticView = { artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 16 }] }] };
+  context.state.view = optimisticView;
+  pendingRequests[0].resolveWith({ artist_groups: [{ artist: 'Artist', albums: [{ ...album, track_count_preview: 13 }] }] });
+  assert.equal(await staleRefresh, false);
+  assert.equal(context.state.view, optimisticView);
+  assert.equal(calls.applyViewPayload.length, 0);
+  assert.equal(context.state.busy, false);
+  assert.equal(context.state.ui.pendingViewTransition, false);
+  assert.equal(context.state.ui.activeViewRequestController, null);
+  assert.equal(context.state.ui.activeViewRequestUrl, '');
+  assert.equal(context.state.ui.viewStateRevision, navigationRevision);
+  const canonicalRefresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
+  pendingRequests[1].resolveWith(optimisticView);
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('opening a tag editor does not invalidate an in-flight gallery refresh', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const refresh = context.fetchAndRender('/view-data', false, { preserveScroll: true });
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] });
+  pendingRequests[0].resolveWith({ artist_groups: [] });
+  assert.equal(await refresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+});
+
+test('a canonical same-URL refresh replaces a request from before an optimistic edit', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+    'owned.mp3': { album: 'Release' },
+  });
+  const canonicalRefresh = context.fetchAndRender('/view-data', false);
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(pendingRequests[0].options.signal.aborted, true);
+  await staleRefresh;
+  assert.equal(context.state.busy, true);
+  assert.equal(context.state.ui.pendingViewTransition, true);
+  pendingRequests[1].resolveWith({ artist_groups: [], album_count: 16 });
+  assert.equal(await canonicalRefresh, true);
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.busy, false);
+});
+
+test('a noninterrupting canonical same-URL refresh queues behind an obsolete mutation epoch', async () => {
+  const { context, calls, pendingRequests } = createContext();
+  vm.runInContext(tagMutationSource, context);
+  const staleRefresh = context.fetchAndRender('/view-data', false);
+  context.claimTagEditViewMutation({ key: 'artist::release', tracks: [] }, ['owned.mp3'], {
+    'owned.mp3': { album: 'Release' },
+  });
+  assert.equal(await context.fetchAndRender('/view-data', false, { interruptCurrent: false }), false);
+  assert.equal(pendingRequests[0].options.signal.aborted, false);
+  assert.equal(context.state.ui.pendingViewRequest.url, '/view-data');
+  pendingRequests[0].resolveWith({ artist_groups: [], album_count: 13 });
+  await staleRefresh;
+  assert.equal(pendingRequests.length, 2);
+  assert.equal(calls.applyViewPayload.length, 0);
+  pendingRequests[1].resolveWith({ artist_groups: [], album_count: 16 });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls.applyViewPayload.length, 1);
+  assert.equal(context.state.busy, false);
+});
 const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const responseStateHelperSource = fs.readFileSync(responseStateHelperPath, 'utf8');
 const viewValueHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'view-value-helpers.js');
@@ -5567,37 +5644,7 @@ test('pollStatus toasts each observed scan error once and resets deduplication a
   assert.equal(lastError.textContent, '');
 
   assert.deepEqual(toastCounts, [1, 1, 1, 2]);
-  assert.deepEqual(
-    calls.prependUtilityLogHistoryEntries.map((entry) => ({
-      id: entry.id,
-      action: entry.action,
-      level: entry.level,
-      error: entry.error,
-      scan_generation: entry.scan_generation,
-      scan_phase: entry.scan_phase,
-      scan_outcome: entry.scan_outcome,
-    })),
-    [
-      {
-        id: 'library-status-error:7',
-        action: 'Library status error',
-        level: 'error',
-        error: errorText,
-        scan_generation: 7,
-        scan_phase: 'idle',
-        scan_outcome: 'failed',
-      },
-      {
-        id: 'library-status-error:8',
-        action: 'Library status error',
-        level: 'error',
-        error: errorText,
-        scan_generation: 8,
-        scan_phase: 'idle',
-        scan_outcome: 'failed',
-      },
-    ],
-  );
+  assert.deepEqual(calls.prependUtilityLogHistoryEntries, []);
   assert.deepEqual(calls.showToast, [
     {
       message: `Last scan error: ${errorText}`,
@@ -5680,21 +5727,10 @@ test('pollStatus does not duplicate a prior error when a new scan generation is 
   });
   await runningStatusPromise;
 
-  assert.deepEqual(
-    calls.prependUtilityLogHistoryEntries.map((entry) => ({
-      id: entry.id,
-      scan_generation: entry.scan_generation,
-      scan_outcome: entry.scan_outcome,
-    })),
-    [{
-      id: 'library-status-error:7',
-      scan_generation: 7,
-      scan_outcome: 'failed',
-    }],
-  );
+  assert.deepEqual(calls.prependUtilityLogHistoryEntries, []);
 });
 
-test('pollStatus does not wait for browser history persistence before scheduling the next poll', async () => {
+test('pollStatus schedules its next poll without creating browser history', async () => {
   const { context, pendingRequests } = createContext();
   const scheduledTimeouts = [];
   context.scheduleBrowserTimeout = (callback, delayMs) => {
@@ -5718,10 +5754,9 @@ test('pollStatus does not wait for browser history persistence before scheduling
   });
 
   await statusPromise;
-  assert.equal(typeof releasePersistence, 'function');
+  assert.equal(typeof releasePersistence, 'undefined');
   assert.equal(scheduledTimeouts.length, 1);
   assert.equal(scheduledTimeouts[0].delayMs, 3000);
-  releasePersistence();
 });
 
 test('a finalization cancellation reconciles the authoritative gallery without showing scan success', async () => {

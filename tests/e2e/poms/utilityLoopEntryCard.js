@@ -5,6 +5,10 @@ function escapeRegExp(value) {
 }
 
 export class UtilityLoopEntryCard extends BasePage {
+  controlStyleForEntry(entry) {
+    return entry.locator('[data-loop-control-style]');
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.entries = page.locator('[data-utility-loop-entry]');
@@ -15,12 +19,12 @@ export class UtilityLoopEntryCard extends BasePage {
     this.playButtons = page.locator('[data-loop-play]');
     this.repeatButtons = page.locator('[data-toggle-loop-repeat]');
     this.timelines = page.locator('[data-loop-timeline]');
-    this.deleteConfirmOverlay = page.locator('#loop-delete-confirm-modal');
+    this.deleteConfirmOverlay = page.locator('#repair-confirm-modal');
     this.deleteConfirmDialog = this.deleteConfirmOverlay.getByRole('dialog', {
-      name: 'Delete saved loop',
+      name: 'Delete saved loop?',
       exact: true,
     });
-    this.deleteConfirmText = this.deleteConfirmDialog.locator('#loop-delete-confirm-text');
+    this.deleteConfirmText = this.deleteConfirmDialog.locator('#repair-confirm-text');
     this.deleteConfirmNo = this.deleteConfirmDialog.getByRole('button', { name: 'No', exact: true });
     this.deleteConfirmYes = this.deleteConfirmDialog.getByRole('button', { name: 'Yes', exact: true });
   }
@@ -58,6 +62,15 @@ export class UtilityLoopEntryCard extends BasePage {
     return entry.locator('[data-loop-audio]');
   }
 
+  dragHandleForEntry(entry) {
+    return entry.locator('.utility-loop-drag-handle');
+  }
+
+  async readPanelOrder() {
+    // parity-check: allow-read-only-measurement-evaluate -- read rendered saved-loop membership and order
+    return this.detailEntries.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-utility-loop-entry')));
+  }
+
   repeatButtonForEntry(entry) {
     return entry.locator('[data-toggle-loop-repeat]');
   }
@@ -77,7 +90,7 @@ export class UtilityLoopEntryCard extends BasePage {
   async readDeleteConfirmationStack() {
     // parity-check: allow-read-only-measurement-evaluate -- measure modal stacking and hit-testing only
     return this.deleteConfirmDialog.evaluate((dialog) => {
-      const overlay = document.getElementById('loop-delete-confirm-modal');
+      const overlay = document.getElementById('repair-confirm-modal');
       const utility = document.getElementById('utility-modal');
       const bounds = dialog.getBoundingClientRect();
       const centerX = bounds.left + (bounds.width / 2);
@@ -86,7 +99,7 @@ export class UtilityLoopEntryCard extends BasePage {
       return {
         deleteZIndex: Number(getComputedStyle(overlay).zIndex) || 0,
         utilityZIndex: Number(getComputedStyle(utility).zIndex) || 0,
-        deleteOwnsTopElement: Boolean(topElement?.closest?.('#loop-delete-confirm-modal')),
+        deleteOwnsTopElement: Boolean(topElement?.closest?.('#repair-confirm-modal')),
       };
     });
   }

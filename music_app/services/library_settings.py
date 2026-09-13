@@ -30,6 +30,7 @@ def save_library_settings_and_start_refresh(
     raw_payload: object,
     *,
     library_state: dict[str, object],
+    library_id=None, media_host_library_id=None,
     start_background_refresh: RefreshStarter,
     build_status_payload: StatusPayloadBuilder,
     save_root_settings: RootSettingsSaver = save_library_root_settings,
@@ -41,7 +42,8 @@ def save_library_settings_and_start_refresh(
             status_code=409,
         )
 
-    normalized = save_root_settings(config, raw_payload)
+    scope = {"library_id": library_id, "media_host_library_id": media_host_library_id} if library_id is not None or media_host_library_id is not None else {}
+    normalized = save_root_settings(config, raw_payload, **scope)
     watched_roots = [
         {**root, "category": category}
         for category in _WATCHED_ROOT_SETTING_KEYS

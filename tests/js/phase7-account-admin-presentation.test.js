@@ -13,12 +13,16 @@ const accountTemplate = readProjectFile('music_app', 'templates', 'account.html'
 const accountCss = readProjectFile('music_app', 'static', 'css', 'account.css');
 const adminCss = readProjectFile('music_app', 'static', 'css', 'admin-members.css');
 const adminNavigation = readProjectFile('music_app', 'templates', 'partials', 'admin-settings-nav.html');
+const navigationMacro = readProjectFile('music_app', 'templates', 'components', 'navigation-tree.html');
 
 test('Account and Admin navigation keep Users discoverable and omit redundant links', () => {
   assert.doesNotMatch(accountTemplate, /href="#active-sessions"|>Back to library</);
   assert.match(accountTemplate, /include ["']partials\/admin-settings-nav.html["']/);
-  assert.match(adminNavigation, /navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)/);
-  assert.match(adminNavigation, /navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
+  assert.match(adminNavigation, /<form[^>]*method="post"[^>]*action="\/logout">[\s\S]*name="csrf_token"[\s\S]*navigation_tree_item\('Sign Out', key='sign-out', icon='↪', action=true\)[\s\S]*<\/form>/);
+  assert.match(adminNavigation, /if navigation_actions\.allows\('accounts\.read'\) %}{{ navigation_tree_item\('Users', '\/admin\/members', 'users', settings_section != 'account'/);
+  assert.match(navigationMacro, /set tag = 'button' if action else 'a'/);
+  assert.match(navigationMacro, /if action %}type="submit"/);
+  assert.match(navigationMacro, /if selected %} aria-current="{{ 'page' if settings else 'true' }}"/);
   assert.doesNotMatch(adminNavigation, /settings-back|Back to library/);
 });
 

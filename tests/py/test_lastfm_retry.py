@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from music_app.services.listen_history_postgres import PendingListenEntry
 
 
 def test_retry_pending_lastfm_scrobbles_marks_successful_entries(monkeypatch):
@@ -25,13 +26,14 @@ def test_retry_pending_lastfm_scrobbles_marks_successful_entries(monkeypatch):
     summaries: list[dict[str, int]] = []
     calls: list[dict[str, object]] = []
 
-    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [entry])
+    monkeypatch.setattr(lastfm_retry, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="owned") if account_id == 7 else None)
+    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)])
     monkeypatch.setattr(
         lastfm_retry,
         "update_listen_history_entry",
-        lambda config, entry_id, payload: updates.append(payload) or {**entry, **payload},
+        lambda config, entry_id, payload, **scope: updates.append(payload) or {**entry, **payload},
     )
-    monkeypatch.setattr(lastfm_retry, "scrobble_track", lambda config, payload: calls.append(payload))
+    monkeypatch.setattr(lastfm_retry, "scrobble_track", lambda config, payload, *, session: calls.append(payload))
     monkeypatch.setattr(lastfm_retry, "pending_scrobble_count", lambda config: 0)
     monkeypatch.setattr(lastfm_retry, "record_retry_summary", lambda config, summary: summaries.append(dict(summary)))
     monkeypatch.setattr(lastfm_retry, "log_app_event", lambda *args, **kwargs: None)
@@ -75,14 +77,15 @@ def test_retry_pending_lastfm_scrobbles_keeps_failed_entries_queued(monkeypatch)
     updates: list[dict[str, object]] = []
     summaries: list[dict[str, int]] = []
 
-    def fail_scrobble(config, payload):
+    def fail_scrobble(config, payload, *, session):
         raise LastfmError("Temporary failure", retryable=True)
 
-    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [entry])
+    monkeypatch.setattr(lastfm_retry, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="owned") if account_id == 7 else None)
+    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)])
     monkeypatch.setattr(
         lastfm_retry,
         "update_listen_history_entry",
-        lambda config, entry_id, payload: updates.append(payload) or {**entry, **payload},
+        lambda config, entry_id, payload, **scope: updates.append(payload) or {**entry, **payload},
     )
     monkeypatch.setattr(lastfm_retry, "scrobble_track", fail_scrobble)
     monkeypatch.setattr(lastfm_retry, "pending_scrobble_count", lambda config: 1)
@@ -169,7 +172,7 @@ def test_pending_scrobble_permanent_provider_error_is_not_requeued(monkeypatch):
     result = lastfm_sync_bridge.process_pending_scrobble_attempt(
         {},
         entry,
-        update_listen_history_entry=lambda config, entry_id, payload: updates.append(payload) or {**entry, **payload},
+        update_listen_history_entry=lambda config, entry_id, payload, **scope: updates.append(payload) or {**entry, **payload},
         scrobble_track=lambda config, payload: (_ for _ in ()).throw(
             LastfmError("Authentication failed", code=4, retryable=False, error_kind="invalid_credentials")
         ),

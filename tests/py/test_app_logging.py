@@ -13,12 +13,6 @@ from music_app.services import app_logging, log_history
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _reset_transient_store_if_available() -> None:
-    reset = getattr(log_history, "_reset_log_history_for_tests", None)
-    if callable(reset):
-        reset()
-
-
 def test_configure_app_logging_is_console_only_and_creates_no_log_directory(tmp_path):
     app = SimpleNamespace(
         config={"DATA_DIR": tmp_path},
@@ -47,12 +41,12 @@ def test_configure_app_logging_is_console_only_and_creates_no_log_directory(tmp_
 @pytest.mark.parametrize(
     "history_error",
     [
-        PermissionError("transient feed unavailable password=hunter2"),
-        RuntimeError("transient feed serializer failed token=secret-token"),
+        PermissionError("history database unavailable password=hunter2"),
+        RuntimeError("history serializer failed token=secret-token"),
     ],
     ids=["permission-error", "unexpected-error"],
 )
-def test_log_app_event_keeps_primary_event_when_transient_feed_append_fails(
+def test_log_app_event_keeps_primary_event_when_scoped_history_append_fails(
     monkeypatch,
     caplog,
     history_error,
@@ -62,7 +56,8 @@ def test_log_app_event_keeps_primary_event_when_transient_feed_append_fails(
         "DATABASE_URL": "postgresql://album_haven:do-not-leak@example.test/album_haven",
     }
 
-    def fail_transient_feed_append(_config, _payload):
+    def fail_transient_feed_append(_config, _payload, *, scope):
+        assert scope.library_id == 9
         raise history_error
 
     monkeypatch.setattr(app_logging, "append_log_history", fail_transient_feed_append)
@@ -74,6 +69,7 @@ def test_log_app_event_keeps_primary_event_when_transient_feed_append_fails(
             "Library indexing failed",
             level="error",
             history=True,
+            history_scope=log_history.HistoryScope(library_id=9),
             scan_id="scan-14",
         )
 
@@ -103,26 +99,17 @@ def test_log_app_event_keeps_primary_event_when_transient_feed_append_fails(
     assert "secret-token" not in warning_message
 
 
-def test_log_app_event_history_uses_transient_feed_without_filesystem(tmp_path):
-    _reset_transient_store_if_available()
-    logger = logging.getLogger("tests.app_logging.transient_history")
+def test_log_app_event_history_forwards_scope_without_filesystem(tmp_path, monkeypatch):
+    logger = logging.getLogger("tests.app_logging.scoped_history")
     config = {"DATA_DIR": tmp_path}
-
-    app_logging.log_app_event(
-        config,
-        logger,
-        "Library indexing completed",
-        history=True,
-        scan_id="scan-local",
-    )
-
-    try:
-        items = log_history.load_log_history(config)
-        assert items[0]["action"] == "Library indexing completed"
-        assert items[0]["scan_id"] == "scan-local"
-        assert not list(tmp_path.rglob("*"))
-    finally:
-        _reset_transient_store_if_available()
+    scope = log_history.HistoryScope(library_id=9)
+    captured = []
+    monkeypatch.setattr(app_logging, "append_log_history",
+                        lambda config, payload, *, scope: captured.append((dict(payload), scope)))
+    app_logging.log_app_event(config, logger, "Library indexing completed",
+                              history=True, history_scope=scope, scan_id="scan-local")
+    assert captured == [({"action": "Library indexing completed", "scan_id": "scan-local", "level": "info"}, scope)]
+    assert not list(tmp_path.rglob("*"))
 
 
 def test_production_python_surface_has_no_emit_to_file_routing_hint():

@@ -19,11 +19,8 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
-    if (selectedLogHistoryId) {
-      state.utility.selectedLogHistoryId = selectedLogHistoryId;
-    }
     hideRepairAlert();
-    openUtilityLogHistoryTab();
+    openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
   if (!event.target.closest('.utility-loop-speed-control')) {
@@ -55,7 +52,9 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityTabButton) {
     event.preventDefault();
     const nextUtilityTab = utilityTabButton.getAttribute('data-utility-tab') || 'problematic-files';
+    if (nextUtilityTab === state.utility.activeTab) return;
     setUtilityActiveTab(nextUtilityTab);
+    if (state.utility.activeTab !== nextUtilityTab) return;
     if (state.utility.activeTab === 'rules') {
       loadUtilityRules(!state.utility.rulesLoaded);
     } else if (state.utility.activeTab === 'loops') {
@@ -64,9 +63,10 @@ async function handleUtilityBootstrapClick(event) {
       loadUtilityLogHistory(!state.utility.logHistoryLoaded);
     } else if (state.utility.activeTab === 'integrations') {
       loadUtilityIntegrations(!state.utility.integrationsLoaded);
-    } else if (state.utility.activeTab === 'appearance') {
-      renderUtilityModalContent();
-    } else {
+      if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
+        loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
+      }
+    } else if (state.utility.activeTab !== 'appearance') {
       loadProblematicFiles(!state.utility.loaded);
     }
     renderUtilityModalContent();
@@ -74,34 +74,19 @@ async function handleUtilityBootstrapClick(event) {
   }
 
   const utilityLogHistoryButton = event.target.closest('[data-utility-log-history-id]');
-  if (utilityLogHistoryButton) {
-    event.preventDefault();
-    state.utility.selectedLogHistoryId = utilityLogHistoryButton.getAttribute('data-utility-log-history-id') || '';
-    renderUtilityModalContent();
-    return;
-  }
-
-  const exportLogHistoryButton = event.target.closest('[data-export-log-history="1"]');
-  if (exportLogHistoryButton) {
+  const logAction = event.target.closest('[data-log-history-action]');
+  if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      await exportBrowserLogHistory();
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to export browser log history.', error);
-      showToast('Unable to export log history.', 'error', 3200);
-    }
+      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
+    } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
   }
 
   const appearanceModeRadio = event.target.closest('[data-appearance-seekbar-mode]');
   if (appearanceModeRadio) {
-    state.player.appearance = normalizePlayerAppearance({
-      ...state.player.appearance,
-      seekbarMode: appearanceModeRadio.getAttribute('data-appearance-seekbar-mode') || 'default',
-    });
-    persistPlayerAppearance();
-    updateWaveformAppearance(true);
-    renderUtilityModalContent();
+    // The Appearance editor owns the draft and applies this only after Save.
     return;
   }
 
@@ -120,6 +105,7 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterToggle = event.target.closest('[data-toggle-problem-filter="1"]');
   if (problemFilterToggle) {
     event.preventDefault();
+    if (state.utility.activeTab === 'log-history') { openUtilityLogHistoryQuery(false); return; }
     state.utility.problemDropdownOpen = !state.utility.problemDropdownOpen;
     renderUtilityModalContent();
     return;
@@ -185,7 +171,9 @@ async function handleUtilityBootstrapClick(event) {
   const utilityRuleButton = event.target.closest('[data-utility-rule-key]');
   if (utilityRuleButton) {
     event.preventDefault();
-    state.utility.selectedRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    const nextRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    if (state.utility.selectedRuleKey === nextRuleKey) return;
+    state.utility.selectedRuleKey = nextRuleKey;
     renderUtilityModalContent();
     return;
   }
@@ -194,6 +182,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    if (nextAppearanceKey === state.utility.appearanceKey) return;
     const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
     const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
     if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
@@ -209,6 +198,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityIntegrationButton) {
     event.preventDefault();
     const integrationKey = utilityIntegrationButton.getAttribute('data-utility-integration-key') || 'lastfm';
+    if (state.utility.selectedIntegrationKey === integrationKey) return;
     const integrationHandled = handleLibrarySettingsIntegrationSelection(integrationKey);
     if (integrationHandled && typeof integrationHandled.then === 'function') {
       integrationHandled.then((handled) => {

@@ -1,0 +1,26 @@
+/* Shared scrollbar treatment for Gallery, Settings and anchored settings panels. */
+:root {
+  --scrollbar-thumb: color-mix(in srgb, var(--text, #eee) 18%, transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--text, #eee) 30%, transparent);
+}
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-track,
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-corner {
+  background: transparent;
+}
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 99px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+:is(.ui-scrollbar, .gallery-scrollbar, #utility-modal, #utility-modal *, #app-form-modal, #app-form-modal *)::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}

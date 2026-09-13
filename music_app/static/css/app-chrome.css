@@ -116,7 +116,6 @@
   --search-field-color: var(--app-ink);
   --search-field-muted: var(--app-muted);
   --search-field-hover: var(--app-active);
-  --search-field-focus: #72baff;
   font-size: 12px;
 }
 .app-bar .search-field .search-field-control > input[type='search'] {

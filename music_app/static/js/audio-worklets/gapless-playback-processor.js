@@ -538,6 +538,7 @@
       let secondConsumedFrames = 0;
       let secondConsumedAudible = false;
       let secondConsumedEvidence = null;
+      let pendingPlaybackNotification = null;
       const appendConsumedEvidence = (evidence, leftSample, rightSample) => {
         const result = evidence || {
           finiteSamples: 0, nonZeroSamples: 0, peakSample: 0, samples: [],
@@ -661,11 +662,11 @@
               && this.continuity.streamId === this.pendingSeek.streamId) {
             const missingFrames = left.length - outputFrame;
             this.underruns += 1;
-            this.port.postMessage({
+            pendingPlaybackNotification = {
               type: 'underrun', generation: this.generation,
               streamId: this.current.streamId, role: 'current',
               renderedFrame: this.renderedFrames + outputFrame, missingFrames,
-            });
+            };
             outputFrame = left.length;
             break;
           }
@@ -714,26 +715,26 @@
               outputFrame = left.length;
               break;
             }
-            this.port.postMessage({
+            pendingPlaybackNotification = {
               type: 'ended',
               generation: this.generation,
               streamId: this.current.streamId,
               timelineFrame: this.timelineFrame,
-            });
+            };
             this.playing = false;
             break;
           }
           const missingFrames = left.length - outputFrame;
           if (this.current.firstFrameReported) {
             this.underruns += 1;
-            this.port.postMessage({
+            pendingPlaybackNotification = {
               type: 'underrun',
               generation: this.generation,
               streamId: this.current.streamId,
               role: 'current',
               renderedFrame: this.renderedFrames + outputFrame,
               missingFrames,
-            });
+            };
           }
           outputFrame = left.length;
           break;
@@ -817,6 +818,8 @@
           },
         });
       }
+      // Credit this block before a terminal or interruption event closes its listen segment.
+      if (pendingPlaybackNotification) this.port.postMessage(pendingPlaybackNotification);
       if (this.current?.firstFrameReported && outputFrame > 0) {
         this.port.postMessage({
           type: 'position',

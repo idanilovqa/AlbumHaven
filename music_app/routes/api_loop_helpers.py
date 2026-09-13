@@ -43,6 +43,7 @@ def resolve_loop_creation_source(
     resolve_loop_media_path: LoopSourceResolver,
     normalize_music_file_path: TrackPathNormalizer,
     file_cache: dict[str, object],
+    scope=None,
 ):
     parent_loop_id = str(payload.get("source_loop_id") or "").strip()
     parent_loop = get_loop(config, parent_loop_id) if parent_loop_id else None
@@ -57,6 +58,14 @@ def resolve_loop_creation_source(
         return None, ({"ok": False, "error": "Loop times must define a finite positive range"}, 400)
 
     if parent_loop:
+        if scope:
+            from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter, LoopOrderError
+            try:
+                SavedLoopsPostgresAdapter(config).resolve_scoped_source(**scope, item={
+                    'parent_loop_id':parent_loop_id,'start_seconds':start_seconds,'end_seconds':end_seconds,
+                })
+            except LoopOrderError as error:
+                return None, (error.payload,error.status_code)
         original = resolve_loop_original_window(parent_loop, lambda key: get_loop(config, key))
         if original is None:
             return None, ({"ok": False, "error": "Original song timestamps are unavailable for this saved loop"}, 409)
@@ -79,14 +88,25 @@ def resolve_loop_creation_source(
     source_path = normalize_music_file_path(str(payload.get("source_path") or ""))
     if source_path is None:
         return None, ({"ok": False, "error": "Source file was not found or is outside the music library"}, 400)
+    if scope:
+        from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter, LoopOrderError
+        try:
+            track_id, _parent_id = SavedLoopsPostgresAdapter(config).resolve_scoped_source(**scope, item={
+                'source_path': str(source_path), 'start_seconds': start_seconds, 'end_seconds': end_seconds,
+            })
+        except LoopOrderError as error:
+            return None, (error.payload,error.status_code)
     entry = file_cache.get(str(source_path)) if isinstance(file_cache, dict) else None
     entry = entry if isinstance(entry, dict) else {}
+    cover_path = str((entry.get('cover_path') if scope else payload.get('cover_path') or entry.get('cover_path')) or '')
+    if scope and not cover_path:
+        cover_path = SavedLoopsPostgresAdapter(config).get_scoped_track_cover(**scope,track_id=track_id)
     return {
         "source_path": source_path,
         "artist": str(payload.get("artist") or entry.get("artist") or entry.get("album_artist") or ""),
         "title": str(payload.get("title") or entry.get("title") or source_path.stem),
         "album": str(payload.get("album") or entry.get("album") or ""),
-        "cover_path": str(payload.get("cover_path") or entry.get("cover_path") or ""),
+        "cover_path": cover_path,
         "parent_loop_id": "",
         "original_start_seconds": start_seconds,
         "original_end_seconds": end_seconds,

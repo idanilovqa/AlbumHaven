@@ -484,6 +484,7 @@ export class GlobalPlayerActions {
   async openLoopEditor(options = {}) {
     await expect(this.globalPlayer.legacyLoopButton).toHaveCount(0);
     await expect(this.globalPlayer.legacyLoopPopup).toHaveCount(0);
+    await this.hoverLoopAction('enter');
     await this.globalPlayer.loopScissorsButton.click();
     await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'editing');
     await expect(this.globalPlayer.loopCreateButton).toBeVisible({ timeout: options.timeout || 60000 });
@@ -563,6 +564,15 @@ export class GlobalPlayerActions {
   }
 
   async hoverLoopAction(target = 'enter') {
+    const playBounds = await this.globalPlayer.playButton.boundingBox();
+    if (!playBounds) throw new Error('Expected Play to have rendered bounds before revealing loop actions.');
+    await this.globalPlayer.page.mouse.move(
+      playBounds.x + (playBounds.width / 2),
+      playBounds.y + (playBounds.height / 2),
+    );
+    if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+      await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+    }
     const locator = target === 'create'
       ? this.globalPlayer.loopCreateButton
       : target === 'cancel'
@@ -586,10 +596,20 @@ export class GlobalPlayerActions {
     return this.readLoopActionVisualState();
   }
 
+  async verifyTouchLoopCreationAndCancel() {
+    await this.globalPlayer.playButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+    await this.globalPlayer.loopScissorsButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'editing');
+    await expect(this.globalPlayer.loopCancelButton).toBeVisible();
+    await this.globalPlayer.loopCancelButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'idle');
+  }
+
   async moveAwayFromLoopAction() {
     await this.globalPlayer.page.mouse.move(2, 2);
     await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'false');
-    await expect(this.globalPlayer.loopPod).toHaveCSS('width', '39px');
+    await expect(this.globalPlayer.loopAction).toHaveCSS('opacity', '0');
     return this.readLoopActionVisualState();
   }
 
@@ -873,6 +893,7 @@ export class GlobalPlayerActions {
   }
 
   async openLoopNameDialog(options = {}) {
+    await this.hoverLoopAction('create');
     await this.globalPlayer.loopCreateButton.click();
     return this.waitForLoopNameDialog(options);
   }

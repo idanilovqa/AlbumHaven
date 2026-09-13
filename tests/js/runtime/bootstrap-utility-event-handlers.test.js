@@ -259,7 +259,7 @@ test('switching away from Loops clears session-only Space ownership', () => {
   );
 });
 
-test('failure alert Log History link selects its exact entry before opening the tab', async () => {
+test('failure alert Log History link passes its exact entry to the authoritative open owner', async () => {
   const link = createElement({
     'data-log-history-entry-id': 'tag-edit-failure-42',
   });
@@ -272,14 +272,14 @@ test('failure alert Log History link selects its exact entry before opening the 
   let hidden = false;
   let opened = false;
   context.hideRepairAlert = () => { hidden = true; };
-  context.openUtilityLogHistoryTab = () => { opened = true; };
+  context.openUtilityLogHistoryTab = entryId => { opened = entryId; };
 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
   assert.equal(hidden, true);
-  assert.equal(opened, true);
-  assert.equal(context.state.utility.selectedLogHistoryId, 'tag-edit-failure-42');
+  assert.equal(opened, 'tag-edit-failure-42');
+  assert.equal(context.state.utility.selectedLogHistoryId, 'older-entry', 'the controller accepts selection after its scoped request');
 });
 
 test('applying a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
@@ -682,7 +682,7 @@ test('normal repair confirmation keeps Repair local files as its accessible name
   assert.equal(elements.dialog.getAttribute('aria-describedby'), 'repair-confirm-text');
 });
 
-test('canceling exclusion confirmation restores focus to Exclude the problem', () => {
+test('canceling exclusion confirmation restores focus to Create Exception', () => {
   let focusCalls = 0;
   const excludeButton = {
     focus() { focusCalls += 1; },
@@ -1113,15 +1113,16 @@ test('changing the local playlist import file input stores the selected file thr
   assert.equal(receivedFile, playlistFile);
 });
 
-test('clicking Export Logs invokes the explicit browser download action', async () => {
+test('clicking Export displayed logs invokes the scoped snapshot download action', async () => {
   const { context } = createContext({ activeTab: 'log-history' });
   let exportCalls = 0;
-  context.exportBrowserLogHistory = async () => {
+  context.handleUtilityLogHistoryAction = async action => {
+    assert.equal(action, 'export-current');
     exportCalls += 1;
   };
-  const exportButton = createElement({ 'data-export-log-history': '1' });
+  const exportButton = createElement({ 'data-log-history-action': 'export-current' });
   const { event, wasPrevented } = createEvent({
-    '[data-export-log-history="1"]': exportButton,
+    '[data-log-history-action]': exportButton,
   });
   await context.handleUtilityBootstrapClick(event);
   assert.equal(wasPrevented(), true);

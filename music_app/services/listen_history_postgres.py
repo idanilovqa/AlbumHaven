@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import json
 from typing import Any
@@ -26,6 +27,14 @@ def is_listen_history_postgres_available(config: dict[str, object] | None) -> bo
         return False
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
     return bool(database_url) and psycopg is not None and callable(getattr(psycopg, "connect", None))
+
+
+@dataclass(frozen=True)
+class PendingListenEntry:
+    entry: dict[str, object]
+    account_id: int
+    library_id: int
+    row_id: int
 
 
 class PostgresListenHistoryAdapter:
@@ -97,6 +106,52 @@ class PostgresListenHistoryAdapter:
                             ),
                         ),
                     )
+
+    def load_pending_entries(self, *, limit=25):
+        # This preserves the existing configured legacy retry family while
+        # carrying its actual row provenance into delayed callbacks.
+        from music_app.services.listen_history import is_pending_scrobble_entry
+        with self._connect_to_database() as connection:
+            rows = connection.execute(_load_listen_history_sql(include_provenance=True)).fetchall()
+            measured_rows = connection.execute("""
+                select * from integration.listen_history
+                where measurement_version = 'rendered-pcm-v1'
+                  and scrobble_status is distinct from 'scrobbled'
+                order by played_at, id
+            """).fetchall()
+            rows.extend(measured_rows)
+        result = []
+        for row in rows:
+            item = _listen_history_item_from_row(row)
+            if (row['account_id'] and row['library_id'] and is_pending_scrobble_entry(item)
+                    and item.get('scrobble_submission_state') not in ('attempting', 'sent', 'uncertain', 'accepted')):
+                result.append(PendingListenEntry(item, row['account_id'], row['library_id'], row['id']))
+                if len(result) >= max(1, int(limit)):
+                    break
+        return result
+
+    def update_scoped_entry(self, *, account_id, library_id, row_id, entry_id, updates):
+        with self._connect_to_database() as connection:
+            if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+                raise ValueError("Exact listen update scope is required")
+            if row_id is None:
+                row = connection.execute("""select * from integration.listen_history
+                    where account_id=%s and library_id=%s
+                      and measurement_version='rendered-pcm-v1'
+                      and metadata->'source_payload'->>'id'=%s for update""",
+                    (account_id, library_id, entry_id)).fetchone()
+            else:
+                row = connection.execute('select * from integration.listen_history where id=%s and account_id=%s and library_id=%s for update', (row_id, account_id, library_id)).fetchone()
+            if row is None:
+                return None
+            item = _listen_history_item_from_row(row)
+            if str(item.get('id') or '') != str(entry_id):
+                return None
+            item.update(dict(updates))
+            metadata = dict(row['metadata'] or {})
+            metadata['source_payload'] = item
+            connection.execute('update integration.listen_history set metadata=%s,scrobble_status=%s where id=%s and account_id=%s and library_id=%s', (_jsonb(metadata), _scrobble_status(item), row['id'], account_id, library_id))
+            return item
 
     def _connect_to_database(self) -> Any:
         if not self._database_url:
@@ -248,11 +303,16 @@ def _bootstrap_context_ready_sql() -> str:
     return _bootstrap_context_sql() + " select 1 as bootstrap_context_ready from bootstrap_context;"
 
 
-def _load_listen_history_sql() -> str:
+def _load_listen_history_sql(*, include_provenance: bool = False) -> str:
+    provenance = (
+        "integration.listen_history.id, integration.listen_history.account_id, "
+        "integration.listen_history.library_id,"
+        if include_provenance else ""
+    )
     return (
         _bootstrap_context_sql()
         + f"""
-        select
+        select {provenance}
           integration.listen_history.track_key,
           integration.listen_history.played_at,
           integration.listen_history.source_entry_id,

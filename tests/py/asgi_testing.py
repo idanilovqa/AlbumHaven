@@ -15,7 +15,7 @@ from tests.py.runtime_testing import configure_test_app_paths
 
 class _BootstrapOwnerResolver:
     def resolve(self, _raw_token):
-        from music_app.services.current_actor import ActorState, CurrentActor
+        from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
         return CurrentActor(
             state=ActorState.ACTIVE,
@@ -23,6 +23,8 @@ class _BootstrapOwnerResolver:
             session_id=1,
             username_display="Rendref",
             is_bootstrap_owner=True,
+            current_library_id=1,
+            library_relationships=(LibraryRelationship(1, "owner", True),),
         )
 
 

@@ -1419,3 +1419,39 @@ test('stop clears playback and reports the exact rendered position', () => {
   }]);
   assert.equal(fixture.events('consumed').length, 0);
 });
+
+
+function measuredProcessorReceiver(fixture, initialSeconds) {
+  const track = {path:'/owned/terminal',title:'Terminal',artist:'Artist'};
+  const role = {role:'current',streamId:41,generation:fixture.generation,track,eosReceived:true};
+  const engine = {generation:fixture.generation,roles:{current:role},context:{sampleRate:48000},snapshot:{currentTime:0,duration:200},diagnostics:{staleMessages:0,underruns:0,bufferedFrames:{current:128},inFlightFrames:{current:0}}};
+  const completions=[];const requests=[];
+  const c={window:{},console,crypto:require('node:crypto'),state:{player:{current:track}},isoNow:()=> '2026-09-09T12:00:00Z',unixNowSeconds:()=>1788955200,getPlayerPlaybackSnapshot:()=>engine.snapshot,
+    fetch:async(_url,options)=>{requests.push(JSON.parse(options.body));return {ok:true,json:async()=>({ok:true})};}};
+  vm.createContext(c);
+  for(const name of ['player-streaming-engine.js','player-listen-session-helpers.js'])vm.runInContext(fs.readFileSync(path.join(path.dirname(processorPath),'../runtime',name),'utf8'),c);
+  c.streamingEngineState=()=>engine;c.streamingRoleForId=id=>id===41?role:null;
+  c.streamingRoleCapacityFrames=()=>512;c.recordStreamingRenderedPcmEvidence=()=>{};c.maybeNotifyStreamingWaveformReady=()=>{};
+  c.streamingAbsoluteTimelineFrame=(_role,frame)=>frame;c.observeStreamingFacadeCallback=promise=>completions.push(promise);
+  c.failStreamingEngine=(_kind,error)=>{throw error;};
+  c.startListenSession(track);const session=c.state.player.listenSession;
+  session.measurement.total=initialSeconds;session.measurement.contiguous=initialSeconds;session.measurement.longest=initialSeconds;role.measuredListenSession=session;
+  c.handleStreamingPlaybackEnded=()=>c.finalizeListenSession('ended',{session,skipCloseSegment:true,duration:200});
+  return {c,session,requests,completions,deliver(){for(const message of fixture.port.events.filter(item=>['consumed','ended','underrun'].includes(item.type)))c.handleStreamingWorkletMessage(message);}};
+}
+
+test('processor terminal quantum credits rendered frames through engine before finalizing measurement',async()=>{
+  const fixture=createProcessor();enqueue(fixture,{streamId:41,role:'current',sequence:0,left:sequence(1,64)});
+  markEos(fixture,{streamId:41,role:'current',emittedFrames:64});play(fixture);
+  const receiver=measuredProcessorReceiver(fixture,10);renderQuantum(fixture);receiver.deliver();await Promise.all(receiver.completions);
+  assert.equal(receiver.session.measurement.total,10+64/48000);
+  assert.equal(receiver.requests.length,1);assert.equal(receiver.requests[0].measured_listened_seconds,10.001);
+});
+
+test('processor partial underrun credits preceding frames before ending the measured contiguous segment',()=>{
+  const fixture=createProcessor();enqueue(fixture,{streamId:41,role:'current',sequence:0,left:sequence(1,32)});play(fixture);
+  const receiver=measuredProcessorReceiver(fixture,2);renderQuantum(fixture);receiver.deliver();
+  assert.equal(receiver.session.measurement.total,2+32/48000);
+  assert.equal(receiver.session.measurement.longest,2+32/48000);
+  assert.equal(receiver.session.measurement.contiguous,0);
+});

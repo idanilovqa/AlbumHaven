@@ -1651,7 +1651,9 @@ class PostgresLibraryBrowseRepository:
             if str(album.get("key") or "") not in requested_keys:
                 continue
             album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
-            return _problematic_album_detail_payload(album)
+            detail = _problematic_album_detail_payload(album)
+            if detail is not None:
+                return detail
         missing_albums = _missing_album_projection_payloads(
             self._load_missing_album_rows(album_key=str(album_key or ""))
         )

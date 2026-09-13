@@ -121,7 +121,7 @@ export async function readResponsiveGalleryLayout(galleryPage, options = {}) {
       galleryBounds,
       columnCount: rowCardCounts.length ? Math.max(...rowCardCounts) : 0,
       rowCardCounts,
-      fullRowRightGaps: rows.filter(row => row.querySelectorAll(selectors.albumCardSelector).length === Math.max(...rowCardCounts)).map(row => {
+      fullRowRightGaps: rows.filter(row => Math.max(...rowCardCounts) > 0 && row.querySelectorAll(selectors.albumCardSelector).length === Math.max(...rowCardCounts)).map(row => {
         const last = row.querySelectorAll(selectors.albumCardSelector);
         return row.getBoundingClientRect().right - last[last.length - 1].getBoundingClientRect().right;
       }),

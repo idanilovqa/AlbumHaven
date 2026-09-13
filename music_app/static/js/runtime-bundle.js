@@ -1174,6 +1174,17 @@ function getReusableSelectedArtistBrowseView(view) {
     : null;
   const cachedView = cachedViews ? cachedViews[requestedSignature] : null;
   if (!cachedView) return null;
+  const requestedSource = String(view?.search_context?.selected_artist_source || '').trim();
+  const cachedSource = String(cachedView?.search_context?.selected_artist_source || '').trim();
+  const selectedArtist = String(view?.selected_artist || '').trim();
+  const cachedNameMatches = cachedView?.search_context?.artist_name_match_artists;
+  // Automatic search selection may include connected-family previews. An explicit
+  // content-only selection instead requires the server's narrow matching records.
+  if (requestedSource === 'requested_artist' && cachedSource === 'auto_top_match'
+    && !(Array.isArray(cachedNameMatches)
+      && cachedNameMatches.some(artist => String(artist || '').trim() === selectedArtist))) {
+    return null;
+  }
   return cloneRuntimeReusableSelectedArtistBrowseView(cachedView);
 }
 
@@ -2195,6 +2206,97 @@ function getBrowserDialogTarget() {
   }
 }
 
+let activeAppFormDialog = null;
+function showAppFormDialog(options = {}) {
+  if (activeAppFormDialog) return activeAppFormDialog.promise;
+  const get = name => document.getElementById(`app-form-${name}`);
+  const modal = get('modal'), title = get('title'), content = get('content'), error = get('error'), cancel = get('cancel'), submit = get('submit');
+  if (!modal || !title || !content || !error || !cancel || !submit) return Promise.resolve(null);
+  const previousFocus = document.activeElement;
+  const anchor = options.anchor;
+  const anchoredPanel = anchor ? modal.querySelector('.confirm-modal-dialog') : null;
+  const listeners = [];
+  let positionObserver = null;
+  const listen = (node, name, handler) => { node.addEventListener(name, handler); listeners.push([node, name, handler]); };
+  let resolve; const promise = new Promise(done => { resolve = done; });
+  const owner = { promise }; activeAppFormDialog = owner;
+  let submitEnabled = options.submitEnabled !== false, submitting = false;
+  const syncSubmit = () => { if (activeAppFormDialog === owner) submit.disabled = submitting || !submitEnabled; };
+  const controls = { setSubmitEnabled(value) {
+    if (activeAppFormDialog !== owner) return;
+    submitEnabled = Boolean(value); syncSubmit();
+  } };
+  const finish = value => {
+    if (activeAppFormDialog !== owner) return;
+    listeners.forEach(([node, name, handler]) => node.removeEventListener(name, handler));
+    positionObserver?.disconnect();
+    options.onClose?.(content);
+    if (anchoredPanel) { clearTriggerAnchor(anchoredPanel); anchoredPanel.removeAttribute('style'); anchoredPanel.setAttribute('aria-modal', 'true'); modal.classList.remove('app-form-anchored'); }
+    modal.classList?.remove('app-form-reading'); submit.hidden = false;
+    modal.hidden = true; content.innerHTML = ''; activeAppFormDialog = null;
+    resolve(value); previousFocus?.focus?.({ preventScroll: true });
+  };
+  const apply = async event => {
+    event?.preventDefault?.();
+    if (submit.disabled || options.mode === 'reading') return;
+    submitting = true; syncSubmit(); error.textContent = '';
+    try { const result = await options.onSubmit?.(content); if (activeAppFormDialog === owner) finish(result ?? true); }
+    catch (failure) { if (activeAppFormDialog === owner) error.textContent = failure.message || 'Unable to apply changes.'; }
+    finally { submitting = false; syncSubmit(); }
+  };
+  title.textContent = options.title || 'Settings'; content.innerHTML = options.contentHtml || ''; error.textContent = '';
+  submit.textContent = options.submitLabel || 'Apply'; syncSubmit(); cancel.textContent = options.cancelLabel || 'Cancel';
+  submit.hidden = options.mode === 'reading'; cancel.hidden = false;
+  if (options.mode === 'reading') { cancel.textContent = 'Close'; modal.classList?.add('app-form-reading'); }
+  modal.hidden = false; modal.style.zIndex = '125';
+  modal.querySelector?.('.confirm-modal-dialog')?.removeAttribute('hidden');
+  if (anchoredPanel) {
+    const boundaryElement = anchor.closest?.('.utility-modal-dialog');
+    const position = () => {
+      if (activeAppFormDialog !== owner || modal.hidden) return;
+      const rect = anchor.getBoundingClientRect();
+      const searchField = boundaryElement && anchor.closest?.('.search-field-control');
+      const searchRect = searchField?.getBoundingClientRect();
+      const joinedTop = searchRect ? searchRect.bottom - 1 : rect.bottom + 4;
+      const boundary = boundaryElement?.getBoundingClientRect();
+      const left = Math.max(16, Math.min(window.innerWidth - 24, Number(boundary?.left || 0) + 16));
+      const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
+      const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+      const width = Math.min(440, right - left);
+      const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
+      const panelLeft = searchRect
+        ? Math.max(8, Math.min(searchRect.left, window.innerWidth - width - 8))
+        : Math.max(left, Math.min(rect.right - width, right - width));
+      anchoredPanel.style.position = 'fixed'; anchoredPanel.style.left = `${panelLeft}px`; anchoredPanel.style.top = `${top}px`;
+      anchoredPanel.style.width = `${width}px`; anchoredPanel.style.maxHeight = `${bottom - top}px`;
+      syncTriggerAnchor(anchoredPanel, anchor);
+    };
+    modal.classList.add('app-form-anchored'); anchoredPanel.setAttribute('aria-modal', 'false');
+    position();
+    if (typeof window.addEventListener === 'function') listen(window, 'resize', position);
+    if (window.visualViewport?.addEventListener) listen(window.visualViewport, 'resize', position);
+    if (typeof ResizeObserver === 'function') {
+      positionObserver = new ResizeObserver(position);
+      positionObserver.observe(anchor);
+      if (boundaryElement) positionObserver.observe(boundaryElement);
+    }
+  }
+  if (typeof bindOverlayPointerOrigin === 'function') bindOverlayPointerOrigin(modal);
+  listen(cancel, 'click', () => finish(null)); listen(submit, 'click', apply);
+  listen(modal, 'keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); finish(null); return; }
+    if (event.key !== 'Tab') return;
+    const controls = [...content.querySelectorAll('input, button, textarea, [tabindex="0"]'), cancel, submit].filter(node => !node.disabled && !node.hidden);
+    const first = controls[0], last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+  listen(modal, 'click', event => { if (typeof overlayClickStartedOnOverlay === 'function' && overlayClickStartedOnOverlay(modal, event)) finish(null); });
+  options.onMount?.(content, controls);
+  (content.querySelectorAll('input, button, textarea, [tabindex="0"]')[0] || cancel).focus();
+  return promise;
+}
+
 function showBrowserAlert(message) {
   const target = getBrowserDialogTarget();
   if (typeof target?.alert !== 'function') return false;
@@ -3032,6 +3134,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   if (typeof renderLibraryWarning === 'function') renderLibraryWarning(normalizedStatus);
   const indicator = document.getElementById('scan-indicator');
@@ -3141,6 +3244,84 @@ function shouldAutoHideNotification(duration) {
 }
 
 const activeErrorToasts = new Map();
+let libraryWatcherWarning = null;
+let libraryWatcherWarningDismissed = false;
+let libraryWatcherHealth = null;
+const libraryWatcherDismissalKey = 'album-haven.library-watcher-warning-dismissed.v1';
+
+function isLibraryWatcherWarningDismissed() {
+  try {
+    return libraryWatcherWarningDismissed || window.localStorage?.getItem(libraryWatcherDismissalKey) === '1';
+  } catch (_error) {
+    return libraryWatcherWarningDismissed;
+  }
+}
+
+function dismissLibraryWatcherWarning() {
+  libraryWatcherWarningDismissed = true;
+  try { window.localStorage?.setItem(libraryWatcherDismissalKey, '1'); } catch (_error) {}
+  libraryWatcherWarning?.remove();
+  libraryWatcherWarning = null;
+}
+
+function syncScanLibraryWatcherHealth(data = {}, scanPageVisible = Boolean(typeof state !== 'undefined' && state.ui?.scanPageReturnContext)) {
+  if (Object.prototype.hasOwnProperty.call(data, 'watcher_health')) libraryWatcherHealth = data.watcher_health;
+  const host = document.getElementById('library-loader-watch-health');
+  if (!host) return;
+  if (!scanPageVisible) { host.hidden = true; host.innerHTML = ''; return; }
+  const problems = libraryWatcherHealth?.problems || [];
+  const warning = libraryWatcherHealth?.state === 'warning' || problems.length > 0;
+  host.hidden = !warning;
+  if (!warning) { host.innerHTML = ''; return; }
+  const unavailable = problems.some(problem => problem.state === 'root_unavailable');
+  const message = unavailable
+    ? 'A watched library folder became unavailable. Reconnect the drive or network share, check that the folder is accessible, then run Full Rescan from Library Status.'
+    : problems.length
+      ? 'The library watcher may have missed file changes. Run Full Rescan from Library Status to reconcile the library with your files.'
+      : 'Library watcher diagnostics are unavailable. Check drive and network access, then retry the library scan.';
+  host.innerHTML = buildOnPageAlertHtml({ severity: 'warning', title: 'Library watcher needs attention', message });
+}
+
+function syncLibraryWatcherWarning(data = {}) {
+  if (!Object.prototype.hasOwnProperty.call(data, 'watcher_health')) return;
+  const health = data.watcher_health;
+  syncScanLibraryWatcherHealth(data);
+  const warning = health?.state === 'warning'
+    || (Array.isArray(health?.problems) && health.problems.length > 0);
+  if (!warning) {
+    libraryWatcherWarning?.remove();
+    libraryWatcherWarning = null;
+    return;
+  }
+  if (isLibraryWatcherWarningDismissed()) {
+    libraryWatcherWarning?.remove();
+    libraryWatcherWarning = null;
+    return;
+  }
+  if (libraryWatcherWarning?.parentElement) return;
+  const layer = document.getElementById('toast-layer');
+  if (!layer) return;
+  libraryWatcherWarning = document.createElement('div');
+  libraryWatcherWarning.className = 'system-warning-notification';
+  libraryWatcherWarning.innerHTML = buildOnPageAlertHtml({
+    severity: 'warning',
+    title: 'Library watcher needs attention',
+    message: 'Some library changes may have been missed. Check Library Status for recovery options.',
+    actionsHtml: window.ButtonComponent.renderButton({ label: 'Dismiss', className: 'on-page-alert__dismiss', attributes: { 'data-watcher-dismiss': '1' } })
+      + window.ButtonComponent.renderButton({ label: 'Go to Library page', variant: 'primary', attributes: { 'data-watcher-library': '1' } }),
+  });
+  libraryWatcherWarning.addEventListener('click', event => {
+    if (event.target.closest('[data-watcher-dismiss]')) {
+      dismissLibraryWatcherWarning();
+    } else if (event.target.closest('[data-watcher-library]')) {
+      dismissLibraryWatcherWarning();
+      closeUtilityModal();
+      openScanPage();
+      syncScanLibraryWatcherHealth();
+    }
+  });
+  layer.appendChild(libraryWatcherWarning);
+}
 
 function showToast(html, variant = 'success', duration = 3600, options = {}) {
   const layer = document.getElementById('toast-layer');
@@ -3491,8 +3672,8 @@ function buildAlbumArtboxHtml(config = {}) {
 }
 
 function buildUtilityAlbumArtbox(album, { label = 'Album artwork', interactive = false, source = '' } = {}) {
-  const preview = source || buildAlbumDisplayCoverUrl(album);
-  const fullSource = buildAlbumLightboxCoverUrl(album) || preview;
+  const preview = source || album?.cover_url || buildAlbumDisplayCoverUrl(album);
+  const fullSource = album?.cover_url || buildAlbumLightboxCoverUrl(album) || preview;
   const artbox = buildAlbumArtboxHtml({
     state: preview ? 'ready' : 'missing', label,
     coverHtml: preview ? `<img class="utility-detail-cover-image" src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
@@ -4168,6 +4349,11 @@ const state = {
     rulesLoading: false,
     rulesLoadPromise: null,
       loops: [],
+      loopsSearchQuery: '',
+      loopOrderPending: {},
+      loopViewGeneration: 0,
+      loopDataGeneration: 0,
+      loopMutationGeneration: 0,
       selectedLoopGroupKey: '',
       selectedLoopDetailMode: 'group',
       collapsedLoopGroups: {},
@@ -4534,6 +4720,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
   const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
@@ -4547,7 +4734,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
-  const canBrowseScanned = shouldShow
+  const canBrowseScanned = shouldShow && !hasSearch
     && !pendingViewTransition
     && (
       finalizingActiveScan
@@ -4592,13 +4779,14 @@ function renderLibraryLoader(data = {}, options = {}) {
   );
   if (!shouldShow) return;
 
-  if (hasSearch && !isLoadingState && !forcedScanPageVisible && !scanPageVisible) {
+  if (hasSearch && !pendingViewTransition && !scanPageVisible) {
     spinner.hidden = true;
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
     browseButton.hidden = true;
-    if (actions) actions.hidden = Boolean(!cancelButton || cancelButton.hidden);
+    if (cancelButton) cancelButton.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 
@@ -4690,16 +4878,29 @@ function getTriggerAnchorGeometry(anchor, surface) {
 
 let activeTriggerSurface = null;
 function activateTriggerSurface(surface, close) {
-  if (activeTriggerSurface?.surface === surface) return;
-  const previous = activeTriggerSurface;
-  activeTriggerSurface = null;
-  previous?.close();
-  activeTriggerSurface = { surface, close };
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    if (owner.surface === surface) return;
+  }
+  while (activeTriggerSurface && !activeTriggerSurface.surface.contains?.(surface)) {
+    const previous = activeTriggerSurface;
+    activeTriggerSurface = previous.parent || null;
+    previous.close();
+  }
+  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
 }
 
 const triggerAnchorBindings = new WeakMap();
 function clearTriggerAnchor(surface) {
-  if (activeTriggerSurface?.surface === surface) activeTriggerSurface = null;
+  let owner = activeTriggerSurface;
+  while (owner && owner.surface !== surface) owner = owner.parent;
+  if (owner) {
+    while (activeTriggerSurface !== owner) {
+      const child = activeTriggerSurface;
+      activeTriggerSurface = child.parent;
+      child.close();
+    }
+    activeTriggerSurface = owner.parent || null;
+  }
   const binding = triggerAnchorBindings.get(surface);
   if (!binding) return;
   binding.observer?.disconnect();
@@ -6599,6 +6800,7 @@ function handleStreamingWorkletMessage(message) {
           outgoingTrackPath,
           incomingTrackPath,
           outgoingPlaybackSnapshot,
+          incomingListenSession: continuity.measuredListenSession || null,
           renderedFrame: message.renderedFrame,
           continuityKind: promotedLoop?.kind || 'queued-next',
         }), 'boundary-facade-error');
@@ -6721,12 +6923,16 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
   if (message.type === 'consumed' && streamingWireRoleAccepted(roleState, message.role)
       && Number.isInteger(message.frames) && message.frames >= 0
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
+    if (typeof recordMeasuredStreamingFrames === 'function') {
+      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+    }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
       ? message.bufferedFrames
@@ -7724,13 +7930,13 @@ function attachAccountMenu(component) {
     trigger.setAttribute('aria-expanded', 'false');
     if (restoreFocus) trigger.focus();
   };
-  const open = (last = false) => {
+  const open = (last = false, focusItem = true) => {
     if (typeof activateTriggerSurface === 'function') activateTriggerSurface(menu, () => close(false));
     menu.hidden = false;
     trigger.setAttribute('aria-expanded', 'true');
     if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
     const items = enabledItems();
-    (last ? items[items.length - 1] : items[0])?.focus();
+    if (focusItem) (last ? items[items.length - 1] : items[0])?.focus();
   };
   globalThis.addEventListener?.('resize', () => {
     if (!menu.hidden && typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
@@ -7741,7 +7947,7 @@ function attachAccountMenu(component) {
   };
   trigger.addEventListener('click', (event) => {
     event.preventDefault();
-    if (menu.hidden) open();
+    if (menu.hidden) open(false, event.detail === 0);
     else close(true);
   });
   menu.addEventListener('click', (event) => {
@@ -11797,7 +12003,7 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = 'capsule' } = {}) {
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule' } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }
@@ -12028,6 +12234,7 @@ function mountGlobalPlayerLoopControls() {
   if (els.loopRange && !els.loopRange._loopRangeController) {
     els.loopRange._loopRangeController = options.mountRange(els.loopRange);
   }
+  if (typeof syncSavedAppearanceLoopControlStyle === 'function') syncSavedAppearanceLoopControlStyle();
 }
 
 function formatTrackDuration(seconds) {
@@ -12190,11 +12397,31 @@ function clearWaveformCanvas() {
   ctx.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
 }
 
+const playerTextTransitions = new WeakMap();
 function setPlayerSeekbarPresentation(isWaveform) {
   const mode = isWaveform ? 'waveform' : 'regular';
   const player = getPlayerElements().player;
+  const previousMode = player?.getAttribute('data-player-seekbar-presentation');
+  const animateText = previousMode && previousMode !== mode
+    && !(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const text = animateText ? Array.from(player.querySelectorAll('.player-meta, .player-time')).map(node => {
+    const rect = node.getBoundingClientRect();
+    playerTextTransitions.get(node)?.cancel();
+    return { node, rect };
+  }) : [];
   player?.setAttribute('data-player-seekbar-presentation', mode);
   document.documentElement?.classList.toggle('has-waveform-player', isWaveform);
+  text.forEach(({ node, rect }) => {
+    const next = node.getBoundingClientRect();
+    const origin = `translate(${rect.left - next.left}px, ${rect.top - next.top}px)`;
+    const animation = node.animate?.([
+      { transform: origin, opacity: 1, offset: 0 },
+      { transform: origin, opacity: 0, offset: .3 },
+      { transform: 'translate(0, 0)', opacity: 0, offset: .45 },
+      { transform: 'translate(0, 0)', opacity: 1, offset: 1 },
+    ], { duration: 320, easing: 'ease-in-out' });
+    if (animation) playerTextTransitions.set(node, animation);
+  });
 }
 
 async function updateWaveformAppearance(forceReload = false) {
@@ -12207,10 +12434,10 @@ async function updateWaveformAppearance(forceReload = false) {
   setPlayerSeekbarPresentation(isWaveform);
   wrap?.classList.toggle('is-waveform', isWaveform);
   if (els.waveformCanvas) {
-    els.waveformCanvas.hidden = !isWaveform;
+    els.waveformCanvas.hidden = false;
   }
   if (!isWaveform || !els.waveformCanvas || !path) {
-    clearWaveformCanvas();
+    if (!path) clearWaveformCanvas();
     return;
   }
   const renderToken = forceReload ? state.player.waveform.renderToken + 1 : state.player.waveform.renderToken;
@@ -12282,25 +12509,35 @@ function buildProblematicAlbumListItem(album, selected) {
 }
 
 function buildUtilityRuleListItem(rule, selected) {
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-rule-key="${escapeHtml(rule.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(rule.title || 'Rule')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(rule.description || '')}</span>
-      <span class="utility-list-item-issues">${Number(rule.count || 0)} applied</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(rule.key || ''), selected,
+    label: rule.title || 'Rule',
+    subtitle: rule.key === 'version-exceptions' ? 'Albums kept as separate releases'
+      : rule.key === 'problem-ignores' ? 'Selected album and track problems' : rule.description || '',
+    attributes: { 'data-utility-rule-key': String(rule.key || '') },
+  });
 }
 
 function buildUtilityLoopGroupKey(loop) {
-  const artist = String(loop?.artist || '').trim().toLowerCase();
-  const title = String(loop?.title || '').trim().toLowerCase();
-  const album = String(loop?.album || '').trim().toLowerCase();
-  if (artist || title || album) {
-    return `${artist}::${title}::${album}`;
-  }
-  const sourcePath = String(loop?.source_path || '').trim().toLowerCase();
-  if (sourcePath) return sourcePath;
-  return String(loop?.id || '');
+  const songKey = typeof loop?.song_key === 'string' ? loop.song_key : '';
+  if (songKey && loop?.song_identity_status === 'resolved') return songKey;
+  return loop?.id ? `unresolved:${String(loop.id)}` : '';
+}
+
+function canReorderUtilityLoop(loop) {
+  return state.utility.allowedActions?.['library.loops.reorder'] === true
+    && loop?.song_identity_status === 'resolved'
+    && typeof loop.song_key === 'string' && Boolean(loop.song_key)
+    && loop.can_reorder === true
+    && Number.isSafeInteger(loop.order_revision) && loop.order_revision >= 0;
+}
+
+function buildUtilityLoopTreeChild(loop, groupKey) {
+  return `<div class="utility-loop-tree-child" draggable="${canReorderUtilityLoop(loop)}" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
+    <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
+    <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
+    <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
+  </div>`;
 }
 
 function groupUtilityLoops(loops) {
@@ -12341,21 +12578,15 @@ function buildUtilityLoopTree(group, selectedGroupKey, selectedLoopId) {
   const loopsHtml = collapsed
     ? ''
     : `
-      <div class="utility-loop-tree-children">
-        ${(group?.loops || []).map((loop) => `
-          <div class="utility-loop-tree-child" draggable="true" data-utility-loop-id="${escapeHtml(loop?.id || '')}" data-utility-loop-group-key="${escapeHtml(groupKey)}">
-            <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
-            <span class="utility-loop-tree-label">${escapeHtml(loop?.name || 'Saved loop')}</span>
-            <span class="utility-loop-tree-duration">${formatLoopTime(loop.duration_seconds || Number(loop.end_seconds) - Number(loop.start_seconds))}</span>
-          </div>
-        `).join('')}
+      <div class="utility-loop-tree-children" data-loop-tree-song="${escapeHtml(groupKey)}">
+        ${(group?.loops || []).map(loop => buildUtilityLoopTreeChild(loop, groupKey)).join('')}
       </div>
     `;
   return `
     <div class="utility-loop-tree ${groupSelected ? 'is-group-selected' : ''} ${collapsed ? 'is-collapsed' : ''}" data-utility-loop-tree="${escapeHtml(groupKey)}">
       <div class="utility-loop-group-row ${groupSelected ? 'is-active' : ''}">
         ${window.NavigationTree.renderItem({
-          variant: 'wide', action: true, key: groupKey, draggable: true, className: 'utility-loop-group-list-item',
+          variant: 'wide', action: true, key: groupKey, draggable: false, className: 'utility-loop-group-list-item',
           selected: groupSelected,
           label: title, subtitle, year: representative?.year || '', artworkHtml,
           count: loopCount, countHidden: true,
@@ -13016,7 +13247,11 @@ async function fetchAndRender(url, push = true, options = {}) {
     state.awaitingInitialDataRefresh = false;
   }
   if (state.busy) {
-    if (String(state.ui.activeViewRequestUrl || '') === apiUrl) {
+    if (
+      String(state.ui.activeViewRequestUrl || '') === apiUrl
+      && Number(state.ui.activeViewRequestTagEditMutationRevision || 0)
+        === Number(state.ui.tagEditOptimisticMutationRevision || 0)
+    ) {
       const activeController = state.ui.activeViewRequestController;
       if (
         restartIfSameUrl
@@ -13064,8 +13299,10 @@ async function fetchAndRender(url, push = true, options = {}) {
   let viewRendered = false;
   const requestId = Number(state.ui.activeViewRequestId || 0) + 1;
   const requestViewStateRevision = readViewStateRevision();
+  const requestTagEditMutationRevision = Number(state.ui.tagEditOptimisticMutationRevision || 0);
   const controller = typeof AbortController === 'function' ? new AbortController() : null;
   state.ui.activeViewRequestId = requestId;
+  state.ui.activeViewRequestTagEditMutationRevision = requestTagEditMutationRevision;
   state.ui.activeViewRequestUrl = apiUrl;
   state.ui.activeViewRequestPush = Boolean(push);
   state.ui.activeViewRequestStartupRefresh = Boolean(requestOptions.startupRefresh);
@@ -13108,6 +13345,10 @@ async function fetchAndRender(url, push = true, options = {}) {
       payloadTier: String(data?.payload_tier || ''),
     });
     if (!requestOwnsCurrentViewState(requestId, requestViewStateRevision)) {
+      return false;
+    }
+    // A response dispatched before a tag edit must not replace its optimistic view.
+    if (requestTagEditMutationRevision !== Number(state.ui.tagEditOptimisticMutationRevision || 0)) {
       return false;
     }
     if (typeof requestOptions.shouldApplyResponse === 'function') {
@@ -13295,6 +13536,7 @@ async function fetchAndRender(url, push = true, options = {}) {
     }
     if (state.ui.activeViewRequestId === requestId) {
       state.ui.activeViewRequestController = null;
+      state.ui.activeViewRequestTagEditMutationRevision = null;
       state.ui.activeViewRequestUrl = '';
       state.ui.activeViewRequestPush = false;
       state.ui.activeViewRequestStartupRefresh = false;
@@ -13848,33 +14090,6 @@ async function pollStatus() {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;
         showToast(`Last scan error: ${escapeHtml(lastErrorText)}`, 'error', 4800);
       }
-      const scanGeneration = Number(normalizedStatus.scan_generation) || 0;
-      const historyIdentity = `${scanGeneration}:${lastErrorText}`;
-      if (state.ui.lastStatusErrorHistoryIdentity !== historyIdentity) {
-        state.ui.lastStatusErrorHistoryIdentity = historyIdentity;
-        try {
-          const historyPersistence = prependUtilityLogHistoryEntry({
-            id: `library-status-error:${scanGeneration}`,
-            action: 'Library status error',
-            level: 'error',
-            error: lastErrorText,
-            scan_generation: scanGeneration,
-            scan_phase: String(normalizedStatus.scan_phase || ''),
-            scan_outcome: scanOutcome,
-          });
-          Promise.resolve(historyPersistence).catch((historyError) => {
-            console.error(
-              '[AlbumHaven][History] Failed to persist a library status error.',
-              historyError,
-            );
-          });
-        } catch (historyError) {
-          console.error(
-            '[AlbumHaven][History] Failed to persist a library status error.',
-            historyError,
-          );
-        }
-      }
     } else {
       state.ui.lastStatusErrorToastIdentity = '';
       state.ui.lastStatusErrorHistoryIdentity = '';
@@ -14374,6 +14589,428 @@ async function exportBrowserLogHistory() {
 
 // END js/runtime/browser-log-history-store.js
 
+// BEGIN js/runtime/utility-log-history-query.js
+
+function normalizeUtilityLogHistoryQuery(draft, { now = new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone } = {}) {
+  const formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  const parts = value => Object.fromEntries(formatter.formatToParts(value).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)]));
+  const parseDate = text => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(text || ''))) throw new Error('Choose a valid date range.');
+    const [year, month, day] = text.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) throw new Error('Choose valid calendar dates.');
+    return date;
+  };
+  const local = parts(new Date(now));
+  let start, end;
+  if (draft?.preset === 'custom') {
+    start = parseDate(draft.fromDate); end = parseDate(draft.toDate);
+    if (start > end) throw new Error('The start date must precede the end date.');
+  } else {
+    const days = { today: 1, '7-days': 7, '30-days': 30 }[draft?.preset];
+    if (!days) throw new Error('Choose a date preset.');
+    end = new Date(Date.UTC(local.year, local.month - 1, local.day));
+    start = new Date(end.getTime() - (days - 1) * 86400000);
+  }
+  end = new Date(end.getTime() + 86400000);
+  const midnightUtc = date => {
+    const target = date.getTime(); let candidate = target;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const p = parts(new Date(candidate));
+      const represented = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+      const difference = target - represented;
+      if (!difference) return new Date(candidate).toISOString();
+      candidate += difference;
+    }
+    throw new Error('Unable to resolve the selected local date.');
+  };
+  const list = value => Array.from(new Set((Array.isArray(value) ? value : []).map(item => String(item).trim()).filter(Boolean))).sort();
+  return { from_utc: midnightUtc(start), to_utc: midnightUtc(end), sources: list(draft.sources), event_types: list(draft.event_types), text: String(draft.text || '').trim(), event_ids: [] };
+}
+
+function createUtilityLogHistoryQueryController({ fetchPage, exportQuery, contextKey, now = () => new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone, onChange = () => {}, onAccepted = () => {} }) {
+  let epoch = 0, navigationEpoch = 0, context = contextKey, previousSelection = '', temporarySerial = 0, periodCapture = null;
+  let state = { query: null, snapshot: null, items: [], selectedEventId: '', temporaryRowId: null, draft: null, stale: false, refreshRequired: false, error: '', loading: false, nextCursor: null, revision: '' };
+  const emit = () => onChange({ ...state });
+  const capture = async (query, selection, temporary, metadata = {}) => {
+    const token = ++epoch;
+    const baseToken = Object.keys(query).length === 0 ? ++navigationEpoch : null;
+    state.loading = true; state.error = ''; emit();
+    try {
+      const page = await fetchPage({ query, cursor: null, snapshot: null, page_size: 500 });
+      if (token !== epoch) return;
+      state = { ...state, query, snapshot: page.snapshot, items: page.items || [], nextCursor: page.next_cursor || null, revision: page.revision || '', selectedEventId: selection, temporaryRowId: temporary, ...metadata, draft: null, stale: false, refreshRequired: false, error: '' };
+      onAccepted({ query, items: state.items, page, publishNavigation: baseToken === navigationEpoch });
+      if (!selection && temporary) periodCapture = { ...state, loading: false };
+    } catch (error) {
+      if (token !== epoch) return;
+      state.error = error.message || String(error); throw error;
+    } finally { if (token === epoch) { state.loading = false; emit(); } }
+  };
+  return {
+    getState: () => ({ ...state }),
+    beginDraft(draft = { preset: 'today' }) { state.draft = { ...draft }; emit(); },
+    cancelDraft() { state.draft = null; emit(); },
+    async applyDraft() {
+      if (!state.draft) throw new Error('No query draft is open.');
+      const query = normalizeUtilityLogHistoryQuery(state.draft, { now: typeof now === 'function' ? now() : now, timeZone });
+      const dates = new Intl.DateTimeFormat(undefined, { timeZone, dateStyle: 'medium' });
+      const periodLabel = `${dates.format(new Date(query.from_utc))} – ${dates.format(new Date(new Date(query.to_utc).getTime() - 1))} · ${timeZone}`;
+      if (!state.temporaryRowId) previousSelection = state.selectedEventId;
+      const row = state.temporaryRowId || `log-query-${++temporarySerial}`;
+      return capture(query, '', row, { periodLabel });
+    },
+    clear() { ++epoch; periodCapture = null; state = { ...state, temporaryRowId: null, periodLabel: undefined, query: null, snapshot: null, items: [], selectedEventId: previousSelection, draft: null, nextCursor: null, loading: false, error: '', stale: false, refreshRequired: false }; emit(); },
+    selectEvent(id) { return capture({ event_ids: [String(id)] }, String(id), state.temporaryRowId); },
+    selectPeriod() { if (!periodCapture) return; ++epoch; state = { ...periodCapture, draft: null, loading: false }; emit(); },
+    refresh() { if (!state.query) return capture({}, '', null); return capture(state.query, state.selectedEventId, state.temporaryRowId); },
+    async refreshNavigation() {
+      const token = ++navigationEpoch, capturedContext = context;
+      const page = await fetchPage({ query: {}, cursor: null, snapshot: null, page_size: 500 });
+      if (token !== navigationEpoch || capturedContext !== context) return;
+      onAccepted({ query: {}, items: page.items || [], page, navigationOnly: true, publishNavigation: true });
+      emit();
+    },
+    async loadMore() {
+      if (!state.nextCursor || state.loading || state.refreshRequired) return;
+      const token = epoch;
+      const baseToken = Object.keys(state.query || {}).length === 0 ? ++navigationEpoch : null;
+      state.loading = true; state.error = ''; emit();
+      try {
+        const page = await fetchPage({ query: state.query, cursor: state.nextCursor, snapshot: state.snapshot, page_size: 500 });
+        if (token !== epoch) return;
+        if (page.snapshot !== state.snapshot) throw new Error('The log snapshot changed. Refresh to continue.');
+        const items = new Map(state.items.map(item => [item.id, item]));
+        (page.items || []).forEach(item => { if (!items.has(item.id)) items.set(item.id, item); });
+        state.items = Array.from(items.values()); state.nextCursor = page.next_cursor || null;
+        onAccepted({ query: state.query, items: state.items, page, publishNavigation: baseToken === navigationEpoch });
+        if (!state.selectedEventId && state.temporaryRowId) periodCapture = { ...state, loading: false };
+      } catch (error) { if (token !== epoch) return; state.error = error.message || String(error); if (error.status === 410) state.refreshRequired = true; throw error; }
+      finally { if (token === epoch) { state.loading = false; emit(); } }
+    },
+    markStale(revision) { if (periodCapture && String(revision || '') !== String(periodCapture.revision || '')) periodCapture.stale = true; if (state.snapshot && String(revision || '') !== String(state.revision || '')) { state.stale = true; emit(); } },
+    setContext(next) { if (next === context) return; context = next; ++epoch; ++navigationEpoch; previousSelection = ''; periodCapture = null; state = { query: null, snapshot: null, items: [], selectedEventId: '', temporaryRowId: null, draft: null, stale: false, refreshRequired: false, error: '', loading: false, nextCursor: null, revision: '' }; emit(); },
+    async exportCurrent() {
+      if (!state.query || !state.snapshot || (state.selectedEventId && !state.items.some(item => String(item.id) === state.selectedEventId))) throw new Error('Select an available log query before exporting.');
+      const token = epoch;
+      try {
+        const result = await exportQuery({ query: state.query, snapshot: state.snapshot });
+        if (token !== epoch) throw new Error('The log context changed before export completed.');
+        return result;
+      } catch (error) {
+        if (token === epoch) { state.error = error.message || String(error); if (error.status === 410) state.refreshRequired = true; emit(); }
+        throw error;
+      }
+    },
+  };
+}
+
+// END js/runtime/utility-log-history-query.js
+
+// BEGIN js/runtime/date-range-picker.js
+
+/* Shared themed calendar. Consumers own timezone conversion and submission. */
+function buildDateRangePicker({ fromDate = '', toDate = '' } = {}) {
+  return `<div class="date-range-picker" data-date-range-picker>
+    ${[['fromDate', 'From date', fromDate], ['toDate', 'To date', toDate]].map(([name, label, value]) => `<div class="date-range-picker__field"><span>${label}</span><div class="date-range-picker__control"><input type="text" name="${name}" aria-label="${label}" value="${escapeHtml(value)}" readonly required>${window.ButtonComponent.renderActionButton({ icon: 'calendar', ariaLabel: `Choose ${label.toLowerCase()}`, attributes: { 'data-calendar-trigger': name, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' } })}</div></div>`).join('')}
+  </div>`;
+}
+
+function mountDateRangePicker(container) {
+  const root = container.querySelector('[data-date-range-picker]');
+  let popup, trigger, input, month;
+  const close = (restore = false) => {
+    if (!popup) return;
+    clearTriggerAnchor(popup); popup.remove(); popup = null;
+    trigger.setAttribute('aria-expanded', 'false');
+    if (restore) trigger.focus();
+  };
+  const limits = () => ({ min: input.name === 'toDate' ? root.querySelector('[name="fromDate"]').value : '', max: input.name === 'fromDate' ? root.querySelector('[name="toDate"]').value : '' });
+  const position = () => {
+    if (!popup) return;
+    const rect = trigger.getBoundingClientRect(), width = Math.min(292, window.innerWidth - 32);
+    popup.style.width = `${width}px`;
+    popup.style.left = `${Math.max(16, Math.min(rect.left, window.innerWidth - width - 16))}px`;
+    const height = popup.getBoundingClientRect().height;
+    popup.style.top = `${Math.max(16, rect.bottom + height + 20 <= window.innerHeight ? rect.bottom + 4 : rect.top - height - 4)}px`;
+    syncTriggerAnchor(popup, trigger);
+  };
+  const render = (key = input.value) => {
+    popup.innerHTML = `<div class="calendar-picker__content ui-scrollbar">${buildCalendarMonth({ year: month.getFullYear(), month: month.getMonth(), selected: input.value, ...limits() })}</div>`;
+    position();
+    (popup.querySelector(`[data-calendar-date="${key}"]:not(:disabled)`) || popup.querySelector('[data-calendar-date]:not(:disabled)') || popup.querySelector('button')).focus();
+  };
+  const click = event => {
+    const button = event.target.closest('[data-calendar-trigger]');
+    if (!button) return;
+    if (popup && trigger === button) { close(true); return; }
+    close(); trigger = button;
+    input = root.querySelector(`[name="${button.dataset.calendarTrigger}"]`);
+    month = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
+    popup = document.createElement('div'); popup.className = 'calendar-picker ui-scrollbar';
+    popup.setAttribute('role', 'dialog'); popup.setAttribute('aria-label', button.getAttribute('aria-label'));
+    container.appendChild(popup); trigger.setAttribute('aria-expanded', 'true');
+    popup.addEventListener('click', e => {
+      const date = e.target.closest('[data-calendar-date]'), nav = e.target.closest('[data-calendar-month]');
+      if (date && !date.disabled) { input.value = date.dataset.calendarDate; input.dispatchEvent(new Event('input', { bubbles: true })); close(true); }
+      else if (nav) { month = new Date(month.getFullYear(), month.getMonth() + Number(nav.dataset.calendarMonth), 1); render(); }
+    });
+    popup.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); return; }
+      const day = e.target.closest('[data-calendar-date]'), offset = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+      if (!day || !offset) return;
+      e.preventDefault();
+      const next = new Date(`${day.dataset.calendarDate}T12:00:00`); next.setDate(next.getDate() + offset);
+      const key = calendarDateKey(next), { min, max } = limits();
+      if ((min && key < min) || (max && key > max)) return;
+      month = next; render(key);
+    });
+    render();
+  };
+  const outside = e => { if (popup && !popup.contains(e.target) && !trigger.contains(e.target)) close(); };
+  root.addEventListener('click', click);
+  document.addEventListener('pointerdown', outside, true);
+  window.addEventListener('resize', position); window.addEventListener('scroll', position, true);
+  return () => {
+    close(); root.removeEventListener('click', click); document.removeEventListener('pointerdown', outside, true);
+    window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true);
+  };
+}
+
+function calendarDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function buildCalendarMonth({ year, month, selected = '', min = '', max = '' }) {
+  const first = new Date(year, month, 1), today = calendarDateKey(new Date());
+  const days = Array.from({ length: first.getDay() }, () => '<span></span>');
+  for (let day = 1; day <= new Date(year, month + 1, 0).getDate(); day++) {
+    const date = new Date(year, month, day), key = calendarDateKey(date);
+    days.push(window.ButtonComponent.renderButton({ label: String(day), className: 'calendar-picker__day', ariaLabel: date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }), disabled: Boolean((min && key < min) || (max && key > max)), attributes: { 'data-calendar-date': key, 'aria-pressed': String(key === selected), 'aria-current': key === today ? 'date' : null } }));
+  }
+  return `<div class="calendar-picker__header">${window.ButtonComponent.renderActionButton({ icon: 'previous', ariaLabel: 'Previous month', attributes: { 'data-calendar-month': '-1' } })}<strong aria-live="polite">${escapeHtml(first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</strong>${window.ButtonComponent.renderActionButton({ icon: 'next', ariaLabel: 'Next month', attributes: { 'data-calendar-month': '1' } })}</div><div class="calendar-picker__weekdays">${Array.from({ length: 7 }, (_, day) => `<span>${escapeHtml(new Date(2023, 0, day + 1).toLocaleDateString(undefined, { weekday: 'short' }))}</span>`).join('')}</div><div class="calendar-picker__days">${days.join('')}</div>`;
+}
+
+// END js/runtime/date-range-picker.js
+
+// BEGIN js/runtime/utility-log-history-ui.js
+
+function canExportUtilityLogHistory() {
+  return state.utility.allowedActions?.['library.logs.read'] === true && state.utility.allowedActions?.['library.logs.export'] === true;
+}
+
+function getUtilityLogHistoryController() {
+  const owner = state.utility;
+  if (owner.logHistoryController) return owner.logHistoryController;
+  let presentation = null;
+  owner.logHistoryController = createUtilityLogHistoryQueryController({
+    contextKey: owner,
+    fetchPage: async ({ query, cursor, snapshot, page_size }) => {
+      const params = new URLSearchParams({ page_size: String(page_size) });
+      Object.entries(query || {}).forEach(([key, value]) => {
+        if (Array.isArray(value)) value.forEach(item => params.append(key, item));
+        else if (value) params.set(key, value);
+      });
+      if (cursor) params.set('cursor', cursor);
+      if (snapshot) params.set('snapshot', snapshot);
+      const response = await fetch(`/utilities/log-history?${params}`, { cache: 'no-store', headers: { Accept: 'application/json' } });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw Object.assign(new Error(data.error || 'Unable to load log history.'), { status: response.status });
+      if (state.utility !== owner) { owner.logHistoryController.setContext({}); return data; }
+      return data;
+    },
+    onAccepted: ({ query, items, page, navigationOnly, publishNavigation }) => {
+      if (state.utility !== owner) return;
+      if (!navigationOnly) owner.allowedActions = { ...(owner.allowedActions || {}),
+        'library.logs.read': page.allowed_actions?.['library.logs.read'] === true,
+        'library.logs.export': page.allowed_actions?.['library.logs.export'] === true };
+      if (publishNavigation && !Object.keys(query || {}).length) owner.logHistory = items;
+    },
+    exportQuery: async request => {
+      if (state.utility !== owner || !canExportUtilityLogHistory()) throw new Error('Log export is unavailable.');
+      const response = await fetch('/utilities/log-history/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) });
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw Object.assign(new Error(data.error || 'Unable to export logs.'), { status: response.status });
+      if (state.utility !== owner) throw new Error('The library changed.');
+      return data;
+    },
+    onChange: value => {
+      if (state.utility !== owner) return;
+      owner.logHistoryLoading = value.loading;
+      owner.logHistoryRevision = value.revision;
+      owner.selectedLogHistoryId = value.selectedEventId;
+      if (value.snapshot) owner.logHistoryLoaded = true;
+      const nextPresentation = [value.query, value.snapshot, value.items, value.selectedEventId, value.temporaryRowId, value.loading, value.error, value.stale, value.refreshRequired, value.periodLabel, owner.logHistory, owner.allowedActions];
+      if (presentation && presentation.every((item, index) => item === nextPresentation[index])) return;
+      presentation = nextPresentation;
+      const els = getUtilityModalElements();
+      if (owner.activeTab === 'log-history' && els.overlay && !els.overlay.hidden) renderUtilityLogHistory();
+    },
+  });
+  return owner.logHistoryController;
+}
+
+function formatConsoleLogEvent(item) {
+  const labels = { file_count: 'Files', processed: 'Processed', downloaded: 'Downloaded', not_touched: 'Not touched', skipped: 'Skipped', not_found: 'Not found', failed: 'Failed', updated: 'Updated', succeeded: 'Succeeded' };
+  const outcomes = Object.entries(labels).filter(([key]) => Number.isFinite(item[key])).map(([key, label]) => `${label}: ${item[key]}`);
+  return [item.timestamp, item.action, item.source, [item.artist, item.album, item.title].filter(Boolean).join(' · '), ...outcomes, item.message, item.error].filter(Boolean).join('  ');
+}
+
+function getConsoleLogText(items) {
+  return (items || []).slice().sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')) || String(a.id).localeCompare(String(b.id))).map(formatConsoleLogEvent).join('\n');
+}
+
+function buildConsoleLog(items, { label = 'Console log' } = {}) {
+  const ordered = (items || []).slice().sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')) || String(a.id).localeCompare(String(b.id)));
+  return `<section class="console-log" aria-label="${escapeHtml(label)}"><div class="console-log__heading"><span>${escapeHtml(label)} · ${ordered.length} events</span>${window.ButtonComponent.renderActionButton({ icon: 'copy', ariaLabel: 'Copy log', attributes: { 'data-log-history-action': 'copy' } })}</div><pre class="console-log__lines" tabindex="0">${ordered.length ? ordered.map(item => {
+    const success = item.level === 'success' || (!item.error && /succeeded|completed|saved/i.test(item.action || ''));
+    const text = formatConsoleLogEvent(item);
+    return `<span class="console-log__line${success ? ' console-log__line--success' : ''}">${escapeHtml(text)}</span>`;
+  }).join('\n') : 'No events in this snapshot.'}</pre></section>`;
+}
+
+function utilityLogButton(label, action, { disabled = false } = {}) {
+  return window.ButtonComponent.renderButton({ label, ariaLabel: label, disabled, attributes: { 'data-log-history-action': action } });
+}
+
+function buildUtilityLogHistoryConsole(value) {
+  const selected = value.items.find(item => String(item.id) === value.selectedEventId);
+  const title = selected ? escapeHtml(selected.action || 'Log entry') : value.temporaryRowId ? 'Logs for selected period' : 'Recent activity';
+  return `<div class="utility-log-console-detail"><div class="utility-log-toolbar"><h3>${title}</h3>${canExportUtilityLogHistory() ? utilityLogButton('Export all logs', 'export-draft') : ''}</div>
+    ${selected ? `<p>${escapeHtml([formatLogHistoryTimestamp(selected.timestamp), selected.source, selected.artist, selected.album, selected.title].filter(Boolean).join(' · '))}</p>` : value.temporaryRowId ? `<p>${escapeHtml(value.periodLabel || '')}</p>` : ''}
+    ${value.stale ? '<p role="status">New activity is available. Refresh to capture it.</p>' : ''}
+    ${value.error ? `<p class="utility-log-error" role="alert">${escapeHtml(value.error)}</p>` : ''}
+    ${buildConsoleLog(value.items)}
+    <div class="utility-log-toolbar">${utilityLogButton(value.loading ? 'Loading…' : 'Refresh', 'refresh', { disabled: value.loading })}
+    ${value.nextCursor ? utilityLogButton('Load more', 'more', { disabled: value.loading || value.refreshRequired }) : ''}
+    ${value.temporaryRowId ? utilityLogButton('Clear period', 'clear') : ''}
+    ${canExportUtilityLogHistory() ? utilityLogButton('Export displayed logs', 'export-current', { disabled: !value.snapshot || value.loading }) : ''}</div></div>`;
+}
+
+function reconcileUtilityLogHistoryTree(els, value) {
+  if (els.list.dataset.utilityNavigationOwner !== 'log-history') {
+    els.list.replaceChildren();
+    els.list.dataset.utilityNavigationOwner = 'log-history';
+  }
+  const rows = (state.utility.logHistory || []).map(item => ({ id: String(item.id), item }));
+  if (value.temporaryRowId) rows.unshift({ id: value.temporaryRowId, temporary: true });
+  const existing = new Map(Array.from(els.list.querySelectorAll('[data-utility-log-history-id]'), node => [node.getAttribute('data-utility-log-history-id'), node]));
+  const wanted = new Set(rows.map(row => row.id));
+  for (const [id, node] of existing) if (!wanted.has(id)) node.remove();
+  let cursor = els.list.firstElementChild;
+  for (const row of rows) {
+    let node = existing.get(row.id);
+    if (!node) {
+      const host = document.createElement('div');
+      host.innerHTML = row.temporary ? window.NavigationTree.renderItem({ action: true, variant: 'panel', key: row.id, label: 'Selected period', subtitle: value.periodLabel || '', attributes: { 'data-utility-log-history-id': row.id, 'data-log-query-row': '1' } }) : buildUtilityLogHistoryListItem(row.item, false);
+      node = host.firstElementChild;
+    }
+    if (node !== cursor) els.list.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
+    if (row.temporary) window.NavigationTree.updateItem(node, { label: 'Selected period', subtitle: value.periodLabel || '' });
+    window.NavigationTree.setItemSelected(node, row.temporary ? Boolean(value.temporaryRowId && !value.selectedEventId) : row.id === value.selectedEventId);
+  }
+  els.count.textContent = String(rows.length);
+}
+
+async function selectUtilityLogHistoryEvent(id) {
+  const controller = getUtilityLogHistoryController();
+  if (id === controller.getState().temporaryRowId) return controller.selectPeriod();
+  if (id === controller.getState().selectedEventId) return;
+  await controller.selectEvent(id);
+}
+
+async function downloadUtilityLogHistory() {
+  const data = await getUtilityLogHistoryController().exportCurrent();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+  anchor.href = url; anchor.download = `album-haven-logs-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function openUtilityLogHistoryQuery(exportAfter = false) {
+  if (exportAfter && !canExportUtilityLogHistory()) return;
+  const controller = getUtilityLogHistoryController();
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (!exportAfter) {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    let dispose = () => {};
+    return showAppFormDialog({
+      title: 'Date range', anchor: getUtilityModalElements().problemFilterButton,
+      contentHtml: `${buildDateRangePicker({ fromDate: today, toDate: today })}<p class="utility-detail-meta">${escapeHtml(zone)}</p>`,
+      submitLabel: 'Apply',
+      onMount: content => { dispose = mountDateRangePicker(content); },
+      onClose: () => { dispose(); controller.cancelDraft(); },
+      onSubmit: async content => {
+        controller.beginDraft({ preset: 'custom', fromDate: content.querySelector('[name="fromDate"]').value,
+          toDate: content.querySelector('[name="toDate"]').value });
+        await controller.applyDraft();
+        return true;
+      },
+    });
+  }
+  let preset = 'today', source = '';
+  const types = Array.from(new Set(['Tags edited', 'Library status error', 'Local cover selection persisted', 'Cover art update completed', 'Library indexing failed', ...(state.utility.logHistory || []).map(item => item.action).filter(Boolean)]));
+  const sources = Array.from(new Set((state.utility.logHistory || []).map(item => item.source).filter(Boolean)));
+  controller.beginDraft({ preset });
+  const contentHtml = `<div class="utility-log-query-form"><p>Timezone: ${escapeHtml(zone)}</p><h4>Date range</h4>
+    <div class="utility-log-presets">${[['today', 'Today'], ['7-days', '7 days'], ['30-days', '30 days'], ['custom', 'Custom']].map(([value, label]) => window.ButtonComponent.renderButton({ label, attributes: { 'data-log-preset': value, 'aria-pressed': String(value === preset) } })).join('')}</div>
+    <div class="utility-log-query-dates" data-log-custom-dates hidden><label>From date<input type="date" name="fromDate"></label><label>To date<input type="date" name="toDate"></label></div>
+    <h4>Log types</h4><div class="utility-log-type-options">${types.map(value => `<label><input type="checkbox" name="eventType" value="${escapeHtml(value)}" checked> ${escapeHtml(value)}</label>`).join('')}</div>
+    <label>Source</label>${window.ButtonComponent.renderButton({ label: 'All sources', attributes: { 'data-log-source-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+    <div class="utility-problem-filter-menu" data-log-source-menu role="menu" hidden>${['', ...sources].map(value => window.ButtonComponent.renderButton({ label: value || 'All sources', attributes: { role: 'menuitemradio', 'aria-checked': String(!value), 'data-log-source-value': value } })).join('')}</div>
+    <label>Text<input name="text" placeholder="Filter event text"></label></div>`;
+  const mount = content => {
+    content.querySelectorAll('[data-log-preset]').forEach(button => button.addEventListener('click', () => {
+      preset = button.getAttribute('data-log-preset');
+      content.querySelectorAll('[data-log-preset]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      content.querySelector('[data-log-custom-dates]').hidden = preset !== 'custom';
+    }));
+    const trigger = content.querySelector('[data-log-source-trigger]'), menu = content.querySelector('[data-log-source-menu]');
+    trigger.addEventListener('click', () => {
+      menu.hidden = !menu.hidden; trigger.setAttribute('aria-expanded', String(!menu.hidden));
+      if (!menu.hidden) { const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.left = `${rect.left}px`; menu.style.top = `${rect.bottom + 4}px`; menu.style.zIndex = '130'; syncTriggerAnchor(menu, trigger); menu.querySelector('button')?.focus(); }
+      else clearTriggerAnchor(menu);
+    });
+    menu.querySelectorAll('[data-log-source-value]').forEach(button => button.addEventListener('click', () => {
+      source = button.getAttribute('data-log-source-value'); trigger.querySelector('.ui-button__content').textContent = source || 'All sources';
+      menu.querySelectorAll('button').forEach(item => item.setAttribute('aria-checked', String(item === button)));
+      menu.hidden = true; clearTriggerAnchor(menu); trigger.setAttribute('aria-expanded', 'false'); trigger.focus({ preventScroll: true });
+    }));
+    menu.addEventListener('keydown', event => {
+      const buttons = Array.from(menu.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.hidden = true; clearTriggerAnchor(menu); trigger.setAttribute('aria-expanded', 'false'); trigger.focus(); }
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
+    });
+  };
+  return showAppFormDialog({ title: exportAfter ? 'Export all logs' : 'Filter log period', anchor: exportAfter ? null : getUtilityModalElements().problemFilterButton, contentHtml, submitLabel: exportAfter ? 'Export logs' : 'Apply', onMount: mount,
+    onClose: content => { const menu = content.querySelector('[data-log-source-menu]'); if (menu) clearTriggerAnchor(menu); controller.cancelDraft(); },
+    onSubmit: async content => {
+      const selectedTypes = Array.from(content.querySelectorAll('[name="eventType"]')).filter(input => input.checked).map(input => input.value);
+      if (!selectedTypes.length) throw new Error('Choose at least one log type.');
+      controller.beginDraft({ preset, fromDate: content.querySelector('[name="fromDate"]').value, toDate: content.querySelector('[name="toDate"]').value, sources: source ? [source] : [], event_types: selectedTypes.length === types.length ? [] : selectedTypes, text: content.querySelector('[name="text"]').value });
+      await controller.applyDraft(); if (exportAfter) await downloadUtilityLogHistory(); return true;
+    },
+  });
+}
+
+async function handleUtilityLogHistoryAction(action) {
+  const controller = getUtilityLogHistoryController();
+  if (action === 'copy') return navigator.clipboard.writeText(getConsoleLogText(controller.getState().items));
+  if (action === 'filter') return openUtilityLogHistoryQuery(false);
+  if (action === 'export-draft') return openUtilityLogHistoryQuery(true);
+  if (action === 'refresh') {
+    const hasSelectedQuery = Object.keys(controller.getState().query || {}).length > 0;
+    return Promise.all([controller.refresh(), ...(hasSelectedQuery ? [controller.refreshNavigation()] : [])]);
+  }
+  if (action === 'more') return controller.loadMore();
+  if (action === 'clear') { controller.clear(); const id = controller.getState().selectedEventId; return id ? controller.selectEvent(id) : controller.refresh(); }
+  if (action === 'export-current') return downloadUtilityLogHistory();
+}
+
+// END js/runtime/utility-log-history-ui.js
+
 // BEGIN js/runtime/compact-data-table.js
 
 function buildCompactDataTable(config = {}) {
@@ -14597,63 +15234,13 @@ function handleAlbumTrackRowDoubleClick(event) {
 // BEGIN js/runtime/utility-list-builders.js
 
 function buildUtilityLogHistoryListItem(item, selected) {
-  const timestamp = formatLogHistoryTimestamp(item?.timestamp);
-  const count = Number(item?.file_count || 0);
-  const summary = [item.artist, item.album, item.title].filter(Boolean).join(' - ');
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-log-history-id="${escapeHtml(item.id || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item.action || 'Activity')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(summary || 'Unknown album')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(timestamp || `${count} files`)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
 function buildUtilityLogHistoryDetail(item) {
-  if (!item) {
-    return `
-      <div class="utility-empty-state">Select a log entry to inspect the saved file changes.</div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-  }
-  const files = Array.isArray(item.files) ? item.files : [];
-  const downloaded = Number(item.downloaded || 0);
-  const notTouched = Number(item.not_touched ?? item.skipped ?? 0);
-  const notFound = Number(item.not_found ?? item.failed ?? 0);
-  const processed = Number(item.processed || 0);
-  const summaryParts = [
-    item.artist || '',
-    item.album || '',
-    item.title || '',
-    item.file_count ? `${item.file_count} file${Number(item.file_count) === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  const coverSummaryParts = [];
-  if (processed || downloaded || notTouched || notFound) {
-    coverSummaryParts.push(`Checked: ${processed}`);
-    coverSummaryParts.push(`Downloaded: ${downloaded}`);
-    coverSummaryParts.push(`Not touched: ${notTouched}`);
-    coverSummaryParts.push(`Not found: ${notFound}`);
-  }
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(item.action || 'Activity')}</h3>
-      <p class="utility-rule-description">${escapeHtml(formatLogHistoryTimestamp(item.timestamp) || '')}</p>
-      <p class="utility-rule-description">${escapeHtml(item.source_label || 'This browser')}</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-group-meta">${escapeHtml(summaryParts.join(' - '))}</div>
-        ${coverSummaryParts.length ? `<div class="utility-rule-album-meta">${escapeHtml(coverSummaryParts.join(' | '))}</div>` : ''}
-        ${item.error ? `<div class="utility-rule-album-meta">${escapeHtml(item.error)}</div>` : ''}
-        ${files.length
-          ? `<div class="utility-log-history-files">${files.map((path) => `<div class="utility-log-history-file">${escapeHtml(path)}</div>`).join('')}</div>`
-          : '<div class="utility-empty-state compact">No downloaded cover paths recorded.</div>'}
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    </div>
-  `;
+  return buildConsoleLog(item ? [item] : []);
 }
 
 function getSelectedUtilityLoop() {
@@ -14672,12 +15259,28 @@ function getSelectedUtilityLoopGroup() {
   return groups.find((group) => String(group?.key || '') === selectedKey) || null;
 }
 
+function getFilteredUtilityLoops() {
+  const query = String(state.utility.loopsSearchQuery || '').trim().toLocaleLowerCase();
+  const loops = state.utility.loops || [];
+  return query ? loops.filter(loop => [loop.name, loop.title, loop.artist, loop.album]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query))) : loops;
+}
+
+function buildUtilityLoopMoveActions(loop) {
+  if (!canReorderUtilityLoop(loop)) return '';
+  return `<span class="utility-loop-reorder-actions" role="group" aria-label="Reorder ${escapeHtml(loop.name || 'Saved loop')}">${['up', 'down'].map(direction => window.ButtonComponent.renderButton({
+    label: `Move ${direction}`, size: 'small', ariaLabel: `Move ${loop.name || 'Saved loop'} ${direction}`,
+    attributes: { 'data-move-utility-loop': loop.id, 'data-loop-move-direction': direction },
+  })).join('')}</span>`;
+}
+
 function buildUtilityLoopEntry(loop) {
   const mediaSrc = `/loops/media/${encodeURIComponent(loop.id || '')}`;
   const loopId = escapeHtml(loop.id || '');
   const repeatEnabled = Boolean(state.utility.loopRepeatEnabled) && String(state.utility.selectedLoopId || '') === String(loop.id || '');
   return `
-    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
+    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
+      ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
         <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
         <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
@@ -14761,7 +15364,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
         </div>
       </div>
       <div class="utility-loop-group-main">
-        <div class="utility-loop-entry-list">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
+        <div class="utility-loop-entry-list" data-loop-panel-song="${escapeHtml(group.key || '')}">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
       </div>
     </div>
   `;
@@ -14785,16 +15388,11 @@ function buildUtilityAppearanceDetail() {
 }
 
 function buildUtilityIntegrationListItem(item, selected) {
-  const status = String(item?.status_label || '').trim() || (item?.connected
-    ? 'Connected'
-    : (item?.api_configured ? 'Not connected' : 'Server setup required'));
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-integration-key="${escapeHtml(item?.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item?.title || 'Integration')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(item?.description || '')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(status)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(item?.key || ''), selected,
+    label: item?.title || 'Integration',
+    attributes: { 'data-utility-integration-key': String(item?.key || '') },
+  });
 }
 
 function buildLastfmTimeZoneOptions(selectedTimeZone) {
@@ -14810,181 +15408,41 @@ function buildLastfmTimeZoneOptions(selectedTimeZone) {
 }
 
 function buildUtilityIntegrationDetail(item) {
-  if (item?.key === 'library') {
-    return buildUtilityLibrarySettingsDetail(item);
-  }
+  const button = options => window.ButtonComponent.renderButton(options);
+  if (item?.key === 'library') return buildUtilityLibrarySettingsDetail(item);
   if (item?.key === 'local_playlist_import') {
-    const importState = state.utility?.localPlaylistImport || {};
-    const supportedExtensions = Array.isArray(item.supported_extensions) ? item.supported_extensions : [];
-    const targetOptions = Array.isArray(item.target_options) ? item.target_options : [];
-    const lastAnalysis = importState.lastAnalysis && typeof importState.lastAnalysis === 'object' ? importState.lastAnalysis : null;
-    const blockedTargets = Array.isArray(lastAnalysis?.target_recommendation?.blocked_targets)
-      ? lastAnalysis.target_recommendation.blocked_targets
-      : [];
-    const targetRows = targetOptions.length
-      ? targetOptions.map((target) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(target.title || target.key || 'Target')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(target.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Target rules will land here later.</div>';
-    const blockedRows = blockedTargets.length
-      ? blockedTargets.map((blocked) => `<div class="utility-rule-album-meta">Album Top unavailable: ${escapeHtml(blocked.reason || '')}</div>`).join('')
-      : '';
-    const analysisHtml = lastAnalysis ? `
-      <section class="utility-rule-album-list">
-        <div class="utility-rule-album-title">${escapeHtml(lastAnalysis.status?.label || 'Preview contract ready')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.status?.detail || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.filename || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.source_kind || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.parser_mode || '')}</div>
-        <div class="utility-rule-album-meta">Recommended target: ${escapeHtml(lastAnalysis.target_recommendation?.recommended_target || 'playlist')}</div>
-        ${blockedRows}
-      </section>
-    ` : '<div class="utility-empty-state compact">Select a local playlist file to prepare the analyze/preview contract.</div>';
-    const completionPreview = lastAnalysis?.local_library_completion && typeof lastAnalysis.local_library_completion === 'object'
-      ? lastAnalysis.local_library_completion
-      : (item.local_library_completion && typeof item.local_library_completion === 'object' ? item.local_library_completion : {});
-    const importStatus = item.import_status && typeof item.import_status === 'object' ? item.import_status : {};
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Import Local Playlist')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || '')}</p>
-        <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'Analyze/preview contract ready')}</div>
-        <div class="utility-rule-album-meta">Supports: ${escapeHtml(supportedExtensions.join(', ') || 'No playlist formats configured yet.')}</div>
-        <div class="utility-loop-create-row">
-          <input type="file" data-local-playlist-import-file accept="${escapeHtml(supportedExtensions.join(','))}">
-          <button class="button" type="button" data-analyze-local-playlist="1" ${importState.analyzeBusy ? 'disabled' : ''}>${importState.analyzeBusy ? 'Analyzing...' : 'Analyze playlist'}</button>
-        </div>
-        <div class="utility-rule-album-meta">${escapeHtml(importState.selectedFileName || 'No file selected')}</div>
-        ${importState.error ? `<div class="utility-rule-album-meta">${escapeHtml(importState.error)}</div>` : ''}
-        ${analysisHtml}
-        ${buildUtilityCollapsibleSection('local-playlist-import-targets', 'Target direction', targetRows)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-completion', completionPreview.label || 'Completion preview direction reserved', `<div class="utility-rule-album-meta">${escapeHtml(completionPreview.detail || '')}</div>`)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-status', importStatus.label || 'Final import execution lands later', `<div class="utility-rule-album-meta">${escapeHtml(importStatus.detail || '')}</div>`)}
-      </div>
-    `;
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Import Local Playlist</h3><div class="settings-integration-actions">${button({ label: 'Import', disabled: true, attributes: { 'data-local-playlist-import': '1' } })}</div></div>`;
   }
   if (item?.key === 'foobar') {
-    const sourceFamilies = Array.isArray(item.source_families) ? item.source_families : [];
-    const referenceAssets = Array.isArray(item.reference_assets) ? item.reference_assets : [];
-    const writeBackScopes = Array.isArray(item.write_back_scopes) ? item.write_back_scopes : [];
-    const continuousSync = item.continuous_sync && typeof item.continuous_sync === 'object' ? item.continuous_sync : {};
-    const sourceFamilyRows = sourceFamilies.length
-      ? sourceFamilies.map((family) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(family.title || 'Source family')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(family.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Source-family contract details will land here later.</div>';
-    const writeBackLabels = writeBackScopes.length
-      ? writeBackScopes.map((scope) => `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(scope)}</span>`).join('')
-      : '<span class="utility-rule-album-meta">No write-back scopes configured.</span>';
-    const assetRows = referenceAssets.length
-      ? referenceAssets.map((asset) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(asset.title || asset.filename || 'Reference asset')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(asset.description || '')}</div>
-          </div>
-          <div class="confirm-modal-actions">
-            <a class="button button-secondary" href="${escapeHtml(asset.view_url || '#')}" target="_blank" rel="noreferrer">View</a>
-            <a class="button button-secondary" href="${escapeHtml(asset.download_url || '#')}" target="_blank" rel="noreferrer">Download</a>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">No reference assets are available yet.</div>';
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Foobar2000')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || 'Help-first Foobar setup guidance.')}</p>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'How To and reference assets ready')}</div>
-          <div class="utility-rule-album-meta">${escapeHtml(continuousSync.label || 'Continuous Foobar sync')}: ${escapeHtml(continuousSync.enabled ? 'Enabled' : (continuousSync.default_state || 'off'))}</div>
-          <div class="utility-rule-album-meta">When off: ${escapeHtml(continuousSync.disabled_behavior || 'One-time import only')}</div>
-          <div class="utility-rule-album-meta">When enabled later: ${escapeHtml(continuousSync.cadence_when_enabled || 'Once a week')}</div>
-          <div class="utility-rule-album-meta">Problems first surface in ${escapeHtml(item.problem_surface || 'Utilities > Problematic Files')}.</div>
-          ${item.help_route ? `<div class="utility-rule-album-meta">Foobar help contract: <a href="${escapeHtml(item.help_route)}" target="_blank" rel="noreferrer">${escapeHtml(item.help_route)}</a></div>` : ''}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">SOURCE FAMILIES</div>
-          ${sourceFamilyRows}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">V1 WRITE-BACK SCOPE</div>
-          <div class="utility-rule-problem-labels">${writeBackLabels}</div>
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">REFERENCE ASSETS</div>
-          ${assetRows}
-        </div>
-      </div>
-    `;
+    const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
+      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
+      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
+      ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+      ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
+      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
+      <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
   }
-  if (!item || item.key !== 'lastfm') {
-    return '<div class="utility-empty-state">Select an integration.</div>';
-  }
-  const draft = state.utility.integrationDrafts?.lastfm || { username: '', password: '', timezone: '' };
-  const username = draft.username || item.username || '';
-  const historyCount = Number(item.listen_history_count || 0);
-  const pendingCount = Number(item.pending_scrobble_count || 0);
-  const connectedAt = item.connected_at ? (formatLogHistoryTimestamp(item.connected_at) || item.connected_at) : '';
-  const selectedTimeZone = String(draft.timezone || item.user_timezone || getDetectedBrowserTimeZone() || 'UTC');
-  const headerText = item.connected
-    ? `Last.FM · Connected as ${item.username || 'Connected'}${connectedAt ? ` (${connectedAt})` : ''}`
-    : 'Last.FM';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title lastfm-header-title">${item.connected ? '<span class="lastfm-status-check" aria-hidden="true">&#10003;</span>' : ''}${escapeHtml(headerText)}</h3>
-      <p class="utility-rule-description">Connect your LastFM account to scrobble and import your listening history</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(historyCount))}. Queued: ${escapeHtml(String(pendingCount))}</div>
-        ${item.api_configured
-          ? ''
-          : '<div class="utility-rule-album-meta">The server still needs `LASTFM_API_KEY` and `LASTFM_API_SECRET` configured before this integration can connect.</div>'}
-      </div>
-      <form class="lastfm-integration-form" data-lastfm-integration-form="1">
-        <div class="lastfm-credentials-grid">
-          <label class="lastfm-inline-field">
-            <span>Username</span>
-            <input type="text" value="${escapeHtml(username)}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-          <label class="lastfm-inline-field">
-            <span>Password</span>
-            <input type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-        </div>
-        <div class="confirm-modal-actions">
-          <button class="button" type="submit" data-save-lastfm-integration="1" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>Connect Last.FM</button>
-          <button class="button button-secondary" type="button" data-disconnect-lastfm-integration="1" ${item.connected ? '' : 'disabled'}>Disconnect</button>
-        </div>
-      </form>
-      <div class="utility-divider" aria-hidden="true"></div>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">TIMEZONE</div>
-      </div>
-      <div class="lastfm-credentials-grid">
-        <label class="lastfm-inline-field">
-          <span>Timezone</span>
-          <select data-lastfm-field="timezone">
-            ${buildLastfmTimeZoneOptions(selectedTimeZone)}
-          </select>
-        </label>
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-save-lastfm-timezone="1" ${selectedTimeZone ? '' : 'disabled'}>Save timezone</button>
-      </div>
-    </div>
-  `;
+  if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';
+  const draft = state.utility.integrationDrafts?.lastfm || {};
+  const enabled = item.api_configured && !item.connected;
+  const statistics = item.playback_statistics;
+  const plays = statistics && Number.isFinite(Number(statistics.local_playcount)) ? String(statistics.local_playcount) : 'Unavailable';
+  const seconds = statistics ? Number(statistics.total_listening_seconds) : NaN;
+  const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  const duration = Number.isFinite(seconds) && seconds >= 0
+    ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
+      ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
+    <p class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(item.listen_history_count ?? 0))} · Queued: ${escapeHtml(String(item.pending_scrobble_count ?? 0))}</p>
+    <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
+      <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
+      <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
+      <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
+      ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
+      ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section></div>`;
 }
 
 function matchesUtilityRuleSearch(item) {
@@ -14998,7 +15456,7 @@ function matchesUtilityRuleSearch(item) {
 
 function buildVersionExceptionRuleDetail(rule) {
   const albums = (Array.isArray(rule?.albums) ? rule.albums : []).filter(matchesUtilityRuleSearch);
-  const table = buildUtilityCompactTable({
+  const table = albums.length ? buildUtilityCompactTable({
     id: 'version-exceptions', ariaLabel: 'Version exceptions',
     columns: 'minmax(220px,1fr) minmax(180px,1fr) 110px',
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
@@ -15008,7 +15466,7 @@ function buildVersionExceptionRuleDetail(rule) {
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
-  });
+  }) : `<p class="utility-detail-meta">${rule?.albums?.length ? 'No version exceptions match your search.' : 'No version exceptions yet.'}</p>`;
   return `<div class="utility-rule-detail"><h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3><p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>${table}</div>`;
 }
 function buildUtilityCompactTable(config) {
@@ -15061,14 +15519,14 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
-        <section class="utility-problem-exclusion-group">
+        ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
-          ${albumItems.length ? table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album') : '<div class="utility-empty-state compact">No album exclusions.</div>'}
-        </section>
-        <section class="utility-problem-exclusion-group">
+          ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}
+        </section>` : ''}
+        ${fileItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">FILE EXCLUSIONS</h4>
-          ${fileItems.length ? table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file') : '<div class="utility-empty-state compact">No file exclusions.</div>'}
-        </section>
+          ${table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file')}
+        </section>` : ''}
       </div>
     `;
   }
@@ -15179,7 +15637,7 @@ function buildDetectedProblemsHtml(album) {
     const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
     const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
     return buildAlertLabelHtml({
-      severity: 'error', message: item.display_reason || item.reason, interactive: true,
+      severity: 'error', message: item.reason === 'Missing year' ? 'Missing year' : item.display_reason || item.reason, interactive: true,
       pressed: keys.length > 0 && keys.every(key => state.utility.problemExclusionSelections?.[key]),
       disabled: !keys.length,
       className: 'utility-problem-exclusion-pill',
@@ -15214,12 +15672,12 @@ function buildDetectedProblemsHtml(album) {
       },
     };
   }).filter(Boolean);
-  const table = buildUtilityCompactTable({
+  const table = tableRows.length ? buildUtilityCompactTable({
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
     columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
-  });
+  }) : '';
   const separateCandidate = album?.separate_release_candidate;
   const separateKey = String(separateCandidate?.key || '');
   const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections?.[separateKey]);
@@ -15231,12 +15689,12 @@ function buildDetectedProblemsHtml(album) {
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    <div class="utility-detected-table">${table}</div>
-    <div class="utility-detected-actions">
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } })}
-    </div>`;
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+    </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
   if (!album) {
@@ -15279,30 +15737,23 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
+        ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
+        <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
           </button>
         ` : ''}
+      </div>
         <div class="utility-detail-context-actions">
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
           ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
-      </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
-    ${buildUtilityCollapsibleSection('details', 'Album Details', `
-      <div class="utility-detail-grid">
-        <div><span class="utility-detail-label">Album</span>${escapeHtml(displayName)}</div>
-        <div><span class="utility-detail-label">Artist</span>${escapeHtml(displayArtist)}</div>
-        <div><span class="utility-detail-label">Year</span>${escapeHtml(album.year ?? 'Unknown')}</div>
-        <div><span class="utility-detail-label">Edition</span>${escapeHtml(album.edition || 'N/A')}</div>
-        <div><span class="utility-detail-label">File types</span>${escapeHtml(fileTypeText)}</div>
-      </div>
-    `)}
   `;
 }
 
@@ -15503,6 +15954,14 @@ const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
+  if (Object.values(updates || {}).some((edits) => (
+    edits && typeof edits === 'object' && Object.keys(edits).length > 0
+  ))) {
+    state.ui = state.ui || {};
+    state.ui.tagEditOptimisticMutationRevision = Number(
+      state.ui.tagEditOptimisticMutationRevision || 0,
+    ) + 1;
+  }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
   const resourceKeys = new Set();
@@ -16463,38 +16922,7 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
 
 async function prependUtilityLogHistoryEntry(entry) {
   if (!entry || typeof entry !== 'object') return;
-  let persistedResult = null;
-  try {
-    persistedResult = await persistBrowserLogHistoryEntries([entry]);
-  } catch (error) {
-    console.warn('[AlbumHaven][History] Could not persist an immediate history entry.', error);
-  }
-  const existing = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-  const persistedItems = Array.isArray(persistedResult?.items) ? persistedResult.items : [];
-  const fallbackEntry = persistedItems.length
-    ? null
-    : (typeof normalizeBrowserLogHistoryEntry === 'function'
-      ? normalizeBrowserLogHistoryEntry(entry)
-      : entry);
-  state.utility.logHistory = persistedItems.length
-    ? persistedItems
-    : [
-      fallbackEntry,
-      ...existing.filter((item) => String(item?.id || '') !== String(fallbackEntry.id || '')),
-    ].slice(0, 250);
-  if (persistedResult?.status) {
-    state.utility.logHistoryStorageStatus = persistedResult.status;
-  }
-  state.utility.logHistoryLoaded = true;
-  if (!state.utility.selectedLogHistoryId) {
-    const persistedEntry = persistedItems.find(
-      (item) => String(item?.id || '') === String(entry.id || ''),
-    ) || persistedItems[0];
-    state.utility.selectedLogHistoryId = String(persistedEntry?.id || fallbackEntry?.id || '');
-  }
-  if (state.utility.activeTab === 'log-history') {
-    renderUtilityModalContent();
-  }
+  state.utility.logHistoryController?.markStale(String(entry.revision || 'new-activity'));
 }
 
 function applyExplicitFinalizedAlbumArtistEdits(finalizedAlbums, tagEdits) {
@@ -17361,7 +17789,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Filters${countSuffix}`;
+    els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
+    els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
@@ -17673,19 +18102,6 @@ function getSelectedSeparateReleaseKeys() {
   return Object.entries(state.utility.separateReleaseSelections || {})
     .filter(([, selected]) => Boolean(selected))
     .map(([key]) => key);
-}
-
-function buildLibraryWatchHealthProblemRow(problem = {}) {
-  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
-  return `
-    <div class="utility-list-item utility-operational-problem" role="status">
-      <div class="utility-operational-problem-copy">
-        <strong>Library watcher needs attention</strong>
-        <span>${escapeHtml('Some library changes may have been missed.')}</span>
-      </div>
-      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
-    </div>
-  `;
 }
 
 function openRuleRevertConfirm(rule) {
@@ -18285,6 +18701,7 @@ function getDefaultLibrarySettingsState() {
     albumRatingImportBusy: false,
     albumRatingImportResult: null,
     error: '',
+    allowedActions: {},
   };
 }
 
@@ -18372,7 +18789,7 @@ function buildUtilityLibraryIntegrationItem() {
 function buildUtilityIntegrationItems() {
   return [
     buildUtilityLibraryIntegrationItem(),
-    ...(Array.isArray(state.utility.integrations) ? state.utility.integrations : []),
+    ...(Array.isArray(state.utility.integrations) ? state.utility.integrations : []).map(item => item.key === 'lastfm' ? {...item, title: 'Scrobbling'} : item),
   ];
 }
 
@@ -18380,7 +18797,6 @@ async function handleLibrarySettingsIntegrationSelection(integrationKey) {
   if (String(integrationKey || '') !== 'library') return false;
   state.utility.selectedIntegrationKey = 'library';
   await loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
-  renderUtilityModalContent();
   return true;
 }
 
@@ -18395,7 +18811,8 @@ function getLibrarySettingsDraft() {
 function buildEmptyLibraryRootDraft(category) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const nextIndex = roots.length + 1;
+  let nextIndex = roots.length + 1;
+  while (roots.some(root => root.id === `${category}-${nextIndex}`)) nextIndex += 1;
   return normalizeLibrarySettingsRootEntry(category, { id: `${category}-${nextIndex}` }, nextIndex - 1);
 }
 
@@ -18460,6 +18877,26 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
+  const layout = event.target.closest('[data-library-layout-trigger]');
+  if (layout) {
+    event.preventDefault();
+    const index = Number(layout.getAttribute('data-library-root-index'));
+    const root = getLibrarySettingsDraft().main_library_roots?.[index];
+    if (!root || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return true;
+    openUtilityChoiceDropdown(layout, {
+      formats: LIBRARY_SETTINGS_LAYOUT_OPTIONS.map(option => option.label),
+      selected: LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.value === root.layout_mode)?.label,
+      label: 'Folder layout',
+      onSelect: label => updateLibraryRootDraftField('main_library_roots', index, 'layout_mode', LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.label === label).value),
+    });
+    return true;
+  }
+  const browse = event.target.closest('[data-browse-library-root]');
+  if (browse) { event.preventDefault(); browseLibraryRootDraft(browse.getAttribute('data-browse-library-root'), Number(browse.getAttribute('data-library-root-index'))); return true; }
+  const foobarHelp = event.target.closest('[data-foobar-help]');
+  if (foobarHelp) { event.preventDefault(); openUtilityFoobarGuide(); return true; }
+  const foobarFormat = event.target.closest('[data-foobar-format-trigger]');
+  if (foobarFormat) { event.preventDefault(); openUtilityFoobarFormats(foobarFormat); return true; }
   const addLibraryRootButton = event.target.closest('[data-add-library-root]');
   if (addLibraryRootButton) {
     event.preventDefault();
@@ -18569,15 +19006,23 @@ function handleLibrarySettingsChange(event) {
 }
 
 async function loadUtilityLibrarySettings(force = false) {
+  const owner = state.utility;
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.loading) return librarySettingsState.loadPromise;
+  const ownsPresentation = () => state.utility === owner && owner.librarySettings === librarySettingsState
+    && owner.activeTab === 'integrations' && owner.selectedIntegrationKey === 'library'
+    && !getUtilityModalElements()?.overlay?.hidden;
+  const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
+  if (librarySettingsState.loading) {
+    renderCurrent();
+    return librarySettingsState.loadPromise;
+  }
   if (librarySettingsState.loaded && !force) {
-    renderUtilityModalContent();
+    renderCurrent();
     return librarySettingsState.settings;
   }
   librarySettingsState.loading = true;
   librarySettingsState.error = '';
-  renderUtilityModalContent();
+  renderCurrent();
   librarySettingsState.loadPromise = (async () => {
     try {
       const response = await fetch('/library-settings', { headers: { Accept: 'application/json' } });
@@ -18585,6 +19030,7 @@ async function loadUtilityLibrarySettings(force = false) {
       if (!response.ok || !data.ok) {
         throw new Error(data.error || 'Unable to load library settings');
       }
+      librarySettingsState.allowedActions = data.allowed_actions || {};
       librarySettingsState.settings = normalizeLibrarySettingsPayload(data.settings);
       librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
       librarySettingsState.loaded = true;
@@ -18592,59 +19038,60 @@ async function loadUtilityLibrarySettings(force = false) {
     } catch (error) {
       console.error('[AlbumHaven][LibrarySettings] Failed to load library settings.', error);
       librarySettingsState.error = error.message || 'Unable to load library settings.';
-      showToast(librarySettingsState.error, 'error', 3200);
+      if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3200);
       return null;
     } finally {
       librarySettingsState.loading = false;
       librarySettingsState.loadPromise = null;
-      renderUtilityModalContent();
+      renderCurrent();
     }
   })();
   return librarySettingsState.loadPromise;
 }
 
 async function saveUtilityLibrarySettings() {
+  const owner = state.utility;
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.saveBusy) return false;
+  const ownsContext = () => state.utility === owner && owner.librarySettings === librarySettingsState;
+  const ownsPresentation = () => ownsContext() && owner.activeTab === 'integrations'
+    && owner.selectedIntegrationKey === 'library' && !getUtilityModalElements()?.overlay?.hidden;
+  const renderCurrent = () => { if (ownsPresentation()) renderUtilityModalContent(); };
+  if (librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true) return false;
   librarySettingsState.saveBusy = true;
   librarySettingsState.error = '';
-  renderUtilityModalContent();
+  renderCurrent();
   try {
     const response = await fetch('/library-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        settings: cloneLibrarySettingsDraft(getLibrarySettingsDraft()),
-      }),
+      body: JSON.stringify({ settings: cloneLibrarySettingsDraft(getLibrarySettingsDraft()) }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || 'Unable to save library settings');
-    }
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save library settings');
     librarySettingsState.settings = normalizeLibrarySettingsPayload(data.settings);
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings);
     librarySettingsState.loaded = true;
-    state.utility.loaded = false;
-    state.utility.problematicFiles = [];
-    if (data.status) {
-      updateStatusIndicator(data.status);
-      state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
-      state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
-      renderLibraryLoader(state.status);
+    owner.loaded = false;
+    owner.problematicFiles = [];
+    if (ownsContext()) {
+      if (data.status) {
+        updateStatusIndicator(data.status);
+        state.wasPollingBusy = Boolean(data.status.scan_in_progress || data.status.relations_in_progress);
+        state.wasCoverPollingBusy = Boolean(data.status.covers_in_progress);
+        renderLibraryLoader(state.status);
+      }
+      scheduleBrowserTimeout(pollStatus, 250);
     }
-    scheduleBrowserTimeout(pollStatus, 250);
-    showToast('Library settings saved. Scan started.', 'success', 3200);
-    renderUtilityModalContent();
+    if (ownsPresentation()) showToast('Library settings saved. Scan started.', 'success', 3200);
     return true;
   } catch (error) {
     console.error('[AlbumHaven][LibrarySettings] Failed to save library settings.', error);
     librarySettingsState.error = error.message || 'Unable to save library settings.';
-    showToast(librarySettingsState.error, 'error', 3600);
-    renderUtilityModalContent();
+    if (ownsPresentation()) showToast(librarySettingsState.error, 'error', 3600);
     return false;
   } finally {
     librarySettingsState.saveBusy = false;
-    renderUtilityModalContent();
+    renderCurrent();
   }
 }
 
@@ -18665,32 +19112,18 @@ function buildLibrarySettingsRootOptions(roots, selectedId, placeholder) {
 function buildLibrarySettingsRootSection(category, title, description) {
   const draft = getLibrarySettingsDraft();
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
-  const rows = roots.length
-    ? roots.map((root, index) => `
-        <div class="library-settings-root-row">
-          <input
-            type="text"
-            value="${escapeHtml(root.path || '')}"
-            placeholder="C:\\Music\\${escapeHtml(title.replaceAll(' ', ''))}"
-            data-library-root-field="path"
-            data-library-root-list="${escapeHtml(category)}"
-            data-library-root-index="${index}"
-          >
-          ${category === 'main_library_roots'
-            ? `<select
-                data-library-root-field="layout_mode"
-                data-library-root-list="${escapeHtml(category)}"
-                data-library-root-index="${index}"
-              >
-                ${LIBRARY_SETTINGS_LAYOUT_OPTIONS.map((option) => `
-                  <option value="${escapeHtml(option.value)}" ${option.value === root.layout_mode ? 'selected' : ''}>${escapeHtml(option.label)}</option>
-                `).join('')}
-              </select>`
-            : ''}
-          <button class="button button-secondary library-settings-root-remove" type="button" data-remove-library-root="${escapeHtml(category)}" data-library-root-index="${index}">Remove</button>
-        </div>
-      `).join('')
-    : '<div class="utility-empty-state compact">No roots added yet.</div>';
+  const canManage = ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
+  const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
+  const rows = roots.length ? roots.map((root, index) => `<div class="library-settings-root-row">
+    <div class="library-settings-path-control"><input type="text" value="${escapeHtml(root.path || '')}"
+      aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
+      data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
+      ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
+        attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
+      ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
+        attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
+    ${category === 'main_library_roots' ? `<div class="library-settings-layout-field"><span>Folder layout</span>${window.ButtonComponent.renderButton({ label: LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.value === root.layout_mode)?.label || 'Artist folders', ariaLabel: `Folder layout for ${title} path ${index + 1}`, disabled: !canManage, attributes: { 'data-library-layout-trigger': '1', 'data-library-root-index': index, 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}</div>` : ''}
+    </div>`).join('') : '<div class="utility-empty-state compact">No roots added yet.</div>';
 
   return `
     <section class="library-settings-section">
@@ -18699,7 +19132,7 @@ function buildLibrarySettingsRootSection(category, title, description) {
           <h4>${escapeHtml(title)}</h4>
           <p>${escapeHtml(description)}</p>
         </div>
-        <button class="button button-secondary" type="button" data-add-library-root="${escapeHtml(category)}">Add root</button>
+        ${window.ButtonComponent.renderButton({label: 'Add path', disabled: !canManage, attributes: {'data-add-library-root': category}})}
       </div>
       <div class="library-settings-root-list">${rows}</div>
     </section>
@@ -18708,7 +19141,7 @@ function buildLibrarySettingsRootSection(category, title, description) {
 
 function buildUtilityLibrarySettingsDetail() {
   const librarySettingsState = ensureLibrarySettingsState();
-  if (librarySettingsState.loading && !librarySettingsState.loaded) {
+  if (!librarySettingsState.loaded && !librarySettingsState.error) {
     return '<div class="utility-empty-state">Loading library settings...</div>';
   }
   if (!librarySettingsState.loaded && librarySettingsState.error) {
@@ -18729,11 +19162,10 @@ function buildUtilityLibrarySettingsDetail() {
   return `
     <div class="utility-rule-detail">
       <h3 class="utility-rule-title">Library</h3>
-      <p class="utility-rule-description">Save root settings for Main Library, Hoard, and New Arrivals. Saving starts a full rescan and queues the normal post-scan cover refresh.</p>
       ${librarySettingsState.error ? `<div class="library-settings-error">${escapeHtml(librarySettingsState.error)}</div>` : ''}
-      ${buildLibrarySettingsRootSection('main_library_roots', 'Main Library', 'Roots used for primary browsing and library moves.')}
-      ${buildLibrarySettingsRootSection('hoarding_library_roots', 'Hoard', 'Roots used for long-term arrivals storage and hoard-only browsing.')}
-      ${buildLibrarySettingsRootSection('new_arrivals_roots', 'New Arrivals', 'Roots used for arrivals-only browsing and move planning.')}
+      ${buildLibrarySettingsRootSection('main_library_roots', 'Main Library', '')}
+      ${buildLibrarySettingsRootSection('hoarding_library_roots', 'Hoard', 'Unlistened music.')}
+      ${buildLibrarySettingsRootSection('new_arrivals_roots', 'New Arrivals', 'Folders watched for new music.')}
       <section class="library-settings-section">
         <div class="library-settings-section-heading">
           <div>
@@ -18762,16 +19194,157 @@ function buildUtilityLibrarySettingsDetail() {
             <h4>Album ratings</h4>
             <p>Copy file-tag ratings into albums that do not already have an app rating. Existing app ratings remain unchanged.</p>
           </div>
-          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings from file tags'}</button>
+          <button class="button button-secondary" type="button" data-import-album-ratings="1" ${librarySettingsState.albumRatingImportBusy ? 'disabled' : ''}>${librarySettingsState.albumRatingImportBusy ? 'Importing ratings...' : 'Import ratings'}</button>
         </div>
         ${importResult ? `<div class="library-settings-import-result" data-album-rating-import-result="1">Created: ${escapeHtml(importResult.created)} \u00b7 Authority skipped: ${escapeHtml(importResult.authority_skipped)} \u00b7 Failed: ${escapeHtml(importResult.failed)}</div>` : ''}
       </section>
       <div class="confirm-modal-actions">
         <button class="button button-secondary" type="button" data-reload-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>Reload</button>
-        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
+        <button class="button" type="button" data-save-library-settings="1" ${librarySettingsState.saveBusy || librarySettingsState.allowedActions?.['library.settings.manage'] !== true ? 'disabled' : ''}>${librarySettingsState.saveBusy ? 'Saving...' : 'Save library settings'}</button>
       </div>
     </div>
   `;
+}
+
+
+async function browseLibraryRootDraft(category, index) {
+  const utility = state.utility, owner = ensureLibrarySettingsState();
+  const activeTab = utility.activeTab, selectedKey = utility.selectedIntegrationKey;
+  const current = () => state.utility === utility && utility.librarySettings === owner && utility.activeTab === activeTab && utility.selectedIntegrationKey === selectedKey && (typeof document === 'undefined' || !document.getElementById?.('utility-modal')?.hidden);
+  if (!LIBRARY_SETTINGS_ROOT_CATEGORIES.includes(category) || owner.allowedActions?.['library.settings.manage'] !== true
+      || owner.allowedActions?.['library.filesystem.browse'] !== true || owner.allowedActions?.['library.paths.read'] !== true) return false;
+  const root = getLibrarySettingsDraft()[category]?.[index];
+  if (!root) return false;
+  let selected = '', disposed = false, generation = 0, navigating = false;
+  const read = async path => {
+    const response = await fetch(`/library-settings/browse?path=${encodeURIComponent(path)}`, {headers: {Accept: 'application/json'}});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to browse folders.');
+    return data;
+  };
+  try {
+    const initial = await read('');
+    if (!current() || ensureLibrarySettingsState() !== owner) return false;
+    const render = data => `<p>${escapeHtml(data.path || 'Choose a configured location')}</p><div class="settings-folder-list">${data.parent_path ? window.ButtonComponent.renderButton({label: 'Parent folder', attributes: {'data-folder-path': data.parent_path}}) : ''}${(data.entries || []).map(entry => window.ButtonComponent.renderButton({label: entry.name, attributes: {'data-folder-path': entry.path}})).join('')}</div>`;
+    const result = await showAppFormDialog({ title: 'Choose library folder', contentHtml: render(initial), submitLabel: 'Choose folder', submitEnabled: false,
+      onMount: (content, dialog) => {
+        const syncNavigation = () => {
+          content.setAttribute?.('aria-busy', String(navigating));
+          dialog?.setSubmitEnabled(Boolean(selected) && !navigating);
+        };
+        const navigate = async event => {
+          const button = event.target.closest('[data-folder-path]'); if (!button) return;
+          event.preventDefault(); const requestGeneration = ++generation;
+          selected = ''; navigating = true; syncNavigation();
+          try { const data = await read(button.getAttribute('data-folder-path'));
+            if (disposed || requestGeneration !== generation || !current()) return;
+            selected = String(data.path || ''); content.innerHTML = render(data);
+          } catch (error) { if (!disposed && requestGeneration === generation && current()) showToast(error.message, 'error'); }
+          finally { if (!disposed && requestGeneration === generation && current()) { navigating = false; syncNavigation(); } }
+        };
+        content.addEventListener('click', navigate); owner.pickerCleanup = () => content.removeEventListener('click', navigate);
+      },
+      onClose: () => { disposed = true; owner.pickerCleanup?.(); delete owner.pickerCleanup; },
+      onSubmit: () => { if (navigating) throw new Error('Wait for the folder to finish loading.'); if (!selected) throw new Error('Choose a folder first.'); return selected; },
+    });
+    if (!result || !current() || ensureLibrarySettingsState() !== owner || getLibrarySettingsDraft()[category]?.[index] !== root) return false;
+    root.path = result; renderUtilityModalContent(); return true;
+  } catch (error) { if (current()) showToast(error.message || 'Folder picker unavailable.', 'error'); return false; }
+}
+
+
+async function openUtilityFoobarGuide() {
+  const utility = state.utility, activeTab = state.utility.activeTab, selectedKey = state.utility.selectedIntegrationKey;
+  try {
+    const response = await fetch('/utilities/integrations/foobar/help', {headers: {Accept: 'application/json'}});
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load setup instructions.');
+    if (state.utility !== utility || utility.activeTab !== activeTab || utility.selectedIntegrationKey !== selectedKey || (typeof document !== 'undefined' && document.getElementById?.('utility-modal')?.hidden)) return false;
+    const sections = (data.sections || []).map(section => `<section><h4>${escapeHtml(section.title)}</h4><div class="settings-guide-copy">${formatUtilityGuideMarkdown(section.body_markdown)}</div></section>`).join('');
+    const references = (data.reference_assets || []).filter(asset => String(asset.view_url || '').startsWith('/utilities/integrations/foobar/assets/'))
+      .map(asset => `<li><a href="${escapeHtml(asset.view_url)}" target="_blank" rel="noreferrer">${escapeHtml(asset.title)}</a></li>`).join('');
+    return await showAppFormDialog({title: 'Foobar2000 setup instructions', mode: 'reading',
+      contentHtml: `<article class="settings-reading-guide" tabindex="0" aria-label="Foobar2000 setup instructions">${sections}${references ? `<h4>Reference files</h4><ul>${references}</ul>` : ''}</article>`});
+  } catch (error) { if (state.utility === utility) showToast(error.message || 'Unable to load setup instructions.', 'error'); return false; }
+}
+
+let utilityFoobarFormatCleanup = null;
+function openUtilityFoobarFormats(trigger) {
+  return openUtilityChoiceDropdown(trigger, {
+    formats: ['Playback Statistics XML', 'Text Tools — standard', 'Text Tools — enhanced'],
+    selected: state.utility.foobarFormat || 'Playback Statistics XML', label: 'Foobar export format',
+    onSelect: value => { state.utility.foobarFormat = value; },
+  });
+}
+function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect }) {
+  if (utilityFoobarFormatCleanup) { utilityFoobarFormatCleanup(); return; }
+  const menu = document.createElement('div');
+  menu.className = 'utility-problem-filter-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', label);
+  menu.innerHTML = formats.map(format => window.ButtonComponent.renderButton({label: format,
+    attributes: {role: 'menuitemradio', 'aria-checked': String(format === selected), 'data-foobar-format': format}})).join('');
+  document.body.append(menu);
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    clearTriggerAnchor(menu); menu.remove(); trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', outside, true); window.removeEventListener('resize', position);
+    observer?.disconnect(); utilityFoobarFormatCleanup = null;
+  };
+  const position = () => {
+    if (!trigger.isConnected) { close(); return; }
+    const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.zIndex = '130';
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 290))}px`;
+    menu.style.top = `${rect.bottom + 4}px`; menu.style.maxHeight = `${Math.max(80, window.innerHeight - rect.bottom - 12)}px`;
+    syncTriggerAnchor(menu, trigger);
+  };
+  const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => { if (menu.hidden || !trigger.isConnected) close(); }) : null;
+  observer?.observe(document.body, {childList:true,subtree:true,attributes:true,attributeFilter:['hidden']});
+  utilityFoobarFormatCleanup = close; trigger.setAttribute('aria-expanded', 'true'); position();
+  document.addEventListener('pointerdown', outside, true); window.addEventListener('resize', position);
+  menu.addEventListener('click', event => {
+    const choice = event.target.closest('[data-foobar-format]'); if (!choice) return;
+    const value = choice.getAttribute('data-foobar-format'); if (!formats.includes(value)) return;
+    onSelect(value);
+    const label = trigger.querySelector('.ui-button__content'); if (label) label.textContent = value;
+    close(); trigger.focus({preventScroll:true});
+  });
+  menu.addEventListener('keydown', event => {
+    const buttons = Array.from(menu.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
+    if (event.key === 'Escape' || event.key === 'Tab') { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); } close(); trigger.focus({preventScroll:true}); }
+    if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) { event.preventDefault(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
+  });
+  menu.querySelector('button')?.focus();
+}
+
+
+function formatUtilityGuideMarkdown(value) {
+  const inline = text => escapeHtml(text).replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) =>
+      /^(?:https:\/\/|\/utilities\/integrations\/foobar\/assets\/)/.test(url)
+        ? `<a href="${url}" target="_blank" rel="noreferrer">${label}</a>` : label);
+  const lines = String(value || '').split(/\r?\n/), result = [];
+  let index = 0;
+  while (index < lines.length) {
+    if (!lines[index].trim()) { index++; continue; }
+    if (lines[index].startsWith('```')) {
+      const code = []; index++;
+      while (index < lines.length && !lines[index].startsWith('```')) code.push(lines[index++]);
+      index++; result.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`); continue;
+    }
+    const ordered = /^\d+\.\s+/.test(lines[index]), unordered = /^[-*]\s+/.test(lines[index]);
+    if (ordered || unordered) {
+      const pattern = ordered ? /^\d+\.\s+/ : /^[-*]\s+/, items = [];
+      while (index < lines.length && pattern.test(lines[index])) items.push(`<li>${inline(lines[index++].replace(pattern, ''))}</li>`);
+      const tag = ordered ? 'ol' : 'ul'; result.push(`<${tag}>${items.join('')}</${tag}>`); continue;
+    }
+    if (/^#{1,6}\s+/.test(lines[index])) { result.push(`<h5>${inline(lines[index++].replace(/^#{1,6}\s+/, ''))}</h5>`); continue; }
+    const paragraph = [];
+    while (index < lines.length && lines[index].trim() && !/^(?:```|\d+\.\s+|[-*]\s+|#{1,6}\s+)/.test(lines[index])) paragraph.push(lines[index++]);
+    result.push(`<p>${inline(paragraph.join(' '))}</p>`);
+  }
+  return result.join('');
 }
 
 // END js/runtime/library-settings.js
@@ -18933,9 +19506,19 @@ function mountBackgroundAppearanceEditor(detail) {
 function getSavedAppearancePlayerColors() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
 }
+function getSavedAppearanceLoopControlStyle() {
+  return getBackgroundAppearanceEditor()?.getSavedLoopControlStyle?.() === 'companion' ? 'companion' : 'capsule';
+}
+function syncSavedAppearanceLoopControlStyle() {
+  const style = getSavedAppearanceLoopControlStyle();
+  document.querySelectorAll?.('[data-playback-control-cluster][data-loop-control-style]').forEach(node => {
+    node.setAttribute('data-loop-control-style', style);
+  });
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+    syncSavedAppearanceLoopControlStyle();
   });
 }
 
@@ -18960,6 +19543,11 @@ function mountSeekbarAppearanceEditor(detail) {
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
     getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: seekbarMode => {
+      state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
+      persistPlayerAppearance();
+      updateWaveformAppearance(true);
+    },
   });
   else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
 }
@@ -19005,15 +19593,9 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const mountedItems = mountedRows.map(row => albumsByKey.get(row.getAttribute('data-problematic-album-key')));
   const retainTree = mountedRows.length > 0 && mountedItems.every(Boolean);
   const items = retainTree ? mountedItems : getFilteredProblematicAlbums();
-  const operationalItems = Array.isArray(state.utility.libraryWatchHealthProblems)
-    ? state.utility.libraryWatchHealthProblems
-    : [];
-  const operationalHtml = operationalItems
-    .map((problem) => buildLibraryWatchHealthProblemRow(problem))
-    .join('');
   const renderTree = selectedKey => {
     if (!retainTree) {
-      els.list.innerHTML = operationalHtml + items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join('');
+      replaceListContents(items.map(album => buildProblematicAlbumListItem(album, album.key === selectedKey)).join(''));
     }
     Array.from(els.list.querySelectorAll?.('[data-problematic-album-key]') || []).forEach(row => {
       const album = albumsByKey.get(row.getAttribute('data-problematic-album-key'));
@@ -19032,7 +19614,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
     });
   };
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Albums';
-  els.count.textContent = String(items.length + operationalItems.length);
+  els.count.textContent = String(items.length);
   if (els.search) {
     els.search.disabled = false;
     els.search.placeholder = 'Filter artist, album, or track';
@@ -19060,13 +19642,13 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   els.detail.removeAttribute?.('inert');
 
   if (state.utility.loading && !state.utility.loaded) {
-    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">Loading...</div>`);
+    replaceListContents('<div class="utility-empty-state compact">Loading...</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">Loading problematic albums...</div>';
     return;
   }
 
   if (!items.length) {
-    replaceListContents(`${operationalHtml}<div class="utility-empty-state compact">No matching problematic albums found.</div>`);
+    replaceListContents('<div class="utility-empty-state compact">No matching problematic albums found.</div>');
     els.detail.innerHTML = '<div class="utility-empty-state">No matching problematic albums found.</div>';
     return;
   }
@@ -19243,6 +19825,33 @@ function mountProblematicMutationOverlay(detail) {
   detail.innerHTML += overlayMarkup;
 }
 
+function reconcileUtilitySectionRows(list, attribute, items, selectedKey, renderItem, trailingMarkup = '') {
+  const rows = Array.from(list.querySelectorAll(`[${attribute}]`));
+  const scrollTop = list.scrollTop;
+  if (!rows.length) {
+    list.innerHTML = items.map(item => renderItem(item, item.key === selectedKey)).join('') + trailingMarkup;
+  } else {
+    const byKey = new Map(rows.map(row => [row.getAttribute(attribute), row]));
+    const keys = new Set(items.map(item => item.key));
+    rows.forEach(row => { if (!keys.has(row.getAttribute(attribute))) row.remove(); });
+    let cursor = list.firstElementChild;
+    for (const item of items) {
+      let row = byKey.get(item.key);
+      if (!row) {
+        const holder = document.createElement('div');
+        holder.innerHTML = renderItem(item, item.key === selectedKey);
+        row = holder.firstElementChild;
+      }
+      if (row !== cursor) list.insertBefore(row, cursor);
+      cursor = row.nextElementSibling;
+    }
+  }
+  list.querySelectorAll(`[${attribute}]`).forEach(row => {
+    window.NavigationTree.setItemSelected(row, row.getAttribute(attribute) === selectedKey);
+  });
+  list.scrollTop = scrollTop;
+}
+
 function renderUtilityRules() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
@@ -19277,7 +19886,20 @@ function renderUtilityRules() {
     state.utility.selectedRuleKey = rules[0].key || '';
   }
   const selectedRule = getSelectedUtilityRule();
-  els.list.innerHTML = rules.map((rule) => buildUtilityRuleListItem(rule, rule.key === state.utility.selectedRuleKey)).join('');
+  reconcileUtilitySectionRows(els.list, 'data-utility-rule-key', rules, state.utility.selectedRuleKey, buildUtilityRuleListItem);
+  const rulesByKey = new Map(rules.map(rule => [rule.key, rule]));
+  els.list.querySelectorAll('[data-utility-rule-key]').forEach(row => {
+    const rule = rulesByKey.get(row.getAttribute('data-utility-rule-key'));
+    row.classList.toggle('is-active', rule.key === state.utility.selectedRuleKey);
+    for (const [selector, value] of [
+      ['.utility-list-item-title', rule.title || 'Rule'],
+      ['.utility-list-item-meta', rule.description || ''],
+      ['.utility-list-item-issues', `${Number(rule.count || 0)} applied`],
+    ]) {
+      const field = row.querySelector?.(selector);
+      if (field && field.textContent !== value) field.textContent = value;
+    }
+  });
   els.detail.innerHTML = buildUtilityRuleDetail(selectedRule);
 }
 
@@ -19292,24 +19914,32 @@ function clearUtilityLoopDragState() {
 }
 
 function syncUtilityLoopDragUi() {
-  document.querySelectorAll('[data-utility-loop-group-key]').forEach((button) => {
-    const groupKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-    const isGroupButton = button.hasAttribute('data-utility-loop-id') === false;
-    const isDragging = isGroupButton
-      ? state.utility.loopDragType === 'group' && groupKey && groupKey === String(state.utility.loopDragId || '')
-      : state.utility.loopDragType === 'loop' && String(button.getAttribute('data-utility-loop-id') || '') === String(state.utility.loopDragId || '');
-    const isDropTarget = isGroupButton
-      ? state.utility.loopDropType === 'group' && groupKey && groupKey === String(state.utility.loopDropTargetId || '')
-      : state.utility.loopDropType === 'loop' && String(button.getAttribute('data-utility-loop-id') || '') === String(state.utility.loopDropTargetId || '');
-    button.classList.toggle('is-dragging', isDragging);
-    button.classList.toggle(
-      'is-drop-before',
-      isDropTarget && state.utility.loopDropPosition === 'before',
-    );
-    button.classList.toggle(
-      'is-drop-after',
-      isDropTarget && state.utility.loopDropPosition === 'after',
-    );
+  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
+    const id = getUtilityLoopNodeId(node);
+    const dragging = id && id === state.utility.loopDragId;
+    const dropping = id && id === state.utility.loopDropTargetId;
+    node.classList.toggle('is-dragging', Boolean(dragging));
+    node.classList.toggle('is-drop-before', Boolean(dropping && state.utility.loopDropPosition === 'before'));
+    node.classList.toggle('is-drop-after', Boolean(dropping && state.utility.loopDropPosition === 'after'));
+  });
+}
+
+function getUtilityLoopNodeId(node) {
+  return String(node?.getAttribute('data-utility-loop-entry') || node?.getAttribute('data-utility-loop-id') || '');
+}
+
+function syncUtilityLoopMoveButtons() {
+  document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
+    const id = button.getAttribute('data-move-utility-loop');
+    const loop = (state.utility.loops || []).find(item => String(item.id) === id);
+    const scope = loop && getUtilityLoopOrderScope(loop.song_key);
+    const index = scope?.loops.findIndex(item => String(item.id) === id) ?? -1;
+    const direction = button.getAttribute('data-loop-move-direction');
+    const unavailable = !scope || Boolean(state.utility.loopOrderPending?.[loop.song_key])
+      || (direction === 'up' ? index <= 0 : index >= scope.loops.length - 1);
+    button.setAttribute('aria-disabled', String(unavailable));
+    // Keep the focused control in the tab order across an optimistic boundary move.
+    button.dataset.moveUnavailable = String(unavailable);
   });
 }
 
@@ -19332,99 +19962,158 @@ function renderUtilityLoopList(els, loops) {
     group,
     state.utility.selectedLoopGroupKey || getSelectedUtilityLoopGroup()?.key || '',
     state.utility.selectedLoopId || '',
-  )).join('');
+  )).join('') || '<div class="utility-empty-state compact">No matching loops.</div>';
   bindUtilityLoopDragAndDrop();
   syncUtilityLoopDragUi();
 }
 
 function bindUtilityLoopDragAndDrop() {
-  document.querySelectorAll('[data-utility-loop-group-key]').forEach((button) => {
-    if (button.dataset.dragBound === '1') return;
-    button.dataset.dragBound = '1';
-    button.addEventListener('dragstart', (event) => {
-      const groupKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const loopId = String(button.getAttribute('data-utility-loop-id') || '');
-      const dragType = loopId ? 'loop' : 'group';
-      const dragId = loopId || groupKey;
-      if (!groupKey || !dragId) {
-        event.preventDefault();
-        return;
-      }
-      state.utility.loopDragType = dragType;
-      state.utility.loopDragId = dragId;
-      state.utility.loopDragGroupKey = groupKey;
-      state.utility.loopSuppressClick = false;
-      updateUtilityLoopDropState('', '', '');
-      syncUtilityLoopDragUi();
-      if (event.dataTransfer) {
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', JSON.stringify({ type: dragType, id: dragId, groupKey }));
-      }
-    });
-    button.addEventListener('dragover', (event) => {
-      const targetKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const targetLoopId = String(button.getAttribute('data-utility-loop-id') || '');
-      let payload = { type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey };
-      const raw = String(event.dataTransfer?.getData('text/plain') || '');
-      if ((!payload.id || !payload.type) && raw) {
-        try { payload = JSON.parse(raw); } catch (_error) {}
-      }
-      if (!targetKey || !payload?.id || !payload?.type) return;
-      if (payload.type === 'loop' && payload.groupKey !== targetKey) return;
+  const clear = () => { clearUtilityLoopDragState(); syncUtilityLoopDragUi(); };
+  const payload = () => ({ type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey });
+  document.querySelectorAll('[data-loop-tree-song]').forEach(container => {
+    if (container.dataset.edgeDragBound === '1') return;
+    container.dataset.edgeDragBound = '1';
+    const edgeTarget = event => {
+      if (event.target.closest('[data-utility-loop-id]')) return null;
+      const nodes = container.querySelectorAll('[data-utility-loop-id]');
+      if (!nodes.length) return null;
+      const first = nodes[0], last = nodes[nodes.length - 1];
+      const before = event.clientY <= first.getBoundingClientRect().top;
+      if (!before && event.clientY < last.getBoundingClientRect().bottom) return null;
+      return { target: { type: 'loop', id: getUtilityLoopNodeId(before ? first : last), groupKey: container.getAttribute('data-loop-tree-song') }, position: before ? 'before' : 'after' };
+    };
+    container.addEventListener('dragover', event => {
+      const edge = edgeTarget(event);
+      if (!edge || !buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) return;
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-      const targetType = targetLoopId ? 'loop' : 'group';
-      const targetId = targetLoopId || targetKey;
-      if (payload.id === targetId && payload.type === targetType) {
-        updateUtilityLoopDropState('', '', '');
-        return;
-      }
-      updateUtilityLoopDropState(targetType, targetId, getUtilityLoopDropPosition(button, event.clientY), targetKey);
+      updateUtilityLoopDropState('loop', edge.target.id, edge.position, edge.target.groupKey);
     });
-    button.addEventListener('drop', async (event) => {
-      event.preventDefault();
-      const targetKey = String(button.getAttribute('data-utility-loop-group-key') || '');
-      const targetLoopId = String(button.getAttribute('data-utility-loop-id') || '');
-      let payload = { type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey };
-      const raw = String(event.dataTransfer?.getData('text/plain') || '');
-      if ((!payload.id || !payload.type) && raw) {
-        try { payload = JSON.parse(raw); } catch (_error) {}
-      }
-      if (!payload?.id || !payload?.type || !targetKey) return;
-      if (payload.type === 'loop' && payload.groupKey !== targetKey) return;
-      const targetType = targetLoopId ? 'loop' : 'group';
-      const targetId = targetLoopId || targetKey;
-      const position = state.utility.loopDropTargetId === targetId && state.utility.loopDropPosition
-        ? state.utility.loopDropPosition
-        : getUtilityLoopDropPosition(button, event.clientY);
-      state.utility.loopSuppressClick = true;
-      clearUtilityLoopDragState();
-      syncUtilityLoopDragUi();
-      await reorderUtilityLoops(payload, { type: targetType, id: targetId, groupKey: targetKey }, position);
-      scheduleBrowserTimeout(() => {
-        state.utility.loopSuppressClick = false;
-      }, 0);
+    container.addEventListener('drop', async event => {
+      const edge = edgeTarget(event);
+      if (!edge) return;
+      event.preventDefault(); event.stopPropagation();
+      const source = payload(); clear();
+      await reorderUtilityLoops(source, edge.target, edge.position);
     });
-    button.addEventListener('dragend', () => {
-      clearUtilityLoopDragState();
-      syncUtilityLoopDragUi();
+    container.addEventListener('dragleave', event => {
+      if (!event.relatedTarget || !container.contains(event.relatedTarget)) updateUtilityLoopDropState('', '', '');
     });
   });
+  document.querySelectorAll('[data-utility-loop-entry], [data-utility-loop-id]').forEach(node => {
+    const currentLoop = () => (state.utility.loops || []).find(loop => String(loop.id) === getUtilityLoopNodeId(node));
+    node.setAttribute('draggable', String(canReorderUtilityLoop(currentLoop())));
+    if (node.dataset.dragBound === '1') return;
+    node.dataset.dragBound = '1';
+    const target = () => ({ type: 'loop', id: getUtilityLoopNodeId(node), groupKey: currentLoop()?.song_key });
+    node.addEventListener('dragstart', event => {
+      const loop = currentLoop();
+      if (!canReorderUtilityLoop(loop) || state.utility.loopOrderPending?.[loop.song_key]
+          || event.target?.closest?.('button, input, select, textarea, a, [data-loop-range-surface]')) {
+        event.preventDefault(); clear(); return;
+      }
+      state.utility.loopDragType = 'loop'; state.utility.loopDragId = String(loop.id);
+      state.utility.loopDragGroupKey = loop.song_key;
+      state.utility.loopSuppressClick = false;
+      updateUtilityLoopDropState('', '', '');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', JSON.stringify(payload()));
+      }
+    });
+    node.addEventListener('dragover', event => {
+      const position = getUtilityLoopDropPosition(node, event.clientY);
+      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), target(), position)) {
+        updateUtilityLoopDropState('', '', ''); return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      updateUtilityLoopDropState('loop', getUtilityLoopNodeId(node), position, currentLoop().song_key);
+    });
+    node.addEventListener('dragleave', event => {
+      if (!event.relatedTarget || !node.contains(event.relatedTarget)) updateUtilityLoopDropState('', '', '');
+    });
+    node.addEventListener('drop', async event => {
+      event.preventDefault(); event.stopPropagation?.();
+      const source = payload(); const destination = target();
+      const position = getUtilityLoopDropPosition(node, event.clientY);
+      clear();
+      state.utility.loopSuppressClick = true;
+      try { return await reorderUtilityLoops(source, destination, position); }
+      finally { setTimeout(() => { state.utility.loopSuppressClick = false; }, 0); }
+    });
+    node.addEventListener('dragend', clear);
+  });
+  document.querySelectorAll('[data-move-utility-loop]').forEach(button => {
+    if (button.dataset.moveBound === '1') return;
+    button.dataset.moveBound = '1';
+    button.addEventListener('click', event => {
+      event.preventDefault(); event.stopPropagation?.();
+      if (button.getAttribute('aria-disabled') === 'true') return false;
+      return moveUtilityLoop(button.getAttribute('data-move-utility-loop'), button.getAttribute('data-loop-move-direction'));
+    });
+  });
+  if (!state.utility.loopDragDismissBound) {
+    state.utility.loopDragDismissBound = true;
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') clear(); });
+    document.addEventListener('drop', clear);
+    document.addEventListener('dragend', clear);
+  }
+  syncUtilityLoopMoveButtons();
+}
+
+function syncUtilityLoopPanelVisibility() {
+  const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
+  const els = getUtilityModalElements();
+  els.detail?.querySelectorAll('[data-utility-loop-entry]').forEach(panel => { panel.hidden = !visibleIds.has(getUtilityLoopNodeId(panel)); });
+  const empty = visibleIds.size === 0;
+  const groupDetail = els.detail?.querySelector('.utility-loop-group-detail');
+  const panelList = els.detail?.querySelector('.utility-loop-entry-list');
+  if (groupDetail) groupDetail.hidden = empty;
+  if (panelList) panelList.hidden = empty;
+  let message = els.detail?.querySelector('[data-loop-search-empty]');
+  if (empty && !message && els.detail) {
+    message = document.createElement('div');
+    message.setAttribute('data-loop-search-empty', '1');
+    message.setAttribute('class', 'utility-empty-state');
+    message.textContent = 'No matching loops.';
+    els.detail.appendChild(message);
+  }
+  if (message) message.hidden = !empty;
+}
+
+function filterUtilityLoopViews() {
+  if (state.utility.activeTab !== 'loops') return;
+  const els = getUtilityModalElements();
+  const filtered = getFilteredUtilityLoops();
+  if (els.count) els.count.textContent = String(filtered.length);
+  if (filtered.length && !filtered.some(loop => buildUtilityLoopGroupKey(loop) === state.utility.selectedLoopGroupKey)) {
+    state.utility.selectedLoopGroupKey = buildUtilityLoopGroupKey(filtered[0]);
+    state.utility.selectedLoopId = String(filtered[0].id);
+    renderUtilityLoops();
+    return;
+  }
+  const scroll = els.list?.scrollTop;
+  renderUtilityLoopList(els, filtered);
+  if (els.list && Number.isFinite(scroll)) els.list.scrollTop = scroll;
+  syncUtilityLoopPanelVisibility();
 }
 
 function renderUtilityLoops() {
   const els = getUtilityModalElements();
   if (!els.overlay || !els.list || !els.detail || !els.count) return;
+  state.utility.loopViewGeneration = Number(state.utility.loopViewGeneration || 0) + 1;
   if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (els.overlay.hidden) return;
   els.detail.classList.add('is-loop-detail');
   const loops = state.utility.loops || [];
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Loops';
-  els.count.textContent = String(loops.length);
+  const filtered = getFilteredUtilityLoops();
+  els.count.textContent = String(filtered.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Saved loops';
+    els.search.value = state.utility.loopsSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Filter song, artist, album, or loop';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -19439,6 +20128,11 @@ function renderUtilityLoops() {
     return;
   }
 
+  if (state.utility.loopsLoadError) {
+    els.list.innerHTML = '<div class="utility-empty-state compact">Saved loops could not be loaded.</div>';
+    els.detail.innerHTML = `<div class="utility-empty-state" role="alert">${escapeHtml(state.utility.loopsLoadError)}</div>`;
+    return;
+  }
   if (!loops.length) {
     clearUtilityLoopDragState();
     els.list.innerHTML = '<div class="utility-empty-state compact">No saved loops yet.</div>';
@@ -19446,7 +20140,7 @@ function renderUtilityLoops() {
     return;
   }
 
-  const groupedLoops = groupUtilityLoops(loops);
+  const groupedLoops = groupUtilityLoops(filtered.length ? filtered : loops);
   if (!state.utility.selectedLoopGroupKey || !groupedLoops.some((group) => String(group.key || '') === String(state.utility.selectedLoopGroupKey || ''))) {
     state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
   }
@@ -19456,10 +20150,25 @@ function renderUtilityLoops() {
   }
   const selectedGroup = getSelectedUtilityLoopGroup();
   state.utility.selectedLoopDetailMode = 'group';
-  renderUtilityLoopList(els, loops);
+  renderUtilityLoopList(els, getFilteredUtilityLoops());
   els.detail.innerHTML = buildUtilityLoopDetail(selectedGroup);
   (selectedGroup?.loops || []).forEach((loop) => initializeUtilityLoopPlayer(loop));
+  bindUtilityLoopDragAndDrop();
+  syncUtilityLoopPanelVisibility();
   updateUtilityLoopRepeatButton(String(state.utility.selectedLoopId || ''));
+}
+
+function filterUtilityAppearanceNavigation() {
+  const els = getUtilityModalElements();
+  const query = String(state.utility.appearanceSearchQuery || '').trim().toLocaleLowerCase();
+  let matches = 0;
+  els.list?.querySelectorAll('[data-utility-appearance-key]').forEach((row) => {
+    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    if (!row.hidden) matches += 1;
+  });
+  const empty = els.list?.querySelector('[data-appearance-search-empty]');
+  if (empty) empty.hidden = matches !== 0;
+  if (els.count) els.count.textContent = String(matches);
 }
 
 function renderUtilityAppearance() {
@@ -19468,9 +20177,9 @@ function renderUtilityAppearance() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Appearance';
   els.count.textContent = '5';
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Appearance';
+    els.search.value = state.utility.appearanceSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Search settings';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -19483,9 +20192,12 @@ function renderUtilityAppearance() {
   const selectedKey = state.utility.appearanceKey;
   const navigationTree = typeof window !== 'undefined' ? window.NavigationTree : null;
   const labels = { backgrounds: 'Main elements', seekbar: 'Player & Seekbar', 'selection-accent': 'Selection & Hover', alerts: 'Alerts', 'album-page': 'Album page' };
-  els.list.innerHTML = appearanceKeys.map(key => navigationTree?.renderItem
-    ? navigationTree.renderItem({ key, label: labels[key], variant: 'panel', action: true, selected: selectedKey === key, attributes: { 'data-utility-appearance-key': key } })
-    : buildUtilityAppearanceListItem(key, labels[key], '', selectedKey === key)).join('');
+  reconcileUtilitySectionRows(els.list, 'data-utility-appearance-key', appearanceKeys.map(key => ({ key })), selectedKey,
+    (item, selected) => navigationTree?.renderItem
+      ? navigationTree.renderItem({ key: item.key, label: labels[item.key], variant: 'panel', action: true, selected, attributes: { 'data-utility-appearance-key': item.key } })
+      : buildUtilityAppearanceListItem(item.key, labels[item.key], '', selected),
+    '<div class="utility-empty-state compact" data-appearance-search-empty hidden>No matching settings.</div>');
+  filterUtilityAppearanceNavigation();
   if (selectedKey === 'backgrounds') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountBackgroundAppearanceEditor === 'function') mountBackgroundAppearanceEditor(els.detail);
@@ -19506,6 +20218,23 @@ function renderUtilityAppearance() {
   }
 }
 
+function filterUtilityIntegrationNavigation() {
+  const els = getUtilityModalElements();
+  const query = String(state.utility.integrationsSearchQuery || '').trim().toLocaleLowerCase();
+  let matches = 0;
+  els.list?.querySelectorAll('[data-utility-integration-key]').forEach((row) => {
+    row.hidden = !String(row.textContent || '').toLocaleLowerCase().includes(query);
+    if (!row.hidden) matches += 1;
+  });
+  let empty = els.list?.querySelector?.('[data-integration-search-empty]');
+  if (!empty && matches === 0 && els.list?.insertAdjacentHTML) {
+    els.list.insertAdjacentHTML('beforeend', '<div class="utility-empty-state compact" data-integration-search-empty>No matching integrations.</div>');
+    empty = els.list.querySelector('[data-integration-search-empty]');
+  }
+  if (empty) empty.hidden = matches !== 0;
+  if (els.count) els.count.textContent = String(matches);
+}
+
 function getSelectedUtilityIntegration() {
   return buildUtilityIntegrationItems().find((item) => String(item.key || '') === String(state.utility.selectedIntegrationKey || '')) || null;
 }
@@ -19517,9 +20246,9 @@ function renderUtilityIntegrations() {
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'Integrations';
   els.count.textContent = String(integrations.length);
   if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Integrations';
+    els.search.value = state.utility.integrationsSearchQuery || '';
+    els.search.disabled = false;
+    els.search.placeholder = 'Search integrations';
   }
   if (els.problemFilterButton) {
     els.problemFilterButton.disabled = true;
@@ -19537,7 +20266,30 @@ function renderUtilityIntegrations() {
     state.utility.selectedIntegrationKey = String(integrations[0].key || '');
   }
   const selected = getSelectedUtilityIntegration();
-  els.list.innerHTML = integrations.map((item) => buildUtilityIntegrationListItem(item, String(item.key || '') === String(state.utility.selectedIntegrationKey || ''))).join('');
+  const scrollTop = els.list.scrollTop;
+  const existingRows = Array.from(els.list.querySelectorAll('[data-utility-integration-key]'));
+  const rowsByKey = new Map(existingRows.map((row) => [row.getAttribute('data-utility-integration-key'), row]));
+  if (!existingRows.length) els.list.replaceChildren();
+  const keys = new Set(integrations.map((item) => String(item.key || '')));
+  existingRows.forEach((row) => {
+    if (!keys.has(row.getAttribute('data-utility-integration-key'))) row.remove();
+  });
+  let cursor = els.list.firstElementChild;
+  integrations.forEach((item) => {
+    const key = String(item.key || '');
+    const isSelected = key === String(state.utility.selectedIntegrationKey || '');
+    let row = rowsByKey.get(key);
+    if (!row) {
+      const holder = document.createElement('div');
+      holder.innerHTML = buildUtilityIntegrationListItem(item, isSelected);
+      row = holder.firstElementChild;
+    }
+    if (row !== cursor) els.list.insertBefore(row, cursor);
+    window.NavigationTree.setItemSelected(row, isSelected);
+    cursor = row.nextElementSibling;
+  });
+  els.list.scrollTop = scrollTop;
+  filterUtilityIntegrationNavigation();
   els.detail.innerHTML = buildUtilityIntegrationDetail(selected);
 }
 
@@ -19547,57 +20299,25 @@ function getSelectedUtilityLogHistoryItem() {
 
 function renderUtilityLogHistory() {
   const els = getUtilityModalElements();
-  if (!els.overlay || !els.list || !els.detail || !els.count) return;
-  const items = state.utility.logHistory || [];
+  if (!els.overlay || els.overlay.hidden || !els.list || !els.detail || !els.count || state.utility.activeTab !== 'log-history') return;
   if (els.sidebarLabel) els.sidebarLabel.textContent = 'History';
-  els.count.textContent = String(items.length);
-  if (els.search) {
-    els.search.value = '';
-    els.search.disabled = true;
-    els.search.placeholder = 'Log history';
-  }
-  if (els.problemFilterButton) {
-    els.problemFilterButton.disabled = true;
-    els.problemFilterButton.hidden = true;
-  }
+  const value = getUtilityLogHistoryController().getState();
+  if (els.search) { els.search.disabled = false; els.search.readOnly = true; els.search.value = value.temporaryRowId ? value.periodLabel || '' : ''; els.search.placeholder = 'Choose a log period'; }
+  if (els.problemFilterButton) { els.problemFilterButton.hidden = false; els.problemFilterButton.disabled = false; els.problemFilterButton.setAttribute('aria-label', 'Period'); els.problemFilterButton.setAttribute('title', 'Choose a log period'); els.problemFilterButton.setAttribute('aria-haspopup', 'dialog'); els.problemFilterButton.setAttribute('aria-controls', 'app-form-modal'); }
   if (els.problemFilterMenu) els.problemFilterMenu.hidden = true;
   if (els.problemFilterChips) els.problemFilterChips.innerHTML = '';
-  const storageStatus = state.utility.logHistoryStorageStatus || {};
-  const storageMessage = String(storageStatus.message || '');
-  const safeStorageMessage = typeof escapeHtml === 'function'
-    ? escapeHtml(storageMessage)
-    : storageMessage;
-  const storageWarning = storageStatus.persistent === false
-    ? `<div class="utility-empty-state compact">${safeStorageMessage || 'History is session-only and will be lost on reload.'}</div>`
-    : '';
-
-  if (state.utility.logHistoryLoading) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Loading history...</div>';
-    els.detail.innerHTML = '<div class="utility-empty-state">Loading history...</div>';
-    return;
-  }
-  if (!items.length) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">No history yet.</div>';
-    els.detail.innerHTML = `
-      <div class="utility-empty-state">Important scan, file, edit, and repair activity—including errors—will appear here.</div>
-      ${storageWarning}
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-    return;
-  }
-  if (!state.utility.selectedLogHistoryId || !items.some((item) => String(item.id || '') === String(state.utility.selectedLogHistoryId))) {
-    state.utility.selectedLogHistoryId = String(items[0].id || '');
-  }
-  const selectedItem = getSelectedUtilityLogHistoryItem();
-  els.list.innerHTML = items.map((item) => buildUtilityLogHistoryListItem(item, String(item.id || '') === String(state.utility.selectedLogHistoryId))).join('');
-  els.detail.innerHTML = `${storageWarning}${buildUtilityLogHistoryDetail(selectedItem)}`;
+  const scroll = els.list.scrollTop;
+  reconcileUtilityLogHistoryTree(els, value);
+  els.list.scrollTop = scroll;
+  els.detail.innerHTML = buildUtilityLogHistoryConsole(value);
 }
 
 function renderUtilityModalContent(options = {}) {
   const els = getUtilityModalElements();
+  if (els.search) els.search.readOnly = false;
+  if (els.problemFilterButton) { els.problemFilterButton.setAttribute('aria-label', 'Filters'); els.problemFilterButton.setAttribute('title', 'Filter by problem type'); els.problemFilterButton.setAttribute('aria-haspopup', 'listbox'); els.problemFilterButton.setAttribute('aria-controls', 'utility-problem-filter-menu'); }
   const activeTab = state.utility.activeTab || 'problematic-files';
+  if (activeTab !== 'log-history' && els.list?.dataset) els.list.dataset.utilityNavigationOwner = activeTab;
   if (activeTab !== 'loops' && typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(els.detail);
   if (activeTab !== 'appearance' && typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
   els.overlay?.setAttribute('data-active-tab', activeTab);
@@ -20479,11 +21199,13 @@ async function createLoopFromSavedLoop(loopId) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to save loop');
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : state.utility.loops;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
     state.utility.selectedLoopGroupKey = data.loop ? buildUtilityLoopGroupKey(data.loop) : state.utility.selectedLoopGroupKey;
     state.utility.selectedLoopDetailMode = 'group';
     state.utility.loopsLoaded = true;
+    setSavedLoopEditMode(id, false);
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
     renderUtilityModalContent();
     showToast('Loop saved.', 'success', 2600);
@@ -20514,6 +21236,7 @@ async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to remove loop');
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : (state.utility.loops || []).filter((item) => String(item.id || '') !== id);
     state.utility.loopsLoaded = true;
     const replacementInGroup = deletedGroupKey
@@ -20532,85 +21255,200 @@ async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   }
 }
 
-function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
-  const dragType = String(draggedItem?.type || '');
-  const fromId = String(draggedItem?.id || '');
-  const fromGroupKey = String(draggedItem?.groupKey || '');
-  const targetType = String(targetItem?.type || '');
-  const toId = String(targetItem?.id || '');
-  const toGroupKey = String(targetItem?.groupKey || '');
-  const insertPosition = position === 'before' ? 'before' : 'after';
-  if (!fromId || !toId || (fromId === toId && dragType === targetType) || !Array.isArray(loops) || loops.length < 2) return null;
-  const groups = groupUtilityLoops(loops);
-  if (dragType === 'group' && targetType === 'group') {
-    const fromIndex = groups.findIndex((group) => String(group?.key || '') === fromId);
-    const targetIndex = groups.findIndex((group) => String(group?.key || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const nextGroups = groups.slice();
-    const [draggedGroup] = nextGroups.splice(fromIndex, 1);
-    if (!draggedGroup) return null;
-    const nextTargetIndex = nextGroups.findIndex((group) => String(group?.key || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    nextGroups.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedGroup);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  if (dragType === 'loop' && targetType === 'loop' && fromGroupKey && fromGroupKey === toGroupKey) {
-    const nextGroups = groups.map((group) => ({
-      ...group,
-      loops: Array.isArray(group.loops) ? group.loops.slice() : [],
-    }));
-    const targetGroup = nextGroups.find((group) => String(group?.key || '') === fromGroupKey);
-    if (!targetGroup || !Array.isArray(targetGroup.loops)) return null;
-    const fromIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === fromId);
-    const targetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const [draggedLoop] = targetGroup.loops.splice(fromIndex, 1);
-    if (!draggedLoop) return null;
-    const nextTargetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    targetGroup.loops.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedLoop);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  return null;
+function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
+  const members = loops.filter(loop => loop.song_key === songKey);
+  const revision = members[0]?.order_revision;
+  if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
+  return { songKey, revision, loops: members };
 }
 
-function rerenderUtilityLoopListOnly() {
-  if (state.utility.activeTab !== 'loops') return;
+function replaceUtilityLoopSong(loops, songKey, members) {
+  const next = [];
+  let inserted = false;
+  for (const loop of loops) {
+    if (loop.song_key !== songKey) next.push(loop);
+    else if (!inserted) { next.push(...members); inserted = true; }
+  }
+  if (!inserted) next.push(...members);
+  return next;
+}
+
+function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
+  if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
+  const songKey = String(draggedItem.groupKey || '');
+  if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
+  const scope = getUtilityLoopOrderScope(songKey, loops);
+  if (!scope) return null;
+  const members = scope.loops.slice();
+  const from = members.findIndex(loop => String(loop.id) === String(draggedItem.id));
+  if (from < 0 || !members.some(loop => String(loop.id) === String(targetItem.id))) return null;
+  const [moving] = members.splice(from, 1);
+  const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
+  members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
+  if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
+  return replaceUtilityLoopSong(loops, songKey, members);
+}
+
+function captureUtilityLoopOrderView(songKey) {
   const els = getUtilityModalElements();
-  if (!els.overlay || els.overlay.hidden) return;
-  renderUtilityModalContent();
+  return { songKey, panel: els.detail?.querySelector('.utility-loop-entry-list'), detail: els.detail,
+    generation: Number(state.utility.loopViewGeneration || 0) };
+}
+
+function isUtilityLoopOrderViewCurrent(view) {
+  const els = getUtilityModalElements();
+  return state.utility.activeTab === 'loops' && !els.overlay?.hidden
+    && String(state.utility.selectedLoopGroupKey || '') === view.songKey
+    && Number(state.utility.loopViewGeneration || 0) === view.generation
+    && view.panel && els.detail === view.detail
+    && els.detail?.querySelector('.utility-loop-entry-list') === view.panel;
+}
+
+function createUtilityLoopMarkupNode(html) {
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  return host.firstElementChild;
+}
+
+function moveUtilityLoopNode(parent, node, before = null) {
+  if (node === before || (node.parentNode === parent && node.nextElementSibling === before)) return;
+  if (typeof parent.moveBefore === 'function' && node.parentNode === parent) {
+    parent.moveBefore(node, before);
+    return;
+  }
+  // Native media retains playback across this synchronous move; do not seek or restart it.
+  parent.insertBefore(node, before);
+}
+
+function reconcileUtilityLoopOrderView(view, members) {
+  if (!isUtilityLoopOrderViewCurrent(view)) return;
+  const els = getUtilityModalElements();
+  const focused = document.activeElement;
+  const scrolls = [els.list, els.detail].filter(Boolean).map(node => [node, node.scrollTop]);
+  const before = new Map(Array.from(view.panel.children, node => [node, node.getBoundingClientRect().top]));
+  const ids = new Set(members.map(loop => String(loop.id)));
+  const panels = new Map(Array.from(view.panel.querySelectorAll('[data-utility-loop-entry]'), node => [node.getAttribute('data-utility-loop-entry'), node]));
+  for (const [id, node] of panels) {
+    if (ids.has(id)) continue;
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(node);
+    if (typeof loopEditSessionExpiryController !== 'undefined') loopEditSessionExpiryController.stop(`saved-loop-${id}`);
+    node.querySelector('[data-loop-audio]')?.pause();
+    node.remove();
+    delete state.utility.loopEditors?.[id];
+  }
+  let panelCursor = view.panel.firstElementChild;
+  for (const loop of members) {
+    const id = String(loop.id);
+    const node = panels.get(id) || createUtilityLoopMarkupNode(buildUtilityLoopEntry(loop));
+    if (!node) continue;
+    moveUtilityLoopNode(view.panel, node, panelCursor);
+    panelCursor = node.nextElementSibling;
+    if (!panels.has(id)) initializeUtilityLoopPlayer(loop);
+  }
+  const treeChildren = Array.from(els.list?.querySelectorAll('[data-utility-loop-id]') || [])
+    .filter(node => node.getAttribute('data-utility-loop-group-key') === view.songKey);
+  const treeParent = treeChildren[0]?.parentNode || Array.from(els.list?.querySelectorAll('[data-loop-tree-song]') || [])
+    .find(node => node.getAttribute('data-loop-tree-song') === view.songKey);
+  if (treeParent) {
+    const existing = new Map(treeChildren.map(node => [node.getAttribute('data-utility-loop-id'), node]));
+    const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
+    for (const [id, node] of existing) if (!ids.has(id) || !visibleIds.has(id)) node.remove();
+    let treeCursor = treeParent.firstElementChild;
+    for (const loop of members) {
+      if (!visibleIds.has(String(loop.id))) continue;
+      const node = existing.get(String(loop.id)) || createUtilityLoopMarkupNode(buildUtilityLoopTreeChild(loop, view.songKey));
+      if (node) {
+        moveUtilityLoopNode(treeParent, node, treeCursor);
+        treeCursor = node.nextElementSibling;
+      }
+    }
+  }
+  if (!(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    for (const node of Array.from(view.panel.children)) {
+      const delta = before.has(node) ? before.get(node) - node.getBoundingClientRect().top : 0;
+      if (delta) node.animate?.([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'ease-out' });
+    }
+  }
+  if (focused && document.activeElement !== focused && els.overlay?.contains?.(focused)) focused.focus?.({ preventScroll: true });
+  scrolls.forEach(([node, scrollTop]) => { node.scrollTop = scrollTop; });
+  syncUtilityLoopPanelVisibility();
+  bindUtilityLoopDragAndDrop();
+  syncUtilityLoopMoveButtons();
+}
+
+function normalizeUtilityLoopOrderResponse(data, songKey) {
+  if (data?.song_key !== songKey || !Number.isSafeInteger(data.order_revision) || data.order_revision < 0
+      || !Array.isArray(data.ordered_ids) || !Array.isArray(data.loops)) return null;
+  const ids = data.ordered_ids;
+  if (ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length || data.loops.length !== ids.length) return null;
+  const byId = new Map(data.loops.map(loop => [String(loop?.id || ''), loop]));
+  if (byId.size !== ids.length || ids.some(id => !byId.has(id) || byId.get(id).song_key !== songKey)) return null;
+  return ids.map(id => ({ ...byId.get(id), order_revision: data.order_revision }));
+}
+
+async function moveUtilityLoop(loopId, direction) {
+  if (!['up', 'down'].includes(direction)) return false;
+  const loop = (state.utility.loops || []).find(item => String(item.id) === String(loopId));
+  const scope = loop && getUtilityLoopOrderScope(loop.song_key);
+  if (!scope) return false;
+  const index = scope.loops.findIndex(item => item.id === loop.id);
+  const target = scope.loops[index + (direction === 'up' ? -1 : 1)];
+  if (!target) return false;
+  return reorderUtilityLoops({ type: 'loop', id: loop.id, groupKey: scope.songKey },
+    { type: 'loop', id: target.id, groupKey: scope.songKey }, direction === 'up' ? 'before' : 'after');
 }
 
 async function reorderUtilityLoops(draggedItem, targetItem, position) {
-  const previousLoops = Array.isArray(state.utility.loops) ? state.utility.loops.slice() : [];
+  const previousLoops = (state.utility.loops || []).slice();
   const nextLoops = buildReorderedUtilityLoops(previousLoops, draggedItem, targetItem, position);
   if (!nextLoops) return false;
-
+  const songKey = String(draggedItem.groupKey);
+  const scope = getUtilityLoopOrderScope(songKey, previousLoops);
+  state.utility.loopOrderPending ||= {};
+  if (state.utility.loopOrderPending[songKey]) return false;
+  const utilityOwner = state.utility;
+  const dataGeneration = Number(utilityOwner.loopDataGeneration || 0);
+  utilityOwner.loopMutationGeneration = Number(utilityOwner.loopMutationGeneration || 0) + 1;
+  const ownsCache = () => state.utility === utilityOwner && Number(state.utility.loopDataGeneration || 0) === dataGeneration;
+  const token = {};
+  state.utility.loopOrderPending[songKey] = token;
+  const view = captureUtilityLoopOrderView(songKey);
+  const ordered = nextLoops.filter(loop => loop.song_key === songKey);
   state.utility.loops = nextLoops;
-  state.utility.loopsLoaded = true;
-  rerenderUtilityLoopListOnly();
-
+  reconcileUtilityLoopOrderView(view, ordered);
   try {
     const response = await fetch('/loops/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ordered_ids: nextLoops.map((item) => String(item?.id || '')).filter(Boolean),
+        song_key: songKey, expected_revision: scope.revision,
+        ordered_ids: ordered.map(loop => String(loop.id)),
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to reorder loops');
-    state.utility.loops = Array.isArray(data.loops) ? data.loops : nextLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
-    return true;
+    const authoritative = normalizeUtilityLoopOrderResponse(data, songKey);
+    if ((!response.ok || !data.ok) && response.status !== 409) throw new Error(data.error || 'Failed to reorder loops');
+    if (!authoritative) throw new Error('Unable to reconcile saved loop order. Reload Loops and try again.');
+    const currentRevision = (state.utility.loops || []).find(loop => loop.song_key === songKey)?.order_revision;
+    if (ownsCache() && Number.isSafeInteger(currentRevision) && data.order_revision >= currentRevision) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, authoritative);
+      reconcileUtilityLoopOrderView(view, authoritative);
+    }
+    if (response.status === 409) showToast('Loop order changed. The latest order is shown; try your move again.', 'error', 4200);
+    return response.ok && data.ok === true;
   } catch (error) {
-    console.error('[AlbumHaven][Loops] Failed to reorder loops.', error);
-    state.utility.loops = previousLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
+    const current = (state.utility.loops || []).filter(loop => loop.song_key === songKey);
+    if (ownsCache() && current.length && current.every(loop => loop.order_revision === scope.revision)) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, scope.loops);
+      reconcileUtilityLoopOrderView(view, scope.loops);
+    }
     showToast(error.message || 'Failed to reorder loops.', 'error', 4200);
     return false;
+  } finally {
+    if (utilityOwner.loopOrderPending[songKey] === token) delete utilityOwner.loopOrderPending[songKey];
+    syncUtilityLoopMoveButtons();
+    clearUtilityLoopDragState();
+    syncUtilityLoopDragUi();
   }
 }
 
@@ -21250,43 +22088,59 @@ async function loadUtilityRules(force = false) {
 }
 
 async function loadUtilityLoops(force = false) {
-  if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && state.utility.loopsActionProjectionLoaded === true && !force) {
+  const utility = state.utility;
+  if (utility.loopsLoading) return utility.loopsLoadPromise;
+  if (utility.loopsLoaded && utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
-  state.utility.loopsLoading = true;
+  const generation = Number(utility.loopDataGeneration || 0) + 1;
+  utility.loopDataGeneration = generation;
+  const mutationGeneration = Number(utility.loopMutationGeneration || 0);
+  const isCurrent = () => state.utility === utility
+    && Number(utility.loopDataGeneration || 0) === generation
+    && Number(utility.loopMutationGeneration || 0) === mutationGeneration;
+  utility.loopsLoading = true;
+  utility.loopsLoadError = '';
   renderUtilityModalContent();
-  state.utility.loopsLoadPromise = (async () => {
+  const loadPromise = (async () => {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
+      if (!isCurrent()) return;
       if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
-      state.utility.allowedActions = data.allowed_actions && typeof data.allowed_actions === 'object' ? { ...data.allowed_actions } : {};
-      state.utility.loopsActionProjectionLoaded = true;
-      state.loopCreateAllowed = state.utility.allowedActions['library.loops.create'] === true;
-      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
-      state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
-      state.utility.loopsLoaded = true;
-      const groupedLoops = groupUtilityLoops(state.utility.loops || []);
-      collapseAllUtilityLoopGroups();
-      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(state.utility.selectedLoopGroupKey || '')) || groupedLoops[0];
-      state.utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
-      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(state.utility.selectedLoopId || ''))) {
-        state.utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      utility.allowedActions = { ...(utility.allowedActions || {}) };
+      for (const action of ['library.loops.read', 'library.loops.create', 'library.loops.delete', 'library.loops.reorder']) {
+        utility.allowedActions[action] = data.allowed_actions?.[action] === true;
       }
-      state.utility.selectedLoopDetailMode = 'group';
+      utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+      utility.loops = Array.isArray(data.loops) ? data.loops : [];
+      utility.loopsLoaded = true;
+      const groupedLoops = groupUtilityLoops(utility.loops || []);
+      collapseAllUtilityLoopGroups();
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(utility.selectedLoopId || ''))) {
+        utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
+      utility.selectedLoopDetailMode = 'group';
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
-      state.utility.loops = [];
+      utility.loopsLoadError = 'Unable to load saved loops. Reopen the Loops tab to retry.';
       showToast('Unable to load saved loops.', 'error', 3200);
     } finally {
-      state.utility.loopsLoading = false;
-      state.utility.loopsLoadPromise = null;
-      renderUtilityModalContent();
+      if (utility.loopsLoadPromise === loadPromise) {
+        utility.loopsLoading = false;
+        utility.loopsLoadPromise = null;
+      }
+      if (isCurrent() && utility.activeTab === 'loops') renderUtilityModalContent();
     }
   })();
-  return state.utility.loopsLoadPromise;
+  utility.loopsLoadPromise = loadPromise;
+  return loadPromise;
 }
 
 function normalizeUtilityLogHistoryRevision(value) {
@@ -21294,117 +22148,20 @@ function normalizeUtilityLogHistoryRevision(value) {
 }
 
 async function loadUtilityLogHistory(force = false) {
-  if (state.utility.logHistoryLoading) return state.utility.logHistoryLoadPromise;
-  if (state.utility.logHistoryLoaded && !force) {
-    if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  }
-  state.utility.logHistoryLoading = true;
-  if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-  state.utility.logHistoryLoadPromise = (async () => {
-    try {
-      await requestBrowserLogHistoryPersistentStorage();
-    } catch (_error) {
-      // The browser may deny or omit persistent-storage requests; IndexedDB still remains usable.
-    }
-    try {
-      const response = await fetch('/utilities/log-history', {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json();
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || 'Unable to load transient log history.');
-      }
-      const stored = await persistBrowserLogHistoryEntries(
-        Array.isArray(data.items) ? data.items : [],
-      );
-      const revision = normalizeUtilityLogHistoryRevision(data.revision);
-      state.utility.logHistory = Array.isArray(stored?.items) ? stored.items : [];
-      state.utility.logHistoryRevision = revision;
-      if (!state.utility.logHistorySyncPromise) {
-        state.utility.logHistoryTargetRevision = revision;
-      }
-      if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-      state.utility.logHistoryLoaded = true;
-      return { revision };
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to load the transient history snapshot.', error);
-      try {
-        const stored = await readBrowserLogHistoryEntries();
-        state.utility.logHistory = Array.isArray(stored?.items)
-          ? stored.items
-          : (Array.isArray(state.utility.logHistory) ? state.utility.logHistory : []);
-        if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-        state.utility.logHistoryLoaded = true;
-      } catch (storageError) {
-        console.error('[AlbumHaven][History] Failed to read browser-owned history.', storageError);
-        state.utility.logHistory = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-        state.utility.logHistoryLoaded = true;
-        state.utility.logHistoryStorageStatus = {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        };
-      }
-      return null;
-    } finally {
-      state.utility.logHistoryLoading = false;
-      state.utility.logHistoryLoadPromise = null;
-      if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    }
-  })();
-  return state.utility.logHistoryLoadPromise;
+  const controller = getUtilityLogHistoryController();
+  if (state.utility.logHistoryLoaded && !force) { renderUtilityLogHistory(); return { revision: controller.getState().revision }; }
+  if (controller.getState().loading) return state.utility.logHistoryLoadPromise;
+  const owner = state.utility;
+  owner.logHistoryLoadPromise = controller.refresh().then(() => ({ revision: controller.getState().revision })).catch(() => null).finally(() => { owner.logHistoryLoadPromise = null; });
+  return owner.logHistoryLoadPromise;
 }
 
 async function syncUtilityLogHistoryRevision(revision) {
-  const targetRevision = normalizeUtilityLogHistoryRevision(revision);
-  if (!targetRevision) return null;
-  state.utility.logHistoryTargetRevision = targetRevision;
-  if (
-    normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision) === targetRevision
-    && !state.utility.logHistorySyncPromise
-  ) {
-    return { revision: targetRevision };
-  }
-  if (state.utility.logHistorySyncPromise) {
-    return state.utility.logHistorySyncPromise;
-  }
-
-  const syncPromise = (async () => {
-    while (
-      normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision)
-      !== normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-    ) {
-      const requestedRevision = normalizeUtilityLogHistoryRevision(
-        state.utility.logHistoryTargetRevision,
-      );
-      const result = await loadUtilityLogHistory(true);
-      if (!result) break;
-      const loadedRevision = normalizeUtilityLogHistoryRevision(result.revision);
-      if (
-        normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-          === requestedRevision
-        && loadedRevision !== requestedRevision
-      ) {
-        state.utility.logHistoryTargetRevision = loadedRevision;
-      }
-    }
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  })();
-  state.utility.logHistorySyncPromise = syncPromise;
-  try {
-    return await syncPromise;
-  } finally {
-    if (state.utility.logHistorySyncPromise === syncPromise) {
-      state.utility.logHistorySyncPromise = null;
-    }
-  }
+  state.utility.logHistoryTargetRevision = normalizeUtilityLogHistoryRevision(revision);
+  state.utility.logHistoryController?.markStale(revision);
+  return { revision: state.utility.logHistoryRevision };
 }
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
@@ -21761,9 +22518,22 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   }
 }
 
-function openUtilityLogHistoryTab() {
-  setUtilityActiveTab('log-history');
-  openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: true });
+function openUtilityLogHistoryTab(entryId = '') {
+  const owner = state.utility;
+  const open = () => {
+    if (state.utility !== owner) return;
+    setUtilityActiveTab('log-history', true);
+    openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
+    if (!entryId) return;
+    const controller = getUtilityLogHistoryController();
+    // Base navigation has its own ownership generation; it cannot replace this
+    // explicitly requested event's console/export capture.
+    if (!owner.logHistory?.length) controller.refreshNavigation().catch(() => {});
+    return controller.selectEvent(entryId).catch(() => null);
+  };
+  if (owner.activeTab !== 'log-history' && typeof confirmBackgroundAppearanceLeave === 'function'
+      && !confirmBackgroundAppearanceLeave(open)) return;
+  return open();
 }
 
 async function saveLastfmIntegration() {
@@ -26743,14 +27513,6 @@ function renderTrackModalRelease(album) {
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
     ? activeDuplicateSource.tracks
     : (Array.isArray(album.tracks) ? album.tracks : []);
-  const grouped = groupAlbumTracks(tracks);
-  const bonusGroups = grouped.groups.filter((group) => group.isBonus);
-  const mainGroups = grouped.groups.filter((group) => !group.isBonus);
-  const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
-  const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
-  const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatAlbumDuration(bonusSeconds);
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
@@ -26995,6 +27757,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',
@@ -27686,6 +28449,63 @@ function restorePlayerState() {
 
 const MIN_RECORDED_LISTEN_SECONDS = 10;
 const LISTEN_SESSION_LONG_PAUSE_MS = 60 * 60 * 1000;
+let measuredPlaybackDeviceId = '';
+
+function newMeasuredPlaybackId() {
+  if (typeof crypto === 'undefined') return '';
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto.getRandomValues !== 'function') return '';
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
+function getMeasuredPlaybackDeviceId() {
+  if (measuredPlaybackDeviceId) return measuredPlaybackDeviceId;
+  const key = 'album-haven-playback-device-id';
+  const stored = typeof getLocalStorageItem === 'function' ? getLocalStorageItem(key) : '';
+  measuredPlaybackDeviceId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(stored || '')
+    ? stored : newMeasuredPlaybackId();
+  if (measuredPlaybackDeviceId && typeof setLocalStorageItem === 'function') setLocalStorageItem(key, measuredPlaybackDeviceId);
+  return measuredPlaybackDeviceId;
+}
+
+function breakMeasuredListenSegment(session) {
+  if (session?.measurement) session.measurement.contiguous = 0;
+}
+
+function recordMeasuredStreamingFrames(roleState, message, sampleRate) {
+  if (!roleState || !Number.isInteger(message?.frames) || message.frames <= 0
+      || !Number.isFinite(sampleRate) || sampleRate <= 0) return;
+  if (!roleState.measuredListenSession) {
+    if (roleState.role === 'continuity' && roleState.continuityOptions?.kind === 'queued-next') {
+      roleState.measuredListenSession = createListenSession(roleState.track);
+    } else {
+      const current = state.player.listenSession || ensureListenSession();
+      if (!current || String(current.track?.path || '') !== String(roleState.track?.path || '')) return;
+      roleState.measuredListenSession = current;
+    }
+  }
+  const session = roleState.measuredListenSession;
+  if (!session?.measurement || ['pending', 'done', 'failed'].includes(session.completionState)) return;
+  const elapsed = message.frames / sampleRate;
+  session.measurement.total += elapsed;
+  session.measurement.contiguous += elapsed;
+  session.measurement.longest = Math.max(session.measurement.longest, session.measurement.contiguous);
+}
+
+function buildMeasuredCompletionFields(session, { advance = false, finalized = false } = {}) {
+  const measurement = session?.measurement;
+  if (!measurement?.deviceId || !measurement.sessionId) return {};
+  if (advance) measurement.sequence = (Number(measurement.sequence) || 0) + 1;
+  return {
+    measurement_version: 'rendered-pcm-v1', device_id: measurement.deviceId,
+    session_id: measurement.sessionId, sequence: Number(measurement.sequence) || 0, finalized,
+    measured_listened_seconds: Math.round(measurement.total * 1000) / 1000,
+    max_measured_contiguous_seconds: Math.round(measurement.longest * 1000) / 1000,
+  };
+}
 
 function getListenSessionDuration(session) {
   const duration = Number(session?.duration_seconds || 0);
@@ -27714,7 +28534,7 @@ function longestListenedSegmentSeconds(session) {
 }
 
 function shouldPersistListenSession(session) {
-  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session)) > MIN_RECORDED_LISTEN_SECONDS;
+  return Math.max(totalListenedSeconds(session), longestListenedSegmentSeconds(session), Number(session?.measurement?.total) || 0) > MIN_RECORDED_LISTEN_SECONDS;
 }
 
 function clearListenPauseMarker(session) {
@@ -27727,6 +28547,7 @@ function clearListenPauseMarker(session) {
 function markListenSessionPaused(currentTime = null) {
   const session = state.player.listenSession;
   if (!session) return;
+  breakMeasuredListenSegment(session);
   session.paused_at = isoNow();
   session.paused_at_unix_ms = Date.now();
   session.pause_offset_seconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
@@ -27751,6 +28572,7 @@ function buildNowPlayingPayload(track, session = null) {
   if (!track) return null;
   const activeSession = session || state.player.listenSession;
   return {
+    ...buildMeasuredCompletionFields(activeSession),
     path: String(track.path || ''),
     title: String(track.title || ''),
     artist: String(track.artist || ''),
@@ -27817,9 +28639,15 @@ async function maybeSplitListenSessionAfterLongPause(track = null) {
 }
 
 async function resumeListenSessionPlayback(track = null, currentTime = null) {
-  await maybeSplitListenSessionAfterLongPause(track);
+  const split = await maybeSplitListenSessionAfterLongPause(track);
   const session = ensureListenSession(track);
   if (!session) return null;
+  if (split) {
+    for (const role of Object.values(state.player.streaming?.roles || {})) {
+      if (role && (role.role === 'current' || role.continuityOptions?.kind !== 'queued-next')
+          && String(role.track?.path || '') === String(session.track?.path || '')) role.measuredListenSession = session;
+    }
+  }
   clearListenPauseMarker(session);
   beginListenSegment(currentTime);
   return session;
@@ -27834,6 +28662,7 @@ function beginListenSegment(currentTime = null) {
 }
 
 function closeListenSegment(currentTime = null, session = state.player.listenSession) {
+  breakMeasuredListenSegment(session);
   if (!session || !session.segmentActive) return;
   const endSeconds = Math.max(0, Number(currentTime == null ? getPlayerPlaybackSnapshot().currentTime : currentTime) || 0);
   const startSeconds = Math.max(0, Number(session.activeSegmentStartSeconds || 0));
@@ -27876,9 +28705,15 @@ async function maybeScrobbleListenSession(session) {
   if (session.scrobblePending) return false;
   if (typeof canEmitPlaybackSessionSideEffects === 'function' && !canEmitPlaybackSessionSideEffects()) return false;
   session.scrobblePending = true;
+  session.scrobblePayload ||= {
+    ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true }),
+    total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
+    max_contiguous_seconds: Math.round(longestListenedSegmentSeconds(session) * 1000) / 1000,
+  };
   const scrobblePromise = postPlaybackSession(
     '/playback/session/scrobble',
-    buildNowPlayingPayload(session.track, session),
+    session.scrobblePayload,
   ).then(() => {
     session.scrobbled = true;
     return true;
@@ -27896,11 +28731,13 @@ async function maybeScrobbleListenSession(session) {
 }
 
 function startListenSession(track) {
-  if (!track) {
-    state.player.listenSession = null;
-    return;
-  }
-  state.player.listenSession = {
+  state.player.listenSession = createListenSession(track);
+}
+
+function createListenSession(track) {
+  if (!track) return null;
+  return {
+    measurement: { deviceId: getMeasuredPlaybackDeviceId(), sessionId: newMeasuredPlaybackId(), total: 0, contiguous: 0, longest: 0 },
     track: {
       path: String(track.path || ''),
       title: String(track.title || ''),
@@ -27963,8 +28800,9 @@ async function finalizeListenSession(reason, options = {}) {
   if (scrobbleEligible && !session.scrobbled) {
     await maybeScrobbleListenSession(session);
   }
-  const payload = {
+  const payload = session.completionPayload || {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: totalListened,
@@ -27979,6 +28817,7 @@ async function finalizeListenSession(reason, options = {}) {
       end_seconds: Number(segment.end_seconds || 0),
     })),
   };
+  session.completionPayload = payload;
   try {
     await postPlaybackSession('/playback/session/complete', payload);
     session.completionState = 'done';
@@ -28017,6 +28856,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
   session.completionState = 'pending';
   const payload = {
     ...buildNowPlayingPayload(session.track, session),
+    ...buildMeasuredCompletionFields(session, { advance: true, finalized: true }),
     ended_at: session.ended_at,
     duration_seconds: session.duration_seconds,
     total_listened_seconds: Math.round(totalListenedSeconds(session) * 1000) / 1000,
@@ -28035,7 +28875,7 @@ function flushListenSessionOnUnload(reason = 'unload') {
     if (navigator?.sendBeacon) {
       const body = new Blob([JSON.stringify(payload)], { type: 'application/json' });
       navigator.sendBeacon('/playback/session/complete', body);
-      if (payload.scrobble_eligible && !payload.scrobbled) {
+      if (!payload.measurement_version && payload.scrobble_eligible && !payload.scrobbled) {
         navigator.sendBeacon('/playback/session/scrobble', new Blob([JSON.stringify(buildNowPlayingPayload(session.track, session))], { type: 'application/json' }));
       }
     }
@@ -29975,7 +30815,9 @@ class VirtualArtistGrid {
     const scrollRect = typeof this.scrollEl.getBoundingClientRect === 'function'
       ? this.scrollEl.getBoundingClientRect()
       : null;
-    if (!scrollRect) {
+    // Scan Page keeps this gallery mounted while hidden. Its zero-size cards
+    // have no usable viewport offsets; retain the absolute position instead.
+    if (!scrollRect || scrollRect.width === 0 || scrollRect.height === 0) {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
@@ -31575,6 +32417,7 @@ function updatePlayerUi() {
   if (els.timeline) {
     els.timeline.max = String(Math.max(duration, 0.1));
     els.timeline.value = String(Math.min(current, duration || current));
+    els.timeline.style?.setProperty('--player-seek-progress', `${duration > 0 ? Math.max(0, Math.min(100, current / duration * 100)) : 0}%`);
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
@@ -31914,6 +32757,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
       typeof maybeSendNowPlaying === 'function'
@@ -32344,6 +33188,7 @@ async function saveCurrentLoop() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to save loop');
     }
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : [data.loop, ...(state.utility.loops || [])].filter(Boolean);
     state.utility.loopsLoaded = true;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
@@ -32518,6 +33363,7 @@ function attachPlayerEvents() {
 
 function syncLoopCreateCapability() {
   const canCreate = state.loopCreateAllowed === true;
+  if (typeof window !== 'undefined') window.AlbumHavenAppearance?.instance?.setLoopCreateAllowed?.(canCreate);
   if (state.utility) {
     state.utility.allowedActions = { ...(state.utility.allowedActions || {}), 'library.loops.create': canCreate };
   }
@@ -32872,17 +33718,57 @@ function attachUtilityModalEvents() {
   els.overlay.dataset.bound = '1';
   bindOverlayPointerOrigin(els.overlay);
   els.close?.addEventListener('click', closeUtilityModal);
+  let searchRenderTimer = null;
+  const scheduleSearchRender = () => {
+    clearTimeout(searchRenderTimer);
+    const owner = state.utility;
+    const tab = owner.activeTab;
+    searchRenderTimer = setTimeout(() => {
+      searchRenderTimer = null;
+      if (state.utility === owner && owner.activeTab === tab && !els.overlay.hidden) renderUtilityModalContent();
+    }, 80);
+  };
   els.search?.addEventListener('input', () => {
+    if (state.utility.activeTab === 'integrations') {
+      state.utility.integrationsSearchQuery = els.search.value || '';
+      filterUtilityIntegrationNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'appearance') {
+      state.utility.appearanceSearchQuery = els.search.value || '';
+      filterUtilityAppearanceNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'loops') {
+      state.utility.loopsSearchQuery = els.search.value || '';
+      filterUtilityLoopViews();
+      return;
+    }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
     else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
     else return;
-    renderUtilityModalContent();
+    scheduleSearchRender();
   });
   els.search?.addEventListener('search', () => {
+    if (state.utility.activeTab === 'integrations') {
+      state.utility.integrationsSearchQuery = els.search.value || '';
+      filterUtilityIntegrationNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'appearance') {
+      state.utility.appearanceSearchQuery = els.search.value || '';
+      filterUtilityAppearanceNavigation();
+      return;
+    }
+    if (state.utility.activeTab === 'loops') {
+      state.utility.loopsSearchQuery = els.search.value || '';
+      filterUtilityLoopViews();
+      return;
+    }
     if (state.utility.activeTab === 'rules') state.utility.rulesSearchQuery = els.search.value || '';
     else if (state.utility.activeTab === 'problematic-files') state.utility.searchQuery = els.search.value || '';
     else return;
-    renderUtilityModalContent();
+    scheduleSearchRender();
   });
   els.overlay.addEventListener('click', (event) => {
     if (overlayClickStartedOnOverlay(els.overlay, event) || event.target.closest('[data-close-utility-modal="1"]')) {
@@ -32928,11 +33814,8 @@ async function handleUtilityBootstrapClick(event) {
   if (openLogHistoryAlertButton) {
     event.preventDefault();
     const selectedLogHistoryId = openLogHistoryAlertButton.getAttribute('data-log-history-entry-id') || '';
-    if (selectedLogHistoryId) {
-      state.utility.selectedLogHistoryId = selectedLogHistoryId;
-    }
     hideRepairAlert();
-    openUtilityLogHistoryTab();
+    openUtilityLogHistoryTab(selectedLogHistoryId);
     return;
   }
   if (!event.target.closest('.utility-loop-speed-control')) {
@@ -32964,7 +33847,9 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityTabButton) {
     event.preventDefault();
     const nextUtilityTab = utilityTabButton.getAttribute('data-utility-tab') || 'problematic-files';
+    if (nextUtilityTab === state.utility.activeTab) return;
     setUtilityActiveTab(nextUtilityTab);
+    if (state.utility.activeTab !== nextUtilityTab) return;
     if (state.utility.activeTab === 'rules') {
       loadUtilityRules(!state.utility.rulesLoaded);
     } else if (state.utility.activeTab === 'loops') {
@@ -32973,9 +33858,10 @@ async function handleUtilityBootstrapClick(event) {
       loadUtilityLogHistory(!state.utility.logHistoryLoaded);
     } else if (state.utility.activeTab === 'integrations') {
       loadUtilityIntegrations(!state.utility.integrationsLoaded);
-    } else if (state.utility.activeTab === 'appearance') {
-      renderUtilityModalContent();
-    } else {
+      if (!state.utility.selectedIntegrationKey || state.utility.selectedIntegrationKey === 'library') {
+        loadUtilityLibrarySettings(!state.utility.librarySettings?.loaded);
+      }
+    } else if (state.utility.activeTab !== 'appearance') {
       loadProblematicFiles(!state.utility.loaded);
     }
     renderUtilityModalContent();
@@ -32983,34 +33869,19 @@ async function handleUtilityBootstrapClick(event) {
   }
 
   const utilityLogHistoryButton = event.target.closest('[data-utility-log-history-id]');
-  if (utilityLogHistoryButton) {
-    event.preventDefault();
-    state.utility.selectedLogHistoryId = utilityLogHistoryButton.getAttribute('data-utility-log-history-id') || '';
-    renderUtilityModalContent();
-    return;
-  }
-
-  const exportLogHistoryButton = event.target.closest('[data-export-log-history="1"]');
-  if (exportLogHistoryButton) {
+  const logAction = event.target.closest('[data-log-history-action]');
+  if (utilityLogHistoryButton || logAction) {
     event.preventDefault();
     try {
-      await exportBrowserLogHistory();
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to export browser log history.', error);
-      showToast('Unable to export log history.', 'error', 3200);
-    }
+      if (utilityLogHistoryButton) await selectUtilityLogHistoryEvent(utilityLogHistoryButton.getAttribute('data-utility-log-history-id'));
+      else await handleUtilityLogHistoryAction(logAction.getAttribute('data-log-history-action'));
+    } catch (error) { showToast(error.message || 'Unable to load log history.', 'error', 3200); }
     return;
   }
 
   const appearanceModeRadio = event.target.closest('[data-appearance-seekbar-mode]');
   if (appearanceModeRadio) {
-    state.player.appearance = normalizePlayerAppearance({
-      ...state.player.appearance,
-      seekbarMode: appearanceModeRadio.getAttribute('data-appearance-seekbar-mode') || 'default',
-    });
-    persistPlayerAppearance();
-    updateWaveformAppearance(true);
-    renderUtilityModalContent();
+    // The Appearance editor owns the draft and applies this only after Save.
     return;
   }
 
@@ -33029,6 +33900,7 @@ async function handleUtilityBootstrapClick(event) {
   const problemFilterToggle = event.target.closest('[data-toggle-problem-filter="1"]');
   if (problemFilterToggle) {
     event.preventDefault();
+    if (state.utility.activeTab === 'log-history') { openUtilityLogHistoryQuery(false); return; }
     state.utility.problemDropdownOpen = !state.utility.problemDropdownOpen;
     renderUtilityModalContent();
     return;
@@ -33094,7 +33966,9 @@ async function handleUtilityBootstrapClick(event) {
   const utilityRuleButton = event.target.closest('[data-utility-rule-key]');
   if (utilityRuleButton) {
     event.preventDefault();
-    state.utility.selectedRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    const nextRuleKey = utilityRuleButton.getAttribute('data-utility-rule-key') || '';
+    if (state.utility.selectedRuleKey === nextRuleKey) return;
+    state.utility.selectedRuleKey = nextRuleKey;
     renderUtilityModalContent();
     return;
   }
@@ -33103,6 +33977,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityAppearanceButton) {
     event.preventDefault();
     const nextAppearanceKey = utilityAppearanceButton.getAttribute('data-utility-appearance-key') || 'seekbar';
+    if (nextAppearanceKey === state.utility.appearanceKey) return;
     const sharedAppearanceKeys = ['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'];
     const sharedAppearanceDraft = sharedAppearanceKeys.includes(state.utility.appearanceKey) && sharedAppearanceKeys.includes(nextAppearanceKey);
     if (nextAppearanceKey !== state.utility.appearanceKey && !sharedAppearanceDraft && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => {
@@ -33118,6 +33993,7 @@ async function handleUtilityBootstrapClick(event) {
   if (utilityIntegrationButton) {
     event.preventDefault();
     const integrationKey = utilityIntegrationButton.getAttribute('data-utility-integration-key') || 'lastfm';
+    if (state.utility.selectedIntegrationKey === integrationKey) return;
     const integrationHandled = handleLibrarySettingsIntegrationSelection(integrationKey);
     if (integrationHandled && typeof integrationHandled.then === 'function') {
       integrationHandled.then((handled) => {
@@ -35195,7 +36071,7 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
     releasePendingSearchWaveformPeakLoadSuspension();
     return;
   }
-  scheduleGallerySearchCommit(normalizedQuery);
+  scheduleGallerySearchCommit(normalizedQuery, { immediate: !normalizedQuery.trim() });
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
@@ -35753,6 +36629,8 @@ function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
 function readReusableRootBrowseViewForClearedSearch(nextView) {
   return typeof getReusableRootBrowseView === 'function'
     ? getReusableRootBrowseView({
+      ...(nextView.gallery_display_mode ? { gallery_display_mode: nextView.gallery_display_mode } : {}),
+      ...(nextView.gallery_scale_percent != null ? { gallery_scale_percent: nextView.gallery_scale_percent } : {}),
       query: '',
       selected_artist: '',
       all_artists_active: true,

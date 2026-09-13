@@ -1920,14 +1920,6 @@ function renderTrackModalRelease(album) {
   const tracks = Array.isArray(activeDuplicateSource?.tracks)
     ? activeDuplicateSource.tracks
     : (Array.isArray(album.tracks) ? album.tracks : []);
-  const grouped = groupAlbumTracks(tracks);
-  const bonusGroups = grouped.groups.filter((group) => group.isBonus);
-  const mainGroups = grouped.groups.filter((group) => !group.isBonus);
-  const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
-  const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
-  const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatAlbumDuration(bonusSeconds);
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
@@ -2172,6 +2164,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
     mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',

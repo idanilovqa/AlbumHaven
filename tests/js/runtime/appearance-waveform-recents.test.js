@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const api = require('../../../music_app/static/js/appearance-backgrounds.js');
-const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember'});
+const defaults = () => ({main_surface_color:null,panel_background_color:null,palette_id:null,panel_index:0,player_override:null,compact_player_style:'docked',album_details_layout:'classic_bar',album_playing_row_animation:'enabled',alert_family:'ember',loop_control_style:'capsule'});
 const custom = () => ({...defaults(),palette_id:'steelblue',player_override:{background:'#14283B',fill:'#8BAED1',edge:'#B9CADD'}});
 function setup(options={}) {
   const requests=[],applied=[];
@@ -207,7 +207,7 @@ test('actual Seekbar renderer supplies its color editor host to the shared insta
   const host={id:'waveform-editor-host'},mounts=[];
   let storageReads=0,unmounts=0;
   const detail={innerHTML:'',querySelector(selector){return selector==='[data-appearance-seekbar-editor]' && this.innerHTML.includes('data-appearance-seekbar-editor') ? host:null;}};
-  const elements={overlay:{},list:{},count:{},detail};
+  const elements={overlay:{},list:{innerHTML:'',scrollTop:0,querySelectorAll:()=>[],querySelector:()=>null},count:{},detail};
   const instance={controller,unmount(){unmounts++;},mountSeekbar(target,options){mounts.push({target,options});}};
   const context=vm.createContext({state:{utility:{appearanceKey:'seekbar'},player:{appearance:{seekbarMode:'waveform'}}},
     window:{AlbumHavenAppearance:{instance},addEventListener(){}},getUtilityModalElements:()=>elements,
@@ -278,7 +278,7 @@ test('direct waveform edits pair control shades and update player-linked outline
   assert.equal(state.draft.player_style_override.waveform.edge,'#AFD8C2');
   assert.equal(state.draft.player_style_override.controls.border,'#86EFAC');
   assert.equal(state.draft.player_style_override.handles.color,'#AFD8C2');
-  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#86EFAC');
+  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#24B86B');
 });
 
 test('permanent player themes stay outside the five recent saved sets',()=>{

@@ -1,3 +1,5 @@
+import { expect } from '@playwright/test';
+
 export class UtilityRulesActions {
   constructor(utilityRulesTab) {
     this.utilityRulesTab = utilityRulesTab;
@@ -28,8 +30,7 @@ export class UtilityRulesActions {
   }
 
   async expectLayoutVisible() {
-    await this.utilityRulesTab.waitForVisible(this.utilityRulesTab.sidebar.label);
-    await this.utilityRulesTab.waitForVisible(this.utilityRulesTab.sidebar.count);
+    await this.utilityRulesTab.waitForVisible(this.utilityRulesTab.sidebar.search);
     await this.utilityRulesTab.waitForVisible(this.utilityRulesTab.sidebar.list);
     await this.utilityRulesTab.waitForVisible(this.utilityRulesTab.mainBody.detail);
   }
@@ -128,6 +129,27 @@ export class UtilityRulesActions {
     };
   }
 
+  async cancelRevertRuleContaining(text, expectedTarget) {
+    const requests = [];
+    const observe = (request) => {
+      if (request.method() === 'POST'
+        && new URL(request.url()).pathname === '/utilities/rules/problem-ignores/revert') requests.push(request);
+    };
+    const row = this.utilityRulesTab.exclusionRowContaining(text);
+    this.utilityRulesTab.page.on('request', observe);
+    try {
+      await this.utilityRulesTab.revertButtonForRow(row).click();
+      await expect(this.utilityRulesTab.revertConfirmation).toBeVisible();
+      await expect(this.utilityRulesTab.revertConfirmation).toContainText(expectedTarget);
+      await this.utilityRulesTab.revertNo.click();
+      await expect(this.utilityRulesTab.revertConfirmation).toBeHidden();
+      await expect(row).toBeVisible();
+      expect(requests).toHaveLength(0);
+    } finally {
+      this.utilityRulesTab.page.off('request', observe);
+    }
+  }
+
   async revertRuleContaining(text) {
     const acknowledgement = this.utilityRulesTab.page.waitForResponse((response) => (
       response.request().method() === 'POST'
@@ -135,6 +157,7 @@ export class UtilityRulesActions {
     ));
     const row = this.utilityRulesTab.exclusionRowContaining(text);
     await this.utilityRulesTab.revertButtonForRow(row).click();
+    await this.utilityRulesTab.revertYes.click();
     await row.waitFor({ state: 'detached', timeout: 60000 });
     const response = await acknowledgement;
     if (!response.ok()) {
@@ -149,6 +172,7 @@ export class UtilityRulesActions {
     ));
     const row = this.utilityRulesTab.exclusionRowByKey(rowKey);
     await this.utilityRulesTab.revertButtonForRow(row).click();
+    await this.utilityRulesTab.revertYes.click();
     await row.waitFor({ state: 'detached', timeout: 60000 });
     const response = await acknowledgement;
     if (!response.ok()) {
@@ -172,6 +196,7 @@ export class UtilityRulesActions {
     );
     const row = this.utilityRulesTab.exclusionRowContaining(text);
     await this.utilityRulesTab.revertButtonForRow(row).click();
+    await this.utilityRulesTab.revertYes.click();
     await row.waitFor({ state: 'detached', timeout: 60000 });
     await requestStarted;
     return {

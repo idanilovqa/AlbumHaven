@@ -6,6 +6,15 @@ const vm = require('node:vm');
 
 const repoRoot = path.join(__dirname, '..', '..', '..');
 
+test('loop artwork uses the scoped public cover URL for preview and enlargement without path fallbacks', () => {
+  const context = loadAlbumArtbox();
+  context.buildAlbumDisplayCoverUrl = () => '';
+  context.buildAlbumLightboxCoverUrl = () => '';
+  const html = context.buildUtilityAlbumArtbox({ id: 'owned-loop', cover_url: '/cover?loop_id=owned-loop' }, { interactive: true });
+  assert.match(html, /src="\/cover\?loop_id=owned-loop"/);
+  assert.match(html, /data-cover-src="\/cover\?loop_id=owned-loop"/);
+});
+
 function loadAlbumArtbox() {
   const context = {
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'),

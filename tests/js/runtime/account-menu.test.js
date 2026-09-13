@@ -46,12 +46,13 @@ function harness() {
   return { document, component, trigger, menu, items, fire };
 }
 
-test('toggle synchronizes visibility, expanded state, and first enabled item focus', () => {
+test('mouse toggle opens without focusing or highlighting the first item', () => {
   const { trigger, menu, items, document, fire } = harness();
-  fire(trigger, 'click');
+  trigger.focus();
+  fire(trigger, 'click', { detail: 1 });
   assert.equal(menu.hidden, false);
   assert.equal(trigger.getAttribute('aria-expanded'), 'true');
-  assert.equal(document.activeElement, items[0]);
+  assert.equal(document.activeElement, trigger);
   fire(trigger, 'click');
   assert.equal(menu.hidden, true);
   assert.equal(trigger.getAttribute('aria-expanded'), 'false');

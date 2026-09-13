@@ -66,6 +66,119 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
   }
 });
 
+test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot', async ({
+  galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
+  trackModalActions, utilityLogHistoryActions, utilityLoopsActions, utilityTabBarActions,
+}, testInfo) => {
+  const name = `Export snapshot ${testInfo.workerIndex}-${Date.now()}`;
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const track = await trackModalActions.playTrackAt(0);
+  await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
+  await trackModalActions.close();
+  await globalPlayerActions.waitForFullTrackTiming();
+  await globalPlayerActions.openLoopEditor();
+  expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
+  await settingsModalAppBarActions.openSettings();
+  const [response] = await Promise.all([
+    page.waitForResponse(value => value.request().method() === 'GET' && new URL(value.url()).pathname === '/utilities/log-history'),
+    utilityTabBarActions.openTab('log-history'),
+  ]);
+  expect(response.status()).toBe(200);
+  const captured = await response.json();
+  expect(captured.items.length).toBeGreaterThan(0);
+  expect(captured.next_cursor).toBeFalsy();
+  await expect(utilityLogHistoryActions.utilityLogHistoryTab.consoleLines).toHaveCount(captured.items.length);
+  const downloaded = await utilityLogHistoryActions.exportLogs();
+  expect(downloaded.suggestedFilename).toMatch(/^album-haven-logs-.*\.json$/);
+  expect(downloaded.document.snapshot).toBe(captured.snapshot);
+  expect(downloaded.document.items).toEqual(captured.items);
+  expect(downloaded.document.count).toBe(captured.items.length);
+  const history = utilityLogHistoryActions.utilityLogHistoryTab;
+  await history.periodButton.click();
+  await history.periodDialog.getByRole('button', { name: 'Today', exact: true }).click();
+  const [periodResponse] = await Promise.all([
+    page.waitForResponse(value => value.request().method() === 'GET' && new URL(value.url()).pathname === '/utilities/log-history'),
+    history.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click(),
+  ]);
+  const periodCapture = await periodResponse.json();
+  await expect(history.periodRow).toHaveCount(1);
+  await utilityLogHistoryActions.selectEntryByAction('Loop created');
+  await expect(history.periodRow).toHaveCount(1);
+  await history.periodRow.click();
+  const periodExport = await utilityLogHistoryActions.exportLogs();
+  expect(periodExport.document.snapshot).toBe(periodCapture.snapshot);
+  expect(periodExport.document.items).toEqual(periodCapture.items);
+  await history.clearPeriodButton.click();
+  await expect(history.periodRow).toHaveCount(0);
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  await utilityLoopsActions.openDeleteConfirmationByName(name);
+  expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
+});
+
+test('FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range', async ({
+  galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
+  trackModalActions, utilityLoopsActions, utilityTabBarActions,
+}, testInfo) => {
+  const names = ['Playing', 'Move', 'Target'].map(label => `${label} native reorder ${testInfo.workerIndex}-${Date.now()}`);
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const track = await trackModalActions.playTrackAt(0);
+  await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
+  await trackModalActions.close();
+  await globalPlayerActions.waitForFullTrackTiming();
+  for (const name of names) {
+    await globalPlayerActions.openLoopEditor();
+    expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
+  }
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  const card = utilityLoopsActions.utilityLoopsTab.loopEntryCard;
+  const before = await card.readPanelOrder();
+  const playingId = await utilityLoopsActions.playLoopByName(names[0]);
+  await utilityLoopsActions.enableRepeatByName(names[0]);
+  await utilityLoopsActions.revealCreateAnotherLoopEditorByName(names[0]);
+  await utilityLoopsActions.adjustLoopBoundaryWithKeyboard(names[0], 'start', 'ArrowRight');
+  await utilityLoopsActions.adjustLoopBoundaryWithKeyboard(names[0], 'end', 'ArrowLeft');
+  const rangeBefore = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect(rangeBefore.startSeconds).toBeGreaterThan(0);
+  const audio = await utilityLoopsActions.captureLoopAudioHandle(playingId);
+  const moveEntry = await utilityLoopsActions.resolveLoopEntryByName(names[1]);
+  const targetEntry = await utilityLoopsActions.resolveLoopEntryByName(names[2]);
+  const moveIsEarlier = before.indexOf(moveEntry.loopId) < before.indexOf(targetEntry.loopId);
+  const result = await utilityLoopsActions.dragLoopAfterByName(
+    moveIsEarlier ? names[1] : names[2],
+    moveIsEarlier ? names[2] : names[1],
+  );
+  expect(result.ordered_ids).not.toEqual(before);
+  await utilityLoopsActions.expandGroupByTitle(LOOP_TRACK_TITLE);
+  expect(await utilityLoopsActions.utilityLoopsTab.loopTree.readSongChildOrder(result.song_key)).toEqual(result.ordered_ids);
+  const continuity = await utilityLoopsActions.readLoopContinuity(audio, playingId);
+  expect(continuity.sameNode).toBe(true);
+  expect(continuity.snapshot.paused).toBe(false);
+  await utilityLoopsActions.waitForLoopProgress(playingId, { afterCurrentTime: continuity.snapshot.currentTime, minimumDelta: 0.2, allowWrap: true });
+  const rangeAfter = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect([rangeAfter.startSeconds, rangeAfter.endSeconds]).toEqual([rangeBefore.startSeconds, rangeBefore.endSeconds]);
+  await utilityLoopsActions.expectCreateAnotherLoopEditorActiveByName(names[0]);
+  await page.reload();
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  expect(await card.readPanelOrder()).toEqual(result.ordered_ids);
+  for (const name of names) {
+    await utilityLoopsActions.openDeleteConfirmationByName(name);
+    expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
+  }
+});
+
 test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback stay grouped under one track`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
@@ -86,6 +199,13 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   let warmupIdleAction = null;
   let playingPlayerLayout = null;
   let selectedTrack;
+  // Approved B02: 48px Play centered in a 56px Capsule, then the shared 8px column gap.
+  const approvedCapsulePlayGap = 8 + ((56 - 48) / 2);
+  const expectApprovedCapsuleSpacing = visual => {
+    expect(Math.abs(visual.playBounds.width - 48)).toBeLessThanOrEqual(1);
+    expect(Math.abs(visual.clusterBounds.width - 56)).toBeLessThanOrEqual(1);
+    expect(Math.abs(visual.timelineLeftGapFromPlay - approvedCapsulePlayGap)).toBeLessThanOrEqual(1);
+  };
 
   await stepLogger.step('Open the fake-data gallery and wait for the initial view to settle', async () => {
     await galleryActions.goto();
@@ -104,7 +224,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(unavailable.visual.timelineCenterY - unavailable.visual.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(unavailable.visual.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(unavailable.visual);
     const hovered = await globalPlayerActions.hoverLoopAction();
     expect(hovered.styles.state).toBe('disabled');
     expect(hovered.podBounds).toEqual(unavailable.visual.podBounds);
@@ -153,8 +273,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(Math.abs(playingPlayerLayout.playerBounds.height - 92)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(playingPlayerLayout);
+    expect(playingPlayerLayout.playerBounds.height).toBe(108);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -238,7 +358,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(idle.mainAreaBounds.x - playingPlayerLayout.mainAreaBounds.x))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(idle.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(idle);
     const idleHovered = await globalPlayerActions.hoverLoopAction();
     expect(idleHovered.styles.state).toBe('idle');
     expect(idleHovered.mainAreaBounds).toEqual(idle.mainAreaBounds);
@@ -269,10 +389,9 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(cancelHovered.styles.cancel.color).not.toBe(createHovered.styles.cancel.color);
     const collapsed = await globalPlayerActions.moveAwayFromLoopAction();
     expect(collapsed.styles.engaged).toBe('false');
-    expect(collapsed.podBounds).toEqual(idle.podBounds);
-    expect(collapsed.podBounds.width).toBeLessThan(createHovered.podBounds.width);
-    expect(collapsed.styles.pod.borderColor).not.toBe(createHovered.styles.pod.borderColor);
-    expect(collapsed.styles.pod.boxShadow).not.toBe(createHovered.styles.pod.boxShadow);
+    expect(collapsed.podBounds).toEqual(createHovered.podBounds);
+    expect(collapsed.styles.create.color).not.toBe(createHovered.styles.create.color);
+    expect(collapsed.styles.create.glyphFilter).not.toBe(createHovered.styles.create.glyphFilter);
     expect(collapsed.mainAreaBounds).toEqual(idle.mainAreaBounds);
     expect(collapsed.waveformBounds).toEqual(idle.waveformBounds);
     await globalPlayerActions.pauseIfPlaying();
@@ -381,6 +500,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       childLoopCount: 0,
     });
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    await utilityLoopsActions.verifySongArtworkAndYear(LOOP_TRACK_TITLE, LOOP_ALBUM_TARGET.year);
     await expectCombinedLoopWaveform(page);
     await expectStableButtonHover(page, surfaces.loopPlay);
     const detail = await utilityLoopsActions.readDetailSummary();
@@ -566,8 +686,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(savedCreateHovered.mainBounds).toEqual(warmupIdleAction.mainBounds);
     expect(savedCreateHovered.timelineBounds).toEqual(warmupIdleAction.timelineBounds);
     const savedCollapsed = await utilityLoopsActions.moveAwayFromLoopActionByName('Warmup Loop');
-    expect(savedCollapsed.podBounds).toEqual(warmupIdleAction.podBounds);
-    expect(savedCollapsed.podBounds.width).toBeLessThan(savedCreateHovered.podBounds.width);
+    expect(savedCollapsed.podBounds).toEqual(savedCreateHovered.podBounds);
     expect(savedCollapsed.mainBounds).toEqual(warmupIdleAction.mainBounds);
     expect(savedCollapsed.timelineBounds).toEqual(warmupIdleAction.timelineBounds);
     await utilityLoopsActions.hoverLoopActionByName('Warmup Loop', 'create');
@@ -685,7 +804,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const nestedSave = await globalPlayerActions.submitLoopName('Transition Loop');
     expect(nestedSave.requestCount).toBe(1);
     const immediateGroup = await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE);
-    expect(immediateGroup.countText).toBe('2 loops');
+    expect(immediateGroup.count).toBe(2);
     const immediateDetail = await utilityLoopsActions.readDetailSummary();
     expect(immediateDetail.title).toBe(LOOP_TRACK_TITLE);
     expect(immediateDetail.entryCount).toBe(2);
@@ -700,7 +819,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await utilityLoopsActions.waitForReady();
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
     const groupSummary = await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE);
-    expect(groupSummary.countText).toBe('2 loops');
+    expect(groupSummary.count).toBe(2);
     const detail = await utilityLoopsActions.readDetailSummary();
     expect(detail.title).toBe(LOOP_TRACK_TITLE);
     expect(detail.entryCount).toBe(2);
@@ -774,7 +893,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   await stepLogger.step('Delete a saved loop through the app-owned No and Yes confirmation', async () => {
     const firstOpen = await utilityLoopsActions.openDeleteConfirmationByName('Transition Loop');
     expect(firstOpen.nativeDialogs).toEqual([]);
-    expect(firstOpen.text).toBe('Remove "Transition Loop"? This will delete the saved loop file.');
+    expect(firstOpen.text).toBe('Delete “Transition Loop”? The saved loop will be removed.');
     expect(firstOpen.stacking.deleteZIndex).toBeGreaterThan(firstOpen.stacking.utilityZIndex);
     expect(firstOpen.stacking.deleteOwnsTopElement).toBe(true);
     expect((await utilityLoopsActions.cancelDeleteConfirmationByName('Transition Loop')).requestCount)
@@ -784,11 +903,11 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(secondOpen.nativeDialogs).toEqual([]);
     expect((await utilityLoopsActions.confirmDeleteByName('Transition Loop')).requestCount).toBe(1);
     expect((await utilityLoopsActions.readDetailSummary()).entryCount).toBe(1);
-    expect((await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE)).countText).toBe('1 loop');
+    expect((await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE)).count).toBe(1);
 
     const consecutiveOpen = await utilityLoopsActions.openDeleteConfirmationByName('Warmup Loop');
     expect(consecutiveOpen.nativeDialogs).toEqual([]);
-    expect(consecutiveOpen.text).toBe('Remove "Warmup Loop"? This will delete the saved loop file.');
+    expect(consecutiveOpen.text).toBe('Delete “Warmup Loop”? The saved loop will be removed.');
     expect((await utilityLoopsActions.cancelDeleteConfirmationByName('Warmup Loop')).requestCount)
       .toBe(0);
   });
@@ -827,7 +946,7 @@ test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal'
   expect(opened.stacking.deleteZIndex).toBeGreaterThan(opened.stacking.utilityZIndex);
   expect(opened.stacking.deleteOwnsTopElement).toBe(true);
   expect(await utilityLoopsActions.selectDeleteConfirmationTextOutsideDialog())
-    .toBe(`Remove "${loopName}"? This will delete the saved loop file.`);
+    .toBe(`Delete “${loopName}”? The saved loop will be removed.`);
   expect((await utilityLoopsActions.confirmDeleteByName(loopName)).requestCount).toBe(1);
 });
 

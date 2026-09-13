@@ -123,7 +123,7 @@ test('Player & Seekbar preserves independent player and waveform tabs when the u
     installBrowser.indexOf('return { controller, mount, mountSeekbar'),
   );
 
-  assert.match(installBrowser, /let activePlayerTab = 'surface', activeWaveformTab = 'waveform';/);
+  assert.match(installBrowser, /let activePlayerTab = 'surface', activeWaveformTab = 'waveform'[,;]/);
   assert.doesNotMatch(mountSeekbar, /let activePlayerTab = 'surface'|let activeWaveformTab = 'waveform'/);
   assert.match(
     mountSeekbar,

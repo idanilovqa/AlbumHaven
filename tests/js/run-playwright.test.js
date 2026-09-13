@@ -3485,6 +3485,40 @@ test('stopManagedIsolatedApp uses bind-only port checks after verified process-t
   ]);
 });
 
+test('managed isolated stop request waits for shutdown without starting a replacement', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-stop-request-'));
+  let finishStop;
+  const stopped = new Promise((resolve) => { finishStop = resolve; });
+  let starts = 0;
+  try {
+    const controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {}, ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5660), ports: [4320, 4322],
+      stopManagedIsolatedAppFn: () => stopped,
+      startManagedIsolatedAppFn: async () => { starts += 1; return createFakeChildProcess(5661); },
+      autoStart: false,
+    });
+    const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+    const ackPath = path.join(controller.controlDirectory, 'restart-ack.json');
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stop-1', action: 'stop' }));
+    const pending = controller.processPendingRequest();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fs.existsSync(ackPath), false);
+    finishStop();
+    await pending;
+    assert.equal(starts, 0);
+    assert.equal(controller.getCurrentChild(), null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'stop-1', status: 'stopped' });
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'resume-1' }));
+    await controller.processPendingRequest();
+    assert.equal(starts, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'resume-1', status: 'ready' });
+    await controller.close();
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
+});
+
 test('managed isolated restart controller keeps control files under the runner-owned temp root', async () => {
   const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-restart-controller-'));
   const childEnv = {

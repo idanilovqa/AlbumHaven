@@ -376,20 +376,16 @@ export class TagEditorActions {
       await expect(this.tagEditor.applyButton).toBeEnabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'pointer');
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgba(239, 68, 68, 0.12)',
-      );
     } else {
       await expect(this.tagEditor.applyButton).toBeDisabled();
-      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
-      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgb(55, 65, 81)',
-      );
-      await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
+      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'default');
+      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+      const theme = await this.tagEditor.readApplyTheme();
+      expect(theme.background).toEqual(theme.expectedBackground);
+      expect(theme.ink).toEqual(theme.expectedInk);
     }
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');
   }
 
   async readTrackNumberAndDiscByFilename(filename) {

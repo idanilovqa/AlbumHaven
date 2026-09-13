@@ -1,61 +1,11 @@
 function buildUtilityLogHistoryListItem(item, selected) {
-  const timestamp = formatLogHistoryTimestamp(item?.timestamp);
-  const count = Number(item?.file_count || 0);
-  const summary = [item.artist, item.album, item.title].filter(Boolean).join(' - ');
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-log-history-id="${escapeHtml(item.id || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item.action || 'Activity')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(summary || 'Unknown album')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(timestamp || `${count} files`)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({ action: true, variant: 'panel', key: String(item.id), selected,
+    label: item.action || 'Activity', subtitle: [item.artist, item.album, item.title].filter(Boolean).join(' · ') || item.source || '',
+    year: formatLogHistoryTimestamp(item.timestamp), attributes: { 'data-utility-log-history-id': String(item.id) } });
 }
 
 function buildUtilityLogHistoryDetail(item) {
-  if (!item) {
-    return `
-      <div class="utility-empty-state">Select a log entry to inspect the saved file changes.</div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    `;
-  }
-  const files = Array.isArray(item.files) ? item.files : [];
-  const downloaded = Number(item.downloaded || 0);
-  const notTouched = Number(item.not_touched ?? item.skipped ?? 0);
-  const notFound = Number(item.not_found ?? item.failed ?? 0);
-  const processed = Number(item.processed || 0);
-  const summaryParts = [
-    item.artist || '',
-    item.album || '',
-    item.title || '',
-    item.file_count ? `${item.file_count} file${Number(item.file_count) === 1 ? '' : 's'}` : '',
-  ].filter(Boolean);
-  const coverSummaryParts = [];
-  if (processed || downloaded || notTouched || notFound) {
-    coverSummaryParts.push(`Checked: ${processed}`);
-    coverSummaryParts.push(`Downloaded: ${downloaded}`);
-    coverSummaryParts.push(`Not touched: ${notTouched}`);
-    coverSummaryParts.push(`Not found: ${notFound}`);
-  }
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title">${escapeHtml(item.action || 'Activity')}</h3>
-      <p class="utility-rule-description">${escapeHtml(formatLogHistoryTimestamp(item.timestamp) || '')}</p>
-      <p class="utility-rule-description">${escapeHtml(item.source_label || 'This browser')}</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-group-meta">${escapeHtml(summaryParts.join(' - '))}</div>
-        ${coverSummaryParts.length ? `<div class="utility-rule-album-meta">${escapeHtml(coverSummaryParts.join(' | '))}</div>` : ''}
-        ${item.error ? `<div class="utility-rule-album-meta">${escapeHtml(item.error)}</div>` : ''}
-        ${files.length
-          ? `<div class="utility-log-history-files">${files.map((path) => `<div class="utility-log-history-file">${escapeHtml(path)}</div>`).join('')}</div>`
-          : '<div class="utility-empty-state compact">No downloaded cover paths recorded.</div>'}
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-export-log-history="1">Export Logs</button>
-      </div>
-    </div>
-  `;
+  return buildConsoleLog(item ? [item] : []);
 }
 
 function getSelectedUtilityLoop() {
@@ -74,12 +24,28 @@ function getSelectedUtilityLoopGroup() {
   return groups.find((group) => String(group?.key || '') === selectedKey) || null;
 }
 
+function getFilteredUtilityLoops() {
+  const query = String(state.utility.loopsSearchQuery || '').trim().toLocaleLowerCase();
+  const loops = state.utility.loops || [];
+  return query ? loops.filter(loop => [loop.name, loop.title, loop.artist, loop.album]
+    .some(value => String(value || '').toLocaleLowerCase().includes(query))) : loops;
+}
+
+function buildUtilityLoopMoveActions(loop) {
+  if (!canReorderUtilityLoop(loop)) return '';
+  return `<span class="utility-loop-reorder-actions" role="group" aria-label="Reorder ${escapeHtml(loop.name || 'Saved loop')}">${['up', 'down'].map(direction => window.ButtonComponent.renderButton({
+    label: `Move ${direction}`, size: 'small', ariaLabel: `Move ${loop.name || 'Saved loop'} ${direction}`,
+    attributes: { 'data-move-utility-loop': loop.id, 'data-loop-move-direction': direction },
+  })).join('')}</span>`;
+}
+
 function buildUtilityLoopEntry(loop) {
   const mediaSrc = `/loops/media/${encodeURIComponent(loop.id || '')}`;
   const loopId = escapeHtml(loop.id || '');
   const repeatEnabled = Boolean(state.utility.loopRepeatEnabled) && String(state.utility.selectedLoopId || '') === String(loop.id || '');
   return `
-    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}">
+    <section class="utility-loop-entry ${repeatEnabled ? 'is-active' : ''}" data-utility-loop-entry="${escapeHtml(loop.id || '')}" data-loop-song-key="${escapeHtml(buildUtilityLoopGroupKey(loop))}" draggable="${canReorderUtilityLoop(loop)}">
+      ${buildUtilityLoopMoveActions(loop)}
       <div class="utility-loop-heading">
         <span class="utility-loop-drag-handle" aria-hidden="true">⋮⋮</span>
         <h3 class="utility-detail-title">${escapeHtml(loop.name || 'Saved loop')}</h3>
@@ -163,7 +129,7 @@ function buildUtilityLoopDetail(loopGroup, selectedLoop = null) {
         </div>
       </div>
       <div class="utility-loop-group-main">
-        <div class="utility-loop-entry-list">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
+        <div class="utility-loop-entry-list" data-loop-panel-song="${escapeHtml(group.key || '')}">${loopsToRender.map((loop) => buildUtilityLoopEntry(loop)).join('')}</div>
       </div>
     </div>
   `;
@@ -187,16 +153,11 @@ function buildUtilityAppearanceDetail() {
 }
 
 function buildUtilityIntegrationListItem(item, selected) {
-  const status = String(item?.status_label || '').trim() || (item?.connected
-    ? 'Connected'
-    : (item?.api_configured ? 'Not connected' : 'Server setup required'));
-  return `
-    <button class="utility-list-item ${selected ? 'is-active' : ''}" type="button" data-utility-integration-key="${escapeHtml(item?.key || '')}">
-      <span class="utility-list-item-title">${escapeHtml(item?.title || 'Integration')}</span>
-      <span class="utility-list-item-meta">${escapeHtml(item?.description || '')}</span>
-      <span class="utility-list-item-issues">${escapeHtml(status)}</span>
-    </button>
-  `;
+  return window.NavigationTree.renderItem({
+    action: true, variant: 'panel', key: String(item?.key || ''), selected,
+    label: item?.title || 'Integration',
+    attributes: { 'data-utility-integration-key': String(item?.key || '') },
+  });
 }
 
 function buildLastfmTimeZoneOptions(selectedTimeZone) {
@@ -212,181 +173,41 @@ function buildLastfmTimeZoneOptions(selectedTimeZone) {
 }
 
 function buildUtilityIntegrationDetail(item) {
-  if (item?.key === 'library') {
-    return buildUtilityLibrarySettingsDetail(item);
-  }
+  const button = options => window.ButtonComponent.renderButton(options);
+  if (item?.key === 'library') return buildUtilityLibrarySettingsDetail(item);
   if (item?.key === 'local_playlist_import') {
-    const importState = state.utility?.localPlaylistImport || {};
-    const supportedExtensions = Array.isArray(item.supported_extensions) ? item.supported_extensions : [];
-    const targetOptions = Array.isArray(item.target_options) ? item.target_options : [];
-    const lastAnalysis = importState.lastAnalysis && typeof importState.lastAnalysis === 'object' ? importState.lastAnalysis : null;
-    const blockedTargets = Array.isArray(lastAnalysis?.target_recommendation?.blocked_targets)
-      ? lastAnalysis.target_recommendation.blocked_targets
-      : [];
-    const targetRows = targetOptions.length
-      ? targetOptions.map((target) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(target.title || target.key || 'Target')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(target.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Target rules will land here later.</div>';
-    const blockedRows = blockedTargets.length
-      ? blockedTargets.map((blocked) => `<div class="utility-rule-album-meta">Album Top unavailable: ${escapeHtml(blocked.reason || '')}</div>`).join('')
-      : '';
-    const analysisHtml = lastAnalysis ? `
-      <section class="utility-rule-album-list">
-        <div class="utility-rule-album-title">${escapeHtml(lastAnalysis.status?.label || 'Preview contract ready')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.status?.detail || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.filename || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.source_kind || '')}</div>
-        <div class="utility-rule-album-meta">${escapeHtml(lastAnalysis.source?.parser_mode || '')}</div>
-        <div class="utility-rule-album-meta">Recommended target: ${escapeHtml(lastAnalysis.target_recommendation?.recommended_target || 'playlist')}</div>
-        ${blockedRows}
-      </section>
-    ` : '<div class="utility-empty-state compact">Select a local playlist file to prepare the analyze/preview contract.</div>';
-    const completionPreview = lastAnalysis?.local_library_completion && typeof lastAnalysis.local_library_completion === 'object'
-      ? lastAnalysis.local_library_completion
-      : (item.local_library_completion && typeof item.local_library_completion === 'object' ? item.local_library_completion : {});
-    const importStatus = item.import_status && typeof item.import_status === 'object' ? item.import_status : {};
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Import Local Playlist')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || '')}</p>
-        <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'Analyze/preview contract ready')}</div>
-        <div class="utility-rule-album-meta">Supports: ${escapeHtml(supportedExtensions.join(', ') || 'No playlist formats configured yet.')}</div>
-        <div class="utility-loop-create-row">
-          <input type="file" data-local-playlist-import-file accept="${escapeHtml(supportedExtensions.join(','))}">
-          <button class="button" type="button" data-analyze-local-playlist="1" ${importState.analyzeBusy ? 'disabled' : ''}>${importState.analyzeBusy ? 'Analyzing...' : 'Analyze playlist'}</button>
-        </div>
-        <div class="utility-rule-album-meta">${escapeHtml(importState.selectedFileName || 'No file selected')}</div>
-        ${importState.error ? `<div class="utility-rule-album-meta">${escapeHtml(importState.error)}</div>` : ''}
-        ${analysisHtml}
-        ${buildUtilityCollapsibleSection('local-playlist-import-targets', 'Target direction', targetRows)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-completion', completionPreview.label || 'Completion preview direction reserved', `<div class="utility-rule-album-meta">${escapeHtml(completionPreview.detail || '')}</div>`)}
-        ${buildUtilityCollapsibleSection('local-playlist-import-status', importStatus.label || 'Final import execution lands later', `<div class="utility-rule-album-meta">${escapeHtml(importStatus.detail || '')}</div>`)}
-      </div>
-    `;
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Import Local Playlist</h3><div class="settings-integration-actions">${button({ label: 'Import', disabled: true, attributes: { 'data-local-playlist-import': '1' } })}</div></div>`;
   }
   if (item?.key === 'foobar') {
-    const sourceFamilies = Array.isArray(item.source_families) ? item.source_families : [];
-    const referenceAssets = Array.isArray(item.reference_assets) ? item.reference_assets : [];
-    const writeBackScopes = Array.isArray(item.write_back_scopes) ? item.write_back_scopes : [];
-    const continuousSync = item.continuous_sync && typeof item.continuous_sync === 'object' ? item.continuous_sync : {};
-    const sourceFamilyRows = sourceFamilies.length
-      ? sourceFamilies.map((family) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(family.title || 'Source family')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(family.description || '')}</div>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">Source-family contract details will land here later.</div>';
-    const writeBackLabels = writeBackScopes.length
-      ? writeBackScopes.map((scope) => `<span class="utility-track-problem-chip utility-rule-problem-chip">${escapeHtml(scope)}</span>`).join('')
-      : '<span class="utility-rule-album-meta">No write-back scopes configured.</span>';
-    const assetRows = referenceAssets.length
-      ? referenceAssets.map((asset) => `
-        <div class="utility-rule-album-row">
-          <div class="utility-rule-album-main">
-            <div class="utility-rule-album-title">${escapeHtml(asset.title || asset.filename || 'Reference asset')}</div>
-            <div class="utility-rule-album-meta">${escapeHtml(asset.description || '')}</div>
-          </div>
-          <div class="confirm-modal-actions">
-            <a class="button button-secondary" href="${escapeHtml(asset.view_url || '#')}" target="_blank" rel="noreferrer">View</a>
-            <a class="button button-secondary" href="${escapeHtml(asset.download_url || '#')}" target="_blank" rel="noreferrer">Download</a>
-          </div>
-        </div>
-      `).join('')
-      : '<div class="utility-empty-state compact">No reference assets are available yet.</div>';
-    return `
-      <div class="utility-rule-detail">
-        <h3 class="utility-rule-title">${escapeHtml(item.title || 'Foobar2000')}</h3>
-        <p class="utility-rule-description">${escapeHtml(item.description || 'Help-first Foobar setup guidance.')}</p>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">${escapeHtml(item.status_label || 'How To and reference assets ready')}</div>
-          <div class="utility-rule-album-meta">${escapeHtml(continuousSync.label || 'Continuous Foobar sync')}: ${escapeHtml(continuousSync.enabled ? 'Enabled' : (continuousSync.default_state || 'off'))}</div>
-          <div class="utility-rule-album-meta">When off: ${escapeHtml(continuousSync.disabled_behavior || 'One-time import only')}</div>
-          <div class="utility-rule-album-meta">When enabled later: ${escapeHtml(continuousSync.cadence_when_enabled || 'Once a week')}</div>
-          <div class="utility-rule-album-meta">Problems first surface in ${escapeHtml(item.problem_surface || 'Utilities > Problematic Files')}.</div>
-          ${item.help_route ? `<div class="utility-rule-album-meta">Foobar help contract: <a href="${escapeHtml(item.help_route)}" target="_blank" rel="noreferrer">${escapeHtml(item.help_route)}</a></div>` : ''}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">SOURCE FAMILIES</div>
-          ${sourceFamilyRows}
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">V1 WRITE-BACK SCOPE</div>
-          <div class="utility-rule-problem-labels">${writeBackLabels}</div>
-        </div>
-        <div class="utility-divider" aria-hidden="true"></div>
-        <div class="utility-rule-album-list">
-          <div class="utility-rule-album-meta">REFERENCE ASSETS</div>
-          ${assetRows}
-        </div>
-      </div>
-    `;
+    const format = state.utility.foobarFormat || 'Playback Statistics XML';
+    return `<div class="utility-rule-detail"><h3 class="utility-rule-title">Foobar2000</h3>
+      <section class="library-settings-section"><label class="lastfm-inline-field"><span>SQLite database</span><input class="utility-search-input" type="text" placeholder="SQLite database path" disabled aria-describedby="foobar-unavailable"></label>
+      <div class="settings-integration-actions">${button({ label: 'Save', disabled: true })}</div></section>
+      <section class="library-settings-section"><h4>Import playback history</h4><div class="settings-integration-actions">
+      ${button({ label: format, attributes: { 'data-foobar-format-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
+      ${button({ label: 'Import', disabled: true, attributes: { 'data-foobar-import': '1' } })}</div>
+      <p id="foobar-unavailable">Import is unavailable in this build. Setup instructions and export references are available.</p></section>
+      <div class="settings-integration-actions settings-instructions-action">${button({ label: 'Read setup instructions', attributes: { 'data-foobar-help': '1' } })}</div></div>`;
   }
-  if (!item || item.key !== 'lastfm') {
-    return '<div class="utility-empty-state">Select an integration.</div>';
-  }
-  const draft = state.utility.integrationDrafts?.lastfm || { username: '', password: '', timezone: '' };
-  const username = draft.username || item.username || '';
-  const historyCount = Number(item.listen_history_count || 0);
-  const pendingCount = Number(item.pending_scrobble_count || 0);
-  const connectedAt = item.connected_at ? (formatLogHistoryTimestamp(item.connected_at) || item.connected_at) : '';
-  const selectedTimeZone = String(draft.timezone || item.user_timezone || getDetectedBrowserTimeZone() || 'UTC');
-  const headerText = item.connected
-    ? `Last.FM · Connected as ${item.username || 'Connected'}${connectedAt ? ` (${connectedAt})` : ''}`
-    : 'Last.FM';
-  return `
-    <div class="utility-rule-detail">
-      <h3 class="utility-rule-title lastfm-header-title">${item.connected ? '<span class="lastfm-status-check" aria-hidden="true">&#10003;</span>' : ''}${escapeHtml(headerText)}</h3>
-      <p class="utility-rule-description">Connect your LastFM account to scrobble and import your listening history</p>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(historyCount))}. Queued: ${escapeHtml(String(pendingCount))}</div>
-        ${item.api_configured
-          ? ''
-          : '<div class="utility-rule-album-meta">The server still needs `LASTFM_API_KEY` and `LASTFM_API_SECRET` configured before this integration can connect.</div>'}
-      </div>
-      <form class="lastfm-integration-form" data-lastfm-integration-form="1">
-        <div class="lastfm-credentials-grid">
-          <label class="lastfm-inline-field">
-            <span>Username</span>
-            <input type="text" value="${escapeHtml(username)}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-          <label class="lastfm-inline-field">
-            <span>Password</span>
-            <input type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>
-          </label>
-        </div>
-        <div class="confirm-modal-actions">
-          <button class="button" type="submit" data-save-lastfm-integration="1" ${(item.api_configured && !item.connected) ? '' : 'disabled'}>Connect Last.FM</button>
-          <button class="button button-secondary" type="button" data-disconnect-lastfm-integration="1" ${item.connected ? '' : 'disabled'}>Disconnect</button>
-        </div>
-      </form>
-      <div class="utility-divider" aria-hidden="true"></div>
-      <div class="utility-rule-album-list">
-        <div class="utility-rule-album-meta">TIMEZONE</div>
-      </div>
-      <div class="lastfm-credentials-grid">
-        <label class="lastfm-inline-field">
-          <span>Timezone</span>
-          <select data-lastfm-field="timezone">
-            ${buildLastfmTimeZoneOptions(selectedTimeZone)}
-          </select>
-        </label>
-      </div>
-      <div class="confirm-modal-actions">
-        <button class="button button-secondary" type="button" data-save-lastfm-timezone="1" ${selectedTimeZone ? '' : 'disabled'}>Save timezone</button>
-      </div>
-    </div>
-  `;
+  if (!item || item.key !== 'lastfm') return '<div class="utility-empty-state">Select an integration.</div>';
+  const draft = state.utility.integrationDrafts?.lastfm || {};
+  const enabled = item.api_configured && !item.connected;
+  const statistics = item.playback_statistics;
+  const plays = statistics && Number.isFinite(Number(statistics.local_playcount)) ? String(statistics.local_playcount) : 'Unavailable';
+  const seconds = statistics ? Number(statistics.total_listening_seconds) : NaN;
+  const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
+  const duration = Number.isFinite(seconds) && seconds >= 0
+    ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
+      ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
+    <p class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(item.listen_history_count ?? 0))} · Queued: ${escapeHtml(String(item.pending_scrobble_count ?? 0))}</p>
+    <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
+      <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
+      <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
+      <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
+      ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
+      ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section></div>`;
 }
 
 function matchesUtilityRuleSearch(item) {
@@ -400,7 +221,7 @@ function matchesUtilityRuleSearch(item) {
 
 function buildVersionExceptionRuleDetail(rule) {
   const albums = (Array.isArray(rule?.albums) ? rule.albums : []).filter(matchesUtilityRuleSearch);
-  const table = buildUtilityCompactTable({
+  const table = albums.length ? buildUtilityCompactTable({
     id: 'version-exceptions', ariaLabel: 'Version exceptions',
     columns: 'minmax(220px,1fr) minmax(180px,1fr) 110px',
     columnsConfig: [{ key: 'target', label: 'Artist / Album' }, { key: 'effect', label: 'Rule' }, { key: 'action', label: 'Actions', header: 'screen-reader', action: true }],
@@ -410,7 +231,7 @@ function buildVersionExceptionRuleDetail(rule) {
       effect: escapeHtml(album.edition ? `Edition: ${album.edition}` : 'Excluded from album version tabs'),
       action: ButtonComponent.renderButton({ label: 'Revert rule', className: 'utility-rule-revert', attributes: { 'data-revert-version-exception': album.key || '' } }),
     } })),
-  });
+  }) : `<p class="utility-detail-meta">${rule?.albums?.length ? 'No version exceptions match your search.' : 'No version exceptions yet.'}</p>`;
   return `<div class="utility-rule-detail"><h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Version exceptions')}</h3><p class="utility-rule-description">${escapeHtml(rule?.description || 'Albums listed here are not counted as versions of another album with the same title.')}</p>${table}</div>`;
 }
 function buildUtilityCompactTable(config) {
@@ -463,14 +284,14 @@ function buildProblemIgnoresRuleDetail(rule) {
       <div class="utility-rule-detail utility-problem-exclusions-detail">
         <h3 class="utility-rule-title">${escapeHtml(rule?.title || 'Problem exclusions')}</h3>
         <p class="utility-rule-description">${escapeHtml(rule?.description || 'Album or file problems excluded from Problematic Files.')}</p>
-        <section class="utility-problem-exclusion-group">
+        ${albumItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">ALBUM EXCLUSIONS</h4>
-          ${albumItems.length ? table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album') : '<div class="utility-empty-state compact">No album exclusions.</div>'}
-        </section>
-        <section class="utility-problem-exclusion-group">
+          ${table(albumItems, 'Artist / Album', 'Album exclusions', 'problem-exclusions-album', 'album')}
+        </section>` : ''}
+        ${fileItems.length ? `<section class="utility-problem-exclusion-group">
           <h4 class="utility-detail-section-title">FILE EXCLUSIONS</h4>
-          ${fileItems.length ? table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file') : '<div class="utility-empty-state compact">No file exclusions.</div>'}
-        </section>
+          ${table(fileItems, 'Filename', 'File exclusions', 'problem-exclusions-file', 'file')}
+        </section>` : ''}
       </div>
     `;
   }
@@ -581,7 +402,7 @@ function buildDetectedProblemsHtml(album) {
     const matching = getIgnorableProblemRows(album).filter(row => normalizeProblemFilterReason(row.reason) === normalizeProblemFilterReason(item.reason));
     const keys = matching.map(row => String(row.row_key || '')).filter(Boolean);
     return buildAlertLabelHtml({
-      severity: 'error', message: item.display_reason || item.reason, interactive: true,
+      severity: 'error', message: item.reason === 'Missing year' ? 'Missing year' : item.display_reason || item.reason, interactive: true,
       pressed: keys.length > 0 && keys.every(key => state.utility.problemExclusionSelections?.[key]),
       disabled: !keys.length,
       className: 'utility-problem-exclusion-pill',
@@ -616,12 +437,12 @@ function buildDetectedProblemsHtml(album) {
       },
     };
   }).filter(Boolean);
-  const table = buildUtilityCompactTable({
+  const table = tableRows.length ? buildUtilityCompactTable({
     id: 'problematic-track-problems', ariaLabel: 'Detected problems',
     columns: 'minmax(180px,1fr) minmax(160px,1fr) minmax(180px,1.2fr)',
     columnsConfig: [{ key: 'filename', label: 'Track / file' }, { key: 'reason', label: 'Problems' }, { key: 'suggested', label: 'Suggested edits' }],
     headers: 'visible', density: 'compact', overflow: 'local', mobile: 'preserve', frame: 'outline', rows: tableRows,
-  });
+  }) : '';
   const separateCandidate = album?.separate_release_candidate;
   const separateKey = String(separateCandidate?.key || '');
   const separateSelected = Boolean(separateKey && state.utility.separateReleaseSelections?.[separateKey]);
@@ -633,12 +454,12 @@ function buildDetectedProblemsHtml(album) {
   return `<div class="sr-only" data-problem-exclusion-status role="status" tabindex="-1"></div>
     <div class="utility-album-problem-labels">${albumProblems}</div>
     <h4 class="utility-detail-section-title">Detected problems</h4>
-    <div class="utility-detected-table">${table}</div>
-    <div class="utility-detected-actions">
+    ${table ? `<div class="utility-detected-table">${table}</div>` : `<p class="utility-detail-meta">${selectedFilters.length ? 'No per-track problems match the selected filters.' : albumRows.length ? 'Only album-level problems found. No per-track problems.' : 'No per-track problems found.'}</p>`}
+    ${tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
       ${separateActions}
       ${ButtonComponent.renderButton({ label: 'Create Exception', className: 'utility-exception-action', disabled: !getIgnoredRepairRowKeys().length || !album.allowed_actions?.['library.rules.manage'], attributes: { 'data-open-exclusion-confirm': '1' } })}
-      ${ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } })}
-    </div>`;
+      ${tableRows.length ? ButtonComponent.renderButton({ label: selected ? 'Apply' : 'Apply All', className: 'utility-detail-apply', disabled: !album.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy), attributes: { 'data-apply-problem-suggestions': '1' } }) : ''}
+    </div>` : ''}`;
 }
 function buildProblematicAlbumDetail(album) {
   if (!album) {
@@ -681,30 +502,23 @@ function buildProblematicAlbumDetail(album) {
         <div class="utility-detail-meta">${escapeHtml(displayArtist)}</div>
         <div class="utility-detail-meta">Year: ${escapeHtml(album.year ?? 'Unknown')}</div>
         <div class="utility-detail-meta">Tracks: ${Array.isArray(album.tracks) ? album.tracks.length : 0}</div>
+        ${album.edition ? `<div class="utility-detail-meta">Edition: ${escapeHtml(album.edition)}</div>` : ''}
+        <div class="utility-detail-meta">File types: ${escapeHtml(fileTypeText)}</div>
         ${album.has_encoding_repairs ? `
           <button class="utility-repair-toggle ${showRepairedDisplay ? 'is-active' : ''}" type="button" data-toggle-problematic-display-repair="1" aria-pressed="${showRepairedDisplay ? 'true' : 'false'}">
             ${showRepairedDisplay ? 'Converted tags' : 'Original tags'}
           </button>
         ` : ''}
+      </div>
         <div class="utility-detail-context-actions">
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Open In File Explorer', title: 'Open In File Explorer', iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !album.allowed_actions?.['library.files.open_location'], attributes: { 'data-open-problematic-album-folder': '1' } })}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Edit Tags', title: 'Edit Tags', icon: 'edit', disabled: !album.allowed_actions?.['library.files.edit_tags'], attributes: { 'data-open-tag-editor': '1' } })}
           ${hasCoverProblemReason ? ButtonComponent.renderActionButton({ ariaLabel: 'Fetch cover', title: 'Fetch cover', icon: 'cover', disabled: !album.allowed_actions?.['library.covers.fetch'], attributes: { 'data-fetch-problematic-cover': '1' } }) : ''}
           ${ButtonComponent.renderActionButton({ ariaLabel: 'Find on Discogs', title: 'Find on Discogs', icon: 'search', attributes: { 'data-find-on-discogs': '1' } })}
         </div>
-      </div>
     </div>
     ${moveActionsHtml ? buildUtilityCollapsibleSection('moves', 'Move Album', moveActionsHtml) : ''}
     ${buildDetectedProblemsHtml(album)}
-    ${buildUtilityCollapsibleSection('details', 'Album Details', `
-      <div class="utility-detail-grid">
-        <div><span class="utility-detail-label">Album</span>${escapeHtml(displayName)}</div>
-        <div><span class="utility-detail-label">Artist</span>${escapeHtml(displayArtist)}</div>
-        <div><span class="utility-detail-label">Year</span>${escapeHtml(album.year ?? 'Unknown')}</div>
-        <div><span class="utility-detail-label">Edition</span>${escapeHtml(album.edition || 'N/A')}</div>
-        <div><span class="utility-detail-label">File types</span>${escapeHtml(fileTypeText)}</div>
-      </div>
-    `)}
   `;
 }
 
@@ -905,6 +719,14 @@ const tagEditViewMutationResourceClaims = new Map();
 const settledTagEditViewMutations = new Set();
 
 function claimTagEditViewMutation(album, editedTrackPaths = [], updates = {}) {
+  if (Object.values(updates || {}).some((edits) => (
+    edits && typeof edits === 'object' && Object.keys(edits).length > 0
+  ))) {
+    state.ui = state.ui || {};
+    state.ui.tagEditOptimisticMutationRevision = Number(
+      state.ui.tagEditOptimisticMutationRevision || 0,
+    ) + 1;
+  }
   tagEditViewMutationGeneration += 1;
   const generation = tagEditViewMutationGeneration;
   const resourceKeys = new Set();
@@ -1865,38 +1687,7 @@ function applyUpdatedAlbumsToCurrentView(updatedAlbums, options = {}) {
 
 async function prependUtilityLogHistoryEntry(entry) {
   if (!entry || typeof entry !== 'object') return;
-  let persistedResult = null;
-  try {
-    persistedResult = await persistBrowserLogHistoryEntries([entry]);
-  } catch (error) {
-    console.warn('[AlbumHaven][History] Could not persist an immediate history entry.', error);
-  }
-  const existing = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-  const persistedItems = Array.isArray(persistedResult?.items) ? persistedResult.items : [];
-  const fallbackEntry = persistedItems.length
-    ? null
-    : (typeof normalizeBrowserLogHistoryEntry === 'function'
-      ? normalizeBrowserLogHistoryEntry(entry)
-      : entry);
-  state.utility.logHistory = persistedItems.length
-    ? persistedItems
-    : [
-      fallbackEntry,
-      ...existing.filter((item) => String(item?.id || '') !== String(fallbackEntry.id || '')),
-    ].slice(0, 250);
-  if (persistedResult?.status) {
-    state.utility.logHistoryStorageStatus = persistedResult.status;
-  }
-  state.utility.logHistoryLoaded = true;
-  if (!state.utility.selectedLogHistoryId) {
-    const persistedEntry = persistedItems.find(
-      (item) => String(item?.id || '') === String(entry.id || ''),
-    ) || persistedItems[0];
-    state.utility.selectedLogHistoryId = String(persistedEntry?.id || fallbackEntry?.id || '');
-  }
-  if (state.utility.activeTab === 'log-history') {
-    renderUtilityModalContent();
-  }
+  state.utility.logHistoryController?.markStale(String(entry.revision || 'new-activity'));
 }
 
 function applyExplicitFinalizedAlbumArtistEdits(finalizedAlbums, tagEdits) {
@@ -2763,7 +2554,8 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Filters${countSuffix}`;
+    els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
+    els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));
     els.problemFilterButton.setAttribute('aria-expanded', state.utility.problemDropdownOpen ? 'true' : 'false');
     els.problemFilterButton.hidden = false;
@@ -3075,19 +2867,6 @@ function getSelectedSeparateReleaseKeys() {
   return Object.entries(state.utility.separateReleaseSelections || {})
     .filter(([, selected]) => Boolean(selected))
     .map(([key]) => key);
-}
-
-function buildLibraryWatchHealthProblemRow(problem = {}) {
-  const canRefresh = problem?.allowed_actions?.['library.refresh'] === true;
-  return `
-    <div class="utility-list-item utility-operational-problem" role="status">
-      <div class="utility-operational-problem-copy">
-        <strong>Library watcher needs attention</strong>
-        <span>${escapeHtml('Some library changes may have been missed.')}</span>
-      </div>
-      ${canRefresh ? '<button type="button" class="button utility-operational-problem-action" data-status-action="full-rescan">Full Rescan</button>' : ''}
-    </div>
-  `;
 }
 
 function openRuleRevertConfirm(rule) {

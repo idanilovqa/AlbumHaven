@@ -179,25 +179,24 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
       expect(presentation.whiteSpace).toBe('nowrap');
     });
 
-    await stepLogger.step('Open the exact Log History entry and retain the complete failure diagnostic', async () => {
-      await tagEditorActions.openLogHistoryFromFailure();
-      await utilityLogHistoryActions.waitForReady();
-      const entryId = await utilityLogHistoryActions.readSelectedEntryId();
-      expect(entryId).not.toBe('');
-      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.payload.error);
-      const stored = await utilityLogHistoryActions.readBrowserStoredEntry(entryId);
-      expect(stored.entry).toMatchObject({
-        id: entryId,
-        action: 'Tag edit failed',
-        error: failure.payload.error,
-        file_count: 1,
-        source: 'this_browser',
-        source_label: 'This browser',
-      });
-      expect(stored.entry.files).toEqual(expect.arrayContaining([
-        expect.stringContaining(RARITY_TRACK_FILENAME),
-      ]));
+  await stepLogger.step('Open the exact durable Log History entry and retain its sanitized failure diagnostic', async () => {
+    await tagEditorActions.openLogHistoryFromFailure();
+    await utilityLogHistoryActions.waitForReady();
+    const entryId = await utilityLogHistoryActions.readSelectedEntryId();
+    expect(entryId).not.toBe('');
+    const stored = await utilityLogHistoryActions.readPersistedEntry(entryId);
+    expect(stored.entry).toMatchObject({
+      id: entryId,
+      action: 'Tag edit failed',
+      file_count: 1,
     });
+    expect(stored.entry.error).toBeTruthy();
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(stored.entry.error);
+    expect(stored.entry.error).not.toMatch(/[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|\/Users\/|\/home\//u);
+    expect(stored.entry).not.toHaveProperty('files');
+    expect(stored.entry).not.toHaveProperty('path');
+    expect(stored.snapshot).toBeTruthy();
+  });
   } finally {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();

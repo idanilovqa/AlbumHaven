@@ -1,3 +1,6 @@
+import assert from 'node:assert/strict';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
+
 export class UtilityProblematicFilesActions {
   constructor(utilityProblematicFilesTab) {
     this.utilityProblematicFilesTab = utilityProblematicFilesTab;
@@ -34,8 +37,7 @@ export class UtilityProblematicFilesActions {
   }
 
   async expectCoreLayoutVisible(options = {}) {
-    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.sidebar.label);
-    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.sidebar.count);
+    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.sidebar.search);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.searchSection.searchInput);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.searchSection.problemFilterButton);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.sidebar.list);
@@ -249,9 +251,7 @@ export class UtilityProblematicFilesActions {
     for (let index = 0; index < await rows.count(); index += 1) {
       const row = rows.nth(index);
       result.push({
-        filename: String(
-          await this.utilityProblematicFilesTab.filenameForTrackRow(row).textContent() || '',
-        ).trim(),
+        filename: String(await row.getAttribute('data-problematic-track-path') || '').split(/[\\/]/).pop(),
         path: String(await row.getAttribute('data-problematic-track-path') || ''),
         reasons: (await this.utilityProblematicFilesTab.reasonsForTrackRow(row).allTextContents())
           .map((reason) => String(reason || '').trim())
@@ -405,12 +405,11 @@ export class UtilityProblematicFilesActions {
       const text = (node) => String(node?.textContent || '').trim();
       const table = element.querySelector(selectors.table);
       const reasonHeader = Array.from(table?.querySelectorAll(selectors.headers) || [])
-        .find((header) => text(header) === 'Reason');
+        .find((header) => text(header) === 'Problems');
       const reasonCells = Array.from(table?.querySelectorAll(selectors.reasonCells) || []);
       return {
-        albumHeadingIndex: text(element).indexOf('ALBUM-LEVEL PROBLEMS'),
-        trackHeadingIndex: text(element).indexOf('TRACK-LEVEL PROBLEMS'),
-        trackRowCount: Number(element.querySelector(selectors.trackRowCount)?.textContent || NaN),
+        albumLabelsBeforeTable: Boolean(element.querySelector(selectors.albumSection)?.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING),
+        detectedHeadingCount: Array.from(element.querySelectorAll(selectors.sectionHeadings)).filter(heading => text(heading) === 'Detected problems').length,
         albumReasons: Array.from(element.querySelectorAll(selectors.albumProblems), text),
         headers: Array.from(table?.querySelectorAll(selectors.headers) || [], text),
         rows: Array.from(table?.querySelectorAll(selectors.rows) || []).map((row) => ({
@@ -429,8 +428,9 @@ export class UtilityProblematicFilesActions {
       table: this.utilityProblematicFilesTab.trackProblemTableSelector,
       headers: this.utilityProblematicFilesTab.columnHeaderSelector,
       reasonCells: this.utilityProblematicFilesTab.reasonCellSelector,
-      trackRowCount: this.utilityProblematicFilesTab.problemReasonCountSelector,
       albumProblems: this.utilityProblematicFilesTab.albumProblemPillSelector,
+      albumSection: this.utilityProblematicFilesTab.albumProblemSectionSelector,
+      sectionHeadings: this.utilityProblematicFilesTab.sectionHeadingSelector,
       rows: this.utilityProblematicFilesTab.keyedTableRowSelector,
       directCells: this.utilityProblematicFilesTab.directTableCellSelector,
       forbidden: this.utilityProblematicFilesTab.forbiddenDetectedProblemSelector,
@@ -507,10 +507,6 @@ export class UtilityProblematicFilesActions {
     });
   }
 
-  async readVisibleProblemReasonCount() {
-    return Number(await this.utilityProblematicFilesTab.problemReasonCount.textContent() || NaN);
-  }
-
   async chooseFirstSuggestedEditWithoutApplying() {
     const choice = this.utilityProblematicFilesTab.suggestedEditChoices.first();
     await choice.waitFor({ state: 'visible', timeout: 60000 });
@@ -525,34 +521,12 @@ export class UtilityProblematicFilesActions {
   }
 
   async readSuggestedEditRows() {
-    const rows = this.utilityProblematicFilesTab.suggestedEditRows;
-    const result = [];
-    for (let index = 0; index < await rows.count(); index += 1) {
-      const row = rows.nth(index);
-      const rowKey = String(
-        await this.utilityProblematicFilesTab.suggestedEditRowKey(row)
-          .getAttribute('data-repair-row-key') || '',
-      );
-      const separator = rowKey.lastIndexOf('::');
-      const path = separator >= 0 ? rowKey.slice(0, separator) : rowKey;
-      result.push({
-        rowKey,
-        path,
-        filename: path.split(/[\\/]/).pop() || '',
-        field: separator >= 0 ? rowKey.slice(separator + 2) : '',
-        original: String(
-          await this.utilityProblematicFilesTab.suggestedEditOriginal(row).textContent() || '',
-        ).trim(),
-        repaired: String(
-          await this.utilityProblematicFilesTab.suggestedEditRepaired(row).textContent() || '',
-        ).trim(),
-        activeChoice: String(
-          await this.utilityProblematicFilesTab.activeSuggestedEditChoice(row)
-            .getAttribute('data-repair-choice') || '',
-        ),
-      });
-    }
-    return result;
+    const fields = { Album: 'album', 'Album artist': 'album_artist', Artist: 'artist', Title: 'title', Year: 'year', Track: 'track_number', Disc: 'disc_number', 'Album / disc': 'album_disc_marker' };
+    return (await this.utilityProblematicFilesTab.readRenderedSuggestions()).map(row => {
+      const parts = /^(.*?): (.*?) → (.*)$/u.exec(row.label);
+      if (!row.rowKey || !row.path || !parts || !fields[parts[1]]) throw new Error('Expected an identified proposal with its real track path and visible before/after label.');
+      return { ...row, filename: row.path.split(/[\\/]/).pop(), field: fields[parts[1]], original: parts[2], repaired: parts[3] };
+    });
   }
 
   async applySuggestedEditSubset(selectedRowKey) {
@@ -560,17 +534,24 @@ export class UtilityProblematicFilesActions {
     if (rows.length < 2 || !rows.some((row) => row.rowKey === selectedRowKey)) {
       throw new Error('A strict Suggested Edits subset requires one selected row among at least two suggestions.');
     }
-    for (const row of rows.filter((item) => item.rowKey !== selectedRowKey)) {
+    for (const row of rows.filter(item => item.selected !== (item.rowKey === selectedRowKey))) {
       const rowLocator = this.utilityProblematicFilesTab.suggestedEditRowByKey(row.rowKey);
-      await this.utilityProblematicFilesTab.suggestedEditChoice(rowLocator, 'ignore').click();
+      await rowLocator.click();
     }
     const selected = await this.readSuggestedEditRows();
-    if (selected.filter((row) => row.activeChoice === 'repair').map((row) => row.rowKey).join() !== selectedRowKey) {
+    if (selected.filter(row => row.selected).map(row => row.rowKey).join() !== selectedRowKey) {
       throw new Error('Suggested Edits did not retain the requested strict repair subset.');
     }
     await this.utilityProblematicFilesTab.suggestedEditsApplyButton.click();
     await this.utilityProblematicFilesTab.repairConfirmDialog.waitFor({ state: 'visible', timeout: 60000 });
+    const acknowledgement = this.utilityProblematicFilesTab.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/utilities/edit-tags');
     await this.utilityProblematicFilesTab.repairConfirmAcceptButton.click();
+    const response = await acknowledgement;
+    assert.deepEqual(response.request().postDataJSON().proposal_ids, [selectedRowKey]);
+    assert.equal(response.ok(), true);
+    const outcome = await response.json();
+    assert.equal(outcome.ok, true);
+    assert.deepEqual(outcome.proposal_outcomes.map(item => ({ id: item.id, status: item.status })), [{ id: selectedRowKey, status: 'committed' }]);
     await this.utilityProblematicFilesTab.exclusionConfirmDialog.waitFor({ state: 'hidden', timeout: 60000 });
     await this.utilityProblematicFilesTab.waitForPageCondition((selectors) => (
       !document.querySelector(selectors.overlay)
@@ -624,15 +605,50 @@ export class UtilityProblematicFilesActions {
     // parity-check: allow-read-only-measurement-evaluate -- capture selected problem identities atomically
     return this.utilityProblematicFilesTab.selectedProblemPills.evaluateAll((elements) => elements.map((element) => ({
       scope: element.getAttribute('data-problem-exclusion-scope'),
-      key: element.getAttribute('data-problem-exclusion-row-key'),
+      ...(element.hasAttribute('data-album-problem-type')
+        ? { scope: 'album', problemType: element.getAttribute('data-album-problem-type') }
+        : { key: element.getAttribute('data-problem-exclusion-row-key') }),
       reason: String(element.textContent || '').trim(),
+      canonicalReason: element.getAttribute('data-problem-exclusion-reason'),
     })));
   }
 
   async openExclusionConfirmation() {
+    const selected = await this.readSelectedProblemInstances();
+    assert.ok(selected.length > 0, 'Exclusion confirmation requires selected real problem labels.');
+    const albumKey = await this.utilityProblematicFilesTab.activeListItem.getAttribute('data-problematic-album-key');
+    const response = await authenticatedPageGet(this.utilityProblematicFilesTab.page, `/utilities/problematic-files/detail?album_key=${encodeURIComponent(albumKey)}`);
+    assert.equal(response.ok(), true);
+    const album = await response.json();
+    assert.equal(album.key, albumKey);
+    const chosenKeys = new Set(selected.filter(item => item.scope === 'file').map(item => item.key));
+    const albumReasons = new Set(selected.filter(item => item.scope === 'album').map(item => item.canonicalReason));
+    const albumRows = (album.album_problem_rows || []).filter(item => chosenKeys.has(item.row_key) || albumReasons.has(item.reason));
+    const fileRows = (album.track_problem_rows || []).flatMap(row => (row.ignorable_reasons || [])
+      .filter(item => chosenKeys.has(item.row_key) || albumReasons.has(item.reason))
+      .map(item => ({ ...item, path: row.path, filename: row.filename })));
+    this.expectedExclusionItems = [...albumRows.map(item => ({ row_key: item.row_key, scope: 'album', album_key: item.album_key || albumKey })),
+      ...fileRows.map(item => ({ row_key: item.row_key, scope: 'file', path: item.path }))];
+    assert.ok(this.expectedExclusionItems.length > 0);
+    const targets = [...albumRows.map(item => `${album.name || 'Album'} — ${item.display_reason || item.reason}`),
+      ...fileRows.map(item => `${item.filename || item.path.split(/[\\/]/).pop()} — ${item.reason}`)];
     await this.utilityProblematicFilesTab.excludeProblemButton.click();
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.exclusionConfirmDialog);
-    return String(await this.utilityProblematicFilesTab.exclusionConfirmText.textContent() || '').trim();
+    const text = String(await this.utilityProblematicFilesTab.exclusionConfirmText.textContent() || '').trim();
+    assert.equal(text, `Create an exclusion rule for ${targets.join('; ')}? These problems will be hidden. You can revert this rule in Rules.`);
+    return text;
+  }
+
+  async clearSelectedProblems() {
+    const labels = this.utilityProblematicFilesTab.selectedProblemPills;
+    const initialCount = await labels.count();
+    for (let index = 0; index < initialCount && await labels.count(); index += 1) await labels.first().click();
+    assert.equal(await labels.count(), 0);
+  }
+
+  verifyExclusionRequest(request) {
+    const sort = items => [...items].sort((a, b) => a.row_key.localeCompare(b.row_key));
+    assert.deepEqual(sort(request.postDataJSON().items), sort(this.expectedExclusionItems));
   }
 
   async cancelExclusion() {
@@ -659,6 +675,7 @@ export class UtilityProblematicFilesActions {
       empty: this.utilityProblematicFilesTab.listEmptyStateSelector,
     });
     const response = await acknowledgement;
+    this.verifyExclusionRequest(response.request());
     if (!response.ok()) {
       throw new Error(`Problem Exclusion creation returned HTTP ${response.status()}.`);
     }
@@ -680,7 +697,7 @@ export class UtilityProblematicFilesActions {
     );
     await this.utilityProblematicFilesTab.exclusionAcceptButton.click();
     await this.utilityProblematicFilesTab.exclusionConfirmDialog.waitFor({ state: 'hidden', timeout: 60000 });
-    await requestStarted;
+    this.verifyExclusionRequest(await requestStarted);
     return {
       isAcknowledgementSettled: () => acknowledgementSettled,
       waitForAcknowledgement: async () => {

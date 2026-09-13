@@ -1,6 +1,12 @@
 import { AccountPage, InvitationPage, MembersPage } from '../poms/authPages.js';
 import { SettingsModalAppBar } from '../../poms/settingsModalAppBar.js';
 import { SettingsModalAppBarActions } from '../../actions/settingsModalAppBarActions.js';
+import { UtilityAppearanceTab } from '../../poms/utilityAppearanceTab.js';
+import { UtilityAppearanceActions } from '../../actions/utilityAppearanceActions.js';
+import { UtilityTabBar } from '../../poms/utilityTabBar.js';
+import { UtilityTabBarActions } from '../../actions/utilityTabBarActions.js';
+import { GlobalPlayer } from '../../poms/globalPlayer.js';
+import { authenticatedPageGet } from '../../helpers/authenticatedPageRequest.js';
 import { invitationPathFrom, OWNER, signIn } from '../actions/authActions.js';
 import {
   databaseAction,
@@ -134,7 +140,10 @@ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared 
   await expect(menu.settingsMenuItem).toBeFocused();
   await menu.adminPanelMenuItem.hover();
   await expect(menu.adminPanelMenuItem).toHaveCSS('border-radius', '9px');
-  await expect(menu.adminPanelMenuItem).toHaveCSS('background-color', 'rgb(23, 45, 67)');
+  await expect.poll(async () => {
+    const { actual, expected } = await menu.readAdminHoverTheme();
+    return actual.every((channel, index) => Math.abs(channel - expected[index]) <= 1);
+  }).toBe(true);
   await menu.settingsMenuItem.press('Escape');
   await expect(menu.accountMenu).toBeHidden();
   await expect(menu.settingsButton).toBeFocused();
@@ -184,6 +193,26 @@ test('FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out throu
   await expect(menu.settingsMenuItem).toBeVisible();
   await expect(menu.adminPanelMenuItem).toHaveCount(0);
   await expect(menu.signOutMenuItem).toBeVisible();
+  const statusResponse = await authenticatedPageGet(recipient.page, '/status');
+  expect(statusResponse.ok()).toBe(true);
+  expect((await statusResponse.json()).allowed_actions).not.toHaveProperty('library.loops.create');
+  await menu.settingsMenuItem.click();
+  const appearance = new UtilityAppearanceTab(recipient.page);
+  const appearanceActions = new UtilityAppearanceActions(appearance);
+  await new UtilityTabBarActions(new UtilityTabBar(recipient.page)).openTab('appearance');
+  await appearanceActions.waitForReady();
+  await appearanceActions.openSection('seekbar');
+  await expect(appearance.loopStyleButton('capsule')).toHaveCount(0);
+  await expect(appearance.loopStyleButton('companion')).toHaveCount(0);
+  await expect(new GlobalPlayer(recipient.page).loopScissorsButton).toBeHidden();
+  await appearanceActions.openSection('backgrounds');
+  await appearanceActions.choosePalette('harbor-mint');
+  await appearanceActions.save();
+  const preferences = await authenticatedPageGet(recipient.page, '/account/appearance');
+  expect(preferences.ok()).toBe(true);
+  expect((await preferences.json()).palette_id).toBe('harbor-mint');
+  await menu.closeButton.click();
+  await menu.settingsButton.click();
   await menu.signOutMenuItem.click();
   await expect(recipient.page).toHaveURL(/\/login$/);
   const protectedAccount = await recipient.page.goto('/account');

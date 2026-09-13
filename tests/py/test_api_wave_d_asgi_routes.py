@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.log_history import HistoryScope
+
 import asyncio
 import base64
 from copy import deepcopy
@@ -123,6 +125,8 @@ def _make_wave_d_app(flask_app):
     from music_app.routes.api_wave_d_asgi_routes import router
 
     asgi_app = FastAPI()
+    from tests.py.asgi_testing import configure_test_bootstrap_actor
+    configure_test_bootstrap_actor(asgi_app)
     asgi_app.state.flask_app = flask_app
     asgi_app.state.config = flask_app.config
     asgi_app.state.library_state = flask_app.library_state
@@ -1077,6 +1081,7 @@ def test_asgi_local_cover_selection_persists_before_success_and_logs_safe_comple
         "config": app.config,
         "logger": asgi_app.state.logger,
         "message": "Local cover selection persisted",
+        "history_scope": HistoryScope(account_id=1, library_id=1, origin_kind="request"),
         "level": "info",
         "history": True,
         "artist": "Test Artist",
@@ -1570,6 +1575,7 @@ def test_asgi_local_cover_selection_persistence_failure_is_safe_and_never_report
         "config": app.config,
         "logger": asgi_app.state.logger,
         "message": "Local cover selection persistence failed",
+        "history_scope": HistoryScope(account_id=1, library_id=1, origin_kind="request"),
         "level": "error",
         "history": True,
         "artist": "Test Artist",
@@ -2907,6 +2913,7 @@ def test_asgi_cover_refresh_manual_single_returns_500_on_refresh_failure(app, mo
             "config": app.config,
             "logger": asgi_app.state.logger,
             "message": "Cover art update failed",
+            "history_scope": HistoryScope(account_id=1, library_id=1, origin_kind="request"),
             "level": "error",
             "history": True,
             "artist": "Test Artist",

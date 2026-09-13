@@ -80,6 +80,8 @@ const expectedRuntimeOrder = [
   'gallery-refresh-and-status.js',
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
+  'utility-log-history-query.js',
+  'utility-log-history-ui.js',
   'compact-data-table.js',
   'album-track-table.js',
   'utility-list-builders.js',

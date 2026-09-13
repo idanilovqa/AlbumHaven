@@ -1,5 +1,9 @@
 # Settings and Player Refinement Implementation Plan
 
+## Owner validation update — September 12, 2026
+
+The owner asked to stop agent-led broad browser validation, finish the mockup implementation first, and hand the complete Settings version back for their own visual validation. This supersedes the delegated manual-validation requirement below for remaining checks. Finish witnessed defects already under repair and their focused checks; do not start additional manual or comprehensive browser waves before this handoff. Preserve the recorded failures and distinguish implemented behavior from final acceptance. Full regression and publication gates remain unfulfilled, not waived or reported as passing. No merge, push or publication; preserve Gallery and all original uncommitted work.
+
 ## Owner workflow override — September 9, 2026
 
 The owner subsequently instructed the orchestrator to perform the manual validation, continue through all remaining Tasks 3-9, and present the completed work for one final owner review. This explicit instruction supersedes intermediate owner manual-acceptance stops throughout this plan and its linked checkpoint/report, including older per-slice wording retained as history. The orchestrator must still execute and record each slice's exact real-app manual checks before dependent progression. Approved test-first work, focused checks, builds, independent reviews and required regression/E2E checkpoints remain in force. No merge, push or publication is authorized. Preserve the original uncommitted work. Do not request the same per-slice approval again.
@@ -33,6 +37,25 @@ Technical approval: on September 9, 2026 the owner replied `approve` to the expl
 - Durable settings, rules, loop order, roots, history and statistics are Postgres-backed. No JSON/file fallback, process-global durable state, mock query-string capability flag or client-only authorization.
 - Preserve existing streaming audio architecture, waveform rendering/style, seek, pitch, speed, repeat, loop expiry and save flow. The player redesign changes presentation and reveal timing, not the audio engine.
 - Existing Appearance flow and subelement locations remain intact. LAN serving was a review convenience, not a product feature; VPN/firewall changes and Sites deployment are outside implementation scope.
+
+### Local delivery boundaries and safe split — September 12
+
+The owner's no-merge/no-publication instruction remains authoritative. Gallery development has its own worktree; continue only in the existing Settings worktree. Preserve its separate owner edit to `gallery-main.css`. Do not switch, reset, clean, stash, commit or amend the Gallery worktree.
+
+The accumulated Settings branch is not one proposed release. Preserve its existing Task 2–4 commits and separate the remaining outcomes in dependency order:
+
+| Unit | Outcome and included checks | Prerequisites and acceptance | Compatibility and rollback | Merge/publish checkpoint |
+| --- | --- | --- | --- | --- |
+| Saved-loop order | Task 5/L05, source artwork/year and surviving player/tree identity | Committed player slice; scoped order/concurrency tests; native L02, reload and playback continuity | Additive scoped order storage; existing default order retained; revert only the unit's reviewed changes, never drop saved media | Local verified checkpoint only; publication not authorized |
+| Captured log history | Task 6/H01–H03, scoped periods, console and matching export | Shared shell; authorized snapshot/query tests; actual H03 download | Additive version storage; preserve log rows and permission checks on rollback | Local verified checkpoint only; publication not authorized |
+| Integration settings | Task 7/I01–I08, host roots, measured statistics, honest import/help states | Approved host/capability model; root and listening service tests; actual I01/I02 and measured-play manual evidence | Preserve root configuration and files, measured ledger and credentials; revert UI/service changes without deleting persisted data | Local verified checkpoint only; publication not authorized |
+| Account Appearance | Task 8/A01–A03/B08, Harbor Mint and gated persisted player style | Committed shared player; account revision/grant tests; touch A01, limited member and cross-surface validation | Default capsule and existing palettes remain supported; retain additive stored preference data | Local verified checkpoint only; publication not authorized |
+
+Task 9 regression tests, ownership mappings and documentation belong with the behavior they verify. Shared regression infrastructure or pre-existing compatibility repairs require a separate tested foundation checkpoint when they cannot be assigned to one outcome. All units retain the required final comprehensive regression and delegated manual acceptance.
+
+Safe extraction procedure: freeze and fingerprint the accumulated Settings files; map overlapping runtime, bundle and test hunks to the units above; construct dependency-ordered local candidate commits with each unit's implementation, tests and documentation together; regenerate the bundle and verify each candidate before accepting its boundary. Do not divide by file count or silently include another outcome's hunks. Preserve the original accumulated files until content equivalence is checked. Any preservation checkpoint is not a release claim. Do not rewrite existing history, auto-publish, or manipulate Gallery changes to achieve the split.
+
+Read-only extraction review confirmed the 37-file Task5 snapshot matches its recorded hashes; 21 files contain later changes and must not be reverted to that snapshot. CSS and API import hunks mix multiple outcomes, so ordinary whole-hunk staging is insufficient. Prefer candidate order shared compatibility foundation, saved-loop order (0063), captured logs (0064), Appearance (0065/0066), then Integrations (0067), preserving migration order without renumbering or changing applied bytes. Final ownership/test manifests must be refreshed after active authors finish.
 
 ## 3. Final requirements and use cases
 
@@ -180,10 +203,10 @@ Files: this plan; private `docs/permissions-and-capabilities.md`, `docs/ui-compo
 
 - [x] Confirm real boot/load paths and source/generated ownership, effective capability IDs, client/deployment matrix and section 4 contracts.
 - [x] Reconcile prior saved-loop visual constraints with the newer approval while retaining audio contracts.
-- [ ] Verify approved hashes; map every visible extension to its existing component and record functional-case IDs.
+- [x] Verify approved hashes; map every visible extension to its existing component and record functional-case IDs.
 - [x] Obtain technical approval for unresolved data/capability/client choices. Record a current focused-test baseline and genuine pre-existing failures.
 
-Progress: 32/32 approved hashes matched during intake. Approval is recorded in the checkpoint and private permissions registry; S01-S05 has a reusable component extension in the private UI registry. The all-visible-extensions/case checkbox remains open until later-slice catalog records and functional-case mappings are complete. Baseline: 265/271 JS and 190/195 Python passed; all failures are retained in the checkpoint, without claiming they are unrelated. No numeric progress counter exists to reconcile.
+Progress: 32/32 approved hashes matched during intake and again on September10. Approval is recorded in the checkpoint and private permissions registry. The private UI registry now maps all S/P/R/L/B/H/I/A extensions to existing component families; the shell, Problems/Rules, player/loops, history, and integration/Appearance functional documents record their owning case IDs. This mapping does not claim complete automated coverage or final acceptance. Baseline: 265/271 JS and 190/195 Python passed; all failures are retained in the checkpoint, without claiming they are unrelated. No numeric progress counter exists to reconcile.
 
 ### Task 2 — Shell, navigation and artwork (S01–S05)
 
@@ -251,10 +274,10 @@ Task 4 completed focused verification and orchestrator manual acceptance. The fi
 Modify: `music_app/static/js/utilities/loops-tab.js`, `music_app/services/loops.py`, `music_app/routes/api_loop_helpers.py` and the existing loop repository reached from that service.
 Create: `tests/js/runtime/utility-loop-reorder.test.js`, `tests/py/test_loop_reorder.py`; extend `tests/py/test_api_loop_helpers.py`.
 
-- [ ] Settle order ownership/revision against current schema; add a migration only if existing storage cannot represent it.
-- [ ] Write failing tests for successful order persistence, duplicate/foreign/missing IDs, stale revision, cancelled/outside/same-position drag, rollback and currently playing loop identity.
-- [ ] Implement the insertion cue, animated placement, stable-ID tree synchronization and atomic persistence; accessible reorder uses the same mutation.
-- [ ] Verify real browser dragging actually changes order, then reload and switch tabs/songs. The earlier mock automation did not demonstrate a changed order; do not treat it as production evidence.
+- [x] Settle order ownership/revision against current schema; add a migration only if existing storage cannot represent it.
+- [x] Write failing tests for successful order persistence, duplicate/foreign/missing IDs, stale revision, cancelled/outside/same-position drag, rollback and currently playing loop identity.
+- [x] Implement the insertion cue, animated placement, stable-ID tree synchronization and atomic persistence; accessible reorder uses the same mutation.
+- [x] Verify real browser dragging actually changes order, then reload and switch tabs/songs. FTC-SETTINGS-L02 passed on pinned Chrome151: native drag changed panel and tree order, retained the playing media node and pending range, and survived reload. Earlier manual navigation and accessible-reorder evidence remains in Task5 validation; the first Task9 drag diagnostic correctly rejected an accidental no-op.
 - [ ] Run focused JS then Python checks, build, manual acceptance, commit.
 
 ### Task 6 — Log periods and exports (H01–H03)
@@ -262,9 +285,9 @@ Create: `tests/js/runtime/utility-loop-reorder.test.js`, `tests/py/test_loop_reo
 Modify: `music_app/services/log_history.py`, `music_app/static/js/runtime/browser-log-history-store.js`, `music_app/static/js/runtime/utility-loaders-and-cover-lookup.js`, `music_app/static/js/runtime/utility-list-builders.js` and the existing log route identified through callers.
 Create: `tests/py/test_log_history_period.py`; extend `tests/js/runtime/browser-log-history-store.test.js`.
 
-- [ ] Write failures for interval boundaries/timezone conversion, equal timestamps, empty results, reversed dates, unauthorized rows, clear behavior, large histories and console/export parity.
-- [ ] Implement one normalized authorized query shared by the temporary tree entry, console and export.
-- [ ] Reuse ConsoleLog, scroll and modal components, preserving colored lines and copy behavior.
+- [x] Write failures for interval boundaries/timezone conversion, equal timestamps, empty results, reversed dates, unauthorized rows, clear behavior, large histories and console/export parity.
+- [x] Implement one normalized authorized query shared by the temporary tree entry, console and export.
+- [x] Reuse ConsoleLog, scroll and modal components, preserving colored lines and copy behavior.
 - [ ] Run focused JS then Python checks, build, manually compare individual/period/export results, commit.
 
 ### Task 7 — Integration sections (I01–I08)
@@ -273,10 +296,10 @@ Modify: `music_app/static/js/runtime/library-settings.js`, `music_app/static/js/
 Tests: `tests/js/runtime/library-settings.test.js`, `utility-list-builders-foobar.test.js`, `utility-loaders-local-playlist-import.test.js`; Create `tests/py/test_playback_statistics.py`.
 References: `docs/future-feature-plans/foobar-reference-assets/how-to-modal-copy.md`, `text-tools-standard-preset.txt`, `text-tools-enhanced-preset.txt`, `README.md`.
 
-- [ ] Approve path authority/overlap policy, statistics definitions and actual import formats before dependent behavior changes.
-- [ ] Add failing multi-root save/remove/cancel/invalid/NAS/duplicate/permission cases, statistics deduplication/duration cases and disabled playlist activation checks.
-- [ ] Implement real root picker/settings, simple Scrobbling status and statistics, shared Foobar dropdown/import and one-scroll wide guide. No sample values or fake paths.
-- [ ] Keep playlist Import disabled. Confirm removal of roots never deletes music and watcher/index behavior only follows successful save.
+- [x] Approve path authority/overlap policy, statistics definitions and actual import formats before dependent behavior changes.
+- [x] Add failing multi-root save/remove/cancel/invalid/NAS/duplicate/permission cases, statistics deduplication/duration cases and disabled playlist activation checks.
+- [x] Implement real root picker/settings, simple Scrobbling status and statistics, shared Foobar dropdown/import and one-scroll wide guide. No sample values or fake paths.
+- [x] Keep playlist Import disabled. Confirm removal of roots never deletes music and watcher/index behavior only follows successful save.
 - [ ] Run focused tests sequentially, build and manually accept each complete integration sub-slice before committing it.
 
 ### Task 8 — Appearance palette and gated style (A01–A03, B08)
@@ -284,17 +307,17 @@ References: `docs/future-feature-plans/foobar-reference-assets/how-to-modal-copy
 Modify: `music_app/static/js/appearance-palettes.js`, `music_app/static/js/appearance-backgrounds.js`, `music_app/static/js/utilities/appearance-tab.js`, `music_app/services/appearance_preferences_postgres.py`, `music_app/routes/appearance_asgi.py`.
 Tests: `tests/js/runtime/appearance-backgrounds.test.js`, `tests/py/test_appearance_palettes.py`, `test_appearance_preferences_postgres.py`, `test_account_appearance_asgi.py` in the same Python directory.
 
-- [ ] Add failing preference round-trip, invalid enum, migration default, staged Save/Cancel/Reset and capability-absence cases without blocking unrelated Appearance edits.
-- [ ] Audit/reuse Harbor Mint work; persist style with existing Appearance preferences and expose only with loop-create capability.
+- [x] Add failing preference round-trip, invalid enum, migration default, staged Save/Cancel/Reset and capability-absence cases without blocking unrelated Appearance edits.
+- [x] Audit/reuse Harbor Mint work; persist style with existing Appearance preferences and expose only with loop-create capability.
 - [ ] Verify palette across Gallery/main/Admin/Utilities/player and both styles without moving existing editor subelements.
 - [ ] Focused JS then Python checks, build, live manual acceptance, commit.
 
 ### Task 9 — Acceptance and regression
 
-- [ ] Record the case IDs from section 3 in the owning private functional-case documents. Propose functional automation before implementation; add approved functional E2E after owner manual acceptance under the project workflow.
-- [ ] Extend real-app owners: `tests/e2e/specs/problematicFileNavigation.spec.js`, `loops.functional.spec.js`, `loop-edit-expiry.functional.spec.js`, `appearanceControls.spec.js`; add log/integration cases under the applicable configured area. Mock pages cannot substitute for real-app E2E.
-- [ ] Assess large tables/drag, log queries/exports, tab responsiveness, waveform/reorder and idle-timer cleanup for measurable performance risk. Preserve existing performance contracts; add performance E2E only where assessment requires it.
-- [ ] Run full required suites before release and inventory all genuine failures before fixes. JS and Python run sequentially; at most one pytest process. Verify owned test processes exit; no blanket cleanup.
+- [x] Record the case IDs from section 3 in the owning private functional-case documents. Approved automation followed delegated live slice acceptance. The five owning case documents now map exact test titles and distinguish browser coverage, manual/service evidence and remaining final acceptance; partial scenarios are not represented as fully automated.
+- [x] Extend real-app owners: `tests/e2e/specs/problematicFileNavigation.spec.js`, `loops.functional.spec.js`, `loop-edit-expiry.functional.spec.js`, `appearanceControls.spec.js`; add log/integration cases under the applicable configured area. All new functional cases use the real isolated application; final full reruns remain required below.
+- [x] Assess large tables/drag, log queries/exports, tab responsiveness, waveform/reorder and idle-timer cleanup for measurable performance risk. Existing gallery, utility, scan, playback and idle-memory performance contracts remain unchanged. Native L02 verifies media/DOM/range continuity under actual reorder; log paging/export and generation-race tests bound query work and reject stale results; controller tests retain exact reveal/fold/disposal boundaries. The assessment and full initial inventory are recorded in the owning case documents and Task9 validation; final complete performance reruns remain required.
+- [x] Run the complete initial required suite inventory before fixes. JavaScript, Python, functional, component, performance, authentication and administration results are retained in Task 9 validation artifacts. JS/Python and heavyweight browser waves ran sequentially, with scoped cleanup. Final clean-state reruns remain required below.
 - [ ] Complete review/full native CI and manual acceptance without weakening tests or thresholds. No publication merely because visuals were approved.
 
 ## 6. Verification commands
@@ -331,4 +354,4 @@ Complete means the section 3 cases have real authorized current-stack behavior, 
 
 Excluded: implementing the future playlist conversion workflow, rewriting waveform/audio architecture, framework migration, unsupported native client delivery, public Sites deployment, VPN/firewall product changes, fabricated statistics/metadata and uncertain corrections presented as actionable.
 
-Runtime implementation is authorized and the section 4 technical checkpoint is approved. Tasks 2, 3 and 4 have completed their focused verification and orchestrator manual checkpoints. Task 5 is next; remaining slices retain their stated implementation checks with intermediate manual validation delegated to the orchestrator under the owner's final-only review instruction. No merge or publication.
+Runtime implementation is authorized and the section 4 technical checkpoint is approved. Tasks 2, 3 and 4 have completed their focused verification and orchestrator manual checkpoints. Tasks 5–8 are implemented with focused and manual evidence in their validation reports; native drag, remaining regression findings, final validation and local commits remain open. Task 9 completed the initial regression inventory and is repairing witnessed failures before final clean-state reruns. Intermediate manual validation remains delegated to the orchestrator under the owner's final-only review instruction. No merge or publication.

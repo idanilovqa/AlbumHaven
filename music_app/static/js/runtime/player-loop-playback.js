@@ -73,6 +73,7 @@ function updatePlayerUi() {
   if (els.timeline) {
     els.timeline.max = String(Math.max(duration, 0.1));
     els.timeline.value = String(Math.min(current, duration || current));
+    els.timeline.style?.setProperty('--player-seek-progress', `${duration > 0 ? Math.max(0, Math.min(100, current / duration * 100)) : 0}%`);
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
@@ -412,6 +413,7 @@ async function handleStreamingPlaybackBoundary(event = {}) {
     }
   }
   setCurrentPlayerTrack(promotedTrack, { previousPlaybackSnapshot });
+  if (event.incomingListenSession) state.player.listenSession = event.incomingListenSession;
   if (typeof resumeListenSessionPlayback === 'function') {
     const incomingSessionStart = Promise.resolve(resumeListenSessionPlayback(promotedTrack, 0)).then((incomingSession) => (
       typeof maybeSendNowPlaying === 'function'
@@ -842,6 +844,7 @@ async function saveCurrentLoop() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || 'Failed to save loop');
     }
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : [data.loop, ...(state.utility.loops || [])].filter(Boolean);
     state.utility.loopsLoaded = true;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
@@ -1016,6 +1019,7 @@ function attachPlayerEvents() {
 
 function syncLoopCreateCapability() {
   const canCreate = state.loopCreateAllowed === true;
+  if (typeof window !== 'undefined') window.AlbumHavenAppearance?.instance?.setLoopCreateAllowed?.(canCreate);
   if (state.utility) {
     state.utility.allowedActions = { ...(state.utility.allowedActions || {}), 'library.loops.create': canCreate };
   }

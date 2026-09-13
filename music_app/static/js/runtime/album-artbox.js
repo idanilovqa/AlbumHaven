@@ -26,8 +26,8 @@ function buildAlbumArtboxHtml(config = {}) {
 }
 
 function buildUtilityAlbumArtbox(album, { label = 'Album artwork', interactive = false, source = '' } = {}) {
-  const preview = source || buildAlbumDisplayCoverUrl(album);
-  const fullSource = buildAlbumLightboxCoverUrl(album) || preview;
+  const preview = source || album?.cover_url || buildAlbumDisplayCoverUrl(album);
+  const fullSource = album?.cover_url || buildAlbumLightboxCoverUrl(album) || preview;
   const artbox = buildAlbumArtboxHtml({
     state: preview ? 'ready' : 'missing', label,
     coverHtml: preview ? `<img class="utility-detail-cover-image" src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',

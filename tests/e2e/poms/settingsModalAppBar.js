@@ -1,5 +1,19 @@
 import { BasePage } from './basePage.js';
 
+export function readThemeColorChannels(value) {
+  const color = String(value).trim();
+  if (/^#[\da-f]{6}$/iu.test(color)) return [1, 3, 5].map(offset => parseInt(color.slice(offset, offset + 2), 16));
+  if (/^#[\da-f]{3}$/iu.test(color)) return [...color.slice(1)].map(channel => parseInt(channel + channel, 16));
+  const functional = color.match(/^(rgb|rgba|color)\((?:srgb\s+)?([\d.\s,]+)(?:\s*\/\s*[\d.]+)?\)$/u);
+  if (functional) return functional[2].trim().split(/[\s,]+/u).slice(0, 3).map(channel => Number(channel) * (functional[1] === 'color' ? 255 : 1));
+  const mix = color.match(/^color-mix\(in srgb,\s*(.+)\s+(\d+(?:\.\d+)?)%,\s*(.+)\)$/u);
+  if (mix) {
+    const first = readThemeColorChannels(mix[1]), second = readThemeColorChannels(mix[3]), weight = Number(mix[2]) / 100;
+    return first.map((channel, index) => channel * weight + second[index] * (1 - weight));
+  }
+  throw new Error(`Unsupported theme color serialization: ${color}`);
+}
+
 export class SettingsModalAppBar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
@@ -18,6 +32,22 @@ export class SettingsModalAppBar extends BasePage {
 
   get modalSelector() {
     return '#utility-modal';
+  }
+
+  async readAdminHoverTheme() {
+    // Baseline appearance-backgrounds.css (d0a34749): shared menu hover mixes 5% text with panel.
+    // parity-check: allow-read-only-measurement-evaluate -- resolve inherited baseline tokens and observed color without changing page styles
+    const colors = await this.adminPanelMenuItem.evaluate(async element => {
+      await Promise.all(element.getAnimations()
+        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map(animation => animation.finished));
+      const style = getComputedStyle(element);
+      const text = style.getPropertyValue('--text').trim() || '#eee';
+      const panel = style.getPropertyValue('--panel').trim() || '#171717';
+      const expected = `color-mix(in srgb, ${text} 5%, ${panel})`;
+      return { expected, actual: style.backgroundColor };
+    });
+    return { expected: readThemeColorChannels(colors.expected), actual: readThemeColorChannels(colors.actual) };
   }
 
   get titleSelector() {

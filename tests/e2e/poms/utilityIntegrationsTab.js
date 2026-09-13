@@ -1,6 +1,7 @@
 import { BasePage } from './basePage.js';
 import { UtilityMainBody } from './utilityMainBody.js';
 import { UtilitySidebarSection } from './utilitySidebarSection.js';
+import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 
 export class UtilityIntegrationsTab extends BasePage {
   constructor(page, testInfo = null) {
@@ -8,7 +9,9 @@ export class UtilityIntegrationsTab extends BasePage {
     this.sidebar = new UtilitySidebarSection(page, testInfo);
     this.mainBody = new UtilityMainBody(page, testInfo);
     this.listItems = page.locator(this.listItemSelector);
-    this.activeListItem = page.locator('[data-utility-integration-key].is-active');
+    this.activeListItem = page.locator('[data-utility-integration-key][aria-current="true"]');
+    this.scrobbling = page.locator('[data-utility-integration-key="lastfm"]');
+    this.connectedStatus = page.locator('.settings-connected-status');
     this.lastfmForm = page.locator(this.lastfmFormSelector);
     this.lastfmUsername = page.locator(this.lastfmUsernameSelector);
     this.lastfmPassword = page.locator('[data-lastfm-field="password"]');
@@ -21,6 +24,13 @@ export class UtilityIntegrationsTab extends BasePage {
 
   get listItemSelector() {
     return '[data-utility-integration-key]';
+  }
+
+  async readPersistedLastfmTimeZone() {
+    const response = await authenticatedPageGet(this.page, '/utilities/integrations');
+    if (!response.ok()) throw new Error(`Integration read returned HTTP ${response.status()}.`);
+    const payload = await response.json();
+    return payload.integrations.find(item => item.key === 'lastfm')?.user_timezone || '';
   }
 
   get lastfmFormSelector() {

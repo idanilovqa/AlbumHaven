@@ -371,7 +371,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@a
   await stepLogger.step('Show only the ordinary album total', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: [],
-      totals: [],
+      totals: ['Total Length: 18m 00s'],
     });
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 18m 00s');

@@ -8,11 +8,54 @@ from types import SimpleNamespace
 
 import pytest
 
+
+def test_missing_statistics_migration_does_not_hide_integrations(monkeypatch):
+    from psycopg.errors import UndefinedColumn
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import listen_history
+
+    def unavailable(*args, **kwargs):
+        raise UndefinedColumn('measured_listened_seconds')
+
+    monkeypatch.setattr(listen_history, 'build_measured_playback_statistics', unavailable)
+    monkeypatch.setattr(routes, 'build_listen_history_status_counts', lambda *args, **kwargs: {
+        'listen_history_count': 7, 'pending_scrobble_count': 2,
+    })
+    result = routes._enrich_lastfm_status({}, {'key': 'lastfm', 'connected': True}, account_id='owner', library_id='library')
+    assert result['connected'] is True
+    assert result['listen_history_count'] == 7
+    assert result['playback_statistics'] is None
+
 from tests.py.asgi_testing import create_test_asgi_app
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
+
+
+@pytest.mark.parametrize('statistics', [None, {'local_playcount': 7}])
+def test_integrations_endpoint_reuses_scoped_statistics(monkeypatch, statistics):
+    import asyncio
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import listen_history
+
+    async def scope(request):
+        return SimpleNamespace(account_id='owner', library_id='library')
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Endpoint must not query statistics a second time')
+
+    monkeypatch.setattr(routes, '_app_config', lambda request: {})
+    monkeypatch.setattr(routes, 'history_scope_for_request', scope)
+    monkeypatch.setattr(listen_history, 'build_measured_playback_statistics', unexpected)
+    monkeypatch.setattr(routes, '_build_integrations_payload', lambda *args, **kwargs: {
+        'ok': True, 'integrations': [{'key': 'lastfm', 'playback_statistics': statistics},
+                                    {'key': 'foobar'}, {'key': 'local-playlist-import'}]})
+    response = asyncio.run(routes.utilities_integrations(None))
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert len(payload['integrations']) == 3
+    assert payload['playback_statistics'] == statistics
 
 
 @pytest.fixture
@@ -1150,7 +1193,12 @@ def test_asgi_playback_session_complete_persists_listen_history(app, monkeypatch
 
 
 def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "resolve_scoped_source", lambda self, **scope: (11, None))
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "get_scoped_track_cover", lambda self, **scope: "")
+    monkeypatch.setattr(asgi_routes, "probe_loop_source_duration", lambda path: 100)
 
     source_path = Path(app.config["MUSIC_DIR"]) / "Artist" / "Song.mp3"
     source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1160,7 +1208,7 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
 
     monkeypatch.setattr(asgi_routes.uuid, "uuid4", lambda: SimpleNamespace(hex="loop-new"))
 
-    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id):
+    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id, **scope):
         assert resolved_source_path == source_path.resolve()
         assert start_seconds == 1.5
         assert end_seconds == 4.5
@@ -1175,8 +1223,8 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
         lambda config, raw_path: source_path.resolve() if raw_path == str(source_path) else None,
     )
     persisted_loops = []
-    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item: persisted_loops.insert(0, item) or item)
-    monkeypatch.setattr(asgi_routes, "load_loops", lambda config: list(persisted_loops))
+    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item, **scope: persisted_loops.insert(0, item) or item)
+    monkeypatch.setattr(asgi_routes, "load_loops", lambda config, **scope: list(persisted_loops))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1225,10 +1273,11 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
     assert _decode_json(reorder_body) == {"ok": False, "error": "ordered_ids must be a list"}
 
 
-def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
+def test_asgi_loop_pitch_preview_uses_owned_stored_legacy_artifact(
     app,
     monkeypatch,
 ):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
     canonical_loop = Path(app.config["DATA_DIR"]) / "loops" / "legacy-loop.mp3"
@@ -1244,12 +1293,14 @@ def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
     legacy_loop.write_bytes(b"legacy-loop")
     monkeypatch.setattr(
         "music_app.services.loops.load_loops",
-        lambda _config: [{"id": "legacy-loop", "path": str(legacy_loop)}],
+        lambda _config, **scope: [{"id": "legacy-loop", "path": str(canonical_loop)}],
     )
+
+    monkeypatch.setattr("music_app.services.loops.SavedLoopsPostgresAdapter.is_unique_scoped_artifact", lambda self, **scope: True)
 
     captured_sources = []
 
-    def fake_create_pitch_preview_file(config, loop_id, source_path, semitones):
+    def fake_create_pitch_preview_file(config, loop_id, source_path, semitones, **scope):
         captured_sources.append(source_path)
         assert loop_id == "legacy-loop"
         assert semitones == 2
@@ -1283,7 +1334,12 @@ def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
 
 
 def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "resolve_scoped_source", lambda self, **scope: (11, None))
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "get_scoped_track_cover", lambda self, **scope: "")
+    monkeypatch.setattr(asgi_routes, "probe_loop_source_duration", lambda path: 100)
 
     parent_source_path = Path(app.config["DATA_DIR"]) / "loops" / "parent-loop.mp3"
     parent_source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1302,18 +1358,18 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     monkeypatch.setattr(
         asgi_routes,
         "get_loop",
-        lambda config, loop_id: parent_loop if loop_id == "parent-loop" else None,
+        lambda config, loop_id, **scope: parent_loop if loop_id == "parent-loop" else None,
     )
     monkeypatch.setattr(
         asgi_routes,
         "resolve_loop_media_path",
-        lambda config, loop_id: parent_source_path if loop_id == "parent-loop" else None,
+        lambda config, loop_id, **scope: parent_source_path if loop_id == "parent-loop" else None,
     )
 
     def fail_track_source_resolution(config, raw_path):
         raise AssertionError(f"saved-parent loop creation resolved track source path {raw_path}")
 
-    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id):
+    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id, **scope):
         assert resolved_source_path == parent_source_path
         assert start_seconds == 2.0
         assert end_seconds == 5.0
@@ -1324,8 +1380,8 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     persisted_loops = []
     monkeypatch.setattr(asgi_routes, "resolve_configured_media_path", fail_track_source_resolution)
     monkeypatch.setattr(asgi_routes, "create_loop_file", fake_create_loop_file)
-    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item: persisted_loops.insert(0, item) or item)
-    monkeypatch.setattr(asgi_routes, "load_loops", lambda config: list(persisted_loops))
+    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item, **scope: persisted_loops.insert(0, item) or item)
+    monkeypatch.setattr(asgi_routes, "load_loops", lambda config, **scope: list(persisted_loops))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1353,16 +1409,18 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     assert payload["loop"]["artist"] == "Parent Artist"
     assert payload["loop"]["title"] == "Parent Title"
     assert payload["loop"]["album"] == "Parent Album"
-    assert payload["loop"]["cover_path"] == "C:/covers/parent.jpg"
+    assert payload["loop"]["cover_url"] == "/cover?loop_id=child-loop"
+    assert persisted_loops[0]["cover_path"] == "C:/covers/parent.jpg"
     assert payload["loop"]["parent_loop_id"] == "parent-loop"
     assert (payload["loop"]["original_start_seconds"], payload["loop"]["original_end_seconds"]) == (62, 65)
     assert payload["loops"][0]["parent_loop_id"] == "parent-loop"
 
 
 def test_asgi_delete_loop_returns_404_when_loop_dependency_reports_missing(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
-    monkeypatch.setattr(asgi_routes, "delete_loop", lambda config, loop_id: (False, []))
+    monkeypatch.setattr(asgi_routes, "delete_loop", lambda config, loop_id, **scope: (False, []))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1856,3 +1914,11 @@ def test_asgi_playlist_reserved_mutations_and_track_preferences_preserve_contrac
     assert header_preference_payload["ok"] is True
     assert header_preference_payload["track_preference"]["rating"] == 5
     assert header_preference_payload["track_preference"]["allowed_actions"]["client_surface_class"] == "mobile"
+
+def _authorize_loop_fixture(monkeypatch):
+    from music_app.services import current_actor_asgi
+    from types import SimpleNamespace
+    actor = SimpleNamespace(account_id=7, current_library_id=9, is_authenticated=True,
+        library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
+    async def resolve_actor(_request): return actor
+    monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)

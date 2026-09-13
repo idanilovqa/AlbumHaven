@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from music_app.services.media_host_roots import root_request_scope, bounded_directories
+
+from music_app.services.log_history import history_scope_for_request
+
 import inspect
 import logging
 from collections.abc import Mapping
@@ -345,6 +349,8 @@ def _default_albums_by_track_paths_finder(get_state_provider):
 
 
 def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
+    append_history = kwargs.pop('append_log_history', append_log_history)
+    log_event = kwargs.pop('log_app_event', log_app_event)
     find_albums_by_track_paths = kwargs.pop("find_albums_by_track_paths", None)
     find_problematic_album_by_track_paths = kwargs.pop("find_problematic_album_by_track_paths", None)
     structural_edit_fields = kwargs.pop("structural_edit_fields", set(_STRUCTURAL_EDIT_FIELDS))
@@ -469,8 +475,8 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
             rebuild_relation_projection=rebuild_relation_projection,
             **save_options,
         ),
-        append_log_history=lambda config, entry: append_log_history(config, entry),
-        log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, **extra),
+        append_log_history=append_history,
+        log_app_event=log_event,
         find_albums_by_track_paths=find_albums_by_track_paths,
         find_problematic_album_by_track_paths=find_problematic_album_by_track_paths,
         structural_edit_fields=set(structural_edit_fields),
@@ -483,12 +489,27 @@ def _bridge_queue_finalize_save_task(**kwargs: Any) -> None:
 
 @router.get("/library-settings")
 async def library_settings_read(request: Request) -> JSONResponse:
+    from music_app.services.policy_asgi import allowed_actions_for_request
+    scope = await root_request_scope(request)
     return JSONResponse(
         {
             "ok": True,
-            "settings": load_library_root_settings(_app_config(request)),
+            "allowed_actions": allowed_actions_for_request(request, ("library.settings.manage", "library.filesystem.browse", "library.paths.read")).as_payload(),
+            "settings": await run_in_threadpool(load_library_root_settings, _app_config(request), **scope),
         }
     )
+
+
+@router.get("/library-settings/browse")
+async def library_settings_browse(request: Request, path: str = "") -> JSONResponse:
+    from music_app.services.policy_asgi import allowed_actions_for_request
+    await root_request_scope(request)
+    config = _app_config(request)
+    actions = allowed_actions_for_request(request, ("library.filesystem.browse", "library.paths.read")).as_payload()
+    if config.get("ALBUM_HAVEN_DEPLOYMENT_MODE") != "self_hosted" or not all(actions.get(key) is True for key in ("library.filesystem.browse", "library.paths.read")):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Directory browsing is unavailable")
+    return JSONResponse({"ok": True, **await run_in_threadpool(bounded_directories, config, path)})
 
 
 @router.post("/library-settings/import-album-ratings")
@@ -506,6 +527,7 @@ async def library_settings_import_album_ratings(request: Request) -> JSONRespons
 
 @router.post("/library-settings")
 async def library_settings_write(request: Request) -> JSONResponse:
+    scope = await root_request_scope(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -531,6 +553,7 @@ async def library_settings_write(request: Request) -> JSONResponse:
                 save_library_settings_and_start_refresh,
                 _app_config(request),
                 settings_payload,
+                **scope,
                 library_state=_library_state(request),
                 start_background_refresh=_start_background_refresh_for_asgi_request(request),
                 build_status_payload=lambda: _build_status_payload_from_state(_library_state(request)),
@@ -875,18 +898,23 @@ def _asgi_bridge_queue_finalize_save_task_builder(
     request: Request,
     *,
     wait_for_completion: bool = False,
+    history_scope=None,
 ):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def queue_finalize_with_asgi_state(**kwargs: Any) -> None:
         _bridge_queue_finalize_save_task(
             get_state=lambda: _library_state(request),
             wait_for_completion=wait_for_completion,
+            append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+            log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
             **kwargs,
         )
 
     return queue_finalize_with_asgi_state
 
 
-def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request: Request):
+def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request: Request, *, history_scope=None):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def compensate_media_write(
         *,
         changed_paths: set[str],
@@ -951,6 +979,8 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
             get_state=lambda: _library_state(request),
             wait_for_completion=True,
             compensate_save_task=compensate_media_write,
+            append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+            log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
             **kwargs,
         )
 
@@ -959,7 +989,9 @@ def _asgi_selected_postgres_media_write_queue_finalize_save_task_builder(request
 
 def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
     request: Request,
+    *, history_scope=None,
 ):
+    history_scope = history_scope or getattr(request.state, 'history_scope', None)
     def compensate_structural_tag_edit(
         *,
         changed_paths: set[str],
@@ -1064,11 +1096,13 @@ def _asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder
             append_log_history=lambda app_config, entry: append_log_history(
                 app_config,
                 entry,
+                scope=history_scope,
             ),
             log_app_event=lambda app_config, logger, message, **extra: log_app_event(
                 app_config,
                 logger,
                 message,
+                history_scope=history_scope,
                 **extra,
             ),
             find_albums_by_track_paths=_postgres_album_finder_for_track_paths(request),
@@ -1329,6 +1363,7 @@ async def revert_version_exception(request: Request) -> JSONResponse:
 
 @router.post("/utilities/rules/problem-ignores/revert")
 async def revert_problem_ignore(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1344,12 +1379,13 @@ async def revert_problem_ignore(request: Request) -> JSONResponse:
         level="info",
         history=True,
         row_key=row_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "reverted_row_key": row_key})
 
 
 @router.post("/utilities/rules/problem-ignores")
 async def create_problem_ignores(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1371,7 +1407,7 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
         history=True,
         row_keys=[str(item.get("row_key") or "") for item in result.applied_items],
         migrated_legacy_row_keys=list(result.removed_legacy_row_keys),
-    )
+     history_scope=history_scope)
     return JSONResponse({
         "ok": True,
         "applied_items": result.applied_items,
@@ -1381,6 +1417,7 @@ async def create_problem_ignores(request: Request) -> JSONResponse:
 
 @router.post("/versions/ignore")
 async def ignore_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1401,12 +1438,13 @@ async def ignore_album_version(request: Request) -> JSONResponse:
         "Version exception created",
         level="info",
         album_key=album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "ignored_version_keys": sorted(ignored)})
 
 
 @router.post("/versions/mark")
 async def mark_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1458,12 +1496,13 @@ async def mark_album_version(request: Request) -> JSONResponse:
         level="info",
         album_key=album_key,
         parent_album_key=parent_album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
 
 
 @router.post("/versions/unmark")
 async def unmark_album_version(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -1485,7 +1524,7 @@ async def unmark_album_version(request: Request) -> JSONResponse:
         "Manual version link removed",
         level="info",
         album_key=album_key,
-    )
+     history_scope=history_scope)
     return JSONResponse({"ok": True, "manual_version_links": manual_version_links})
 
 
@@ -1539,6 +1578,7 @@ async def utilities_save_task(task_id: str) -> JSONResponse:
 
 @router.post("/utilities/repair-album")
 async def utilities_repair_album(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
         return _json_response(({"ok": False, "error": "Repair was not confirmed"}, 400))
@@ -1576,8 +1616,8 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
         save_ignored_repair_keys=save_ignored_repair_keys,
         load_separate_release_keys=load_separate_release_keys,
         save_separate_release_keys=save_separate_release_keys,
-        append_log_history=append_log_history,
-        log_app_event=log_app_event,
+        append_log_history=lambda config, entry: append_log_history(config, entry, scope=history_scope),
+        log_app_event=lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
         structural_edit_fields=set(_STRUCTURAL_EDIT_FIELDS),
         edit_write_workers=_EDIT_WRITE_WORKERS,
     )
@@ -1588,6 +1628,7 @@ async def utilities_repair_album(request: Request) -> JSONResponse:
 
 @router.post("/utilities/edit-tags")
 async def utilities_edit_tags(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     request_started = perf_counter()
     payload = await _json_payload(request)
     if payload is None or not payload.get("confirmed"):
@@ -1646,8 +1687,8 @@ async def utilities_edit_tags(request: Request) -> JSONResponse:
         "build_affected_album_dicts": build_affected_album_dicts,
         "load_separate_release_keys": load_separate_release_keys,
         "normalize_exception_value": normalize_exception_value,
-        "append_log_history": append_log_history,
-        "log_app_event": log_app_event,
+        "append_log_history": lambda config, entry: append_log_history(config, entry, scope=history_scope),
+        "log_app_event": lambda config, logger, message, **extra: log_app_event(config, logger, message, history_scope=history_scope, **extra),
         "structural_edit_fields": set(_STRUCTURAL_EDIT_FIELDS),
         "edit_write_workers": _EDIT_WRITE_WORKERS,
         "save_track_exception_override": set_track_exception_override,

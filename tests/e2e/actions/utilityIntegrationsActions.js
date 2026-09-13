@@ -76,16 +76,13 @@ export class UtilityIntegrationsActions {
   }
 
   async waitForLastfmTimeZone(timezone, options = {}) {
-    await expect(this.utilityIntegrationsTab.lastfmTimeZone).toBeVisible({
-      timeout: options.timeout || 10000,
-    });
-    await expect(this.utilityIntegrationsTab.lastfmTimeZone).toHaveValue(
-      String(timezone),
-      { timeout: options.timeout || 10000 },
-    );
+    await expect.poll(() => this.utilityIntegrationsTab.readPersistedLastfmTimeZone(),
+      { timeout: options.timeout || 10000 }).toBe(String(timezone));
+    await expect(this.utilityIntegrationsTab.lastfmTimeZone).toHaveCount(0);
   }
 
   async connectLastfm({ username, password }, options = {}) {
+    await this.utilityIntegrationsTab.scrobbling.click();
     await this.utilityIntegrationsTab.lastfmUsername.fill(String(username));
     await this.utilityIntegrationsTab.lastfmPassword.fill(String(password));
     const responsePromise = this.utilityIntegrationsTab.page.waitForResponse((response) => (
@@ -103,6 +100,7 @@ export class UtilityIntegrationsActions {
   }
 
   async ensureLastfmConnected({ username, password }, options = {}) {
+    await this.utilityIntegrationsTab.scrobbling.click();
     if (await this.utilityIntegrationsTab.lastfmUsername.isDisabled()) {
       await this.waitForConnectedAs(username, options);
       return false;
@@ -112,6 +110,7 @@ export class UtilityIntegrationsActions {
   }
 
   async submitRejectedLastfmConnection({ username, password }, options = {}) {
+    await this.utilityIntegrationsTab.scrobbling.click();
     await this.utilityIntegrationsTab.lastfmUsername.fill(String(username));
     await this.utilityIntegrationsTab.lastfmPassword.fill(String(password));
     const responsePromise = this.utilityIntegrationsTab.page.waitForResponse((response) => (
@@ -131,21 +130,15 @@ export class UtilityIntegrationsActions {
   }
 
   async waitForConnectedAs(username, options = {}) {
-    await this.utilityIntegrationsTab.waitForPageCondition((expected) => {
-      const title = document.querySelector(expected.titleSelector);
-      const usernameInput = document.querySelector(expected.usernameSelector);
-      return String(title?.textContent || '').includes(`Connected as ${expected.username}`)
-        && usernameInput instanceof HTMLInputElement
-        && usernameInput.disabled;
-    }, { timeout: options.timeout || 10000 }, {
-      titleSelector: this.utilityIntegrationsTab.mainBody.ruleTitleSelector,
-      usernameSelector: this.utilityIntegrationsTab.lastfmUsernameSelector,
-      username: String(username),
-    });
+    await this.utilityIntegrationsTab.scrobbling.click();
+    await expect(this.utilityIntegrationsTab.connectedStatus).toHaveText(/Connected/u, { timeout: options.timeout || 10000 });
+    await expect(this.utilityIntegrationsTab.lastfmUsername).toHaveValue(String(username));
+    await expect(this.utilityIntegrationsTab.lastfmUsername).toBeDisabled();
   }
 
   async waitForScrobbledCount(count, options = {}) {
-    const expectedText = `Scrobbled: ${Number(count)}.`;
+    await this.utilityIntegrationsTab.scrobbling.click();
+    const expectedText = `Scrobbled: ${Number(count)} ·`;
     await this.utilityIntegrationsTab.waitForPageCondition((expected) => (
       [...document.querySelectorAll(expected.metaSelector)]
         .some((element) => String(element.textContent || '').includes(expected.text))

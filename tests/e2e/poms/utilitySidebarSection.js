@@ -5,6 +5,7 @@ export class UtilitySidebarSection extends BasePage {
     super(page, testInfo);
     this.label = page.locator('#utility-sidebar-label');
     this.count = page.locator('#utility-problematic-count');
+    this.search = page.locator('#utility-problematic-search');
     this.list = page.locator('#utility-problematic-list');
     this.listItems = page.locator('#utility-problematic-list .utility-list-item');
     this.activeListItem = page.locator('#utility-problematic-list .utility-list-item.is-active');

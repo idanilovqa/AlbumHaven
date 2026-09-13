@@ -23,7 +23,7 @@ function createLocator({ text = '', visible = true, count = 0, evaluateAll = nul
   };
 }
 
-function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = null }) {
+function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = null, sharedEmptyArtbox = false }) {
   const waitCalls = [];
   const albumCoverImage = createLocator({ evaluateAll: coverLoaded });
   return {
@@ -57,12 +57,22 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
         visible: noCover,
         attributes: noCover ? { 'data-album-artbox-state': 'empty' } : {},
       }),
+      missingArtbox: createLocator({ visible: sharedEmptyArtbox }),
       async readDetailedCoverImageCheckpoint() {
         return coverCheckpoint;
       },
     },
   };
 }
+
+test('TrackModalActions recognizes a visible empty shared Artbox without placeholder text', async () => {
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  const { trackModal } = createTrackModalStub({ coverLoaded: false, sharedEmptyArtbox: true });
+  const summary = await new TrackModalActions(trackModal).readSummary();
+  assert.equal(summary.coverLoaded, false);
+  assert.equal(summary.coverPlaceholderVisible, true);
+  assert.equal(summary.coverReady, true);
+});
 
 test('TrackModalActions.waitForLoadedSummary accepts a modal with loaded cover art', async () => {
   const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');

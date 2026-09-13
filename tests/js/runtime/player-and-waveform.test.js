@@ -550,7 +550,8 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
   assert.match(playerRule, /--player-regular-centerline:\s*39px/);
   assert.match(playerRule, /--player-controls-size:\s*48px/);
-  assert.match(playerRule, /--player-leading-width:\s*114px/);
+  assert.doesNotMatch(playerRule, /--player-leading-width:/);
+  assert.match(css, /\.player-main\s*\{[^}]*grid-column:\s*1\s*\/\s*-1[^}]*grid-template-columns:\s*subgrid/s);
   assert.match(
     css,
     /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-controls\s*\{[^}]*margin-top:\s*calc\(var\(--player-waveform-centerline\)\s*-\s*\(var\(--player-controls-size\)\s*\/\s*2\)\)/s,
@@ -587,7 +588,7 @@ test('persistent-player metadata and timestamps use approved mode offsets', () =
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
   ), 'utf8');
 
-  assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-meta\s*\{[^}]*top:\s*7px[^}]*left:\s*calc\(-1\s*\*\s*var\(--player-leading-width\)\)/s);
+  assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-meta\s*\{[^}]*top:\s*7px[^}]*left:\s*0/s);
   assert.match(css, /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-time\s*\{[^}]*top:\s*8px/s);
   assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-meta\s*\{[^}]*top:\s*10px[^}]*left:\s*0/s);
   assert.match(css, /\.global-player\[data-player-seekbar-presentation="regular"\]\s+\.player-time\s*\{[^}]*top:\s*11px/s);

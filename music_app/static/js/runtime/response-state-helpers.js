@@ -847,6 +847,17 @@ function getReusableSelectedArtistBrowseView(view) {
     : null;
   const cachedView = cachedViews ? cachedViews[requestedSignature] : null;
   if (!cachedView) return null;
+  const requestedSource = String(view?.search_context?.selected_artist_source || '').trim();
+  const cachedSource = String(cachedView?.search_context?.selected_artist_source || '').trim();
+  const selectedArtist = String(view?.selected_artist || '').trim();
+  const cachedNameMatches = cachedView?.search_context?.artist_name_match_artists;
+  // Automatic search selection may include connected-family previews. An explicit
+  // content-only selection instead requires the server's narrow matching records.
+  if (requestedSource === 'requested_artist' && cachedSource === 'auto_top_match'
+    && !(Array.isArray(cachedNameMatches)
+      && cachedNameMatches.some(artist => String(artist || '').trim() === selectedArtist))) {
+    return null;
+  }
   return cloneRuntimeReusableSelectedArtistBrowseView(cachedView);
 }
 

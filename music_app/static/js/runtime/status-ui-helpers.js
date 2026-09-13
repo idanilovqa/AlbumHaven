@@ -250,6 +250,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
+  if (typeof syncLibraryWatcherWarning === 'function') syncLibraryWatcherWarning(data);
   syncStatusContextMenu();
   if (typeof renderLibraryWarning === 'function') renderLibraryWarning(normalizedStatus);
   const indicator = document.getElementById('scan-indicator');

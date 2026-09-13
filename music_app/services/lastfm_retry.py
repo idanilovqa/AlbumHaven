@@ -5,10 +5,14 @@ import threading
 from typing import Any
 
 from music_app.services.app_logging import log_app_event
+from music_app.services.log_history import HistoryScope
+from music_app.services.listen_history_postgres import PendingListenEntry
 from music_app.services.lastfm_listen_sync import record_retry_summary
-from music_app.services.lastfm_sync_bridge import process_pending_scrobble_attempt
-from music_app.services.listen_history import load_pending_scrobble_entries, update_listen_history_entry
-from music_app.services.lastfm import lastfm_api_enabled, scrobble_track
+from music_app.services.lastfm_sync_bridge import process_pending_scrobble_attempt, record_playback_session_complete
+from music_app.services.listen_history import (load_pending_scrobble_entries, update_listen_history_entry,
+    append_listen_history_entry, is_meaningful_listen_session)
+from music_app.services.playback_session_payloads import normalize_playback_track_payload
+from music_app.services.lastfm import lastfm_api_enabled, scrobble_track, get_saved_lastfm_session
 
 _RETRY_INTERVAL_SECONDS = 30 * 60
 _RETRY_BATCH_LIMIT = 100
@@ -28,6 +32,7 @@ def retry_pending_lastfm_scrobbles(
     *,
     limit: int = _RETRY_BATCH_LIMIT,
     reauthenticated: bool = False,
+    account_id: int | None = None,
 ) -> dict[str, int]:
     summary = {
         "pending_before": 0,
@@ -41,24 +46,55 @@ def retry_pending_lastfm_scrobbles(
 
     with _RETRY_LOCK:
         pending_entries = load_pending_scrobble_entries(config, limit=limit)
+        if account_id is not None:
+            pending_entries = [item for item in pending_entries if isinstance(item, PendingListenEntry) and item.account_id == account_id]
         summary["pending_before"] = len(pending_entries)
         if not pending_entries:
             return summary
 
-        for entry in pending_entries:
-            if not isinstance(entry, dict):
+        for pending in pending_entries:
+            if not isinstance(pending, PendingListenEntry):
                 continue
+            entry = pending.entry
+            if entry.get("measurement_version") == "rendered-pcm-v1":
+                session = get_saved_lastfm_session(config, account_id=pending.account_id)
+                if session is None:
+                    continue
+                payload = {**entry, **dict(entry.get("canonical_match") or {})}
+                body, _status = record_playback_session_complete(
+                    config, payload,
+                    account_id=pending.account_id, library_id=pending.library_id,
+                    lastfm_session=session, user_timezone=str(entry.get("user_timezone") or "UTC"),
+                    normalize_playback_track_payload=normalize_playback_track_payload,
+                    is_meaningful_listen_session=is_meaningful_listen_session,
+                    append_listen_history_entry=append_listen_history_entry,
+                    update_listen_history_entry=update_listen_history_entry,
+                    scrobble_track=scrobble_track,
+                    log_lastfm_scrobble_event=lambda action, *, level, payload, error="", owner=pending: log_app_event(
+                        config, logging.getLogger("music_app"), action, level=level, history=True,
+                        history_scope=HistoryScope(account_id=owner.account_id, library_id=owner.library_id, origin_kind="retry"),
+                        artist=payload.get("artist", ""), album=payload.get("album", ""),
+                        title=payload.get("title", ""), error=error,
+                    ),
+                )
+                summary["attempted"] += 1
+                summary["succeeded" if body.get("scrobbled") else "failed"] += 1
+                continue
+            scope = HistoryScope(library_id=pending.library_id, account_id=pending.account_id, origin_kind='retry')
             result = process_pending_scrobble_attempt(
                 config,
                 entry,
-                update_listen_history_entry=update_listen_history_entry,
-                scrobble_track=scrobble_track,
-                log_lastfm_scrobble_event=lambda action, *, level, payload, error="", retry_count=0: log_app_event(
+                update_listen_history_entry=lambda config, entry_id, updates, owner=pending: update_listen_history_entry(
+                    config, entry_id, updates, account_id=owner.account_id, library_id=owner.library_id, row_id=owner.row_id),
+                scrobble_track=lambda cfg, payload, owner=pending: scrobble_track(
+                    cfg, payload, session=get_saved_lastfm_session(cfg, account_id=owner.account_id)),
+                log_lastfm_scrobble_event=lambda action, *, level, payload, error="", retry_count=0, history_scope=scope: log_app_event(
                     config,
                     logging.getLogger("music_app"),
                     action,
                     level=level,
                     history=True,
+                    history_scope=history_scope,
                     artist=payload.get("artist", ""),
                     album=payload.get("album", ""),
                     title=payload.get("track", ""),
@@ -76,7 +112,8 @@ def retry_pending_lastfm_scrobbles(
                 summary["failed"] += 1
 
         summary["pending_after"] = pending_scrobble_count(config)
-        record_retry_summary(config, summary)
+        if account_id is None and any(item.entry.get("measurement_version") != "rendered-pcm-v1" for item in pending_entries):
+            record_retry_summary(config, summary)
         return summary
 
 

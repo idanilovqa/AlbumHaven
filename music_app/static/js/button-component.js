@@ -7,6 +7,8 @@
   const actionButtonShapes = new Set(['default', 'round']);
   const actionButtonSemantics = new Set(['default', 'destructive']);
   const iconPaths = Object.freeze({
+    calendar: 'M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16',
+    copy: 'M8 8h12v12H8V8ZM4 16H3V3h13v1M8 4H4v4',
     cover: 'M5 5h14v14H5V5Zm0 10 4-4 4 4 2-2 4 4M14.5 8.5h.01',
     search: 'M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z',
     play: 'M9 6.4v11.2l9-5.6-9-5.6Z',

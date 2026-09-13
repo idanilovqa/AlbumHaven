@@ -55,6 +55,7 @@ import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
+import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -319,6 +320,10 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  appearancePreferenceIsolation: async ({ page }, use) => {
+    const isolation = createAppearancePreferenceIsolation(page);
+    try { await use(isolation); } finally { await isolation.restore(); }
+  },
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],

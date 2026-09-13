@@ -490,6 +490,28 @@ function createRuntimeContext() {
   return { context, scrollEl, containerEl, topSpacerEl, bottomSpacerEl };
 }
 
+for (const scrollTop of [0, 840]) {
+  test(`a hidden Scan Page gallery retains absolute scroll ${scrollTop} when layout returns`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const visibleRect = scrollEl.getBoundingClientRect;
+    scrollEl.scrollTop = scrollTop;
+    scrollEl.getBoundingClientRect = () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 });
+    context.__albumTitleButtons = [context.createAlbumTitleButton(
+      'retained-album', { top: 0, bottom: 0 }, 'artist:all:Retained:0', 'Retained',
+    )];
+
+    const anchor = virtualGrid.captureScrollAnchor();
+    scrollEl.getBoundingClientRect = visibleRect;
+    context.__albumTitleButtons = [context.createAlbumTitleButton(
+      'retained-album', { top: 43, bottom: 280 }, 'artist:all:Retained:0', 'Retained',
+    )];
+    virtualGrid.restoreScrollAnchor(anchor);
+
+    assert.equal(scrollEl.scrollTop, scrollTop, 'Zero-size hidden geometry cannot become a visible card anchor');
+  });
+}
+
 test('visible cover priming promotes scheduler work discovered after transient layout', () => {
   const { context, scrollEl } = createRuntimeContext();
   Object.setPrototypeOf(scrollEl, context.HTMLElement.prototype);

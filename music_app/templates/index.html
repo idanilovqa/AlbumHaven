@@ -27,6 +27,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/gallery-main.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/runtime/trigger-anchor.css') }}?v={{ runtime_asset_version }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/search-input.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/scrollbar.css') }}?v={{ runtime_asset_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/date-range-picker.css') }}?v={{ runtime_asset_version }}">
   {% include "partials/navigation-tree-assets.html" %}
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/admin-members.js" defer></script>
@@ -171,6 +173,7 @@
           {% endif %}
         </div>
         <div id="library-scan-warning" hidden></div>
+        <div id="library-loader-watch-health" hidden></div>
         <div class="library-loader-progress" id="library-loader-progress"></div>
         <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
           <li><strong>Discovering music files</strong><span>Enumerates candidate files in your local library.</span></li>

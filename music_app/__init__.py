@@ -161,6 +161,7 @@ def _configure_asgi_app(app, runtime) -> None:
     template_dir = package_root / "templates"
 
     app.state.config = runtime.config
+    app.state.media_host_library_id = None
     app.state.library_state = runtime.library_state
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
@@ -259,6 +260,9 @@ def create_asgi_app():
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         hydrated = hydrate_runtime_library_state_on_startup(runtime)
+        from music_app.services.log_history import resolve_media_host_history_scope
+        host_scope = resolve_media_host_history_scope(runtime.config)
+        _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
         ensure_runtime_relation_projection_ready(runtime)
         library_state = runtime.library_state
         if (

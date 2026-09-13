@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from music_app.services.loop_request_scope import saved_loop_scope
+from music_app.services.log_history import history_scope_for_request, normalize_log_history_query, export_log_history, LogHistoryQueryError
+from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
+
 import logging
 import time
 from collections.abc import Iterable, Mapping
@@ -356,7 +360,6 @@ async def status(request: Request) -> JSONResponse:
     # the root response handoff or an explicit manual refresh starts the scan.
     with request.app.state.cold_scan_handoff_lock:
         payload = dict(_build_status_payload_from_state(library_state))
-        payload["log_history_revision"] = load_log_history_revision(_app_config(request))
         handoff_status = str(library_state.get("cold_scan_handoff_status") or "idle")
         if library_state.get("cold_scan_pending") or handoff_status == "claimed":
             payload["scan_in_progress"] = True
@@ -378,6 +381,15 @@ async def status(request: Request) -> JSONResponse:
             # A failed preference read must not hide a health warning.
             pass
 
+    scope = await history_scope_for_request(request, required=False)
+    payload['log_history_revision'] = ''
+    if scope is not None:
+        try:
+            payload['log_history_revision'] = await run_in_threadpool(
+                load_log_history_revision, _app_config(request), scope=scope,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning('Operational history revision is unavailable')
     payload["allowed_actions"] = allowed_actions_for_request(request, ("library.loops.create",)).as_payload()
     return JSONResponse(payload)
 
@@ -999,16 +1011,48 @@ async def utilities_loops(request: Request) -> JSONResponse:
     actions = allowed_actions_for_request(request, (
         "library.loops.read", "library.loops.create", "library.loops.delete", "library.loops.reorder",
     ))
-    return JSONResponse({"ok": True, "loops": load_loops(_app_config(request)), "allowed_actions": actions.as_payload()})
+    return JSONResponse({"ok": True, "loops": [project_loop_for_client(item) for item in load_loops(_app_config(request), **(await saved_loop_scope(request)))], "allowed_actions": actions.as_payload()})
 
 
 @router.get("/utilities/log-history")
 async def utilities_log_history(request: Request) -> JSONResponse:
-    snapshot = load_log_history_snapshot(_app_config(request))
-    return JSONResponse(
-        {"ok": True, **snapshot},
-        headers={"Cache-Control": "no-store"},
-    )
+    scope = await history_scope_for_request(request)
+    try:
+        fields = {key: request.query_params.get(key) for key in ('from_utc', 'to_utc', 'text') if key in request.query_params}
+        fields.update({key: request.query_params.getlist(key) for key in ('sources', 'event_types', 'event_ids')})
+        snapshot = await run_in_threadpool(
+            load_log_history_snapshot, _app_config(request), scope=scope, query=normalize_log_history_query(fields),
+            cursor=request.query_params.get('cursor'), snapshot=request.query_params.get('snapshot'),
+            page_size=int(request.query_params.get('page_size', '500')),
+        )
+    except LogHistoryQueryError as error:
+        return JSONResponse(error.payload, status_code=error.status_code)
+    except ValueError:
+        return JSONResponse({'ok': False, 'error': 'Invalid history request'}, status_code=400)
+    except Exception:
+        logging.getLogger(__name__).warning('Operational history is unavailable')
+        return JSONResponse({'ok': False, 'error': 'Operational history is unavailable'}, status_code=503)
+    actions = allowed_actions_for_request(request, ('library.logs.read', 'library.logs.export'))
+    return JSONResponse({'ok': True, **snapshot, 'allowed_actions': actions.as_payload()}, headers={'Cache-Control': 'no-store'})
+
+
+@router.post('/utilities/log-history/export')
+async def utilities_log_history_export(request: Request) -> JSONResponse:
+    scope = await history_scope_for_request(request)
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise LogHistoryQueryError('Invalid history export request')
+        result = await run_in_threadpool(export_log_history, _app_config(request), scope=scope,
+            query=normalize_log_history_query(payload.get('query')), snapshot=payload.get('snapshot'))
+    except LogHistoryQueryError as error:
+        return JSONResponse(error.payload, status_code=error.status_code)
+    except ValueError:
+        return JSONResponse({'ok': False, 'error': 'Invalid history request'}, status_code=400)
+    except Exception:
+        logging.getLogger(__name__).warning('Operational history is unavailable')
+        return JSONResponse({'ok': False, 'error': 'Operational history is unavailable'}, status_code=503)
+    return JSONResponse({'ok': True, **result}, headers={'Cache-Control': 'no-store'})
 
 
 @router.post("/album-notes")

@@ -1,7 +1,10 @@
 const path = require('node:path');
+const fs = require('node:fs');
 const { test, expect } = require('@playwright/test');
 
 const repositoryRoot = path.join(__dirname, '..', '..');
+const { renderPlaybackControlCluster } = require(path.join(repositoryRoot, 'music_app/static/js/runtime/playback-control-cluster.js'));
+const { renderButton } = require(path.join(repositoryRoot, 'music_app/static/js/button-component.js'));
 const playerCssPath = path.join(
   repositoryRoot,
   'music_app',
@@ -21,30 +24,21 @@ const baseLayoutCssPath = path.join(
 const buttonCssPath = path.join(repositoryRoot, 'music_app', 'static', 'css', 'button-component.css');
 const componentUrl = 'http://player-component.test/player';
 
-const expandedControls = `
+const expandedControls = (loopControlStyle = 'capsule') => `
   <div class="player-controls">
-    <button class="button ui-button ui-button--icon ui-button--small player-collapse-button" type="button" aria-label="Collapse player"><span class="ui-button__content">‹</span></button>
+    ${renderButton({ variant: 'icon', size: 'small', className: 'player-collapse-button', ariaLabel: 'Collapse player', label: '‹' })}
     <button class="player-cover-button" type="button" aria-label="Open album details"></button>
-    <div class="playback-control-cluster playback-control-cluster--expanded player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player">
-      <div class="loop-play-control-cluster">
-        <button class="loop-play-control-button" type="button" aria-label="Pause">⏸</button>
-        <div class="loop-play-control-actions" aria-hidden="true"></div>
-      </div>
-    </div>
+    ${renderPlaybackControlCluster({ variant: 'expanded-player', ownerId: 'global-player', loopControlStyle })}
   </div>`;
 
 const compactControls = `
   <div class="compact-player-shell" aria-label="Compact player">
-    <button class="button ui-button ui-button--icon ui-button--small compact-player-expand" type="button" aria-label="Expand player"><span class="ui-button__content">›</span></button>
-    <button class="compact-player-cover" data-compact-player-cover type="button" aria-label="Open album details"></button>
-    <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
-      <button class="compact-player-skip" type="button" data-compact-player-previous aria-label="Previous track">‹</button>
-      <button class="compact-player-play" type="button" data-compact-player-play aria-label="Pause">⏸</button>
-      <button class="compact-player-skip" type="button" data-compact-player-next aria-label="Next track">›</button>
-    </div>
+    ${renderButton({ variant: 'icon', size: 'small', className: 'compact-player-expand', ariaLabel: 'Expand player', label: '›' })}
+    <button class="compact-player-cover" type="button" aria-label="Open album details"></button>
+    ${renderPlaybackControlCluster({ variant: 'compact-player' })}
   </div>`;
 
-async function mountPlayer(page, mode) {
+async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
   const isExpanded = mode === 'waveform' || mode === 'regular';
   const isWaveform = mode === 'waveform';
   const rootClasses = mode === 'docked'
@@ -68,7 +62,7 @@ async function mountPlayer(page, mode) {
       </style></head>
       <body>
         <div class="global-player shell-bottom-player ${mode === 'docked' ? 'is-compact is-docked-compact' : mode === 'floating' ? 'is-compact is-floating-compact' : ''}" data-player-view="${mode}" ${isExpanded ? `data-player-seekbar-presentation="${mode}"` : ''}>
-          <div class="player-shell" aria-hidden="${!isExpanded}">${expandedControls}
+          <div class="player-shell" aria-hidden="${!isExpanded}">${expandedControls(loopControlStyle)}
             <div class="player-main">
               <div class="player-meta"><div class="player-title">Transatlantic - We All Need Some Light</div><button class="player-album-link" type="button">/ SMPTe</button></div>
               <div class="player-time">3:13 / 5:46</div>
@@ -83,9 +77,18 @@ async function mountPlayer(page, mode) {
       </body></html>`,
   }));
   await page.goto(componentUrl);
-  await page.addStyleTag({ path: baseLayoutCssPath });
+  // Load the actual application theme tokens before component styles.
+  await page.addStyleTag({ content: fs.readFileSync(baseLayoutCssPath, 'utf8').replace(/^\uFEFF/, '') });
   await page.addStyleTag({ path: buttonCssPath });
   await page.addStyleTag({ path: playerCssPath });
+  const theme = await page.locator(':root').evaluate(element => {
+    const style = getComputedStyle(element);
+    return ['--success', '--panel-2', '--border'].map(name => style.getPropertyValue(name).trim());
+  });
+  expect(theme, 'component fixture must use the real base theme tokens').toEqual(['#34d399', '#0f172a', '#374151']);
+  await page.locator('[data-playback-control-action="play-pause"]').evaluateAll(buttons => {
+    for (const button of buttons) { button.setAttribute('aria-label', 'Pause'); button.textContent = '⏸'; }
+  });
 }
 
 for (const mode of ['docked', 'floating']) {
@@ -222,3 +225,64 @@ test('floating compact player retains its overlap, glow, and compact-only contro
   await expect(player.getByRole('button', { name: 'Pause' }).last()).toBeVisible();
   await expect(player).toHaveScreenshot('floating-compact-player.png', { animations: 'disabled' });
 });
+
+for (const style of ['capsule', 'companion']) {
+  test(`waveform metadata and Play preserve approved anchors with actual ${style} controls`, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 640 });
+    await mountPlayer(page, 'waveform', style);
+    const player = page.locator('[data-player-view="waveform"]');
+    const [box, metadata, play] = await Promise.all([
+      player.boundingBox(), player.locator('.player-meta').boundingBox(), player.locator('#player-play').boundingBox(),
+    ]);
+    const padding = await player.evaluate(element => parseFloat(getComputedStyle(element).paddingLeft));
+    expect(Math.abs(metadata.x - box.x - padding)).toBeLessThanOrEqual(1);
+    expect(Math.abs(centerY(play) - box.y - 57)).toBeLessThanOrEqual(1);
+  });
+
+  for (const owner of ['expanded-player', 'saved-loop']) {
+    test(`${owner} ${style} native Play and revealed actions have independent hit targets`, async ({ page }) => {
+      await page.setViewportSize({ width: 1280, height: 640 });
+      await mountPlayer(page, 'regular', style);
+      await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/loop-range-controls.js') });
+      await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js/runtime/playback-control-cluster.js') });
+      await page.evaluate(({ owner, style }) => {
+        let compound;
+        if (owner === 'saved-loop') {
+          const host = document.createElement('section');
+          host.id = 'saved-control-host'; host.style.cssText = 'position:absolute;left:200px;top:120px';
+          host.innerHTML = renderPlaybackControlCluster({ variant: owner, ownerId: 'saved:fixture', loopId: 'fixture', loopControlStyle: style });
+          document.body.append(host); compound = host.querySelector('[data-playback-control-cluster]');
+        } else {
+          compound = document.querySelector('.player-play-cluster');
+          compound.querySelector('[data-playback-control-loop-actions]').innerHTML = buildLoopEditActionControl({ ownerId: 'global-player' });
+        }
+        compound.id = 'native-controls';
+        const root = compound.querySelector('.loop-edit-actions');
+        const record = name => { compound.dataset.lastAction = name; };
+        let controller;
+        controller = mountLoopEditActionControl({ root, interactionRoot: compound, enabled: true, canCreate: true,
+          onEnter() { record('enter'); controller.update({ active: true }); },
+          onCreate() { record('create'); }, onCancel() { record('cancel'); controller.update({ active: false }); },
+        });
+        compound.querySelector('[data-playback-control-action="play-pause"]').addEventListener('click', () => record('play'));
+      }, { owner, style });
+      const compound = page.locator('#native-controls');
+      const play = compound.locator('[data-playback-control-action="play-pause"]');
+      await play.click();
+      await expect(compound).toHaveAttribute('data-last-action', 'play');
+      await play.hover();
+      await expect(compound).toHaveAttribute('data-loop-action-engaged', 'true');
+      await compound.locator('[data-loop-action="enter"]').click();
+      await expect(compound).toHaveAttribute('data-last-action', 'enter');
+      await compound.locator('[data-loop-action="create"]').click();
+      await expect(compound).toHaveAttribute('data-last-action', 'create');
+      await compound.locator('[data-loop-action="cancel"]').click();
+      await expect(compound).toHaveAttribute('data-last-action', 'cancel');
+      await page.mouse.move(1100, 100);
+      await expect(compound).toHaveAttribute('data-loop-action-engaged', 'false');
+      await expect(compound.locator('[data-loop-action="enter"]')).toHaveAttribute('tabindex', '-1');
+      await play.click();
+      await expect(compound).toHaveAttribute('data-last-action', 'play');
+    });
+  }
+}

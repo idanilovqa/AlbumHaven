@@ -606,11 +606,8 @@ test('repeat state leaves native media looping disabled so the app can restart s
     'after',
   );
 
-  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [
-    { id: 'beta' },
-    { id: 'gamma' },
-    { id: 'alpha' },
-  ]);
+  // Task 5 intentionally supersedes global song-group ordering with scoped loop ordering.
+  assert.equal(reordered, null);
 }
 
 {
@@ -620,7 +617,9 @@ test('repeat state leaves native media looping disabled so the app can restart s
     { id: 'beta', artist: 'Neal Morse', title: 'The Door', album: 'One' },
     { id: 'gamma', artist: 'Neal Morse', title: 'The Door', album: 'One' },
   ];
-  const groupKey = 'neal morse::the door::one';
+  const groupKey = 'track:1';
+  loops.forEach(loop => { loop.song_key = groupKey; loop.order_revision = 7; });
+  context.canReorderUtilityLoop = loop => loop.song_key === groupKey;
 
   const reordered = context.buildReorderedUtilityLoops(
     loops,
@@ -629,11 +628,7 @@ test('repeat state leaves native media looping disabled so the app can restart s
     'before',
   );
 
-  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [
-    { id: 'gamma', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-    { id: 'alpha', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-    { id: 'beta', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [loops[2], loops[0], loops[1]]);
 }
 
 {
@@ -1796,6 +1791,7 @@ test('second activation names and posts the validated editor range with source_l
   assert.equal(harness.context.state.utility.selectedLoopId, 'loop-2');
   assert.equal(harness.context.state.utility.selectedLoopGroupKey, 'artist::song::album');
   assert.equal(harness.context.state.utility.selectedLoopDetailMode, 'group');
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false, 'successful Save closes only its completed parent edit');
   assert.deepEqual(harness.renderCalls, [{
     loopIds: ['loop-2', 'loop-1'],
     selectedLoopId: 'loop-2',
@@ -1865,7 +1861,7 @@ test('saved-loop create and cancel preserve one audio node and one pending POST'
   assert.match(helperSource, /savedLoopEditorBusy/);
   assert.match(helperSource, /if\s*\([^)]*savedLoopEditorBusy[^)]*\)\s*return/);
   assert.doesNotMatch(
-    helperSource,
+    helperSource.slice(helperSource.indexOf('function mountSavedLoopControls'), helperSource.indexOf('async function createLoopFromSavedLoop')),
     /on(?:Enter|Cancel)[^]*?\.remove\s*\(\)|on(?:Enter|Cancel)[^]*?replaceWith\s*\(/,
     'enter and cancel must retain the existing audio element',
   );

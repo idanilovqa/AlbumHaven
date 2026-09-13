@@ -1005,7 +1005,7 @@ function handleGalleryBootstrapSearchInput(nextQuery) {
     releasePendingSearchWaveformPeakLoadSuspension();
     return;
   }
-  scheduleGallerySearchCommit(normalizedQuery);
+  scheduleGallerySearchCommit(normalizedQuery, { immediate: !normalizedQuery.trim() });
 }
 
 function commitGallerySearchQuery(nextQuery, options = {}) {
@@ -1563,6 +1563,8 @@ function tryRenderOptimisticSidebarArtistSelection(nextView, options = {}) {
 function readReusableRootBrowseViewForClearedSearch(nextView) {
   return typeof getReusableRootBrowseView === 'function'
     ? getReusableRootBrowseView({
+      ...(nextView.gallery_display_mode ? { gallery_display_mode: nextView.gallery_display_mode } : {}),
+      ...(nextView.gallery_scale_percent != null ? { gallery_scale_percent: nextView.gallery_scale_percent } : {}),
       query: '',
       selected_artist: '',
       all_artists_active: true,

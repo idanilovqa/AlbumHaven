@@ -2568,6 +2568,9 @@ def configure_isolated_environment(
     library_root = temp_root / "media"
     session_dir = temp_root / "session"
     temp_dir = temp_root / "tmp"
+    settings_browse_base = temp_root / "settings-root-picker-fixture"
+    for name in ("Main additional", "Hoard additional", "Incoming additional"):
+        (settings_browse_base / name).mkdir(parents=True, exist_ok=True)
     for path in (app_data_dir, library_root, session_dir, temp_dir):
         path.mkdir(parents=True, exist_ok=True)
     environment = {
@@ -2581,6 +2584,7 @@ def configure_isolated_environment(
         "MUSIC_BULK_COVER_JOB_WORKERS": "4",
         "MUSIC_LIBRARY_ROOTS_PATH": str(app_data_dir / "inert-library-roots.json"),
         "ALBUM_HAVEN_APP_DATABASE_URL": runtime_database_url,
+        "ALBUM_HAVEN_LIBRARY_BROWSE_BASES": json.dumps([str(settings_browse_base)]),
         "ALBUM_HAVEN_PERSISTENCE_DEFAULT": "postgres",
         "ALBUM_HAVEN_COVER_PROVIDER_GROUPS": "music_services,manual_urls,discogs,cover_art_archive",
         "ALBUM_HAVEN_ENABLED_MUSIC_SERVICES": "apple",

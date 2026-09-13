@@ -1,5 +1,5 @@
 ﻿:root {
-  --player-height: 68px;
+  --player-height: 76px;
   color-scheme: light dark;
   --bg: #111827;
   --panel: #1f2937;
@@ -257,6 +257,13 @@ input[type='search'] {
   transform: translateY(-8px);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
+.system-warning-notification {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--player-height) + 12px);
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: auto;
+}
 .toast.is-visible { opacity: 1; transform: translateY(0); }
 .toast.is-error { background: color-mix(in srgb, #ef4444 18%, var(--panel) 82%); border-color: color-mix(in srgb, #ef4444 45%, var(--border) 55%); }
 .toast.is-top-center {
@@ -360,3 +367,9 @@ input[type='search'] {
   border-color: rgba(255,255,255,0.24);
   background: rgba(255,255,255,0.12);
 }
+:root input:is(:not([type]), [type='text'], [type='password'], [type='search'], [type='email'], [type='url'], [type='tel'], [type='number']):not(:disabled):not([readonly]),
+:root textarea:not(:disabled):not([readonly]),
+:root [contenteditable='true'] {
+  cursor: text;
+}
+#library-loader [hidden] { display: none !important; }

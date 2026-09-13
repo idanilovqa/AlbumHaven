@@ -134,10 +134,8 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
 
   await stepLogger.step('Open and close album details without re-requesting or blanking the gallery cover', async () => {
     await galleryActions.clickAlbumDetailsByArtistAndAlbum(ARTIST, ALBUM);
-    const summary = await trackModalActions.waitForLoadedSummary();
-    expect(summary.title).toContain(ARTIST);
-    expect(summary.title).toContain(ALBUM);
-    expect(summary.title).toContain(YEAR);
+    await trackModalActions.waitForLoadedSummary();
+    await trackModalActions.waitForTitle(`${ARTIST} • ${ALBUM} • ${YEAR}`);
     await trackModalActions.close();
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));

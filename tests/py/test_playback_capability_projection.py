@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from music_app.services.allowed_actions import AllowedActions
+from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
 
 @pytest.fixture
@@ -18,7 +19,10 @@ def projection(monkeypatch):
     grants = set()
     observed = []
     request = SimpleNamespace(
-        state=SimpleNamespace(current_actor=SimpleNamespace(role_name='owner')),
+        state=SimpleNamespace(current_actor=CurrentActor(
+            state=ActorState.ACTIVE, account_id=1, session_id=1, current_library_id=1,
+            library_relationships=(LibraryRelationship(1, 'owner', True),),
+        )),
         app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={}, cold_scan_handoff_lock=Lock(), auth_policy_config=None)),
         cookies={},
     )
@@ -31,8 +35,8 @@ def projection(monkeypatch):
     monkeypatch.setattr(reads, 'allowed_actions_for_request', allowed)
     monkeypatch.setattr(web, 'allowed_actions_for_request', allowed)
     monkeypatch.setattr(reads, '_project_library_watch_health_for_request', lambda _request: {})
-    monkeypatch.setattr(reads, 'load_log_history_revision', lambda _config: 'epoch:0')
-    monkeypatch.setattr(reads, 'load_loops', lambda _config: [{'id': 'owned-loop'}])
+    monkeypatch.setattr(reads, 'load_log_history_revision', lambda _config, **_scope: 'epoch:0')
+    monkeypatch.setattr(reads, 'load_loops', lambda _config, **_scope: [{'id': 'owned-loop'}])
     return reads, web, request, grants, observed
 
 
@@ -53,7 +57,7 @@ def test_saved_loops_project_each_effective_action_without_role_inference(projec
     reads, _web, request, grants, _observed = projection
     grants.update({'library.loops.read', 'library.loops.delete'})
     response = json.loads(asyncio.run(reads.utilities_loops(request)).body)
-    assert response['loops'] == [{'id': 'owned-loop'}]
+    assert response['loops'] == [{'id': 'owned-loop', 'cover_url': ''}]
     assert response['allowed_actions'].get('library.loops.delete') is True
     assert response['allowed_actions'].get('library.loops.create') is not True
     assert response['allowed_actions'].get('library.loops.reorder') is not True

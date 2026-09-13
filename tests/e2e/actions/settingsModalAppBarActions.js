@@ -63,11 +63,13 @@ export class SettingsModalAppBarActions {
         || element.getClientRects().length
       ));
       return isVisible(document.querySelector(selectors.modal))
-        && isVisible(document.querySelector(selectors.title))
+        && isVisible(document.querySelector(selectors.dialog))
+        && isVisible(document.querySelector(selectors.tabs))
         && isVisible(document.querySelector(selectors.body));
     }, { timeout: options.timeout || 60000 }, {
       modal: this.settingsModalAppBar.modalSelector,
-      title: this.settingsModalAppBar.titleSelector,
+      dialog: '#utility-modal [role="dialog"][aria-label="Settings"]',
+      tabs: '#utility-modal [role="tablist"][aria-label="Settings sections"]',
       body: this.settingsModalAppBar.modalBodySelector,
     });
   }

@@ -222,6 +222,7 @@ export class TrackModalActions {
     await this.trackModal.waitForPageCondition((selectors) => {
       const coverImage = document.querySelector(selectors.coverImageSelector);
       const coverPlaceholder = document.querySelector(selectors.coverPlaceholderSelector);
+      const missingArtbox = document.querySelector(selectors.missingArtboxSelector);
       const coverLoaded = coverImage instanceof HTMLImageElement
         && coverImage.complete
         && coverImage.naturalWidth > 0
@@ -238,6 +239,7 @@ export class TrackModalActions {
     }, {
       coverImageSelector: this.trackModal.detailedCoverImageSelector,
       coverPlaceholderSelector: this.trackModal.coverPlaceholderSelector,
+      missingArtboxSelector: this.trackModal.missingArtboxSelector,
     });
     const summary = await this.readSummary();
     expect(summary.trackRows).toBeGreaterThan(0);
@@ -257,9 +259,9 @@ export class TrackModalActions {
   }
 
   async waitForTitle(expectedTitle, options = {}) {
-    await expect(this.trackModal.title).toHaveText(String(expectedTitle), {
+    await expect.poll(async () => (await this.trackModal.readCanonicalAlbumIdentity()).replaceAll(' • ', ' - '), {
       timeout: options.timeout || 30000,
-    });
+    }).toBe(String(expectedTitle).replaceAll(' • ', ' - '));
     return this.readSummary();
   }
 
@@ -387,9 +389,7 @@ export class TrackModalActions {
     const expectedTrackTitles = Array.isArray(expected.trackTitles)
       ? expected.trackTitles.map((title) => String(title || '').trim())
       : [];
-    await expect(this.trackModal.title).toHaveText(expectedTitle, {
-      timeout: options.timeout || 30000,
-    });
+    await this.waitForTitle(expectedTitle, options);
     await expect(this.trackModal.trackRows).toHaveCount(expectedTrackTitles.length, {
       timeout: options.timeout || 30000,
     });

@@ -630,43 +630,59 @@ async function loadUtilityRules(force = false) {
 }
 
 async function loadUtilityLoops(force = false) {
-  if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && state.utility.loopsActionProjectionLoaded === true && !force) {
+  const utility = state.utility;
+  if (utility.loopsLoading) return utility.loopsLoadPromise;
+  if (utility.loopsLoaded && utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
-  state.utility.loopsLoading = true;
+  const generation = Number(utility.loopDataGeneration || 0) + 1;
+  utility.loopDataGeneration = generation;
+  const mutationGeneration = Number(utility.loopMutationGeneration || 0);
+  const isCurrent = () => state.utility === utility
+    && Number(utility.loopDataGeneration || 0) === generation
+    && Number(utility.loopMutationGeneration || 0) === mutationGeneration;
+  utility.loopsLoading = true;
+  utility.loopsLoadError = '';
   renderUtilityModalContent();
-  state.utility.loopsLoadPromise = (async () => {
+  const loadPromise = (async () => {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
+      if (!isCurrent()) return;
       if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
-      state.utility.allowedActions = data.allowed_actions && typeof data.allowed_actions === 'object' ? { ...data.allowed_actions } : {};
-      state.utility.loopsActionProjectionLoaded = true;
-      state.loopCreateAllowed = state.utility.allowedActions['library.loops.create'] === true;
-      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
-      state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
-      state.utility.loopsLoaded = true;
-      const groupedLoops = groupUtilityLoops(state.utility.loops || []);
-      collapseAllUtilityLoopGroups();
-      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(state.utility.selectedLoopGroupKey || '')) || groupedLoops[0];
-      state.utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
-      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(state.utility.selectedLoopId || ''))) {
-        state.utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      utility.allowedActions = { ...(utility.allowedActions || {}) };
+      for (const action of ['library.loops.read', 'library.loops.create', 'library.loops.delete', 'library.loops.reorder']) {
+        utility.allowedActions[action] = data.allowed_actions?.[action] === true;
       }
-      state.utility.selectedLoopDetailMode = 'group';
+      utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+      utility.loops = Array.isArray(data.loops) ? data.loops : [];
+      utility.loopsLoaded = true;
+      const groupedLoops = groupUtilityLoops(utility.loops || []);
+      collapseAllUtilityLoopGroups();
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(utility.selectedLoopId || ''))) {
+        utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
+      utility.selectedLoopDetailMode = 'group';
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
-      state.utility.loops = [];
+      utility.loopsLoadError = 'Unable to load saved loops. Reopen the Loops tab to retry.';
       showToast('Unable to load saved loops.', 'error', 3200);
     } finally {
-      state.utility.loopsLoading = false;
-      state.utility.loopsLoadPromise = null;
-      renderUtilityModalContent();
+      if (utility.loopsLoadPromise === loadPromise) {
+        utility.loopsLoading = false;
+        utility.loopsLoadPromise = null;
+      }
+      if (isCurrent() && utility.activeTab === 'loops') renderUtilityModalContent();
     }
   })();
-  return state.utility.loopsLoadPromise;
+  utility.loopsLoadPromise = loadPromise;
+  return loadPromise;
 }
 
 function normalizeUtilityLogHistoryRevision(value) {
@@ -674,117 +690,20 @@ function normalizeUtilityLogHistoryRevision(value) {
 }
 
 async function loadUtilityLogHistory(force = false) {
-  if (state.utility.logHistoryLoading) return state.utility.logHistoryLoadPromise;
-  if (state.utility.logHistoryLoaded && !force) {
-    if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  }
-  state.utility.logHistoryLoading = true;
-  if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-  state.utility.logHistoryLoadPromise = (async () => {
-    try {
-      await requestBrowserLogHistoryPersistentStorage();
-    } catch (_error) {
-      // The browser may deny or omit persistent-storage requests; IndexedDB still remains usable.
-    }
-    try {
-      const response = await fetch('/utilities/log-history', {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json();
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || 'Unable to load transient log history.');
-      }
-      const stored = await persistBrowserLogHistoryEntries(
-        Array.isArray(data.items) ? data.items : [],
-      );
-      const revision = normalizeUtilityLogHistoryRevision(data.revision);
-      state.utility.logHistory = Array.isArray(stored?.items) ? stored.items : [];
-      state.utility.logHistoryRevision = revision;
-      if (!state.utility.logHistorySyncPromise) {
-        state.utility.logHistoryTargetRevision = revision;
-      }
-      if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-      state.utility.logHistoryLoaded = true;
-      return { revision };
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to load the transient history snapshot.', error);
-      try {
-        const stored = await readBrowserLogHistoryEntries();
-        state.utility.logHistory = Array.isArray(stored?.items)
-          ? stored.items
-          : (Array.isArray(state.utility.logHistory) ? state.utility.logHistory : []);
-        if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-        state.utility.logHistoryLoaded = true;
-      } catch (storageError) {
-        console.error('[AlbumHaven][History] Failed to read browser-owned history.', storageError);
-        state.utility.logHistory = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-        state.utility.logHistoryLoaded = true;
-        state.utility.logHistoryStorageStatus = {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        };
-      }
-      return null;
-    } finally {
-      state.utility.logHistoryLoading = false;
-      state.utility.logHistoryLoadPromise = null;
-      if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    }
-  })();
-  return state.utility.logHistoryLoadPromise;
+  const controller = getUtilityLogHistoryController();
+  if (state.utility.logHistoryLoaded && !force) { renderUtilityLogHistory(); return { revision: controller.getState().revision }; }
+  if (controller.getState().loading) return state.utility.logHistoryLoadPromise;
+  const owner = state.utility;
+  owner.logHistoryLoadPromise = controller.refresh().then(() => ({ revision: controller.getState().revision })).catch(() => null).finally(() => { owner.logHistoryLoadPromise = null; });
+  return owner.logHistoryLoadPromise;
 }
 
 async function syncUtilityLogHistoryRevision(revision) {
-  const targetRevision = normalizeUtilityLogHistoryRevision(revision);
-  if (!targetRevision) return null;
-  state.utility.logHistoryTargetRevision = targetRevision;
-  if (
-    normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision) === targetRevision
-    && !state.utility.logHistorySyncPromise
-  ) {
-    return { revision: targetRevision };
-  }
-  if (state.utility.logHistorySyncPromise) {
-    return state.utility.logHistorySyncPromise;
-  }
-
-  const syncPromise = (async () => {
-    while (
-      normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision)
-      !== normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-    ) {
-      const requestedRevision = normalizeUtilityLogHistoryRevision(
-        state.utility.logHistoryTargetRevision,
-      );
-      const result = await loadUtilityLogHistory(true);
-      if (!result) break;
-      const loadedRevision = normalizeUtilityLogHistoryRevision(result.revision);
-      if (
-        normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-          === requestedRevision
-        && loadedRevision !== requestedRevision
-      ) {
-        state.utility.logHistoryTargetRevision = loadedRevision;
-      }
-    }
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  })();
-  state.utility.logHistorySyncPromise = syncPromise;
-  try {
-    return await syncPromise;
-  } finally {
-    if (state.utility.logHistorySyncPromise === syncPromise) {
-      state.utility.logHistorySyncPromise = null;
-    }
-  }
+  state.utility.logHistoryTargetRevision = normalizeUtilityLogHistoryRevision(revision);
+  state.utility.logHistoryController?.markStale(revision);
+  return { revision: state.utility.logHistoryRevision };
 }
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
@@ -1141,9 +1060,22 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   }
 }
 
-function openUtilityLogHistoryTab() {
-  setUtilityActiveTab('log-history');
-  openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: true });
+function openUtilityLogHistoryTab(entryId = '') {
+  const owner = state.utility;
+  const open = () => {
+    if (state.utility !== owner) return;
+    setUtilityActiveTab('log-history', true);
+    openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
+    if (!entryId) return;
+    const controller = getUtilityLogHistoryController();
+    // Base navigation has its own ownership generation; it cannot replace this
+    // explicitly requested event's console/export capture.
+    if (!owner.logHistory?.length) controller.refreshNavigation().catch(() => {});
+    return controller.selectEvent(entryId).catch(() => null);
+  };
+  if (owner.activeTab !== 'log-history' && typeof confirmBackgroundAppearanceLeave === 'function'
+      && !confirmBackgroundAppearanceLeave(open)) return;
+  return open();
 }
 
 async function saveLastfmIntegration() {

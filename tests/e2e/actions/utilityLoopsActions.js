@@ -106,10 +106,13 @@ export class UtilityLoopsActions {
 
   async readGroupSummaryByTitle(title) {
     const button = this.utilityLoopsTab.loopTree.groupButtonByTitle(title);
+    const count = this.utilityLoopsTab.loopTree.countForGroup(button);
+    await expect(count).toHaveCount(1);
+    await expect(count).toHaveAttribute('hidden', '');
     return {
       title: ((await this.utilityLoopsTab.loopTree.titleForGroup(button).textContent()) || '').trim(),
       meta: ((await this.utilityLoopsTab.loopTree.metaForGroup(button).textContent()) || '').trim(),
-      countText: ((await this.utilityLoopsTab.loopTree.countForGroup(button).textContent()) || '').trim(),
+      count: Number((await count.textContent()).trim()),
     };
   }
 
@@ -214,6 +217,41 @@ export class UtilityLoopsActions {
     return this.utilityLoopsTab.loopEntryCard.captureAudioHandle(loopId);
   }
 
+  async dragLoopAfterByName(sourceName, targetName) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    const { entry: source } = await this.resolveLoopEntryByName(sourceName);
+    const { entry: target } = await this.resolveLoopEntryByName(targetName);
+    const bounds = await target.boundingBox();
+    if (!bounds) throw new Error('Expected a visible reorder target.');
+    const [response] = await Promise.all([
+      this.utilityLoopsTab.page.waitForResponse(response =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === '/loops/reorder'),
+      card.dragHandleForEntry(source).dragTo(target, {
+        targetPosition: { x: Math.min(30, bounds.width / 2), y: bounds.height - 12 },
+      }),
+    ]);
+    expect(response.status()).toBe(200);
+    const result = await response.json();
+    await expect.poll(() => card.readPanelOrder()).toEqual(result.ordered_ids);
+    return result;
+  }
+
+  async verifySongArtworkAndYear(title, expectedYear) {
+    const tab = this.utilityLoopsTab;
+    const song = tab.loopTree.groupButtonByTitle(title);
+    await expect(tab.loopTree.metaForGroup(song)).toContainText(String(expectedYear));
+    await expect(tab.headerArtbox).toHaveAttribute('data-album-artbox-state', 'ready');
+    const retained = await song.elementHandle();
+    try {
+      await tab.headerArtworkTrigger.click();
+      await expect(tab.lightbox).toBeVisible();
+      await expect(tab.lightboxImage).toBeVisible();
+      await tab.lightboxClose.click();
+      await expect(tab.lightbox).toBeHidden();
+      expect(await tab.loopTree.isRetainedSelectedSong(retained)).toBe(true);
+    } finally { await retained.dispose(); }
+  }
+
   async readLoopContinuity(previousHandle, loopId) {
     return this.utilityLoopsTab.loopEntryCard.readAudioContinuity(previousHandle, loopId);
   }
@@ -267,6 +305,8 @@ export class UtilityLoopsActions {
   async hoverLoopActionByName(name, target = 'enter') {
     const { entry } = await this.resolveLoopEntryByName(name);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
+    await entryCard.playButtonForEntry(entry).hover();
+    await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-engaged', 'true');
     const locator = target === 'create'
       ? entryCard.loopCreateButtonForEntry(entry)
       : target === 'cancel'
@@ -280,7 +320,9 @@ export class UtilityLoopsActions {
     );
     await expect(entryCard.loopActionForEntry(entry))
       .toHaveAttribute('data-loop-action-engaged', 'true');
-    await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', '55px');
+    const style = await entryCard.controlStyleForEntry(entry).getAttribute('data-loop-control-style');
+    const editing = await entryCard.loopActionForEntry(entry).getAttribute('data-loop-action-state') === 'editing';
+    await expect(entryCard.loopPodForEntry(entry)).toHaveCSS('width', `${style === 'companion' ? (editing ? 88 : 58) : (editing ? 65 : 34)}px`);
     return entryCard.readLoopActionVisualSnapshot(entry);
   }
 
@@ -289,7 +331,7 @@ export class UtilityLoopsActions {
     await this.utilityLoopsTab.page.mouse.move(2, 2);
     await expect(this.utilityLoopsTab.loopEntryCard.loopActionForEntry(entry))
       .toHaveAttribute('data-loop-action-engaged', 'false');
-    await expect(this.utilityLoopsTab.loopEntryCard.loopPodForEntry(entry)).toHaveCSS('width', '39px');
+    await expect(this.utilityLoopsTab.loopEntryCard.loopActionForEntry(entry)).toHaveCSS('opacity', '0');
     return this.utilityLoopsTab.loopEntryCard.readLoopActionVisualSnapshot(entry);
   }
 
@@ -328,6 +370,7 @@ export class UtilityLoopsActions {
 
   async revealCreateAnotherLoopEditorByName(name, options = {}) {
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    await this.hoverLoopActionByName(name, 'enter');
     await this.utilityLoopsTab.loopEntryCard.loopScissorsButtonForEntry(entry).click();
     const entryCard = this.utilityLoopsTab.loopEntryCard;
     await expect(entryCard.savedLoopEditRangeForEntry(entry, loopId)).toBeVisible({
@@ -449,6 +492,14 @@ export class UtilityLoopsActions {
       ...await this.readLoopEditorStateByName(name),
       dragSnapshot,
     };
+  }
+
+  async adjustLoopBoundaryWithKeyboard(name, boundary, key) {
+    const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    const handle = this.utilityLoopsTab.loopEntryCard.savedLoopBoundaryHandleForEntry(entry, boundary, loopId);
+    await handle.focus();
+    await handle.press(key);
+    return Number(await handle.getAttribute('aria-valuenow'));
   }
 
   async expectCreateAnotherLoopEditorActiveByName(name, options = {}) {

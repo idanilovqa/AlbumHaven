@@ -1,24 +1,18 @@
+import { expect } from '@playwright/test';
+
 export class UtilityLogHistoryActions {
   constructor(utilityLogHistoryTab) {
     this.utilityLogHistoryTab = utilityLogHistoryTab;
   }
 
   async waitForReady(options = {}) {
-    await this.utilityLogHistoryTab.waitForPageCondition((selectors) => {
-      if (typeof state === 'undefined' || state.utility?.activeTab !== 'log-history') return false;
-      if (state.utility?.logHistoryLoading) return false;
-      return Boolean(document.querySelector(selectors.listItemSelector))
-        || Boolean(document.querySelector(selectors.emptyStateSelector));
-    }, {
-      timeout: options.timeout || 60000,
-    }, {
-      listItemSelector: this.utilityLogHistoryTab.listItemSelector,
-      emptyStateSelector: this.utilityLogHistoryTab.mainBody.emptyStateSelector,
-    });
+    await expect(this.utilityLogHistoryTab.console).toBeVisible({ timeout: options.timeout || 60000 });
+    await expect(this.utilityLogHistoryTab.refresh).toBeEnabled({ timeout: options.timeout || 60000 });
+    await expect(this.utilityLogHistoryTab.refresh).toHaveAccessibleName('Refresh');
   }
 
   async readSummary() {
-    const detailTitle = this.utilityLogHistoryTab.mainBody.ruleTitle;
+    const detailTitle = this.utilityLogHistoryTab.detailTitle;
     const emptyState = this.utilityLogHistoryTab.mainBody.emptyState;
     return {
       itemCount: await this.utilityLogHistoryTab.listItems.count(),
@@ -74,43 +68,8 @@ export class UtilityLogHistoryActions {
       .trim();
   }
 
-  async readBrowserStoredEntry(entryId) {
-    // parity-check: allow-read-only-measurement-evaluate -- inspect the existing browser-owned IndexedDB entry
-    return this.utilityLogHistoryTab.page.evaluate(async ({ databaseName, storeName, id }) => {
-      if (typeof indexedDB.databases !== 'function') {
-        throw new Error('Browser database discovery is unavailable.');
-      }
-      const databases = await indexedDB.databases();
-      if (!databases.some((database) => database.name === databaseName)) {
-        throw new Error('Browser log history database is missing.');
-      }
-      return new Promise((resolve, reject) => {
-        const openRequest = indexedDB.open(databaseName);
-        openRequest.addEventListener('error', () => reject(
-          openRequest.error || new Error('Unable to open browser log history.'),
-        ), { once: true });
-        openRequest.addEventListener('success', () => {
-          const database = openRequest.result;
-          if (!database.objectStoreNames.contains(storeName)) {
-            reject(new Error('Browser log history object store is missing.'));
-            return;
-          }
-          const databaseVersion = database.version;
-          const transaction = database.transaction(storeName, 'readonly');
-          const getRequest = transaction.objectStore(storeName).get(id);
-          getRequest.addEventListener('error', () => reject(
-            getRequest.error || new Error('Unable to read browser log history entry.'),
-          ), { once: true });
-          getRequest.addEventListener('success', () => {
-            resolve({ databaseVersion, entry: getRequest.result || null });
-          }, { once: true });
-        }, { once: true });
-      });
-    }, {
-      databaseName: 'album-haven-client-diagnostics',
-      storeName: 'log-history',
-      id: String(entryId),
-    });
+  async readPersistedEntry(entryId) {
+    return this.utilityLogHistoryTab.readPersistedEntry(String(entryId));
   }
 
   async reloadBrowserPage() {

@@ -2105,7 +2105,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   assert.equal(
     typeof parseArtistAlbumCount,
     'function',
-    'Expected a visible artist-meta count reader that does not depend on the mounted virtual window.',
+    'Expected a visible artist-header count reader that does not depend on the mounted virtual window.',
   );
   assert.equal(parseArtistAlbumCount('14 albums'), 14);
   assert.equal(parseArtistAlbumCount('1 album'), 1);
@@ -2116,7 +2116,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.artist-meta[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -4734,10 +4734,12 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.ok(savedHelperStart >= 0 && savedHelperEnd > savedHelperStart, 'Expected the saved-loop hover action helper.');
   const savedHelper = savedActions.slice(savedHelperStart, savedHelperEnd);
   assert.match(savedHelper, /page\.mouse\.move\(/);
+  assert.match(savedHelper, /controlStyleForEntry\(entry\)\.getAttribute\('data-loop-control-style'\)/);
+  assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', '55px'\)[\s\S]*readLoopActionVisualSnapshot/,
-    'saved-loop hover must settle the production expansion before measuring its geometry',
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
 });
@@ -4981,7 +4983,7 @@ test('Settings measurement prepares the real button action and observes the moda
     const visibleElement = { offsetWidth: 1, offsetHeight: 0, getClientRects: () => [] };
     global.document = {
       querySelector(selector) {
-        return ['#utility-modal', '#utility-modal-title', '.utility-modal-body'].includes(selector)
+        return ['#utility-modal', '#utility-modal [role="dialog"][aria-label="Settings"]', '#utility-modal [role="tablist"][aria-label="Settings sections"]', '.utility-modal-body'].includes(selector)
           ? visibleElement
           : null;
       },
@@ -5164,8 +5166,8 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder keeps its cover, controls, and timeline centered',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\)[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*expectApprovedCapsuleSpacing\(unavailable\.visual\)/,
+    'the no-track placeholder keeps controls and timeline on their shared centerline',
   );
   assert.match(
     spec,
@@ -5179,7 +5181,13 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
     spec,
     /idle\.mainAreaBounds\.x - playingPlayerLayout\.mainAreaBounds\.x[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
-  assert.match(spec, /mainLeftGapFromPlay - 8\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /approvedCapsulePlayGap = 8 \+ \(\(56 - 48\) \/ 2\)/);
+  assert.match(spec, /visual\.playBounds\.width - 48\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /visual\.clusterBounds\.width - 56\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /timelineLeftGapFromPlay - approvedCapsulePlayGap\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(playingPlayerLayout\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(idle\)/);
+  assert.match(actionVisualHelper, /this\.expandedPlaybackControls\.root\.boundingBox\(\)/);
   assert.match(spec, /cursors\.startHandle\)\.toBe\('grab'\)/);
   assert.match(spec, /dragSnapshot\.cursors\.startHandle\)\.toBe\('grabbing'\)/);
   assert.match(spec, /pitchVisible\)\.toBe\(false\)/);

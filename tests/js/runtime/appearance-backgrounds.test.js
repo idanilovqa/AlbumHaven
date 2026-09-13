@@ -289,6 +289,54 @@ test('an appearance 403 clears the old theme and blocks its draft from saving un
   assert.equal(requests.length, 2);
 });
 
+test('loop style permission denial preserves the session, saved theme and retryable appearance draft', async () => {
+  let denied=true;const requests=[];
+  const {instance,styles}=browser(async(_url,options)=>{
+    requests.push(options);
+    if(options.method==='GET')return response({...custom(),csrf_token:'token-A'});
+    return denied?response({error:'loop_style_forbidden'},403):response(JSON.parse(options.body));
+  });
+  await instance.load();instance.controller.setColor('main_surface_color','#123456');
+  assert.equal(await instance.controller.save(),false);
+  assert.equal(instance.controller.getState().draft.main_surface_color,'#123456');
+  assert.equal(instance.controller.getState().saved.main_surface_color,custom().main_surface_color);
+  assert.equal(instance.controller.getState().loadFailed,false);
+  assert.equal(styles.get('--appearance-main-surface'),custom().main_surface_color);
+  denied=false;assert.equal(await instance.controller.save(),true);
+  assert.equal(requests.at(-1).headers['X-Album-Haven-CSRF'],'token-A');
+});
+
+test('browser editor consumes live loop capability and exposes only the saved style to playback',async()=>{
+  const initial={...custom(),palette_id:null,panel_index:0,player_override:null,loop_control_style:'capsule'};
+  const {instance}=browser(async(_url,options)=>response(options.method==='GET'?{...initial,csrf_token:'own'}:JSON.parse(options.body)),initial);
+  await instance.load();
+  assert.equal(typeof instance.setLoopCreateAllowed,'function');
+  let updates=0;const unsubscribe=instance.controller.subscribe(()=>{updates++;});
+  instance.setLoopCreateAllowed(true);instance.setLoopCreateAllowed(true);
+  assert.equal(updates,1,'unchanged status projections must not rerender the Appearance editor');
+  unsubscribe();instance.controller.setLoopControlStyle('companion');
+  assert.equal(instance.getSavedLoopControlStyle(),'capsule');
+  assert.equal(instance.controller.getState().canChangeLoopStyle,true);
+  assert.equal(await instance.controller.save(),true);
+  assert.equal(instance.getSavedLoopControlStyle(),'companion');
+  instance.setLoopCreateAllowed(false);instance.controller.setLoopControlStyle('capsule');
+  assert.equal(instance.controller.getState().canChangeLoopStyle,false);
+  assert.equal(instance.controller.getState().draft.loop_control_style,'companion');
+});
+
+test('a stale failing appearance response cannot clear a newly loaded session while its body resolves',async()=>{
+  const started=deferred(),body=deferred();
+  const {instance,styles}=browser(async(_url,options)=>options.method==='GET'
+    ? response({...custom(),csrf_token:'current'})
+    : {ok:false,status:403,redirected:false,json:()=>{started.resolve();return body.promise;}});
+  await instance.load();instance.controller.setColor('main_surface_color','#123456');
+  const pending=instance.controller.save();await started.promise;
+  instance.clearSession();await instance.load();
+  body.resolve({detail:'CSRF validation failed.'});await pending;
+  assert.equal(instance.controller.getState().loadFailed,false);
+  assert.equal(styles.get('--appearance-main-surface'),custom().main_surface_color);
+});
+
 for (const stage of ['response', 'body']) {
   test(`a saved response arriving after session cleanup cannot restore the prior theme (${stage})`, async () => {
     const pending = deferred();

@@ -1679,6 +1679,7 @@ def test_live_targeted_album_rename_commits_without_rebuilding_unrelated_invento
                 2.0,
                 expected_cover_mutation_revision=current_cover_revision,
                 expected_inventory_mutation_revision=prepared_inventory_revision,
+            observed_library_root_ids={"structural-root"},
             )
 
         isolatedPostgres.reset_application_tables(setup_url)
@@ -5196,6 +5197,13 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
             )
 
             relation_rows = list(connection.execute(load_relation_source_rows_sql()).fetchall())
+            from music_app.services.library_browse_postgres import (
+                _missing_album_projection_payloads,
+                _missing_albums_sql,
+            )
+            missing_albums = _missing_album_projection_payloads(
+                list(connection.execute(_missing_albums_sql()).fetchall())
+            )
 
         assert relation_rows
         assert all(
@@ -5252,15 +5260,19 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
         browse_artists = {row["artist"] for row in browse_payload["artists_sidebar"]}
         assert "New Guest" in browse_artists
         assert "Old Guest" not in browse_artists
+        # Observed missing files remain discoverable as non-playable tombstones.
         assert "Archived Owner" in browse_artists
-        archived_album = next(
-            album
-            for group in browse_payload["artist_groups"]
-            if group["artist"] == "Archived Owner"
-            for album in group["albums"]
-            if album["name"] == "Removed Album"
-        )
-        assert archived_album["inventory_status"] == "missing"
+        archived_tombstones = [
+            album for album in missing_albums
+            if album["album_artist"] == "Archived Owner"
+        ]
+        assert len(archived_tombstones) == 1
+        tombstone = archived_tombstones[0]
+        assert tombstone["name"] == "Removed Album"
+        assert tombstone["inventory_status"] == "missing"
+        assert tombstone["tracks"] == []
+        assert tombstone["track_count_preview"] == 0
+        assert tombstone["missing_since"]
         assert "Curated Guest" in browse_artists
 
         relation_views = build_relation_views_from_postgres_rows(config, relation_rows)

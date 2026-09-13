@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const runtime = path.resolve(__dirname, '../../../music_app/static/js/runtime');
 function setup(key = 'problem-ignores', query = '') {
   const handlers = {};
-  const elements = { overlay: {dataset: {}, addEventListener() {}}, list: {innerHTML: ''}, detail: {innerHTML: ''}, count: {}, search: {value: query, disabled: true, addEventListener(type, handler) { handlers[type] = handler; }} };
+  const elements = { overlay: {dataset: {}, addEventListener() {}}, list: {innerHTML: '', scrollTop: 0, querySelectorAll: () => []}, detail: {innerHTML: ''}, count: {}, search: {value: query, disabled: true, addEventListener(type, handler) { handlers[type] = handler; }} };
   const tables = [];
   const rules = [
     {key: 'version-exceptions', title: 'Version exceptions', albums: [{key: 'v1', name: 'Alpha Album', album_artist: 'Artist One', edition: 'Deluxe'}, {key: 'v2', name: 'Beta Album', album_artist: 'Artist Two'}]},
@@ -19,6 +19,11 @@ function setup(key = 'problem-ignores', query = '') {
     bindOverlayPointerOrigin() {}, closeUtilityModal() {}, groupProblemIgnoreItems: () => [],
   };
   vm.createContext(context);
+  const timers = new Map();
+  let timerId = 0;
+  context.setTimeout = callback => { timers.set(++timerId, callback); return timerId; };
+  context.clearTimeout = id => timers.delete(id);
+  context.flushSearchTimers = () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); };
   for (const filename of ['utility-list-builders.js', 'utility-renderers-and-actions.js', 'track-modal-and-gallery.js']) vm.runInContext(fs.readFileSync(path.join(runtime, filename), 'utf8'), context);
   context.buildUtilityAlbumArtbox = () => '';
   context.buildUtilityRuleListItem = rule => `<nav>${rule.key}</nav>`;
@@ -52,6 +57,8 @@ for (const event of ['input', 'search']) {
     handlers[event]();
     assert.equal(context.state.utility.rulesSearchQuery, 'Missing year');
     assert.equal(context.state.utility.searchQuery, 'existing Problems query');
+    assert.equal(elements.detail.innerHTML, '', 'typing must not synchronously rebuild results');
+    context.flushSearchTimers();
     assert.match(elements.detail.innerHTML, /f1/);
     assert.doesNotMatch(elements.detail.innerHTML, /f2/);
   });

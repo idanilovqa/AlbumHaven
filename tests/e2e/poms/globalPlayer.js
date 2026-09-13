@@ -400,6 +400,7 @@ export class GlobalPlayer extends BasePage {
 
   async readLoopActionVisualSnapshot() {
     const [
+      clusterBounds,
       rootBounds,
       podBounds,
       playerBounds,
@@ -410,6 +411,7 @@ export class GlobalPlayer extends BasePage {
       timelineSurfaceBounds,
       titleBounds,
     ] = await Promise.all([
+      this.expandedPlaybackControls.root.boundingBox(),
       this.loopAction.boundingBox(),
       this.loopPod.boundingBox(),
       this.player.boundingBox(),
@@ -420,7 +422,7 @@ export class GlobalPlayer extends BasePage {
       this.timeline.boundingBox(),
       this.title.boundingBox(),
     ]);
-    if (!rootBounds || !podBounds || !playerBounds || !mainAreaBounds || !playBounds
+    if (!clusterBounds || !rootBounds || !podBounds || !playerBounds || !mainAreaBounds || !playBounds
         || !timelineSurfaceBounds || !titleBounds) {
       throw new Error('Expected rendered bottom-player loop action geometry.');
     }
@@ -442,6 +444,7 @@ export class GlobalPlayer extends BasePage {
           display: style.display,
           opacity: Number(style.opacity),
           textShadow: style.textShadow,
+          glyphFilter: getComputedStyle(element.querySelector('.loop-edit-action-icon') || element).filter,
           visibility: style.visibility,
         };
       };
@@ -459,6 +462,7 @@ export class GlobalPlayer extends BasePage {
       };
     });
     return {
+      clusterBounds,
       rootBounds,
       podBounds,
       playerBounds,
@@ -473,6 +477,7 @@ export class GlobalPlayer extends BasePage {
       playCenterY: playBounds.y + (playBounds.height / 2),
       timelineCenterY: timelineSurfaceBounds.y + (timelineSurfaceBounds.height / 2),
       mainLeftGapFromPlay: mainAreaBounds.x - (playBounds.x + playBounds.width),
+      timelineLeftGapFromPlay: timelineSurfaceBounds.x - (playBounds.x + playBounds.width),
       styles,
     };
   }

@@ -18,3 +18,9 @@ Verification:
 - All conflicted JavaScript files and changed Python files passed syntax checks.
 
 This is a local integration checkpoint, not release acceptance. Runtime logs and scratch artifacts remain untracked.
+
+## UI assertion follow-up
+
+The owner requested resolution of the four remaining assertions. All four were reproduced before changes. The item-hover check now verifies the current inset 1px outline while keyboard focus retains its separate outward-outline check. The saved-loop Play border falls back to the shared `--loop-control-border` token, and its test accepts the component's border shorthand while requiring a nonempty color. The two warning tests moved from the removed Problematic Files renderer to the live Library notice, using the real alert and button components. Privacy checks remain, and action visibility requires literal `true` permission (absent, false, and string values are rejected).
+
+Focused result: 214 tests passed across appearance workspace, loop controls, utility list builders, and Library warnings. No full suite, paid review, push, or database migration was run for this follow-up.

@@ -1,0 +1,14 @@
+{
+  "status": "draft",
+  "screen": "utilities-refactor",
+  "version": "v001",
+  "approvals": [],
+  "requests": [],
+  "history": [
+    {
+      "date": "2026-09-08",
+      "event": "intake",
+      "note": "Owner handoff saved. Owner approved current stack. Visual format and exact artifact approval remain pending."
+    }
+  ]
+}

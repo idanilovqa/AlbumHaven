@@ -1,0 +1,5 @@
+# Utilities v001 mockup brief
+
+Use the owner handoff in source/owner-handoff.txt. Compose the current dark blue Album Haven surfaces and compact shared-control styling into one Utilities shell with connected tabs and a subtly raised teal active tab. Use two-column navigation/detail views, integrated search filters, restrained problem labels, lightweight tables, icon-only album actions, reusable settings sections, and loop controls in an attached card footer. Include separate Create Exception, Revert rule, and filtered Export all logs states. Preserve existing problem selection, loop interactions, and action authority during subsequent production adoption.
+
+Use synthetic album/log data only. Keep the preview isolated from production runtime. Appearance provides shell context, not a new editor design. The first reference set is the stored Gallery/Admin imagery in references; replace or supplement it with fresh connected-app captures after browser sign-in. Current-stack use and local interactive format are owner-approved. No exact visual design is approved yet.

@@ -6330,42 +6330,6 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
   assert.doesNotMatch(html, /data-remove-missing-album|Exclude the problem/);
 });
 
-test('watcher health renders one path-free operational row with the authorized full scan action', () => {
-  const context = loadHelpers();
-  context.escapeHtml = (value) => String(value ?? '');
-
-  const html = context.buildLibraryWatchHealthProblemRow({
-    state: 'overflow',
-    root_key: 'root_1234567890abcdef',
-    detected_at: '2026-09-04T12:00:00+00:00',
-    message: 'Some library changes may have been missed.',
-    allowed_actions: { 'library.refresh': true },
-  });
-
-  assert.match(html, /role="status"/);
-  assert.match(html, /Some library changes may have been missed\./);
-  assert.match(html, /class="[^"]*button[^"]*"/);
-  assert.match(html, /data-status-action="full-rescan"/);
-  assert.match(html, />Full Rescan</);
-  assert.doesNotMatch(html, /Private Music|[A-Z]:\\|root_1234567890abcdef/);
-});
-
-test('watcher health keeps the operational message but omits the action for a read-only reviewer', () => {
-  const context = loadHelpers();
-  context.escapeHtml = (value) => String(value ?? '');
-
-  const html = context.buildLibraryWatchHealthProblemRow({
-    state: 'root_unavailable',
-    root_key: 'root_fedcba0987654321',
-    detected_at: '2026-09-04T12:00:00+00:00',
-    message: 'Some library changes may have been missed.',
-    allowed_actions: {},
-  });
-
-  assert.match(html, /Some library changes may have been missed\./);
-  assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321/);
-});
-
 test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {
   const context = {};
   vm.createContext(context);

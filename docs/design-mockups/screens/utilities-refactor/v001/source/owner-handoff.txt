@@ -1,0 +1,763 @@
+Below is a structured handoff capturing the requirements and design direction from this chat.
+
+# Utilities UI Refactor — Handoff
+
+## 1. Overall Utilities shell
+
+The Utilities area should use the same visual language and reusable app components already used elsewhere in Album Haven.
+
+### Header bar
+Use the existing reusable **header bar component** previously used for:
+- Album Details
+- Loose Tracks
+
+The header should contain:
+- Utilities title
+- Subtitle: `Review fixes, loops, integrations, and library settings.`
+- Close button on the right
+
+Do not treat this as a one-off modal header.
+
+---
+
+## 2. Global tab bar
+
+Tabs:
+- Problematic files
+- Rules
+- Loops
+- Log History
+- Integrations
+- Appearance
+
+### Required tab design
+The current separated-button look should be replaced.
+
+Requirements:
+- Tabs should **touch one another**
+- No large gaps between tabs
+- They should visually read as one continuous tab strip
+- Selected tab should visually **pop out from the row**
+- Selected tab can be slightly taller / raised, but not dramatically oversized
+- Modern, polished, integrated design rather than plain individual rounded buttons
+- Selection should remain obvious in dark mode
+- Use the application's existing theme/accent styling
+
+The later mockups used a connected tab-strip direction with a slightly elevated glowing active tab; that is the intended general direction.
+
+---
+
+# 3. Problematic Files tab
+
+## Layout
+
+Two-column layout:
+
+### Left
+Navigation tree / album browser.
+
+### Right
+Selected album/folder/collection information and detected problems.
+
+---
+
+## Left navigation
+
+### Header
+- `Albums`
+- item count
+
+### Search
+Use the reusable **search input component**.
+
+Important:
+- The **filter icon must be part of the search bar itself**
+- Do not place it as a completely separate button beside the search input
+
+### Tree/list
+Each item can show:
+- cover thumbnail
+- album/folder/collection name
+- artist
+- number of issues
+
+Selected item should be clearly highlighted.
+
+---
+
+## Main album summary
+
+At the top of the main body:
+
+### Album art
+Small square artbox.
+
+For missing cover:
+- use a standard **No Cover** state
+- icon should be a crossed-out CD/disc
+- not just text saying `No cover art`
+
+### Album information
+To the right of the art:
+- album/folder/collection title
+- artist
+- year
+- number of tracks
+
+---
+
+## Mini action header
+
+On the same horizontal level as the first line of album/track information, aligned to the right.
+
+Convert these existing text buttons into reusable **icon-only action buttons**:
+- Open in Explorer
+- Edit Tags
+- Fetch Cover
+- Find on Discogs
+
+They should visually behave like a small contextual toolbar / mini header bar.
+
+No button text should be visible in this location.
+
+---
+
+## Album-level problem labels
+
+Where the old action buttons used to sit below the album information, show album/folder/collection-level problems instead.
+
+Examples:
+- Missing year
+- Missing cover art
+
+Use the existing reusable **Label / Alert component** styling.
+
+These should look like problem/status chips, not ordinary buttons.
+
+---
+
+## Detected Problems section
+
+Remove the old separate:
+- Album-level Problems box
+- Track-level Problems box
+
+Instead use one section.
+
+### Section separator
+Heading:
+`Detected problems`
+
+Use a clear reusable section divider/separator.
+
+### Table
+Use the reusable table component.
+
+Columns conceptually:
+- selection
+- track / file
+- problems
+
+Each track occupies one row.
+
+The Problems column contains the alert/problem labels for that track.
+
+Examples:
+- Missing year
+- Missing track number
+
+---
+
+## Problem-label selection behavior
+
+Important existing behavior must remain:
+
+A user can drag across the same problem label on multiple rows to select several matching problems at once.
+
+Example:
+- select `Missing year` on several tracks by dragging across the labels
+
+The redesign must not remove or obscure this interaction.
+
+---
+
+## Create Exception action
+
+Rename:
+`Exclude the problem`
+
+to:
+
+**Create Exception**
+
+This should be a normal reusable app button.
+
+Requirements:
+- It must **not** look like a dropdown
+- No split-button/dropdown arrow styling
+- It should clearly apply to selected:
+  - album-level problem labels
+  - track-level problem labels
+
+Supporting helper text may explain this, e.g. that it creates a rule excluding the selected album/tracks and selected problems from Problematic Files.
+
+---
+
+## Create Exception modal
+
+Make this a **separate UI state/mockup**, rather than showing the modal permanently in the main page mockup.
+
+Modal message should clearly explain what will happen.
+
+Suggested wording pattern:
+
+`This will create a rule to exclude this album/tracks <name if one> with <problem> from Problematic Files. You can later find this rule under Rules and cancel it.`
+
+Actions:
+- Cancel
+- Create Exception
+
+The modal should dynamically identify the selected target/problem where possible.
+
+---
+
+## Removed section
+
+Remove the entire old:
+`Album Details`
+
+section from the bottom.
+
+---
+
+# 4. Rules tab
+
+## Layout
+Same Utilities shell.
+
+Two-column layout:
+- left rule-type navigation
+- right table of active rules
+
+---
+
+## Left navigation
+
+Heading:
+`Rules`
+
+Show number of rule types / relevant count.
+
+Use reusable search input.
+
+Items are rule **types**, e.g.:
+- Version exceptions
+- Problem exclusions
+
+Each item can include:
+- title
+- short description
+- number applied
+
+Selected rule type highlighted.
+
+---
+
+## Main body
+
+For selected rule type:
+
+### Header
+Example:
+`Version exceptions`
+
+### Subtitle
+Brief explanation of what the rule type does.
+
+Example:
+`Albums that should not be counted as versions of another album with the same title.`
+
+---
+
+## Rules table
+
+Use reusable table component.
+
+Each rule is shown in one row.
+
+The row should identify the target:
+- album
+- folder
+- track
+- other applicable entity
+
+It may include small artwork/icon if useful.
+
+On the far right:
+**Revert rule**
+
+This should look like an actionable label/button within the row.
+
+---
+
+## Revert Rule modal
+
+Clicking `Revert rule` opens a confirmation modal.
+
+Modal:
+- Title: `Revert rule?`
+- Explain which rule/target will be restored
+
+Actions must be:
+
+- No
+- Yes
+
+The `Yes` action performs the revert.
+
+---
+
+# 5. Loops tab
+
+## Layout
+
+Two columns:
+- left navigation tree
+- right album information + saved loops
+
+---
+
+## Left navigation
+
+Heading:
+`Loops`
+
+Search input at top.
+
+Filter can follow the same search-component pattern.
+
+### Tree items
+Each item represents a track/album entry with saved loops.
+
+Items are:
+- **draggable**
+- expandable/collapsible
+
+The row may show:
+- drag handle
+- art thumbnail
+- track name
+- artist / album
+- number of loops
+- expand arrow
+
+---
+
+## Expanded navigation item
+
+When expanded, show a slightly indented nested subtable beneath the parent item.
+
+The nested table can contain:
+- #
+- Loop name
+- Length
+
+The nested loop rows should preserve drag/reorder affordances where applicable.
+
+This should visually feel like a child section of the selected navigation item.
+
+---
+
+## Main header
+
+Same general album information pattern as Problematic Files:
+
+Small artbox on left.
+
+Album/track info to the right:
+- track name
+- artist
+- album
+- year
+- track count if useful
+- saved loop count
+
+---
+
+## Saved Loops main section
+
+Section heading:
+`Saved loops (N)`
+
+Can include:
+- Add loop action
+
+Each saved loop should be represented by a reusable **Loop component**.
+
+Loop component contains:
+- loop name
+- timing information
+- edit button
+- delete button
+- loop player instance
+
+---
+
+## Loop player
+
+Use a special/versioned instance of the existing player component.
+
+It can contain:
+- Play
+- range/loop handles
+- current / total time
+- reset
+- playback speed
+- minus / plus controls
+- other existing loop-edit/player controls
+
+Preserve the visual language of the existing player.
+
+---
+
+## Loop player footer
+
+Important later change:
+
+The bottom player controls should be treated as a **footer of the Loop component**, not floating independently inside the main loop body.
+
+So:
+- main loop card/body above
+- dedicated horizontal footer bar below
+- Play and the rest of the player controls live inside this footer
+- footer should visually belong to the loop card
+
+This was the final requested direction for the Loops mockup.
+
+---
+
+# 6. Log History tab
+
+## Layout
+
+Two columns:
+- left history navigation
+- right selected log details
+
+---
+
+## Left navigation
+
+Heading:
+`History`
+
+Show history count.
+
+Search bar:
+`Search log history…`
+
+Optional filter control should follow the same integrated search/filter component language used elsewhere.
+
+History cards may contain:
+- event type
+- album/item
+- timestamp
+
+Examples:
+- Tags edited
+- Library status error
+- Local cover selection persisted
+- Cover art update completed
+- Library indexing failed
+
+---
+
+## Main body
+
+Selected event metadata at top:
+- event title
+- timestamp
+- source/device/browser
+- associated album/items
+- count of files
+
+---
+
+## Console Log component
+
+Main content should use a reusable **Console Log component**.
+
+It should:
+- have a terminal/log appearance
+- use monospace text
+- list relevant tracks/files
+- support large amounts of log output
+- optionally include copy action
+
+This is the central UI element on the right.
+
+---
+
+## Export actions
+
+At the bottom:
+
+- Export log
+- Export all logs
+
+Both use standard reusable app buttons.
+
+---
+
+## Export All Logs modal
+
+Clicking `Export all logs` should open a filtering modal.
+
+Purpose:
+Allow the user to choose which logs to export rather than blindly exporting everything.
+
+Suggested controls:
+
+### Date range
+Presets such as:
+- Today
+- 7 days
+- 30 days
+- Custom
+
+For Custom:
+- From date
+- To date
+
+Use reusable date/input components.
+
+### Log types
+Multi-select/checklist of event categories.
+
+Examples:
+- Tags edited
+- Library status error
+- Local cover selection persisted
+- Cover art update completed
+- Library indexing failed
+
+### Source
+Reusable select/dropdown component.
+
+Example:
+`All sources`
+
+### Optional export options
+Example:
+- Include file paths toggle
+
+### Actions
+- Cancel
+- Export logs
+
+---
+
+# 7. Integrations tab
+
+## Layout
+
+Two columns:
+- left integration navigation
+- right settings sections
+
+This should follow the same general structural pattern as Appearance.
+
+---
+
+## Left navigation
+
+Heading:
+`Integrations`
+
+Search input.
+
+Navigation entries can include:
+- icon
+- integration name
+- short description
+- state/status if applicable
+
+Examples:
+- Library
+- Last.FM
+- Foobar2000
+- Import Local Playlist
+
+Selected item highlighted.
+
+---
+
+## Main body
+
+Do not create a custom layout for every integration.
+
+Use a reusable collection of **settings sections**.
+
+Each section consists of:
+- header
+- subtitle
+- relevant controls/content
+
+Sections are divided from one another using a consistent section separator.
+
+---
+
+## Component reuse
+
+All inputs must use the app's reusable **Input component**.
+
+Do not use raw/default browser inputs.
+
+All buttons use the regular reusable **Button component**.
+
+For select/dropdown controls:
+- use the existing reusable select component if one exists
+- otherwise create a reusable app Select component matching the visual language of the other controls
+
+Do not use the raw browser `<select>` appearance.
+
+---
+
+## Example Last.FM structure
+
+### Connection section
+
+Header/status:
+`Last.FM · Connected as Rendref (...)`
+
+Subtitle:
+`Connect your LastFM account to scrobble and import your listening history.`
+
+May show:
+- scrobbled count
+- queued count
+
+Fields:
+- Username
+- Password / reconnect state
+
+Actions:
+- Connect Last.FM
+- Disconnect
+
+Use regular reusable buttons.
+
+---
+
+### Timezone section
+
+Header:
+`Timezone`
+
+Subtitle explaining its purpose.
+
+Control:
+Reusable Select component.
+
+Example value:
+`America/Denver`
+
+Action:
+`Save timezone`
+
+---
+
+### Help section
+
+Can contain:
+- section heading
+- description
+- regular button linking to integration guide
+
+---
+
+# 8. Common component/system requirements
+
+Across all Utilities tabs, favor shared components rather than one-off implementations.
+
+Important reusable pieces:
+
+- Utilities HeaderBar
+- connected TabBar
+- NavigationTree
+- SearchInput
+- integrated search filter affordance
+- Filter UI
+- ActionButton / icon button
+- standard Button
+- Input
+- Select
+- AlertLabel / problem label
+- SectionSeparator
+- Table
+- Artbox
+- no-cover art state
+- Modal
+- ConsoleLog
+- Loop
+- LoopPlayer
+- card/list navigation item
+- drag handle
+- nested/expandable navigation table
+
+---
+
+# 9. Visual direction
+
+The intended design language from the mockups:
+
+- dark interface
+- subtle borders
+- moderate corner radius
+- restrained use of accent glow
+- green/teal accent consistent with Album Haven
+- selected navigation and tabs clearly highlighted
+- typography hierarchy stronger than current implementation
+- compact controls
+- avoid oversized buttons
+- reduce visual clutter
+- actions should be icon-only when they are contextual utility actions
+- regular workflow actions should remain normal buttons
+- danger/destructive actions can use restrained red styling
+- tables should feel light and integrated rather than heavy grids
+
+The UI should look modern without becoming overly stylized or futuristic.
+
+---
+
+# 10. Interaction requirements that must be preserved
+
+These are functional requirements, not just styling:
+
+- Problem labels can be selected across multiple rows by dragging.
+- Create Exception works for album-level and track-level problems.
+- Rule reversion has confirmation.
+- Loop navigation items are draggable.
+- Loop navigation items can expand to show nested saved loops.
+- Loop player controls belong to the Loop component footer.
+- Export All Logs opens filtering configuration.
+- Search/filter interaction is consistent across left navigation areas.
+- Existing app reusable components should be preferred over new one-off controls.
+
+---
+
+# 11. Current design states/mockups requested in this chat
+
+The set of design states discussed/generated consists of:
+
+1. Problematic Files — normal state
+2. Problematic Files — Create Exception modal state
+3. Rules — rule listing
+4. Rules — Revert Rule confirmation
+5. Loops — expanded tree + loop player
+6. Loops — revised player with controls in component footer
+7. Log History — selected log / console view
+8. Log History — Export All Logs modal
+9. Integrations — reusable section-based settings layout
+
+Appearance was referenced as an existing structural model but was not redesigned in this chat.

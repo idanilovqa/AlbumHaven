@@ -1,0 +1,14 @@
+/* Place the reviewed control on the existing loop waveform centerline. */
+.loop .utility-loop-shell{padding-top:12px;padding-bottom:20px;height:104px}
+.loop .cluster.capsule{position:relative;width:56px;height:56px;min-width:56px;z-index:6;overflow:visible}
+.loop .cluster .play{display:grid;place-items:center;width:48px;height:48px;min-height:48px;padding:0;border:0;border-radius:50%;background:var(--appearance-play);color:var(--appearance-play-ink);font-size:23px;line-height:1}
+.loop .capsule .loop-edit-action{width:32px;min-width:32px;height:44px;min-height:44px;border:0;border-radius:0;background:transparent;color:#c8e4d4}
+.loop .capsule button:hover{outline:none}
+.loop .capsule .loop-edit-action-cancel:hover{color:#FFADB7}
+.loop .capsule .loop-edit-action-create:hover{color:#75E8A7}
+.loop .cluster.capsule{transform:translateY(1px)}
+.loop .cluster.companion{position:relative;z-index:6;width:52px;height:52px;min-width:52px;transform:translateY(1px)}
+.loop .companion .play{width:52px;height:52px;min-height:52px}
+.loop .companion .loop-edit-action{border:0;border-radius:0;background:transparent;padding:0}
+.loop .companion button:hover{outline:none}
+.loop-style-setting .ui-button[aria-pressed=true]{background:var(--appearance-item-selected);border-color:var(--appearance-interaction-outline)}

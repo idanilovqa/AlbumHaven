@@ -522,7 +522,9 @@ test('saved-loop Play hover preserves its surface and uses only a subtle one-pix
     /:root \.utility-loop-play:is\(:hover,\s*:active,\s*:focus-visible\):not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
   )?.[1] || '';
   const restingSurface = playRule.match(/background:\s*([^;]+);/)?.[1]?.trim() || '';
-  const restingBorder = playRule.match(/border-color:\s*([^;]+);/)?.[1]?.trim() || '';
+  const restingBorder = (playRule.match(/border-color:\s*([^;]+);/)
+    || playRule.match(/border:\s*1px solid\s+([^;]+);/))?.[1]?.trim() || '';
+  assert.ok(restingBorder, 'the shared Play control must declare its resting border color');
   assert.ok(baseRule.includes(`background: var(--appearance-play, ${restingSurface}) !important;`));
   assert.ok(baseRule.includes(`border-color: var(--appearance-player-control-border, ${restingBorder}) !important;`));
   assert.match(baseRule, /outline:\s*none\s*!important/);

@@ -1,0 +1,26 @@
+/* Header must not cover the tab strip with an invisible full-width hit area. */
+.shell>header.album-details-header {width:auto;left:auto;right:0;justify-content:flex-end;pointer-events:none}
+.shell>header #close {pointer-events:auto;margin-left:auto}
+.header-artbox-trigger,.header-artbox-trigger:hover:not(:disabled),.header-artbox-trigger:active {outline:none!important;border:0!important;box-shadow:none!important;background:transparent!important}
+.header-artbox-trigger:focus-visible {outline:2px solid var(--appearance-ink)!important;outline-offset:3px}
+.review-artbox,.review-artbox .album-artbox {outline:none;box-shadow:none}
+.detail[aria-labelledby=tab-0] table th:first-child {width:30%}
+.detail[aria-labelledby=tab-0] table th:nth-child(2) {width:28%}
+.detail[aria-labelledby=tab-0] table th:last-child {width:42%}
+.suggested-value {margin:3px 0 12px;font-size:12px;line-height:1.5}
+.suggested-value strong {font-weight:500;color:var(--text)}
+.suggested-value small,.no-suggestion {font-size:11px;line-height:1.5;color:var(--muted)}
+.suggestion-note {font-size:11px;margin-top:12px;text-align:right}
+.suggestion-applied {color:var(--muted);font-size:12px}
+.detail td {vertical-align:top}
+.problem-labels,.suggestion-labels {display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:flex-start;gap:6px}
+.detail table .problem-labels .pill,.detail table .suggestion-labels .suggested-value {margin:0;text-align:left}
+.suggested-value {min-height:26px;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:400;line-height:1.5;user-select:none;touch-action:none;cursor:pointer;color:var(--appearance-ink);background:color-mix(in srgb,var(--appearance-accent) 12%,var(--appearance-control));border:1px solid color-mix(in srgb,var(--appearance-accent) 40%,var(--appearance-line));transition:background 150ms,border-color 150ms}
+.suggested-value[aria-pressed=true] {background:color-mix(in srgb,var(--appearance-accent) 32%,var(--appearance-control));border-color:var(--appearance-accent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--appearance-accent) 25%,transparent)}
+.suggested-value:hover:not(:disabled) {outline:1px solid var(--appearance-interaction-outline);background:color-mix(in srgb,var(--appearance-ink) 10%,var(--appearance-control))}
+.suggested-value:focus-visible {outline:2px solid var(--appearance-interaction-outline);outline-offset:2px}
+#exception.exception-action {color:color-mix(in srgb,var(--appearance-error,#df8f96) 70%,var(--appearance-ink));background:color-mix(in srgb,var(--appearance-error,#df8f96) 12%,var(--appearance-control));border-color:color-mix(in srgb,var(--appearance-error,#df8f96) 48%,var(--appearance-line))}
+#exception.exception-action:hover:not(:disabled) {background:color-mix(in srgb,var(--appearance-error,#df8f96) 22%,var(--appearance-control));outline-color:var(--appearance-error,#df8f96)}
+
+.suggested-value[data-pointer-focus=true]:focus,.suggested-value[data-pointer-focus=true]:focus-visible {outline:none!important}
+.suggested-value[data-pointer-focus=true]:hover:not(:disabled) {outline:1px solid var(--appearance-interaction-outline)!important}

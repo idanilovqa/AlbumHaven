@@ -375,6 +375,7 @@ def test_index_renders_shell_without_legacy_flask_route_module(asgi_app, monkeyp
     assert headers["pragma"] == "no-cache"
     assert headers["expires"] == "0"
     assert b"<!doctype html>" in body
+    assert 'data-gallery-context-summary>2 artists \u00b7 2 albums<' in body.decode("utf-8")
     assert b"Album Haven" in body
     runtime_asset_version = asgi_app.state.runtime_asset_version
     encoded_runtime_asset_version = runtime_asset_version.encode("ascii")
@@ -1609,4 +1610,5 @@ def test_app_js_loads_generated_runtime_bundle_after_bootstrap_payload_setup():
         "settings-navigation.js",
         "navigation-tree.js",
         "selection-accent.js",
+        "unfolding-action-button.js",
     }

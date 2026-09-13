@@ -65,8 +65,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
     expect(familyChips).toContain(MORSE_CANONICAL_ARTIST);
     expect(familyChips).toContain('Neal Morse');
 
-    await artistFamilyActions.clickChipByName('Neal Morse');
-    await artistFamilyActions.waitForChipActive('Neal Morse');
+    await artistFamilyActions.waitForAllChipsActive(familyChips);
+    await artistFamilyActions.selectOnlyChipByName('Neal Morse');
     await galleryActions.waitForOnlyArtistHeadings(['Neal Morse']);
     expect(await galleryActions.readArtistHeadings()).toEqual(['Neal Morse']);
     const nealOnlyAlbums = await galleryActions.readAlbumNamesByHeading('Neal Morse');
@@ -90,6 +90,10 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await artistFamilyActions.clickPrimaryChip();
     await artistFamilyActions.waitForChipActive(MORSE_CANONICAL_ARTIST, false);
+    await galleryActions.waitForOnlyArtistHeadings([]);
+    await galleryActions.waitForEmptyFamilySelection();
+
+    await artistFamilyActions.selectAllChips();
     await galleryActions.waitForArtistHeadings([MORSE_CANONICAL_ARTIST, 'Neal Morse']);
   });
 
@@ -103,9 +107,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
     await navigationPanelActions.waitForSidebarSelection('Neal Morse');
-    await artistFamilyActions.waitForViewReady('Neal Morse', {
-      queryValue: MORSE_CANONICAL_ARTIST,
-    });
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForAlbumVisibleUnderHeading(
       'Neal Morse',
       NEAL_MORSE_RETAINED_ALBUM,
@@ -113,9 +116,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName(MORSE_CANONICAL_ARTIST);
     await navigationPanelActions.waitForSidebarSelection(MORSE_CANONICAL_ARTIST);
-    await artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, {
-      queryValue: MORSE_CANONICAL_ARTIST,
-    });
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForArtistHeadings([MORSE_CANONICAL_ARTIST, 'Neal Morse']);
 
     const deepScroll = await galleryActions.jumpGalleryToMiddle();
@@ -124,9 +126,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
     await navigationPanelActions.waitForSidebarSelection('Neal Morse');
-    await artistFamilyActions.waitForViewReady('Neal Morse', {
-      queryValue: MORSE_CANONICAL_ARTIST,
-    });
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForAlbumVisibleUnderHeading(
       'Neal Morse',
       NEAL_MORSE_RETAINED_ALBUM,
@@ -140,9 +141,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
   });
 
   await stepLogger.step('Keep both source credits under the canonical root grouping', async () => {
-    await searchToolbarActions.clearSearch({ submitWithEnter: true });
+    await galleryActions.goto('/?surface=albums');
     await searchToolbarActions.waitForQuery('');
-    await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
     await galleryActions.waitForInitialAllArtistsSections({ minimumHeadingCount: 4 });
     expect(await navigationPanelActions.readSidebarArtistNameCount(MORSE_CANONICAL_ARTIST)).toBe(1);
     expect(await navigationPanelActions.readSidebarArtistAlbumCount(MORSE_CANONICAL_ARTIST)).toBe(2);
@@ -232,8 +232,8 @@ test('FTC-SEARCH-NAV-022 starts with a collapsed scan identity and browses its r
     expect(familyChips).toContain(WHITESPACE_DISPLAY_ARTIST);
     expect(familyChips).toContain(WHITESPACE_RELATED_ARTIST);
 
-    await artistFamilyActions.clickChipByName(WHITESPACE_RELATED_ARTIST);
-    await artistFamilyActions.waitForChipActive(WHITESPACE_RELATED_ARTIST);
+    await artistFamilyActions.waitForAllChipsActive(familyChips);
+    await artistFamilyActions.selectOnlyChipByName(WHITESPACE_RELATED_ARTIST);
     await galleryActions.waitForOnlyArtistHeadings([WHITESPACE_RELATED_ARTIST]);
     expect(await galleryActions.readArtistHeadings()).not.toContain(WHITESPACE_DISPLAY_ARTIST);
     await galleryActions.waitForAlbumVisibleUnderHeading(

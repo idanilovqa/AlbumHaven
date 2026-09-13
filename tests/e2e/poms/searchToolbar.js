@@ -1,6 +1,6 @@
 import { BasePage } from './basePage.js';
 import {
-  ProductionViewObserver,
+  getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
   readCanonicalArtistGroups,
@@ -18,7 +18,7 @@ export function resolveCurrentCanonicalView(payload = {}, runtimeView = null) {
   const runtimeQuery = runtimeView && typeof runtimeView === 'object'
     ? String(runtimeView.query || '').trim()
     : null;
-  if (runtimeQuery !== null && runtimeQuery !== payloadQuery) {
+  if (runtimeQuery !== null && runtimeView.surface && Array.isArray(runtimeView.artists)) {
     return {
       query: runtimeQuery,
       surface: String(runtimeView.surface || '').trim().toLowerCase(),
@@ -36,6 +36,23 @@ export function resolveCurrentCanonicalView(payload = {}, runtimeView = null) {
   };
 }
 
+export function resolveCurrentCanonicalSidebar(payload = {}, runtimeView = null) {
+  const names = Array.isArray(runtimeView?.sidebarArtists)
+    ? runtimeView.sidebarArtists
+    : (Array.isArray(payload?.artists_sidebar) ? payload.artists_sidebar : [])
+      .map(artist => artist?.artist_display || artist?.artist);
+  return names.map(artist => String(artist || '').trim()).filter(Boolean);
+}
+
+export function hasAppliedCanonicalSidebar(canonicalArtists, attachedArtists, options) {
+  const normalize = artists => artists.map(artist => String(artist || '').trim()).filter(Boolean);
+  const canonical = normalize(canonicalArtists);
+  const attached = normalize(attachedArtists);
+  return canonical.length === attached.length
+    && canonical.every((artist, index) => artist === attached[index])
+    && hasAppliedCanonicalArtistSurface(canonical, attached, options);
+}
+
 export class SearchToolbar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
@@ -46,7 +63,7 @@ export class SearchToolbar extends BasePage {
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });
     this.recentSearchOptions = this.recentSearchPopover.getByRole('option');
     this.mainContent = page.getByRole('main');
-    this.productionViewObserver = new ProductionViewObserver(page);
+    this.productionViewObserver = getProductionViewObserver(page);
   }
 
   get formSelector() {
@@ -98,19 +115,19 @@ export class SearchToolbar extends BasePage {
   }
 
   get artistFamilyPanelSelector() {
-    return '#related-box';
+    return '#artist-family-panel';
   }
 
   get artistFamilyToggleSelector() {
-    return '#related-toggle';
+    return '[data-gallery-bar-action="artist-family"]';
   }
 
   get artistFamilyListSelector() {
-    return '#related-list';
+    return '[data-gallery-family-panel-body]';
   }
 
   get artistFamilyChipSelector() {
-    return '#related-list .related-chip';
+    return '[data-gallery-family-panel-body] [data-gallery-family-artist]';
   }
 
   get sidebarArtistSelector() {
@@ -235,7 +252,7 @@ export class SearchToolbar extends BasePage {
         (chip) => String(chip.textContent || '').trim(),
       );
       const readFamilySelection = (chips) => chips.map((chip) => ({
-        active: chip.classList.contains('active'),
+        active: chip.classList.contains('is-active'),
         ariaPressed: String(chip.getAttribute('aria-pressed') || ''),
         primary: chip.classList.contains('is-primary'),
       }));
@@ -743,21 +760,18 @@ export class SearchToolbar extends BasePage {
         || null;
       // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
       const runtimeView = await this.page.evaluate(() => {
-        if (typeof state === 'undefined') return null;
-        const artists = [];
-        const seenArtists = new Set();
-        for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
-          for (const group of Array.isArray(state?.view?.[field]) ? state.view[field] : []) {
-            const artist = String(group?.artist || group?.artist_display || '').trim();
-            if (!artist || seenArtists.has(artist)) continue;
-            seenArtists.add(artist);
-            artists.push(artist);
-          }
-        }
+        if (typeof state === 'undefined' || !state.gallery?.mainState
+          || typeof getFilteredGalleryMainModel !== 'function') return null;
+        const artists = [...new Set(getFilteredGalleryMainModel().groups
+          .map(group => String(group?.artist_display || group?.artist || '').trim())
+          .filter(Boolean))];
         return {
           query: String(state?.view?.query || '').trim(),
           surface: String(state?.view?.surface?.active || '').trim().toLowerCase(),
           artists,
+          sidebarArtists: (Array.isArray(state.view.artists_sidebar) ? state.view.artists_sidebar : [])
+            .map(artist => String(artist?.artist_display || artist?.artist || '').trim())
+            .filter(Boolean),
           activeViewRequestId: Number(state?.ui?.activeViewRequestId || 0),
           activeViewRequestUrl: String(state?.ui?.activeViewRequestUrl || ''),
           busy: Boolean(state?.busy),
@@ -787,9 +801,7 @@ export class SearchToolbar extends BasePage {
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const canonicalSurface = canonicalView.surface;
-      const canonicalSidebarArtists = (Array.isArray(payload?.artists_sidebar) ? payload.artists_sidebar : [])
-        .map((artist) => String(artist?.artist_display || artist?.artist || '').trim())
-        .filter(Boolean);
+      const canonicalSidebarArtists = resolveCurrentCanonicalSidebar(payload, runtimeView);
       const attachedSidebarArtists = (await this.page
         .locator(this.sidebarArtistNameSelector)
         .allTextContents())
@@ -826,7 +838,7 @@ export class SearchToolbar extends BasePage {
         || observationChanged
         || domChanged;
       const canonicalApplied = canonicalSurface === 'home'
-        ? hasAppliedCanonicalArtistSurface(
+        ? hasAppliedCanonicalSidebar(
           canonicalSidebarArtists,
           finalAttachedSidebarArtists,
           { loaderVisible, payloadPresent: payload !== null, settledEmpty },

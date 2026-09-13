@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 from music_app.services.library_watch import LibraryEvent, LibraryEventKind
 
@@ -56,7 +57,8 @@ set metadata = jsonb_set(
              %(root_id)s::text,
              jsonb_build_object(
                'state', %(state)s::text,
-               'detected_at', %(detected_at_text)s::text
+               'detected_at', %(detected_at_text)s::text,
+               'event_id', %(event_id)s::text
              )
            ),
       true
@@ -148,6 +150,7 @@ class LibraryWatchHealthProblem:
     root_id: str
     state: str
     detected_at: str
+    event_id: str = ""
 
     @property
     def message(self) -> str:
@@ -159,6 +162,7 @@ class LibraryWatchHealthProblem:
             "root_key": opaque_root_key(self.root_id),
             "detected_at": self.detected_at,
             "message": WATCH_HEALTH_MESSAGE,
+            **({"event_id": self.event_id} if self.event_id else {}),
         }
 
 
@@ -183,6 +187,7 @@ class PostgresLibraryWatchHealthStore:
                     "state": problem.state,
                     "detected_at": problem.detected_at,
                     "detected_at_text": problem.detected_at,
+                    "event_id": problem.event_id,
                 },
             )
             _commit_if_supported(connection)
@@ -206,6 +211,7 @@ class PostgresLibraryWatchHealthStore:
                         root_id=normalized_root_id,
                         state=state,
                         detected_at=detected_at,
+                        event_id=str(value.get("event_id") or "").strip(),
                     )
                 )
         return sorted(problems, key=lambda problem: problem.root_id)
@@ -290,6 +296,7 @@ class LibraryWatchHealthService:
             root_id=root_id,
             state=state,
             detected_at=self._now().astimezone(timezone.utc).isoformat(),
+            event_id=str(uuid4()),
         )
         with self._lock:
             # Wall-clock ticks can repeat. Only a recovery completed during

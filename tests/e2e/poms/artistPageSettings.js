@@ -10,42 +10,50 @@ export class ArtistPageSettings extends BasePage {
     super(page, testInfo);
     this.button = page.locator(this.buttonSelector);
     this.menu = page.locator(this.menuSelector);
+    this.familyToggle = page.locator('[data-gallery-bar-action="artist-family"]');
+    this.familyPanel = page.locator('#artist-family-panel');
     this.combineSimilarArtistsButton = page.locator(this.combineSimilarArtistsButtonSelector);
     this.nonAlbumTracksButton = page.locator(this.nonAlbumTracksButtonSelector);
-    this.nonAlbumTracksCount = this.nonAlbumTracksButton.locator(this.countSelector);
     this.nonAlbumTracksModal = page.locator(this.nonAlbumTracksModalSelector);
     this.nonAlbumTrackRows = page.locator(this.nonAlbumTrackRowSelector);
     this.nonAlbumTrackTitles = page.locator(this.nonAlbumTrackTitleSelector);
-    this.nonAlbumTrackSections = this.nonAlbumTracksModal.locator('[data-non-album-section]');
-    this.nonAlbumTrackSectionTitles = this.nonAlbumTracksModal.locator('.non-album-track-section-title');
+    this.nonAlbumTrackSections = this.nonAlbumTracksModal.locator('.album-track-table__disc');
+    this.nonAlbumTrackSectionTitles = this.nonAlbumTracksModal.locator('.album-track-table__disc-heading');
+    this.nonAlbumTrackTable = this.nonAlbumTracksModal.locator('.album-track-table');
+    this.nonAlbumTrackTotal = this.nonAlbumTracksModal.locator('.album-track-table__total');
     this.nonAlbumCompactTables = this.nonAlbumTracksModal.getByRole('table');
     this.nonAlbumColumnHeaders = this.nonAlbumTracksModal.getByRole('columnheader');
-    this.nonAlbumControlCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="control"]');
-    this.nonAlbumTrackCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="track"]');
+    this.nonAlbumPlayCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="number"] .album-track-table__play');
+    this.nonAlbumNumberCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="number"]');
+    this.nonAlbumTrackCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="title"]');
     this.nonAlbumPathCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="path"]');
-    this.nonAlbumExceptionLabels = this.nonAlbumTracksModal.locator('.non-album-type-cell');
+    this.nonAlbumProblemCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="problem"]');
+    this.nonAlbumDurationCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="duration"]');
+    this.nonAlbumHeader = this.nonAlbumTracksModal.locator('.album-details-header');
+    this.nonAlbumHeaderActions = this.nonAlbumHeader.locator('.album-details-header__action');
+    this.nonAlbumHeaderFolderActions = this.nonAlbumHeader.locator('.album-details-header__action-icon--folder');
     this.nonAlbumDialog = this.nonAlbumTracksModal.getByRole('dialog');
     this.nonAlbumTracksCloseButton = page.locator(this.nonAlbumTracksCloseButtonSelector);
     this.nonAlbumTracksEditTagsButton = this.nonAlbumTracksModal.getByRole('button', {
-      name: 'Edit album tags',
+      name: 'Edit tags',
       exact: true,
     });
   }
 
   get buttonSelector() {
-    return '#gallery-options-button';
+    return '[data-gallery-bar-action="album-types"]';
   }
 
   get menuSelector() {
-    return '#gallery-options-menu';
+    return '#gallery-album-types-menu';
   }
 
   get combineSimilarArtistsButtonSelector() {
-    return '#gallery-options-menu [data-toggle-combine-similar-artists="1"]';
+    return '#artist-family-panel [data-toggle-combine-similar-artists="1"]';
   }
 
   get nonAlbumTracksButtonSelector() {
-    return '#gallery-options-menu [data-open-non-album-modal="1"]';
+    return '#gallery-album-types-menu [data-open-non-album-tracks="1"]';
   }
 
   get nonAlbumTracksModalSelector() {
@@ -57,7 +65,7 @@ export class ArtistPageSettings extends BasePage {
   }
 
   get nonAlbumTrackTitleSelector() {
-    return '#non-album-modal [data-track-row-path] .track-title';
+    return '#non-album-modal [data-track-row-path] .album-track-table__title';
   }
 
   get nonAlbumTracksCloseButtonSelector() {
@@ -74,31 +82,31 @@ export class ArtistPageSettings extends BasePage {
 
   nonAlbumTrackRowByTitle(trackTitle) {
     return this.nonAlbumTrackRows.filter({
-      has: this.page.locator('.track-title').filter({
-        hasText: exactNormalizedText(trackTitle),
+      has: this.page.locator('.album-track-table__title').filter({
+        hasText: new RegExp(`^\\s*${String(trackTitle).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'u'),
       }),
     });
   }
 
   nonAlbumTrackArtistByTitle(trackTitle) {
-    return this.nonAlbumTrackRowByTitle(trackTitle).locator('.non-album-track-artist');
+    return this.nonAlbumTrackRowByTitle(trackTitle).locator('.album-track-table__secondary');
   }
 
   nonAlbumTrackPathByTitle(trackTitle) {
     return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="path"]');
   }
 
-  nonAlbumTrackControlByTitle(trackTitle) {
-    return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="control"]');
+  nonAlbumTrackNumberByTitle(trackTitle) {
+    return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="number"]');
   }
 
   nonAlbumTrackCellByTitle(trackTitle) {
-    return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="track"]');
+    return this.nonAlbumTrackRowByTitle(trackTitle).locator('[data-cdt-column="title"]');
   }
 
   nonAlbumPlayButtonByTitle(trackTitle) {
     return this.nonAlbumTrackRowByTitle(trackTitle).getByRole('button', {
-      name: `Play ${trackTitle}`,
+      name: 'Play track',
       exact: true,
     });
   }
@@ -123,7 +131,7 @@ export class ArtistPageSettings extends BasePage {
     const [trackHeader, pathHeader, trackCell, pathCell] = await Promise.all([
       table.getByRole('columnheader', { name: 'Track', exact: true }).boundingBox(),
       table.getByRole('columnheader', { name: 'File path', exact: true }).boundingBox(),
-      firstRow.locator('[data-cdt-column="track"]').boundingBox(),
+      firstRow.locator('[data-cdt-column="title"]').boundingBox(),
       firstRow.locator('[data-cdt-column="path"]').boundingBox(),
     ]);
     if (!trackHeader || !pathHeader || !trackCell || !pathCell) return null;

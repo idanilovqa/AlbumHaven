@@ -7,7 +7,11 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   const coverPath = String(track.coverPath || track.cover_path || '');
   const durationSeconds = Number(track.durationSeconds || track.duration_seconds || 0);
   const isPlaying = Boolean(track.isPlaying);
-  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${isPlaying ? '&#x23F8;' : '&#x25B6;'}</button>`;
+  const iconName = isPlaying ? 'pause' : 'play';
+  const icon = ButtonComponent.renderIconSvg(iconName, {
+    className: `album-track-table__play-icon ui-icon--${iconName}`,
+  });
+  return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
@@ -22,6 +26,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const problemHtml = track.isProblematic
     ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
     : '';
+  const displayPath = String(track.displayPath || track.display_path || trackPath).trim();
   return {
     key: trackPath || `${index + 1}`,
     className: classes.join(' '),
@@ -31,9 +36,9 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      play: { content: buildAlbumTrackPlayButtonHtml(track), ariaLabel: track.isPlaying ? 'Pause track' : 'Play track' },
-      number: { content: escapeHtml(track.trackNumber || track.track_number || index + 1) },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
       title: { content: titleHtml },
+      path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },
       duration: { content: `<span class="track-duration" data-track-duration-path="${escapeHtml(trackPath)}" data-original-duration="${escapeHtml(track.originalDuration || track.duration || '')}">${escapeHtml(track.duration || '')}</span>` },
     },
@@ -42,24 +47,34 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
 
 function buildAlbumTrackTableHtml(config = {}) {
   const groups = Array.isArray(config.groups) ? config.groups : [];
+  const showPath = Boolean(config.showPath);
+  const forceGroupLabels = Boolean(config.forceGroupLabels);
+  const ariaLabel = String(config.ariaLabel || 'Album tracks').trim() || 'Album tracks';
+  const idPrefix = String(config.idPrefix || 'album-track-table').trim() || 'album-track-table';
   const multiDisc = Boolean(config.multiDisc) || groups.length > 1;
   const mainDiscCount = groups.filter((group) => !group?.isBonus).length;
   const tableSections = groups.map((group, groupIndex) => {
     const tracks = Array.isArray(group?.tracks) ? group.tracks : [];
     const label = String(group?.discLabel || (group?.discNumber ? `CD ${group.discNumber}` : '')).trim();
-    const showLabel = multiDisc && Boolean(label) && (Boolean(group?.isBonus) || mainDiscCount > 1);
+    const showLabel = Boolean(label) && (
+      forceGroupLabels
+      || (multiDisc && (Boolean(group?.isBonus) || mainDiscCount > 1))
+    );
+    const columnsConfig = [
+      { key: 'number', label: '#' },
+      { key: 'title', label: 'Track' },
+      ...(showPath ? [{ key: 'path', label: 'File path' }] : []),
+      { key: 'problem', label: 'Problem', header: 'absent', action: true },
+      { key: 'duration', label: 'Length', action: true },
+    ];
     const table = buildCompactDataTable({
-      id: `album-track-table-tracks-${groupIndex + 1}`,
-      ariaLabel: label ? `Album tracks — ${label}` : 'Album tracks',
+      id: `${idPrefix}-tracks-${groupIndex + 1}`,
+      ariaLabel: label ? `${ariaLabel} — ${label}` : ariaLabel,
       headers: groupIndex === 0 ? 'visible' : 'absent',
-      columns: '34px 36px minmax(0, 1fr) 20px minmax(54px, auto)',
-      columnsConfig: [
-        { key: 'play', label: 'Play', header: 'absent' },
-        { key: 'number', label: '#' },
-        { key: 'title', label: 'Track' },
-        { key: 'problem', label: 'Problem', header: 'absent', action: true },
-        { key: 'duration', label: 'Length', action: true },
-      ],
+      columns: showPath
+        ? '36px minmax(180px, 1fr) minmax(220px, .9fr) 20px minmax(54px, auto)'
+        : '36px minmax(0, 1fr) 20px minmax(54px, auto)',
+      columnsConfig,
       rows: tracks.map((track, index) => buildAlbumTrackTableRow(track, index, config)),
       density: 'compact',
       frame: 'outline',
@@ -90,4 +105,17 @@ function triggerAlbumTrackPlayActivation(button) {
   button.addEventListener?.('animationend', () => {
     button.classList.remove('album-track-table__play--activating');
   }, { once: true });
+}
+
+function handleAlbumTrackRowDoubleClick(event) {
+  if (event.target.closest?.('button, a, input, textarea, select, [contenteditable=true]')) return;
+  const row = event.currentTarget;
+  event.preventDefault();
+  // Double-click is playback; ordinary drag selection remains native and copyable.
+  const selection = row.ownerDocument.getSelection();
+  if (selection && row.contains(selection.anchorNode) && row.contains(selection.focusNode)) {
+    selection.removeAllRanges();
+  }
+  if (row.dataset.trackPlaying === 'true') return;
+  row.querySelector('.play-track-button')?.click();
 }

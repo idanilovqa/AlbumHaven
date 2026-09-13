@@ -118,9 +118,9 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     await artistFamilyActions.waitForVisible();
     await artistFamilyActions.expand();
     await artistFamilyActions.clickChipByName('The Neal Morse Band');
-    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
-    await artistFamilyActions.clickChipByName('The Neal Morse Band');
     await artistFamilyActions.waitForChipActive('The Neal Morse Band', false);
+    await artistFamilyActions.clickChipByName('The Neal Morse Band');
+    await artistFamilyActions.waitForChipActive('The Neal Morse Band');
     await galleryActions.waitForAlbumVisibleUnderHeading(ARTIST, ALBUM);
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
     const checkpoint = await readDecodedImageCheckpoint(galleryActions.albumCoverByName(ALBUM));
@@ -236,6 +236,7 @@ test('FTC-COVERS-015 shows the exact Joseph 2023 cover decoded in the card, moda
 test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view to the active album', { tag: '@area:playback' }, async ({
   galleryActions,
   globalPlayerActions,
+  navigationPanelActions,
   page,
   playbackEvidence,
   searchToolbarActions,
@@ -285,6 +286,8 @@ test('FTC-PLAYER-010 keeps player artwork decoded and limits its full-art view t
     await trackModalActions.close();
     await searchToolbarActions.clearSearch({ submitWithEnter: true });
     await searchToolbarActions.waitForQuery('');
+    await navigationPanelActions.selectSidebarArtistByName(ARTIST);
+    await navigationPanelActions.waitForSidebarSelection(ARTIST);
     await galleryActions.waitForGalleryReady({ minimumCards: 2 });
     await galleryActions.waitForSelectedArtistGallery(ARTIST);
     await galleryActions.waitForMinimumAlbumCountByHeading(ARTIST, 2);

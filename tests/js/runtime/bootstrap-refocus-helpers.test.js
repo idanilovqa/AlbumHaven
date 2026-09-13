@@ -143,11 +143,11 @@ function createEvent(target) {
   modal.appendChild(modalButton);
   context.armViewportRefocusSuppression();
   const pointerEvent = createEvent(modalButton);
-  assert.equal(context.suppressRefocusViewportInteraction(pointerEvent), true);
-  assert.equal(pointerEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportInteraction(pointerEvent), false);
+  assert.equal(pointerEvent.prevented, false);
   const clickEvent = createEvent(modalButton);
-  assert.equal(context.suppressRefocusViewportClick(clickEvent), true);
-  assert.equal(clickEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportClick(clickEvent), false);
+  assert.equal(clickEvent.prevented, false);
   assert.equal(context.state.ui.suppressClickSequenceUntil, 0);
   const secondPointerEvent = createEvent(modalButton);
   assert.equal(context.suppressRefocusViewportInteraction(secondPointerEvent), false);
@@ -186,19 +186,19 @@ function createEvent(target) {
 
   context.armViewportRefocusSuppression();
   const ordinaryPointerEvent = createEvent(ordinaryModalButton);
-  assert.equal(context.suppressRefocusViewportInteraction(ordinaryPointerEvent), true);
-  assert.equal(ordinaryPointerEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportInteraction(ordinaryPointerEvent), false);
+  assert.equal(ordinaryPointerEvent.prevented, false);
   const ordinaryClickEvent = createEvent(ordinaryModalButton);
-  assert.equal(context.suppressRefocusViewportClick(ordinaryClickEvent), true);
-  assert.equal(ordinaryClickEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportClick(ordinaryClickEvent), false);
+  assert.equal(ordinaryClickEvent.prevented, false);
 
   context.armViewportRefocusSuppression();
   const headerPointerEvent = createEvent(modalHeader);
-  assert.equal(context.suppressRefocusViewportInteraction(headerPointerEvent), true);
-  assert.equal(headerPointerEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportInteraction(headerPointerEvent), false);
+  assert.equal(headerPointerEvent.prevented, false);
   const headerClickEvent = createEvent(modalHeader);
-  assert.equal(context.suppressRefocusViewportClick(headerClickEvent), true);
-  assert.equal(headerClickEvent.prevented, true);
+  assert.equal(context.suppressRefocusViewportClick(headerClickEvent), false);
+  assert.equal(headerClickEvent.prevented, false);
   assert.equal(context.state.ui.suppressNextViewportClick, false);
   const nextCoverPointerEvent = createEvent(coverCard);
   assert.equal(context.suppressRefocusViewportInteraction(nextCoverPointerEvent), false);

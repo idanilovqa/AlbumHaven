@@ -99,6 +99,21 @@ function requireMethod(controller, name) {
   return controller[name].bind(controller);
 }
 
+function openElementClassesAt(markup, offset) {
+  const stack = [];
+  const tags = /<\/?([a-z][\w-]*)(?:\s[^>]*)?>/gi;
+  let match;
+  while ((match = tags.exec(markup)) && match.index < offset) {
+    if (match[0].startsWith('</')) {
+      stack.pop();
+      continue;
+    }
+    if (match[0].endsWith('/>')) continue;
+    stack.push(match[0].match(/\bclass="([^"]*)"/)?.[1] || '');
+  }
+  return stack;
+}
+
 function setup(options = {}) {
   const initial = options.initial || initialAppearance();
   const requests = [];
@@ -241,14 +256,22 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
 test('Main elements and Player & Seekbar keep their live previews visible while settings scroll', () => {
   const source = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/appearance-backgrounds.js'), 'utf8');
   const main = source.slice(source.indexOf('function editorMarkup()'), source.indexOf('function seekbarMarkup('));
-  const player = appearance.seekbarMarkup('waveform');
   const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/appearance-backgrounds.css'), 'utf8');
 
   assert.match(main, /class="background-choices"[\s\S]*class="background-player-section"[\s\S]*class="background-preview-column"/);
   assert.match(css, /\.background-preview-column\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
 
-  assert.match(player, /class="player-preview-dock"[\s\S]*data-player-live-preview[\s\S]*class="player-seekbar-mode"[\s\S]*class="player-editor-workspace"/);
-  assert.equal((player.match(/class="player-seekbar-mode"/g) || []).length, 1);
+  for (const mode of ['default', 'waveform']) {
+    const player = appearance.seekbarMarkup(mode);
+    const seekbarModeOffset = player.indexOf('<section class="player-seekbar-mode"');
+    const openClasses = openElementClassesAt(player, seekbarModeOffset);
+
+    assert.ok(seekbarModeOffset > 0);
+    assert.ok(player.indexOf('data-player-live-preview') < seekbarModeOffset);
+    assert.ok(seekbarModeOffset < player.indexOf('<div class="player-editor-workspace"'));
+    assert.ok(!openClasses.includes('player-preview-dock'), `${mode} selector must scroll outside the sticky preview`);
+    assert.equal((player.match(/class="player-seekbar-mode"/g) || []).length, 1);
+  }
   assert.match(css, /\.player-preview-dock\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
 });
 
@@ -576,8 +599,8 @@ test('interaction overrides use seven coordinated families and the former focus 
   const roles = ['item_hover', 'item_selected', 'button_hover_background', 'item_outline', 'button_pressed'];
   assert.deepEqual(appearance.interactionColorFamilies.map(family => [family.id, family.label, roles.map(role => family.colors[role])]), expected);
   const markup = appearance.interactionControlsMarkup();
-  for (const label of ['Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
-  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 5);
+  for (const label of ['Panel &amp; dropdown outline', 'Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
+  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 6);
   assert.doesNotMatch(markup, /data-interaction-clear=/);
   assert.match(markup, /data-interaction-color="item_hover" data-color="#31465D"/);
   assert.match(markup, /data-item-outline-color[^>]*data-color-family="blue"[^>]*style="--swatch:#86B7EF"/);
@@ -680,11 +703,11 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:not\(\.global-player \*\)/);
   assert.match(css, /:not\(:disabled\)/);
   assert.match(css, /:not\(\[aria-disabled=['"]true['"]\]\)/);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\):not\(\.navigation-tree-item\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
-  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*2px/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
+  assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
   assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\):not\(\.global-player \*\):focus-visible[^{}]*\{[^}]*outline:\s*2px solid var\(--appearance-interaction-outline,/s);
+  assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
   assert.match(css, /:is\(input\[type='checkbox'\], input\[type='radio'\]\):not\(\.global-player \*\):hover:not\(:disabled\)[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);
   assert.match(css, /:root\[data-appearance-palette\]\s+:is\(input\[type='checkbox'\], input\[type='radio'\]\)\s*\{[^}]*accent-color:\s*var\(--appearance-accent\)/s);
   assert.doesNotMatch(css, /:root\[data-appearance-palette\][^{]*:focus-visible\s*\{[^}]*--appearance-interaction-outline/s);

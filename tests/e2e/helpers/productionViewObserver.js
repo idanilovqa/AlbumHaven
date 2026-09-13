@@ -1,3 +1,5 @@
+import { CDPDocumentEvents } from './cdpDocumentEvents.js';
+
 function readViewDataRequest(request, sequence) {
   const requestUrl = new URL(request.url());
   if (!['/view-data', '/home-data'].includes(requestUrl.pathname)) return null;
@@ -129,7 +131,8 @@ export function readCanonicalAlbumTargetEvidence(observation = {}, expected = {}
 }
 
 export class ProductionViewObserver {
-  constructor(page) {
+  constructor(page, events = new CDPDocumentEvents(page)) {
+    this.events = events;
     this.activeRequests = new Map();
     this.latestFullPayload = null;
     this.latestFullPayloadError = null;
@@ -146,31 +149,30 @@ export class ProductionViewObserver {
     this.requestDetails = new WeakMap();
     this.stateRevision = 0;
 
-    page.on('request', (request) => {
-      if (
-        typeof request.isNavigationRequest === 'function'
-        && request.isNavigationRequest()
-        && typeof request.resourceType === 'function'
-        && request.resourceType() === 'document'
-      ) {
-        this.authorityGeneration += 1;
-        this.activeRequests.clear();
-        this.latestFullPayload = null;
-        this.latestFullPayloadError = null;
-        this.latestFullRequestSequence = 0;
-        this.latestFullRequestUrl = '';
-        this.latestFullPayloadRead = null;
-        this.latestCompletedSaveTaskPayload = null;
-        this.completedCanonicalMutationPayloads = [];
-        this.pendingPayloadReads.clear();
-        this.stateRevision += 1;
-      }
+    this.documentGeneration = 0;
+    const resetDocumentObservation = () => {
+      this.documentGeneration += 1;
+      this.authorityGeneration += 1;
+      this.activeRequests.clear();
+      this.latestFullPayload = null;
+      this.latestFullPayloadError = null;
+      this.latestFullRequestSequence = 0;
+      this.latestFullRequestUrl = '';
+      this.latestFullPayloadRead = null;
+      this.latestCompletedSaveTaskPayload = null;
+      this.completedCanonicalMutationPayloads = [];
+      this.pendingPayloadReads.clear();
+      this.stateRevision += 1;
+    };
+    events.on('documentcommitted', resetDocumentObservation);
+    events.on('request', (request) => {
       if (isSaveTaskRequest(request)) {
         const sequence = this.nextSaveTaskRequestSequence + 1;
         this.nextSaveTaskRequestSequence = sequence;
         this.latestSaveTaskRequestSequence = sequence;
         const saveTaskDetail = {
           authorityGeneration: this.authorityGeneration,
+          documentGeneration: this.documentGeneration,
           full: false,
           kind: 'save-task',
           sequence,
@@ -183,6 +185,7 @@ export class ProductionViewObserver {
       }
       const detail = readViewDataRequest(request, this.nextRequestSequence + 1);
       if (!detail) return;
+      detail.documentGeneration = this.documentGeneration;
       this.nextRequestSequence = detail.sequence;
       this.requestDetails.set(request, detail);
       this.activeRequests.set(request, detail);
@@ -199,9 +202,10 @@ export class ProductionViewObserver {
       }
     });
 
-    page.on('response', (response) => {
+    events.on('response', (response) => {
       const responseRequest = response.request();
       const detail = this.requestDetails.get(responseRequest);
+      if (detail && detail.documentGeneration !== this.documentGeneration) return;
       if (detail?.kind === 'save-task') {
         if (!response.ok()) return;
         const pendingRead = `save-task:${detail.sequence}`;
@@ -228,6 +232,8 @@ export class ProductionViewObserver {
             this.latestCompletedSaveTaskPayload = payload;
           })
           .catch((error) => {
+            if (detail.documentGeneration !== this.documentGeneration) return;
+            if (detail.authorityGeneration !== this.authorityGeneration) return;
             this.latestFullPayloadError = String(
               error?.message || error || `Unable to parse save-task payload for ${detail.url}`,
             );
@@ -240,7 +246,8 @@ export class ProductionViewObserver {
       }
       if (!detail?.full) return;
       if (!response.ok()) {
-        if (detail.sequence === this.latestFullRequestSequence) {
+        if (detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestFullRequestSequence) {
           this.latestFullPayloadError = `HTTP ${response.status()} for ${detail.url}`;
           this.stateRevision += 1;
         }
@@ -250,7 +257,8 @@ export class ProductionViewObserver {
       this.stateRevision += 1;
       const payloadRead = Promise.resolve(response.json())
         .then((payload) => {
-          if (detail.sequence !== this.latestFullRequestSequence) return;
+          if (detail.documentGeneration !== this.documentGeneration
+              || detail.sequence !== this.latestFullRequestSequence) return;
           const payloadTier = String(payload?.payload_tier || 'full').trim().toLowerCase();
           if (payloadTier !== 'full') {
             this.latestFullPayloadError = `Expected full production view payload, received ${payloadTier || 'unknown'}`;
@@ -260,7 +268,8 @@ export class ProductionViewObserver {
           this.latestFullPayloadError = null;
         })
         .catch((error) => {
-          if (detail.sequence === this.latestFullRequestSequence) {
+          if (detail.documentGeneration === this.documentGeneration
+              && detail.sequence === this.latestFullRequestSequence) {
             this.latestFullPayloadError = String(error?.message || error || 'Unable to parse production view payload');
           }
         })
@@ -268,7 +277,8 @@ export class ProductionViewObserver {
           this.pendingPayloadReads.delete(detail.sequence);
           this.stateRevision += 1;
         });
-      if (detail.sequence === this.latestFullRequestSequence) {
+      if (detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestFullRequestSequence) {
         this.latestFullPayloadRead = payloadRead;
       }
     });
@@ -276,18 +286,29 @@ export class ProductionViewObserver {
     const finishRequest = (request) => {
       if (this.activeRequests.delete(request)) this.stateRevision += 1;
     };
-    page.on('requestfinished', finishRequest);
-    page.on('requestfailed', (request) => {
+    events.on('requestfinished', finishRequest);
+    events.on('requestfailed', (request) => {
       const detail = this.requestDetails.get(request);
       finishRequest(request);
-      if (detail?.full && detail.sequence === this.latestFullRequestSequence) {
+      if (detail?.full && detail.documentGeneration === this.documentGeneration
+          && detail.sequence === this.latestFullRequestSequence) {
         this.latestFullPayloadError = `Request failed for ${detail.url}`;
         this.stateRevision += 1;
       }
     });
   }
 
+  async initialize() {
+    await this.events.initialize();
+    return this;
+  }
+
+  async dispose() {
+    await this.events.close();
+  }
+
   read() {
+    if (this.events.observationError) throw this.events.observationError;
     const activeRequest = [...this.activeRequests.values()]
       .sort((left, right) => right.sequence - left.sequence)[0];
     return {
@@ -307,4 +328,10 @@ export class ProductionViewObserver {
     if (this.latestFullPayloadRead) await this.latestFullPayloadRead;
     return this.read();
   }
+}
+
+const observersByPage = new WeakMap();
+export function getProductionViewObserver(page) {
+  if (!observersByPage.has(page)) observersByPage.set(page, new ProductionViewObserver(page));
+  return observersByPage.get(page);
 }

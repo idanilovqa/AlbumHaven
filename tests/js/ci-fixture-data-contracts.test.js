@@ -355,8 +355,8 @@ test('approved test-data matrix records every discovered case', () => {
   });
 
   assert.deepEqual(errors, []);
-  assert.equal(matrix.length, 179);
-  assert.equal(new Set(matrix.map(caseIdentity)).size, 179);
+  assert.equal(matrix.length, 187);
+  assert.equal(new Set(matrix.map(caseIdentity)).size, 187);
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
 });
 
@@ -476,7 +476,7 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 97 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 103 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -492,7 +492,7 @@ test('functional shard contract owns all 97 browser-functional cases exactly onc
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 97);
+  assert.equal(expectedCases.size, 103);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -695,14 +695,14 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 10);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 97,
-    component: 56,
+    browserFunctional: 103,
+    component: 58,
     performance: 26,
-    total: 179,
+    total: 187,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 179,
-    functionalShards: 97,
+    testDataMatrix: 187,
+    functionalShards: 103,
     performanceTargets: 26,
   });
 });

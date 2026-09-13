@@ -157,6 +157,14 @@ function closeVersionPickerModal() {
 
 function getVisibleNonAlbumTracks() {
   const view = state.view;
+  const mainState = state.gallery?.mainState;
+  if (mainState) {
+    const activeSources = activeGallerySourceCategories(mainState);
+    const payloadSources = view.non_album_library_categories
+      || view.loaded_library_categories || view.visible_library_categories
+      || ['main_library', 'new_arrivals', 'hoard'];
+    if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
+  }
   const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
   const selectedArtist = String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;
@@ -198,16 +206,12 @@ function getNonAlbumMenuLabel() {
 function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
   return items.map((item, offset) => {
     const rowIndex = startingIndex + offset + 1;
-    const src = `/track?path=${encodeURIComponent(item.path || '')}`;
     const duration = formatTrackDuration(item.duration_seconds);
     const trackPath = String(item.path || '');
     const playback = getPlayerPlaybackSnapshot();
     const isCurrentTrack = String(state.player.current?.path || '') === trackPath;
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     const problematicAlbum = getProblematicAlbumForTrackPath(trackPath);
-    const utilityJump = problematicAlbum
-      ? `<button class="track-problem-link" type="button" data-open-track-problematic="1" data-track-path="${escapeHtml(trackPath)}" title="Open this track in Problematic Files" aria-label="Open this track in Problematic Files">!</button>`
-      : '';
     const displayPath = String(item.display_path || '').trim();
     const metadataTitle = String(item.title || '').trim();
     const filename = String(item.filename || trackPath.split(/[\\/]/).pop() || '').trim();
@@ -215,32 +219,26 @@ function buildNonAlbumTrackRowsMarkup(items, startingIndex) {
       ? metadataTitle
       : filename || 'Unknown track';
     const metadataArtist = String(item.artist || '').trim();
-    const artistMarkup = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
-      ? `<small class="non-album-track-artist">${escapeHtml(metadataArtist)}</small>`
+    const secondaryArtist = metadataArtist && metadataArtist.toLocaleLowerCase() !== 'unknown artist'
+      ? metadataArtist
       : '';
     return {
-      key: trackPath || `${rowIndex}`,
-      dataAttributes: {
-        'track-row-path': trackPath,
-        'non-album-row-index': rowIndex,
-      },
-      cells: {
-        control: `
-          <div class="non-album-track-control">
-            <span class="track-number">${rowIndex}.</span>
-            <button class="play-track-button" data-src="${src}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(item.artist || '')}" data-track-album="" data-track-cover="" data-track-duration-seconds="${Number(item.duration_seconds) || 0}" type="button" aria-label="${isActivelyPlaying ? `Pause ${escapeHtml(title)}` : `Play ${escapeHtml(title)}`}">${isActivelyPlaying ? '&#x23F8;' : '&#x25B6;'}</button>
-          </div>
-        `,
-        track: `
-          <div class="non-album-track-cell">
-            <strong class="track-title">${escapeHtml(title)}</strong>
-            ${artistMarkup}
-          </div>
-          ${utilityJump}
-        `,
-        path: `<span class="non-album-track-path">${escapeHtml(displayPath || trackPath)}</span>`,
-      },
-      ariaSelected: isCurrentTrack,
+      path: trackPath,
+      title,
+      playbackTitle: title,
+      artist: String(item.artist || ''),
+      albumArtist: String(item.album_artist || ''),
+      album: '',
+      coverPath: '',
+      durationSeconds: Number(item.duration_seconds) || 0,
+      duration,
+      originalDuration: duration,
+      trackNumber: rowIndex,
+      secondaryArtist,
+      displayPath: displayPath || trackPath,
+      isCurrent: isCurrentTrack,
+      isPlaying: isActivelyPlaying,
+      isProblematic: Boolean(problematicAlbum),
     };
   });
 }
@@ -252,7 +250,7 @@ function buildNonAlbumTrackSectionsMarkup(items) {
     { key: 'other', title: 'Other', exceptionType: '' },
   ];
   let runningIndex = 0;
-  return sectionDefinitions.map((section) => {
+  const groups = sectionDefinitions.map((section) => {
     const sectionItems = items.filter((item) => (
       String(
         Object.prototype.hasOwnProperty.call(item || {}, 'exception_type')
@@ -260,31 +258,21 @@ function buildNonAlbumTrackSectionsMarkup(items) {
           : item.reason_label || '',
       ).trim() === section.exceptionType
     ));
-    if (!sectionItems.length) return '';
-    const rows = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
+    if (!sectionItems.length) return null;
+    const tracks = buildNonAlbumTrackRowsMarkup(sectionItems, runningIndex);
     runningIndex += sectionItems.length;
-    return `
-      <section class="non-album-track-section" data-non-album-section="${escapeHtml(section.key)}">
-        <h4 class="non-album-track-section-title">${escapeHtml(section.title)}</h4>
-        ${buildCompactDataTable({
-          id: `non-album-${section.key}-table`,
-          ariaLabel: `${section.title} tracks`,
-          columns: '64px minmax(220px, 1fr) minmax(240px, 0.9fr)',
-          columnsConfig: [
-            { key: 'control', label: 'Play and number', header: 'absent' },
-            { key: 'track', label: 'Track' },
-            { key: 'path', label: 'File path' },
-          ],
-          headers: 'visible',
-          density: 'compact',
-          overflow: 'local',
-          mobile: 'preserve',
-          frame: 'outline',
-          rows,
-        })}
-      </section>
-    `;
-  }).join('');
+    return { discLabel: section.title, sectionKey: section.key, tracks };
+  }).filter(Boolean);
+  const totalSeconds = items.reduce((sum, item) => sum + (Number(item?.duration_seconds) || 0), 0);
+  return buildAlbumTrackTableHtml({
+    groups,
+    showPath: true,
+    forceGroupLabels: true,
+    ariaLabel: 'Loose tracks',
+    idPrefix: 'loose-track-table',
+    totalLength: formatAlbumDuration(totalSeconds),
+    playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
+  });
 }
 
 const LIBRARY_CATEGORY_LABELS = Object.freeze({
@@ -353,92 +341,18 @@ function buildAlbumMoveConfirmMessage(album, actionConfig) {
   return `Move "${albumName}" to ${targetLabel}?`;
 }
 
-function ensureGalleryOptionsMenu() {
-  let menu = document.getElementById('gallery-options-menu');
-  if (menu) return menu;
-  menu = document.createElement('div');
-  menu.id = 'gallery-options-menu';
-  menu.className = 'gallery-options-menu';
-  document.body.appendChild(menu);
-  return menu;
-}
-
 function renderGalleryOptionsMenu() {
-  const menu = ensureGalleryOptionsMenu();
-  const looseCount = getVisibleNonAlbumTracks().length;
-  const nonAlbumLabel = getNonAlbumMenuLabel();
-  const preferenceArtist = getCurrentGalleryPreferenceArtist();
-  const combineEnabled = getCombineSimilarArtistsPreference(preferenceArtist);
-  const galleryScope = String(state.view?.gallery_scope || 'all');
-  const visibleCategories = typeof normalizeVisibleLibraryCategorySelection === 'function'
-    ? normalizeVisibleLibraryCategorySelection(state.view?.visible_library_categories)
-    : ['main_library', 'hoard', 'new_arrivals'];
-  const categoryButtons = galleryScope === 'new_arrivals'
-    ? ''
-    : Object.entries(LIBRARY_CATEGORY_LABELS).map(([category, label]) => {
-      const isActive = visibleCategories.includes(category);
-      const disableToggleOff = isActive && visibleCategories.length <= 1;
-      return `
-        <button
-          type="button"
-          class="gallery-options-menu-item"
-          data-gallery-category-toggle="${escapeHtml(category)}"
-          aria-pressed="${isActive ? 'true' : 'false'}"
-          ${disableToggleOff ? 'disabled' : ''}
-          title="${escapeHtml(isActive ? `Hide ${label}` : `Show ${label}`)}"
-        >
-          <span>${escapeHtml(label)}</span>
-          <span class="gallery-options-count">${isActive ? 'On' : 'Off'}</span>
-        </button>
-      `;
-    }).join('')
-    + `
-      <button type="button" class="gallery-options-menu-item" data-open-new-arrivals="1" title="Show only albums from New Arrivals roots">
-        <span>Open New Arrivals</span>
-        <span class="gallery-options-count">Page</span>
-      </button>
-    `;
-  menu.innerHTML = `
-    ${galleryScope === 'new_arrivals'
-      ? `
-        <button type="button" class="gallery-options-menu-item" data-open-main-gallery="1" title="Return to the main gallery and restore its category mix">
-          <span>Back to Main Gallery</span>
-          <span class="gallery-options-count">Page</span>
-        </button>
-      `
-      : categoryButtons}
-    <button
-      type="button"
-      class="gallery-options-menu-item"
-      data-toggle-combine-similar-artists="1"
-      ${preferenceArtist ? '' : 'disabled'}
-      title="${preferenceArtist ? `Combine collaboration-style aliases for ${escapeHtml(preferenceArtist)}` : 'Select a single artist to change this setting'}"
-    >
-      <span>Combine similar artists</span>
-      <span class="gallery-options-count">${preferenceArtist ? (combineEnabled ? 'On' : 'Off') : 'N/A'}</span>
-    </button>
-    <button type="button" class="gallery-options-menu-item" data-open-non-album-modal="1" ${looseCount ? '' : 'disabled'} title="${looseCount ? `Show ${escapeHtml(nonAlbumLabel.toLowerCase())} list` : `No ${escapeHtml(nonAlbumLabel.toLowerCase())} in this view`}">
-      <span>${escapeHtml(nonAlbumLabel)}</span>
-      <span class="gallery-options-count">${looseCount}</span>
-    </button>
-  `;
+  if (typeof updateGalleryMainControls === 'function') updateGalleryMainControls();
 }
 
 function showGalleryOptionsMenu(anchor) {
-  const menu = ensureGalleryOptionsMenu();
-  renderGalleryOptionsMenu();
-  const rect = anchor.getBoundingClientRect();
-  menu.style.left = `${Math.max(12, rect.right - 220)}px`;
-  menu.style.top = `${rect.bottom + 8}px`;
-  menu.hidden = false;
-  state.gallery.menuOpen = true;
+  const sources = document.getElementById('gallery-sources-menu');
+  if (sources && typeof openGalleryMainSurface === 'function') openGalleryMainSurface('sources', anchor, sources);
 }
 
 function hideGalleryOptionsMenu() {
-  const menu = document.getElementById('gallery-options-menu');
-  if (!menu) return;
-  menu.hidden = true;
   state.gallery.menuOpen = false;
+  if (typeof galleryMainSurfaceController !== 'undefined' && galleryMainSurfaceController?.isOpen?.('sources')) closeGalleryMainSurface(false);
 }
 
 function openNonAlbumModal() {
@@ -446,10 +360,18 @@ function openNonAlbumModal() {
   if (!els.overlay || !els.table) return;
   bindOverlayPointerOrigin(els.overlay);
   const looseTracks = getVisibleNonAlbumTracks();
-  if (els.subtitle) {
-    els.subtitle.textContent = state.view.selected_artist
-      ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
-      : 'Non-album tracks found in the artist folders currently displayed.';
+  const subtitle = state.view.selected_artist
+    ? `Non-album tracks found in ${state.view.selected_artist} and family artist folders.`
+    : 'Non-album tracks found in the artist folders currently displayed.';
+  if (els.header) {
+    els.header.innerHTML = buildAlbumDetailsHeaderHtml({
+      variant: 'copy',
+      title: 'Loose Tracks',
+      subtitle,
+      titleId: 'non-album-modal-title',
+      subtitleId: 'non-album-modal-subtitle',
+      actionsHtml: buildLooseTracksHeaderActionsHtml(),
+    });
   }
   els.table.innerHTML = looseTracks.length
     ? buildNonAlbumTrackSectionsMarkup(looseTracks)
@@ -1291,7 +1213,7 @@ function getTagEditorElements() {
 function getNonAlbumModalElements() {
   return {
     overlay: document.getElementById('non-album-modal'),
-    subtitle: document.getElementById('non-album-modal-subtitle'),
+    header: document.getElementById('non-album-modal-header'),
     table: document.getElementById('non-album-modal-table'),
     close: document.getElementById('non-album-modal-close'),
   };

@@ -59,6 +59,9 @@ async function mountEditorFooter(page) {
               --appearance-panel-background: #111827;
               --appearance-primary-button: #2563eb;
               --appearance-primary-button-ink: #ffffff;
+              --appearance-error: #ef5350;
+              --alert-error-edge: #ef5350;
+              --alert-error-focus: #ff7b79;
             }
             body { margin: 40px; background: #111827; color: #f3f6fa; }
           </style>
@@ -90,7 +93,7 @@ async function mountEditorFooter(page) {
     document.getElementById('preview-host').innerHTML = `<div class="background-preview-actions">
       <span><strong>Buttons</strong><small>Hover, press, or use Tab to preview interactions.</small></span>
       <div>${ButtonComponent.renderButton({ label: 'Cancel', variant: 'secondary', size: 'small', quiet: true, attributes: { 'data-background-preview-cancel': true } })}${ButtonComponent.renderButton({ label: 'Save', variant: 'primary', size: 'small', attributes: { 'data-background-preview-save': true } })}</div>
-    </div>`;
+    </div>${ButtonComponent.renderActionButton({ ariaLabel: 'Remove loop', icon: 'delete', shape: 'round', semantic: 'destructive', attributes: { 'data-round-destructive': true } })}`;
   });
 }
 
@@ -111,8 +114,8 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(save).toBeDisabled();
   await reset.hover();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
-  await expect(reset).toHaveCSS('outline-offset', '2px');
+  await expect(reset).toHaveCSS('outline-width', '1px');
+  await expect(reset).toHaveCSS('outline-offset', '1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
   await expect(reset).toHaveCSS('border-color', outlineColor);
 
@@ -120,7 +123,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await page.keyboard.press('Tab');
   await expect(reset).toBeFocused();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
+  await expect(reset).toHaveCSS('outline-width', '1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
 
   await cancel.hover();
@@ -160,4 +163,31 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await page.keyboard.press('Tab');
   await expect(previewSave).toBeFocused();
   await expect(previewSave).toHaveCSS('outline-color', outlineColor);
+});
+
+test('round destructive ActionButton centers its SVG and keeps error-family interaction feedback', async ({ page }) => {
+  await mountEditorFooter(page);
+  const action = page.locator('[data-round-destructive]');
+  const icon = action.locator('svg');
+
+  await expect(action).toHaveCSS('border-radius', '50%');
+  const centers = await action.evaluate((button) => {
+    const buttonRect = button.getBoundingClientRect();
+    const iconRect = button.querySelector('svg').getBoundingClientRect();
+    return {
+      buttonX: buttonRect.left + buttonRect.width / 2,
+      buttonY: buttonRect.top + buttonRect.height / 2,
+      iconX: iconRect.left + iconRect.width / 2,
+      iconY: iconRect.top + iconRect.height / 2,
+    };
+  });
+  expect(Math.abs(centers.buttonX - centers.iconX)).toBeLessThan(0.5);
+  expect(Math.abs(centers.buttonY - centers.iconY)).toBeLessThan(0.5);
+  await expect(icon).toHaveAttribute('aria-hidden', 'true');
+
+  await action.hover();
+  await expect(action).toHaveCSS('border-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
+  await action.focus();
+  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
 });

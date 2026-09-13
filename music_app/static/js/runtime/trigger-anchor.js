@@ -1,0 +1,123 @@
+function getTriggerAnchorGeometry(anchor, surface) {
+  const edge = surface.bottom <= anchor.top ? 'bottom' : 'top';
+  return {
+    edge,
+    side: Math.abs(anchor.left - surface.left) <= 2 ? 'left'
+      : Math.abs(surface.right - anchor.right) <= 2 ? 'right' : 'none',
+    left: Math.max(0, anchor.left - surface.left),
+    right: Math.max(0, surface.right - anchor.right),
+    width: anchor.width,
+    gap: Math.max(0, edge === 'top' ? surface.top - anchor.bottom : anchor.top - surface.bottom),
+  };
+}
+
+let activeTriggerSurface = null;
+function activateTriggerSurface(surface, close) {
+  if (activeTriggerSurface?.surface === surface) return;
+  const previous = activeTriggerSurface;
+  activeTriggerSurface = null;
+  previous?.close();
+  activeTriggerSurface = { surface, close };
+}
+
+const triggerAnchorBindings = new WeakMap();
+function clearTriggerAnchor(surface) {
+  if (activeTriggerSurface?.surface === surface) activeTriggerSurface = null;
+  const binding = triggerAnchorBindings.get(surface);
+  if (!binding) return;
+  binding.observer?.disconnect();
+  binding.resizeObserver?.disconnect();
+  binding.anchor.classList.remove('trigger-anchor-open');
+  delete binding.anchor.dataset.triggerAnchorEdge;
+  triggerAnchorBindings.delete(surface);
+}
+
+function syncTriggerAnchor(surface, anchor) {
+  if (!surface?.getBoundingClientRect || !anchor?.getBoundingClientRect || surface.hidden) return;
+  activateTriggerSurface(surface, () => {
+    surface.hidden = true;
+    anchor.setAttribute?.('aria-expanded', 'false');
+    clearTriggerAnchor(surface);
+  });
+  const previous = triggerAnchorBindings.get(surface);
+  if (previous && previous.anchor !== anchor) clearTriggerAnchor(surface);
+  const geometry = getTriggerAnchorGeometry(anchor.getBoundingClientRect(), surface.getBoundingClientRect());
+  surface.classList.add('trigger-anchor-surface');
+  anchor.classList.add('trigger-anchor-open');
+  surface.dataset.triggerAnchorEdge = geometry.edge;
+  surface.dataset.triggerAnchorSide = geometry.side;
+  anchor.dataset.triggerAnchorEdge = geometry.edge;
+  for (const name of ['left', 'right', 'width', 'gap']) {
+    surface.style.setProperty(`--trigger-anchor-${name}`, `${geometry[name]}px`);
+  }
+  anchor.style.setProperty('--trigger-anchor-gap', `${geometry.gap}px`);
+  if (previous?.anchor === anchor) return;
+  const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => {
+    if (surface.hidden || surface.getAttribute('aria-hidden') === 'true') clearTriggerAnchor(surface);
+  }) : null;
+  observer?.observe(surface, { attributes: true, attributeFilter: ['hidden', 'aria-hidden'] });
+  // A sibling's animated width moves this trigger without resizing the trigger itself.
+  // ResizeObserver runs after layout and before paint, keeping the join in that frame.
+  const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    if (surface.hidden) { clearTriggerAnchor(surface); return; }
+    syncTriggerAnchor(surface, anchor);
+  }) : null;
+  triggerAnchorBindings.set(surface, { anchor, observer, resizeObserver });
+  if (resizeObserver) {
+    resizeObserver.observe(anchor);
+    resizeObserver.observe(surface);
+    if (anchor.parentElement) resizeObserver.observe(anchor.parentElement);
+  }
+}
+function confinePanelTextSelection(selection, surface) {
+  if (!selection?.anchorNode || !selection.focusNode || !surface.contains(selection.anchorNode)
+      || surface.contains(selection.focusNode)) return;
+  const bounds = surface.ownerDocument.createRange();
+  bounds.selectNodeContents(surface);
+  const before = bounds.comparePoint(selection.focusNode, selection.focusOffset) < 0;
+  selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset,
+    before ? bounds.startContainer : bounds.endContainer,
+    before ? bounds.startOffset : bounds.endOffset);
+}
+
+let panelSelectionBoundaryInstalled = false;
+function installPanelSelectionBoundary() {
+  if (panelSelectionBoundaryInstalled) return;
+  panelSelectionBoundaryInstalled = true;
+  let origin = null;
+  let gestureOrigin = null;
+  const release = () => {
+    origin?.classList.remove('panel-selection-origin');
+    document.documentElement.classList.remove('panel-text-selection-active');
+    origin = null;
+  };
+  const confine = () => {
+    if (origin?.isConnected) confinePanelTextSelection(document.getSelection(), origin);
+  };
+  document.addEventListener('pointerdown', event => {
+    release();
+    gestureOrigin = event.button === 0 ? event.target.closest?.('.trigger-anchor-surface, .artist-info-overlay, [role="dialog"], [role="menu"]') : null;
+    origin = event.button === 0 ? event.target.closest?.('.artist-info-overlay, .trigger-anchor-surface, .album-track-table, [role=dialog]') : null;
+    if (origin) {
+      origin.classList.add('panel-selection-origin');
+      document.documentElement.classList.add('panel-text-selection-active');
+    }
+  }, true);
+  // A click generated by releasing a drag outside its starting surface is not
+  // an outside-click dismissal or an activation of the background underneath.
+  document.addEventListener('click', event => {
+    const startedInside = gestureOrigin;
+    gestureOrigin = null;
+    if (event.detail !== 0 && startedInside && !startedInside.contains(event.target)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+  document.addEventListener('selectionchange', confine);
+  document.addEventListener('selectstart', event => {
+    if (origin && !origin.contains(event.target)) event.preventDefault();
+  }, true);
+  document.addEventListener('pointerup', () => { confine(); release(); }, true);
+  document.addEventListener('pointercancel', () => { gestureOrigin = null; release(); }, true);
+  globalThis.addEventListener?.('blur', () => { gestureOrigin = null; release(); });
+}

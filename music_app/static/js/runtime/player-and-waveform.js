@@ -200,6 +200,7 @@ function setPlayerSeekbarPresentation(isWaveform) {
 }
 
 async function updateWaveformAppearance(forceReload = false) {
+  if (typeof refreshUtilityLoopStereoWaveforms === 'function') refreshUtilityLoopStereoWaveforms();
   const els = getPlayerElements();
   const wrap = els.timeline?.parentElement;
   const playback = getPlayerPlaybackSnapshot();

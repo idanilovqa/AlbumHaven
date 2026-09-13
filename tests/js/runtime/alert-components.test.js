@@ -52,6 +52,35 @@ test('OnPageAlert supports semantic variants and shared action slots', () => {
   assert.match(html, /Keep as missing/);
 });
 
+test('AlertLabel renders static and interactive semantic problem pills', () => {
+  const context = loadAlertComponents();
+  const staticHtml = context.buildAlertLabelHtml({
+    severity: 'error',
+    message: 'Missing cover art',
+  });
+  const interactiveHtml = context.buildAlertLabelHtml({
+    severity: 'error',
+    message: 'Missing year',
+    interactive: true,
+    pressed: true,
+    disabled: true,
+    className: 'utility-problem-exclusion-pill',
+    attributes: {
+      'data-problem-exclusion-row-key': 'album:&1',
+      'data-ignored-attribute': '<unsafe>',
+    },
+  });
+
+  assert.match(staticHtml, /^<span class="alert-label alert-label--error" data-alert-label="error">Missing cover art<\/span>$/);
+  assert.match(interactiveHtml, /^<button class="alert-label alert-label--error utility-problem-exclusion-pill is-active"/);
+  assert.match(interactiveHtml, /type="button"/);
+  assert.match(interactiveHtml, /data-problem-exclusion-row-key="album:&amp;1"/);
+  assert.doesNotMatch(interactiveHtml, /data-ignored-attribute/);
+  assert.match(interactiveHtml, /aria-pressed="true"/);
+  assert.match(interactiveHtml, /aria-disabled="true"/);
+  assert.match(interactiveHtml, / disabled/);
+});
+
 test('shared alert CSS uses the same tinted surface family and honors reduced motion', () => {
   const css = fs.readFileSync(
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
@@ -68,4 +97,18 @@ test('shared alert CSS uses the same tinted surface family and honors reduced mo
   assert.match(css, /\.on-page-alert__actions \.ui-button--primary\s*\{[^}]*background:\s*var\(--alert-edge\)/s);
   assert.match(css, /\.on-page-alert__actions \.ui-button--secondary\s*\{[^}]*border-color:\s*color-mix\([^;]*var\(--alert-edge\)/s);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+});
+
+test('AlertLabel interaction states retain the gallery alert severity color family', () => {
+  const css = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'alert-components.css'),
+    'utf8',
+  );
+
+  assert.match(css, /\.small-alert,\s*\.alert-label,\s*\.on-page-alert\s*\{[^}]*--alert-edge:[^}]*--alert-tint:[^}]*--alert-ink:/s);
+  assert.match(css, /\.alert-label\s*\{[^}]*border:[^;]*var\(--alert-edge\)[^}]*background:\s*var\(--alert-tint\)[^}]*color:\s*var\(--alert-ink\)/s);
+  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*2px solid color-mix\(in srgb, var\(--alert-edge\)/s);
+  assert.match(css, /button\.alert-label:is\(\.is-active,\s*\[aria-pressed="true"\]\)/s);
+  const labelRules = css.match(/[^{}]*\.alert-label[^{}]*\{[^}]*\}/g)?.join('\n') || '';
+  assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });

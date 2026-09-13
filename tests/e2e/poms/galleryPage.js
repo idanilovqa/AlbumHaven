@@ -1,8 +1,9 @@
+import { VISIBLE_ALBUM_YEAR_PATTERN } from '../helpers/visibleAlbumMetadata.js';
 import { AlbumCard } from './albumCard.js';
 import { BasePage } from './basePage.js';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
-  ProductionViewObserver,
+  getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
   readCanonicalAlbumTargetEvidence,
@@ -145,12 +146,14 @@ export class GalleryPage extends BasePage {
     this.libraryLoaderTitle = page.locator(this.libraryLoaderTitleSelector);
     this.artistHeadings = page.locator(this.artistHeadingSelector);
     this.sectionLabels = page.locator(this.sectionLabelSelector);
+    this.emptyFamilySelection = page.locator('[data-gallery-empty-selection]');
+    this.galleryContextSummary = page.locator('[data-gallery-context-summary]');
     this.galleryScroll = page.locator(this.galleryScrollSelector);
     this.allArtistsActiveLink = page.locator(this.allArtistsActiveSelector);
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
     this.coverReadyStates = page.locator(this.coverReadyStateSelector);
-    this.galleryOptionsButton = page.locator('#gallery-options-button');
-    this.productionViewObserver = new ProductionViewObserver(page);
+    this.galleryOptionsButton = page.locator('[data-gallery-bar-action="album-types"]');
+    this.productionViewObserver = getProductionViewObserver(page);
   }
 
   async hasVisibleAlbum(albumName) {
@@ -281,13 +284,14 @@ export class GalleryPage extends BasePage {
         ).trim(),
         key: String(element.getAttribute('data-gallery-card-key') || '').trim(),
         year: String(
-          element.querySelector(selectors.albumYearSelector)?.textContent || '',
+          element.querySelector('.album-year')?.textContent ?? String(element.querySelector(selectors.albumYearSelector)?.textContent || '').match(new RegExp(selectors.albumYearPattern))?.[1] ?? '',
         ).trim(),
       })).filter(({ album }) => expectedAlbums.has(album));
     }, {
       expectedAlbumNames: expectedAlbumNames.map((album) => String(album || '').trim()),
       albumTitleSelector: this.albumTitleButtonWithinSectionSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
     });
   }
 
@@ -305,7 +309,7 @@ export class GalleryPage extends BasePage {
           card.querySelector(selectors.albumTitleSelector)?.textContent || '',
         ).trim(),
         year: String(
-          card.querySelector(selectors.albumYearSelector)?.textContent || '',
+          card.querySelector('.album-year')?.textContent ?? String(card.querySelector(selectors.albumYearSelector)?.textContent || '').match(new RegExp(selectors.albumYearPattern))?.[1] ?? '',
         ).trim(),
         trackCount: trackCountMatch ? Number(trackCountMatch[1]) : -1,
         trackCountText,
@@ -313,6 +317,7 @@ export class GalleryPage extends BasePage {
     }).filter(({ album }) => Boolean(album)), {
       albumTitleSelector: this.albumTitleButtonWithinSectionSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       trackCountSelector: this.albumCard.trackCountWithinCardSelector,
     });
   }
@@ -341,7 +346,7 @@ export class GalleryPage extends BasePage {
                 card.querySelector(selectors.trackCountSelector)?.textContent || '',
               ).trim(),
               year: String(
-                card.querySelector(selectors.albumYearSelector)?.textContent || '',
+                card.querySelector('.album-year')?.textContent ?? String(card.querySelector(selectors.albumYearSelector)?.textContent || '').match(new RegExp(selectors.albumYearPattern))?.[1] ?? '',
               ).trim(),
             };
           },
@@ -352,6 +357,7 @@ export class GalleryPage extends BasePage {
       albumRowSelector: this.albumRowWithinSectionSelector,
       albumTitleSelector: this.albumTitleButtonWithinSectionSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       artistHeadingSelector: this.artistHeadingWithinSectionSelector,
       trackCountSelector: this.albumCard.trackCountWithinCardSelector,
     });
@@ -362,7 +368,7 @@ export class GalleryPage extends BasePage {
     // parity-check: allow-read-only-measurement-evaluate -- atomically read the visible production section count and expected album identities
     const observation = await section.evaluate((element, selectors) => {
       const artistMetaText = String(
-        element.querySelector('.artist-meta')?.textContent || '',
+        element.querySelector('.family-artist-header > span:last-child, .artist-meta')?.textContent || '',
       ).trim();
       const expectedAlbums = new Set(selectors.expectedAlbumNames);
       const renderedIdentities = [...element.querySelectorAll(selectors.albumCardSelector)]
@@ -371,7 +377,7 @@ export class GalleryPage extends BasePage {
             card.querySelector(selectors.albumTitleSelector)?.textContent || '',
           ).trim(),
           year: String(
-            card.querySelector(selectors.albumYearSelector)?.textContent || '',
+            card.querySelector('.album-year')?.textContent ?? String(card.querySelector(selectors.albumYearSelector)?.textContent || '').match(new RegExp(selectors.albumYearPattern))?.[1] ?? '',
           ).trim(),
         }))
         .filter(({ album }) => expectedAlbums.has(album));
@@ -383,6 +389,7 @@ export class GalleryPage extends BasePage {
       albumCardSelector: this.albumCardWithinSectionSelector,
       albumTitleSelector: this.albumTitleButtonWithinSectionSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       expectedAlbumNames: expectedAlbumNames.map((album) => String(album || '').trim()),
     });
     return {
@@ -744,7 +751,7 @@ export class GalleryPage extends BasePage {
         ];
         return candidates.filter((card) => (
           normalize(card.querySelector(options.albumTitleSelector)?.textContent) === expectedAlbum
-          && normalize(card.querySelector(options.albumYearSelector)?.textContent) === expectedYear
+          && normalize(card.querySelector('.album-year')?.textContent ?? String(card.querySelector(options.albumYearSelector)?.textContent || '').match(new RegExp(options.albumYearPattern))?.[1] ?? '') === expectedYear
         )).length;
       };
       const readCount = () => {
@@ -756,7 +763,7 @@ export class GalleryPage extends BasePage {
         return Array.from(section.querySelectorAll(options.albumCardWithinSectionSelector))
           .filter((card) => (
             normalize(card.querySelector(options.albumTitleSelector)?.textContent) === expectedAlbum
-            && normalize(card.querySelector(options.albumYearSelector)?.textContent) === expectedYear
+            && normalize(card.querySelector('.album-year')?.textContent ?? String(card.querySelector(options.albumYearSelector)?.textContent || '').match(new RegExp(options.albumYearPattern))?.[1] ?? '') === expectedYear
           )).length;
       };
       const inspect = (phase, records = []) => {
@@ -834,6 +841,7 @@ export class GalleryPage extends BasePage {
       albumCardWithinSectionSelector: this.albumCardWithinSectionSelector,
       albumTitleSelector: this.albumCard.titleButtonSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
     });
     let finished = false;
     return {
@@ -906,7 +914,7 @@ export class GalleryPage extends BasePage {
             nextCardNodeId += 1;
           }
           const album = normalize(card.querySelector(options.albumTitleSelector)?.textContent);
-          const year = normalize(card.querySelector(options.albumYearSelector)?.textContent);
+          const year = normalize(card.querySelector('.album-year')?.textContent ?? String(card.querySelector(options.albumYearSelector)?.textContent || '').match(new RegExp(options.albumYearPattern))?.[1] ?? '');
           const row = card.closest(options.albumRowWithinSectionSelector) || card;
           const rowBounds = row.getBoundingClientRect();
           return {
@@ -1042,6 +1050,7 @@ export class GalleryPage extends BasePage {
       albumTitleSelector: this.albumCard.titleButtonSelector,
       albumTrackCountSelector: this.albumCard.trackCountWithinCardSelector,
       albumYearSelector: this.albumCard.yearWithinCardSelector,
+      albumYearPattern: VISIBLE_ALBUM_YEAR_PATTERN,
       galleryScrollSelector: this.galleryScrollSelector,
     });
     let finished = false;

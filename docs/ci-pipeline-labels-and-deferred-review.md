@@ -21,3 +21,18 @@ Keep both branches unchanged. The first contains the current implementation and 
 When the owner chooses to resume paid reviews, use a separate review-only PR from the snapshot to the preserved base, or supply the equivalent Git diff to the batch reviewer. Do not create or trigger that review until requested. Do not merge into the preserved base. Validate findings against current main, implement still-applicable fixes on a new branch from current main, and publish those fixes as a separate PR. Track resolved, obsolete and rejected findings against their source review. A clear later review describes that reviewed revision and scope; it cannot guarantee that future reviews will never identify another issue.
 
 PR1's current test-only release work may make further test-driven repairs after the snapshot. Its release commit remains separately identifiable by the merge commit and release tag; the preserved snapshot must not move to include those changes.
+
+## PR2 gallery release review waiver
+
+On September 12, 2026, the owner authorized the gallery PR2 release to use
+`skip_reviews`, with `skip_tests` absent. This waives hosted Codex and PR Agent
+reviews for the gallery branch, including its release metadata and test-driven
+repairs. It does not waive local review or any required test suite.
+
+Merge and publication still require the complete passing CI pipeline. Preserve
+existing assertions, fixture isolation, retries, and performance limits. Record
+the waiver as waived review coverage; do not claim paid review coverage, a
+successfully reviewed-head baseline, or zero findings from skipped reviewers.
+
+The PR1 snapshot and comparison-base branches above remain unchanged. This PR2
+waiver neither moves those snapshots nor starts the deferred paid-review work.

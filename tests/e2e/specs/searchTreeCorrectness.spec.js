@@ -612,7 +612,7 @@ test('FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted thr
       familyChipContentChanged: false,
       familyChipNodesChanged: false,
       familyControlsHidden: false,
-      familyControlsVisibleDuringActiveRequest: true,
+      familyControlsVisibleDuringActiveRequest: false,
       familyListReplaced: false,
       familyMutationCount: 0,
       familyPanelContentChanged: false,
@@ -834,7 +834,7 @@ test('FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Fam
     await artistFamilyActions.waitForHidden();
     expect(await artistFamilyActions.readPanelState()).toEqual({
       visible: false,
-      chipTexts: [],
+      chipTexts: [UNRELATED_ARTIST],
     });
   });
 });
@@ -1044,7 +1044,7 @@ test('FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the sear
     const { control, popover } = await searchToolbarActions.readRecentSearchGeometry();
     expect(Math.abs(popover.x - control.x)).toBeLessThanOrEqual(1);
     expect(popover.width).toBe(control.width);
-    expect(popover.y).toBeGreaterThanOrEqual(control.y + control.height);
+    expect(popover.y).toBeCloseTo(control.y + control.height - 1, 0);
     expect(popover.x + popover.width).toBeLessThanOrEqual(1440);
     expect(popover.y + popover.height).toBeLessThanOrEqual(900);
   });

@@ -16,8 +16,19 @@ const helperPath = path.join(
   'modal-and-overlay-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const buttonComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'button-component.js');
+const galleryMainComponentsPath = path.join(path.dirname(helperPath), 'gallery-main-components.js');
+const galleryMainComponentsSource = fs.readFileSync(galleryMainComponentsPath, 'utf8');
+const bootstrapGalleryHandlersSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'bootstrap-gallery-event-handlers.js'),
+  'utf8',
+);
 const compactTableSource = fs.readFileSync(
   path.join(path.dirname(helperPath), 'compact-data-table.js'),
+  'utf8',
+);
+const albumTrackTableSource = fs.readFileSync(
+  path.join(path.dirname(helperPath), 'album-track-table.js'),
   'utf8',
 );
 
@@ -126,6 +137,9 @@ function loadHelper() {
     HTMLElement: FakeElement,
     HTMLImageElement: FakeElement,
     document: {
+      documentElement: {
+        getAttribute() { return null; },
+      },
       getElementById(id) {
         return elementsById[id] || null;
       },
@@ -172,8 +186,13 @@ function loadHelper() {
     escapeHtml(value) {
       return String(value ?? '');
     },
-    formatTrackDuration() {
-      return '';
+    formatTrackDuration(value) {
+      const seconds = Math.max(0, Math.floor(Number(value) || 0));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    },
+    formatAlbumDuration(value) {
+      const seconds = Math.max(0, Math.floor(Number(value) || 0));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     },
     getPlayerPlaybackSnapshot() {
       return { paused: true, ended: true, currentTime: 0, duration: 0 };
@@ -210,11 +229,15 @@ function loadHelper() {
     getAlbumIdentity(album) {
       return String(album?.key || '');
     },
+    ButtonComponent: require(buttonComponentPath),
   };
 
   vm.createContext(context);
   vm.runInContext(compactTableSource, context, {
     filename: path.join(path.dirname(helperPath), 'compact-data-table.js'),
+  });
+  vm.runInContext(albumTrackTableSource, context, {
+    filename: path.join(path.dirname(helperPath), 'album-track-table.js'),
   });
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.__preloaders = preloaders;
@@ -245,6 +268,56 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks()), tracks.slice(0, 2));
   context.state.view.non_album_tracks = [tracks[2]];
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
+});
+
+test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
+  const { context } = loadHelper();
+  for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), filename), 'utf8'), context, { filename });
+  }
+  // These are the current public non-album payload shape: no root/category field.
+  const mainTrack = { path: '/fixture/main/song.mp3', artist: 'Main Artist', title: 'Main loose song' };
+  const hoardTrack = { path: '/fixture/hoard/song.mp3', artist: 'Hoard Artist', title: 'Hoard loose song' };
+  const categories = ['main_library', 'new_arrivals', 'hoard'];
+  context.state.view = {
+    selected_artist: '', gallery_scope: 'all', query: '',
+    visible_library_categories: categories, loaded_library_categories: categories,
+    non_album_tracks: [mainTrack, hoardTrack],
+  };
+  context.window = { location: { href: 'http://localhost/' }, history: {} };
+  context.renderArtistGroups = () => {};
+  const requests = [];
+  let completeRefresh;
+  const responseReady = new Promise(resolve => { completeRefresh = resolve; });
+  context.buildApiUrl = view => '/view?' + new URLSearchParams(
+    view.visible_library_categories.map(category => ['category', category]),
+  ).toString();
+  context.fetchAndRender = async url => {
+    requests.push(url);
+    await responseReady;
+    // Network boundary: the server already returns a category-scoped list.
+    const selected = new URL(url, 'http://localhost').searchParams.getAll('category');
+    if (!selected.includes('hoard')) context.state.view = {
+      ...context.state.view, non_album_tracks: [mainTrack],
+      visible_library_categories: selected, loaded_library_categories: selected,
+    };
+  };
+  const edited = [];
+  context.closeNonAlbumModal = () => {};
+  context.openTagEditor = album => edited.push(album);
+  context.showRepairAlert = () => {};
+
+  context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0, 'unscoped records stay unavailable during refresh');
+  context.openNonAlbumTagEditor();
+  assert.equal(edited.length, 0, 'an immediate Edit tags action cannot use stale records');
+  completeRefresh();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks(), track => track.path), [mainTrack.path],
+    'a hidden source must not remain in the Loose Tracks collection');
+  context.openNonAlbumTagEditor();
+  assert.deepEqual(Array.from(edited[0].tracks, track => track.path), [mainTrack.path]);
+  assert.ok(requests.length > 0, 'payloads without category provenance need an authoritative scoped refresh');
 });
 
 test('backend-scoped non-album search matches survive an empty album gallery', () => {
@@ -299,7 +372,7 @@ test('non-album artist scope expands only aliases of the displayed family', () =
     'retained aliases must not authorize tracks after the displayed artist changes');
 });
 
-test('non-album modal uses compact three-column tables in exception order', () => {
+test('non-album modal adapts ordered exception groups into one shared AlbumTrackTable', () => {
   const { context } = loadHelper();
   const markup = context.buildNonAlbumTrackSectionsMarkup([
     {
@@ -308,6 +381,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
       title: 'An Interview',
       artist: 'Guest Artist',
       exception_type: 'Interview',
+      duration_seconds: 95,
     },
     {
       path: 'C:/Music/Artist/Rarity.mp3',
@@ -315,6 +389,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
       title: 'Rare Song',
       artist: 'Main Artist feat. Guest',
       exception_type: 'Non-album rarity',
+      duration_seconds: 245,
     },
   ]);
 
@@ -322,24 +397,27 @@ test('non-album modal uses compact three-column tables in exception order', () =
     markup.indexOf('>Non-album rarity<') < markup.indexOf('>Interviews<'),
     'rarities must render before interviews regardless of payload order',
   );
-  assert.match(markup, /data-non-album-section="non-album-rarity"/);
-  assert.match(markup, /data-non-album-section="interview"/);
-  assert.match(markup, /class="compact-data-table"/);
-  assert.match(markup, /--cdt-columns: 64px minmax\(220px, 1fr\) minmax\(240px, 0\.9fr\)/);
-  assert.match(markup, /data-cdt-column="control"/);
-  assert.match(markup, /data-cdt-column="track"/);
+  assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
+  assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
+  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.doesNotMatch(markup, /data-cdt-column="play"/);
+  assert.match(markup, /data-cdt-column="number"/);
+  assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
+  assert.match(markup, /data-cdt-column="problem"/);
+  assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div data-cdt-column="control"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="track"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
-  assert.match(markup, /class="non-album-track-artist">Main Artist feat\. Guest</);
+  assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
-  assert.match(markup, /class="play-track-button"/);
-  assert.match(markup, /class="track-number">1\.<\/span>/);
+  assert.match(markup, /class="play-track-button album-track-table__play"/);
+  assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
   assert.match(markup, /Artist\/Rarity\.mp3/);
   assert.doesNotMatch(markup, /non-album-type-cell/);
-  assert.doesNotMatch(markup, /class="track-duration"/);
+  assert.match(markup, /class="track-duration"[^>]*>4:05<\/span>/);
+  assert.match(markup, /Total Length: 5:40/);
 
   const rarityOnly = context.buildNonAlbumTrackSectionsMarkup([{
     path: 'C:/Music/Artist/Rarity.mp3',
@@ -368,7 +446,7 @@ test('non-album modal uses compact three-column tables in exception order', () =
     artist: '',
     exception_type: '',
   }]);
-  assert.match(missingMetadata, /class="track-title">Artist - Possible Song\.flac<\/strong>/);
+  assert.match(missingMetadata, /class="album-track-table__title">Artist - Possible Song\.flac/);
   assert.doesNotMatch(missingMetadata, /Unknown track|Unknown Artist/);
 });
 
@@ -1091,28 +1169,28 @@ test('markAlbumCoverPathsFresh keeps transient refresh tokens when revisions are
   assert.equal(items[0].src, '/cover?path=C%3A%2Fcovers%2Fprimary-1.jpg&v=epoch-6');
 }
 
-{
+test('legacy Gallery options no longer owns source switches or New Arrivals navigation', () => {
   const { context } = loadHelper();
-  context.state.view.gallery_scope = 'all';
-  context.state.view.visible_library_categories = ['main_library', 'new_arrivals'];
-  context.renderGalleryOptionsMenu();
-  const menu = context.document.getElementById('gallery-options-menu');
-  assert.match(menu.innerHTML, /data-gallery-category-toggle="main_library"/);
-  assert.match(menu.innerHTML, /data-gallery-category-toggle="hoard"/);
-  assert.match(menu.innerHTML, /data-open-new-arrivals="1"/);
-  assert.match(menu.innerHTML, /Main Library[\s\S]*On/);
-  assert.match(menu.innerHTML, /Hoard[\s\S]*Off/);
-}
+  if (typeof context.renderGalleryOptionsMenu === 'function') {
+    context.renderGalleryOptionsMenu();
+    const legacyMenu = context.document.getElementById('gallery-options-menu');
+    assert.doesNotMatch(legacyMenu?.innerHTML || '', /data-gallery-category-toggle=/);
+    assert.doesNotMatch(legacyMenu?.innerHTML || '', /data-open-(?:new-arrivals|main-gallery)=/);
+  }
+  assert.doesNotMatch(helperSource, /data-open-(?:new-arrivals|main-gallery)=/);
+  assert.doesNotMatch(bootstrapGalleryHandlersSource, /data-open-(?:new-arrivals|main-gallery)=/);
+  assert.doesNotMatch(bootstrapGalleryHandlersSource, /data-gallery-category-toggle/);
 
-{
-  const { context } = loadHelper();
-  context.state.view.gallery_scope = 'new_arrivals';
-  context.state.view.visible_library_categories = ['new_arrivals'];
-  context.renderGalleryOptionsMenu();
-  const menu = context.document.getElementById('gallery-options-menu');
-  assert.match(menu.innerHTML, /data-open-main-gallery="1"/);
-  assert.doesNotMatch(menu.innerHTML, /data-gallery-category-toggle=/);
-}
+  vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
+  const switches = ['main_library', 'new_arrivals', 'hoard'].map((source) => (
+    context.buildGallerySwitchHtml({ id: `source-${source}`, source, label: source, checked: true })
+  )).join('');
+  assert.equal((switches.match(/role="switch"/g) || []).length, 3);
+  assert.match(switches, /data-gallery-source="main_library"/);
+  assert.match(switches, /data-gallery-source="new_arrivals"/);
+  assert.match(switches, /data-gallery-source="hoard"/);
+  assert.doesNotMatch(switches, /Open New Arrivals/);
+});
 
 {
   const { context } = loadHelper();

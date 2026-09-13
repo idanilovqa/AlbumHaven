@@ -658,6 +658,7 @@ export async function readGaplessPlaybackDiagnostics(page) {
       currentStreamId: Number(streaming.roles?.current?.streamId || 0),
       continuityStreamId: Number(streaming.roles?.continuity?.streamId || 0),
       pendingPromotionStreamId: Number(streaming.pendingPromotion?.streamId || 0),
+      pendingPromotionPresent: Boolean(streaming.pendingPromotion),
       pcmEvidence: diagnostics.pcmEvidence ? { ...diagnostics.pcmEvidence } : null,
       renderedPcmEvidence: diagnostics.renderedPcmEvidence
         ? { ...diagnostics.renderedPcmEvidence }
@@ -853,15 +854,54 @@ export function assertAudibleBoundaryCapture(expect, capture, expectedSigns = {}
 }
 
 export async function waitForGaplessBoundary(page, options = {}) {
-  await page.waitForFunction((expectedStreamId) => {
-    if (typeof getStreamingPlaybackSnapshot !== 'function' || typeof state === 'undefined') {
-      return false;
+  try {
+    await page.waitForFunction((expectedStreamId) => {
+      if (typeof getStreamingPlaybackSnapshot !== 'function' || typeof state === 'undefined') {
+        return false;
+      }
+      const snapshot = getStreamingPlaybackSnapshot();
+      const streaming = state.player?.streaming || {};
+      return Boolean(snapshot.diagnostics?.boundaryCapture)
+        && !streaming.pendingPromotion
+        && Number(streaming.roles?.current?.streamId || 0) === expectedStreamId;
+    }, Number(options.expectedPromotedStreamId || 0), { timeout: options.timeout || 60000 });
+  } catch (error) {
+    let timer;
+    const appendEvidence = evidence => {
+      error.message += evidence;
+      if (typeof error.stack === 'string' && !error.stack.includes(evidence)) error.stack += evidence;
+    };
+    try {
+      const diagnostics = await Promise.race([
+        readGaplessPlaybackDiagnostics(page),
+        new Promise((resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Diagnostic read exceeded 2500ms')), 2500);
+        }),
+      ]);
+      const failureState = {
+        expectedPromotedStreamId: Number(options.expectedPromotedStreamId || 0),
+        generation: diagnostics.generation,
+        mode: diagnostics.mode,
+        currentTime: diagnostics.currentTime,
+        paused: diagnostics.paused,
+        currentStreamId: diagnostics.currentStreamId,
+        continuityStreamId: diagnostics.continuityStreamId,
+        pendingPromotionStreamId: diagnostics.pendingPromotionStreamId,
+        pendingPromotionPresent: diagnostics.pendingPromotionPresent,
+        boundaryCapturePresent: Boolean(diagnostics.boundaryCapture),
+        activeRoles: diagnostics.activeRoles,
+        bufferedFrames: diagnostics.bufferedFrames,
+        inFlightFrames: diagnostics.inFlightFrames,
+        underruns: diagnostics.underruns,
+        lastError: diagnostics.lastError,
+      };
+      appendEvidence(`\nFinal gapless boundary state: ${JSON.stringify(failureState)}`);
+    } catch (diagnosticError) {
+      appendEvidence(`\nFinal gapless boundary state unavailable: ${diagnosticError.message}`);
+    } finally {
+      clearTimeout(timer);
     }
-    const snapshot = getStreamingPlaybackSnapshot();
-    const streaming = state.player?.streaming || {};
-    return Boolean(snapshot.diagnostics?.boundaryCapture)
-      && !streaming.pendingPromotion
-      && Number(streaming.roles?.current?.streamId || 0) === expectedStreamId;
-  }, Number(options.expectedPromotedStreamId || 0), { timeout: options.timeout || 60000 });
+    throw error;
+  }
   return readGaplessPlaybackDiagnostics(page);
 }

@@ -1,6 +1,7 @@
 import { expect, test as base } from '../support/baseFixtures.js';
 import { PERFORMANCE_AUTH_USERNAME } from '../support/performanceAuthentication.js';
 import { withRestoredAppearanceFixture } from '../helpers/appearanceFixture.js';
+import { InteractionSurfaces, expectAnchorFollowsUnfold, expectPreviewOccludesControls, expectSharedOutlineGeometry, expectSelectionDragStaysInside } from '../poms/interactionSurfaces.js';
 import { SettingsModalAppBarActions } from '../actions/settingsModalAppBarActions.js';
 import { UtilityAppearanceActions } from '../actions/utilityAppearanceActions.js';
 import { UtilityTabBarActions } from '../actions/utilityTabBarActions.js';
@@ -22,6 +23,8 @@ const PLAYER_COLORS = Object.freeze({
   surfaceEnd: '#234567',
   controlFill: '#345678',
   controlBorder: '#456789',
+  pairedControlFill: '#51A1C4',
+  pairedControlBorder: '#2F91D1',
   waveformFill: '#56789A',
   waveformEdge: '#6789AB',
   pairedControlFill: '#51A1C4',
@@ -43,10 +46,12 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
   navigationPanelActions,
   page,
   settingsModalAppBarActions,
+  searchToolbarActions,
   stepLogger,
   utilityAppearanceActions,
   utilityTabBarActions,
 }) => {
+  const surfaces = new InteractionSurfaces(page);
   test.setTimeout(240000);
   const appearance = utilityAppearanceActions.utilityAppearanceTab;
   let savedSnapshot;
@@ -168,6 +173,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     expect(playerSticky.previewTop).toBeGreaterThanOrEqual(playerSticky.viewportTop);
     expect(playerSticky.previewTop).toBeLessThanOrEqual(playerSticky.viewportTop + 24);
     expect(playerSticky.previewBottom).toBeLessThanOrEqual(playerSticky.viewportBottom);
+    await expectPreviewOccludesControls(appearance.playerPreviewDock);
   });
 
   await stepLogger.step('Override selection accent plus all five hover and interaction states', async () => {
@@ -263,8 +269,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await artistFamilyActions.waitForViewReady('Neal Morse');
     await artistFamilyActions.expand();
     await artistFamilyActions.waitForPrimaryChipActive('Neal Morse');
-    await artistFamilyActions.clickPrimaryChip();
-    await artistFamilyActions.waitForChipActive('Neal Morse');
+    await artistFamilyActions.selectOnlyChipByName('Neal Morse');
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
@@ -426,4 +431,71 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await utilityAppearanceActions.waitForReady();
     await expect(appearance.paletteButton('graphite')).toHaveAttribute('aria-pressed', 'true');
   });
+  await stepLogger.step('Keep panel outlines blue by default and persist an explicit override', async () => {
+    await utilityAppearanceActions.openSection('selection-accent');
+    await surfaces.panelDefault.click();
+    await utilityAppearanceActions.save();
+    await expect(surfaces.root).toHaveCSS('--appearance-selected-accent', '#55c7ff');
+    const swatch = surfaces.panelSwatches.first();
+    const customColor = await swatch.getAttribute('data-color');
+    await swatch.click();
+    await utilityAppearanceActions.save();
+    await page.reload();
+    await galleryActions.waitForGalleryReady();
+    await expect(surfaces.root).toHaveCSS('--appearance-selected-accent', customColor);
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('selection-accent');
+    await surfaces.panelDefault.click();
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+  });
+
+  await stepLogger.step('Combine similar artists without losing albums or main-artist information', async () => {
+    await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
+    await artistFamilyActions.waitForViewReady('Neal Morse');
+    await artistFamilyActions.expand();
+    await artistFamilyActions.selectAllChips();
+    const combine = surfaces.combine;
+    if (await combine.getAttribute('aria-checked') !== 'true') await combine.click();
+    await surfaces.familyTrigger.click();
+    await expect(surfaces.combinedHeading).toBeVisible();
+    const info = surfaces.mainArtistInfo;
+    await expect(info).toBeVisible();
+    await expect(surfaces.cards.first()).toBeVisible();
+    await info.click();
+    const panel = surfaces.infoPanel;
+    await expect(panel.getByRole('heading', { name: 'Neal Morse', exact: true })).toBeVisible();
+    await expectSelectionDragStaysInside(page, panel);
+  });
+
+  await stepLogger.step('Reopen recent-search options when typing after clearing', async () => {
+    await searchToolbarActions.search('Neal Morse', { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery('Neal Morse');
+    await searchToolbarActions.searchToolbar.input.fill('');
+    await searchToolbarActions.searchToolbar.input.fill('Neal');
+    await expect(searchToolbarActions.searchToolbar.recentSearchPopover).toBeVisible();
+    await expect(searchToolbarActions.searchToolbar.recentSearchOptions.first()).toBeVisible();
+    await searchToolbarActions.searchToolbar.input.press('Escape');
+    await searchToolbarActions.waitForQuery('Neal');
+  });
+
+  await stepLogger.step('Opening another dropdown dismisses the previous surface', async () => {
+    const family = surfaces.familyTrigger;
+    const types = surfaces.typeTrigger;
+    await family.click();
+    await expect(surfaces.familyPanel).toBeVisible();
+    await expectSharedOutlineGeometry(surfaces);
+    await expectAnchorFollowsUnfold(page, surfaces);
+    await types.click();
+    await expect(surfaces.familyPanel).toBeHidden();
+    await expect(surfaces.typeMenu).toBeVisible();
+    await expect(types).toHaveCSS('outline-style', 'none');
+    await surfaces.sourcesTrigger.click();
+    await expect(surfaces.typeMenu).toBeHidden();
+    await expect(surfaces.sourcesMenu).toBeVisible();
+    await surfaces.sourcesTrigger.click();
+  });
+
 });

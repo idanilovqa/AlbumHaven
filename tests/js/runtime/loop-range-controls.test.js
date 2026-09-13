@@ -489,6 +489,26 @@ test('shared scissors matches the owner-reference hover intensity and neutral ic
   );
 });
 
+test('themed bottom player preserves the approved scissors icon and pod hover glow', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const themedPodHover = css.match(
+    /:root\[data-appearance-player\]:not\(\[data-appearance-native-controls\]\) \.global-player \.loop-edit-actions:not\(\.is-disabled\):hover \.loop-edit-action-pod\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const themedIconHover = css.match(
+    /:root\[data-appearance-player\]:not\(\[data-appearance-native-controls\]\) \.global-player \.loop-edit-action-enter:hover \.loop-edit-action-icon,[^]*?\.loop-edit-action-create:focus-visible \.loop-edit-action-icon\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const themedActionHover = css.match(
+    /:root\[data-appearance-player\]:not\(\[data-appearance-native-controls\]\) \.global-player :is\(\.loop-edit-action-enter:hover,[^)]*\.loop-edit-action-create:focus-visible\)\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+
+  assert.match(themedPodHover, /box-shadow:\s*0 0 7px color-mix\(in srgb, var\(--appearance-play\) 48%, transparent\)/);
+  assert.match(themedActionHover, /color:\s*var\(--appearance-play\)/);
+  assert.match(themedActionHover, /text-shadow:\s*0 0 9px color-mix\(in srgb, var\(--appearance-play\) 90%, transparent\)/);
+  assert.match(themedIconHover, /filter:\s*drop-shadow\(0 0 5px var\(--appearance-play\)\)/);
+});
+
 test('shared scissors keeps owner-measured glyph centers inside the compact idle and active pods', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
@@ -604,6 +624,47 @@ test('opaque Play surfaces retain pointer ownership at the loop-control edge', (
   assert.match(mountRule, /z-index:\s*4/);
 });
 
+test('saved-loop Play hover preserves its surface and uses only a subtle one-pixel outline', () => {
+  const playerCss = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
+  ), 'utf8');
+  const appearanceCss = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const playRule = playerCss.match(/\.loop-play-control-button\s*\{([^}]*)\}/s)?.[1] || '';
+  const baseRule = appearanceCss.match(/:root \.utility-loop-play\s*\{([^}]*)\}/s)?.[1] || '';
+  const interactionRule = appearanceCss.match(
+    /:root \.utility-loop-play:is\(:hover,\s*:active,\s*:focus-visible\):not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+  const restingSurface = playRule.match(/background:\s*([^;]+);/)?.[1]?.trim() || '';
+  const restingBorder = playRule.match(/border-color:\s*([^;]+);/)?.[1]?.trim() || '';
+  assert.ok(baseRule.includes(`background: var(--appearance-play, ${restingSurface}) !important;`));
+  assert.ok(baseRule.includes(`border-color: var(--appearance-player-control-border, ${restingBorder}) !important;`));
+  assert.match(baseRule, /outline:\s*none\s*!important/);
+  assert.doesNotMatch(interactionRule, /(?:background|border-color):/, 'interaction keeps the same theme-linked surface and border');
+  assert.match(interactionRule, /outline:\s*1px solid color-mix\([^;]+transparent\)\s*!important/);
+  assert.match(interactionRule, /outline-offset:\s*1px\s*!important/);
+});
+
+test('saved-loop green controls use a thin subdued hover outline below pressed intensity', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const genericHoverRule = css.match(
+    /:root :is\(button,[^{]+:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{([^}]*)\}/s,
+  )?.[0] || '';
+  const loopHoverRule = css.match(
+    /:root :is\(\.utility-loop-pitch-control button, \.utility-loop-repeat, \.utility-loop-speed-step, \.utility-loop-speed-value\):hover:not\(:disabled\)\s*\{([^}]*)\}/s,
+  )?.[1] || '';
+
+  assert.match(genericHoverRule, /:not\(\.utility-loop-control button\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-repeat\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-step\)/);
+  assert.match(genericHoverRule, /:not\(\.utility-loop-speed-value\)/);
+  assert.match(loopHoverRule, /outline:\s*1px solid rgba\(110,\s*231,\s*183,\s*0\.18\)/);
+  assert.match(loopHoverRule, /outline-offset:\s*1px/);
+});
+
 test('expanded loop edit controls overlay the waveform without reserving their two-button width', () => {
   const css = fs.readFileSync(path.join(
     __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
@@ -707,6 +768,18 @@ test('persistent and saved-loop players share one relational Play control cluste
   assert.doesNotMatch(css, /\.utility-loop-play\s*\{[^}]*(?:width|height|min-width|min-height):/s);
   assert.doesNotMatch(css, /\.utility-loop-play-cluster\s+\.loop-edit-actions\s*\{/s);
   assert.doesNotMatch(css, /\.player-loop-actions\s*\{/s);
+});
+
+test('saved-loop rows leave breathing room below the overhanging Play control', () => {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css',
+  ), 'utf8');
+  const entryRule = css.match(/\.utility-loop-entry\s*\{([^}]*)\}/s)?.[1] || '';
+  const firstEntryRule = css.match(/\.utility-loop-entry:first-child\s*\{([^}]*)\}/s)?.[1] || '';
+
+  assert.match(entryRule, /padding:\s*11px\s+0\s+15px/);
+  assert.match(firstEntryRule, /padding-top:\s*0/);
+  assert.doesNotMatch(firstEntryRule, /padding-bottom:\s*0/);
 });
 
 test('active-away scissors keeps the idle one-button geometry with subdued styling', () => {
@@ -1126,6 +1199,32 @@ test('main and Utility editors share the same selection and edge-safe handle pri
   assert.match(css, /\.loop-range-handle\s*\{[^}]*--loop-handle-hit-size/s);
   assert.match(css, /\.loop-range-handle\.is-start/);
   assert.match(css, /\.loop-range-handle\.is-end/);
+});
+
+function readGenericInteractionSelectors() {
+  const css = fs.readFileSync(path.join(
+    __dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css',
+  ), 'utf8');
+  const selectors = [...css.matchAll(/([^{}]+)\{[^}]*\}/g)]
+    .map(match => match[1].trim())
+    .filter(selector => selector.startsWith(':root')
+      && selector.includes(':is(button,')
+      && /:(hover|active|focus-visible)/.test(selector));
+  assert.equal(selectors.length, 5, 'all generic hover, pressed, and keyboard-focus rules must be checked');
+  return selectors;
+}
+
+test('shared loop range handles are excluded from generic button interaction painting', () => {
+  for (const selector of readGenericInteractionSelectors()) {
+    assert.ok(selector.includes(':not(.loop-range-handle)'), `${selector} must exclude range handles`);
+    assert.ok(selector.includes(':not(.global-player *)'), `${selector} must exclude the global player`);
+  }
+});
+
+test('saved-loop action children do not paint a moving outline beside the fixed divider', () => {
+  for (const selector of readGenericInteractionSelectors()) {
+    assert.ok(selector.includes(':not(.loop-edit-action)'), `${selector} must exclude saved-loop action children`);
+  }
 });
 
 test('player and Utility adapters persist the controller range returned after duration correction', () => {

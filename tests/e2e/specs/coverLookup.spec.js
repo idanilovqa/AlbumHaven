@@ -261,6 +261,22 @@ test('FTC-COVERS-007 notification states and bulk clear preserve active work', {
 
   await stepLogger.step('Select the notification card text without opening the modal and verify the completed elapsed pill', async () => {
     await coverLookupActions.waitForTaskStatus(actionedTaskTitle, 'Completed');
+    const info=coverLookupActions.coverLookup.taskInfoByTitle(actionedTaskTitle);
+    const clear=coverLookupActions.coverLookup.taskClearButtonByTitle(actionedTaskTitle);
+    await clear.hover();
+    const clearHoverBefore=await coverLookupActions.coverLookup.readTaskClearHoverStyle(actionedTaskTitle);
+    await info.hover();
+    await expect(info).toHaveCSS('outline-style','none');
+    await expect(info).toHaveCSS('cursor','pointer');
+    await clear.focus();
+    await clear.press('Shift+Tab');
+    await expect(info).toBeFocused();
+    await expect(info).toHaveJSProperty('tabIndex',0);
+    await info.press('Tab');
+    await expect(clear).toBeFocused();
+    await clear.press('Tab');
+    await clear.hover();
+    expect(await coverLookupActions.coverLookup.readTaskClearHoverStyle(actionedTaskTitle)).toEqual(clearHoverBefore);
     terminalDuration = await coverLookupActions.waitForTerminalTaskElapsed(actionedTaskTitle);
     await coverLookupActions.expectTaskElapsedStable(actionedTaskTitle, terminalDuration);
     const selection = await coverLookupActions.dragSelectTaskTitleWithoutOpeningModal(actionedTaskTitle);

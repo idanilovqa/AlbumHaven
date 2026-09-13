@@ -563,7 +563,17 @@ function openTrackModal(album, options = {}) {
     return;
   }
   invalidatePendingTrackModalLoad();
-  const releaseSet = getAlbumReleaseSet(albumWithPlaybackContext);
+  // Edition hydration must not rebuild the tabs around a different base name.
+  const preserved = options.releaseSet;
+  const preservedAlbum = preserved?.releases?.[preserved.selectedIndex];
+  const releaseSet = preservedAlbum
+    && getAlbumRequestKey(preservedAlbum) === getAlbumRequestKey(albumWithPlaybackContext)
+    ? {
+      releases: preserved.releases.map((release, index) => index === preserved.selectedIndex
+        ? { ...albumWithPlaybackContext, tabLabel: release.tabLabel } : release),
+      selectedIndex: preserved.selectedIndex,
+    }
+    : getAlbumReleaseSet(albumWithPlaybackContext);
   state.modalReleases = releaseSet.releases;
   state.modalReleaseIndex = releaseSet.selectedIndex;
   hideVersionContextMenu();

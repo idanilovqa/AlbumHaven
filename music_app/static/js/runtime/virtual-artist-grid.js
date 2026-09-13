@@ -17,11 +17,11 @@ function albumCardHtml(album, options = {}) {
   const albumMissing = String(album?.inventory_status || '').trim().toLowerCase() === 'missing';
   const summary = getAlbumCardSummary(album);
   const rating = getAlbumCardRating(album);
-  const ratingMarkup = `
-        <div class="rating-row">
-          <div class="stars" role="img" aria-label="${rating === null ? 'Album unrated' : `Album rating ${rating}/10`}">${renderStars(rating)}</div>
-          ${rating === null ? '' : `<div class="rating-text">${rating}/10</div>`}
-        </div>`;
+  const ratingMarkup = buildGalleryRatingHtml({
+    value: rating || 0,
+    maximum: 10,
+    label: rating === null ? 'Album unrated' : `Album rating ${rating}/10`,
+  });
   const albumKey = getAlbumRequestKey(album);
   const albumVersionKey = getAlbumCardVersionKey(album);
   const albumFallback = JSON.stringify({
@@ -80,6 +80,7 @@ function albumCardHtml(album, options = {}) {
     trackCount: summary.trackCount,
     lengthDisplay: summary.lengthDisplay,
     artboxHtml,
+    displayMode: options.displayMode || state?.gallery?.mainState?.view || state?.view?.gallery_display_mode,
   });
 }
 
@@ -104,6 +105,7 @@ function getAlbumCardRenderKey(album) {
     String(album?.remote_cover_thumbnail_url || album?.remote_cover_url || '').trim(),
     String(album?.inventory_status || ''),
     String(album?.missing_since || ''),
+    String(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode || 'cards'),
   ]);
 }
 
@@ -259,7 +261,7 @@ function resolveGalleryCardWidth(layoutConfig = CARD_GALLERY_LAYOUT_CONFIG) {
 
 function buildAlbumRowGridTemplate(columns, cardTrackWidth) {
   const safeColumns = Math.max(1, Math.floor(Number(columns) || 1));
-  const safeTrackWidth = Math.max(1, Math.round(Number(cardTrackWidth) || 1));
+  const safeTrackWidth = Math.max(1, Math.floor((Number(cardTrackWidth) || 1) * 1000) / 1000);
   return `repeat(${safeColumns}, minmax(0, ${safeTrackWidth}px))`;
 }
 
@@ -797,12 +799,9 @@ class VirtualArtistGrid {
       this._selectedFamilyCoverUrls.clear();
       this._selectedFamilyCoverOwner = '';
     }
-    if (renderedPrimaryGroups.length) {
-      sections.push({ kind: 'label', title: 'Primary Artist' });
-      renderedPrimaryGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'primary', sectionKey: '' }));
-    }
+    if (renderedPrimaryGroups.length) renderedPrimaryGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'primary', sectionKey: '' }));
     if (renderedFamilyGroups.length) {
-      sections.push({ kind: 'label', title: 'Family' });
+      sections.push({ kind: 'label', title: 'Family', albumCount: renderedFamilyGroups.reduce((total, group) => total + group.albums.length, 0) });
       renderedFamilyGroups.forEach((group) => sections.push({ kind: 'artist', group, sectionType: 'family', sectionKey: '' }));
     }
     if (!renderedPrimaryGroups.length && !renderedFamilyGroups.length) {
@@ -827,6 +826,7 @@ class VirtualArtistGrid {
       )}:${measurementOccurrence}`;
       const previousSection = previousSectionsByMeasurementKey.get(section.measurementKey);
       if (!previousSection) return;
+      section.rowGeometryKey = previousSection.rowGeometryKey;
       section.blockHeights = Array.isArray(previousSection.blockHeights)
         ? previousSection.blockHeights.slice()
         : [];
@@ -952,9 +952,12 @@ class VirtualArtistGrid {
   recalculate() {
     const layoutConfig = this.getLayoutConfig();
     const selectedCardWidth = resolveGalleryCardWidth(layoutConfig);
-    const width = Math.max(1, this.scrollEl.clientWidth - 8);
-    this.cardTrackWidth = Math.min(selectedCardWidth, width);
+    const width = Math.max(1, this.scrollEl.clientWidth - 4);
     this.columns = Math.max(1, Math.floor((width + this.columnGap) / (selectedCardWidth + this.columnGap)));
+    this.cardTrackWidth = (width - (this.columns - 1) * this.columnGap) / this.columns;
+    const displayMode = resolveGalleryRendererMode(state?.gallery?.mainState?.view || state?.view?.gallery_display_mode);
+    const rowGeometryKey = `${displayMode}:${this.columns}:${this.cardTrackWidth}`;
+    const estimatedRowHeight = displayMode === 'covers' ? this.cardTrackWidth : this.collapsedRowHeight;
     let offsetTop = 0;
     this.sectionByKey = new Map();
     this.sections.forEach((section) => {
@@ -966,6 +969,14 @@ class VirtualArtistGrid {
         return;
       }
 
+      // Measurements only survive while the card geometry stays the same.
+      // In particular, picture-only rows are square from their first render.
+      if (section.rowGeometryKey !== rowGeometryKey) {
+        section.blockHeights = [];
+        section.blockMeasureKeys = [];
+        section.measuredBlockKeys = [];
+      }
+      section.rowGeometryKey = rowGeometryKey;
       const blocks = this.getBlocksForSection(section);
       const previousMeasureKeys = Array.isArray(section.blockMeasureKeys) ? section.blockMeasureKeys : [];
       const previousMeasuredKeys = Array.isArray(section.measuredBlockKeys) ? section.measuredBlockKeys : [];
@@ -978,13 +989,13 @@ class VirtualArtistGrid {
         section.blockHeights = blocks.map((block, index) => {
           if (block.kind === 'subheading') return this.subsectionLabelHeight;
           const previousHeight = Number(previousBlockHeights[index] || 0);
-          return previousHeight > 0 ? previousHeight : this.collapsedRowHeight;
+          return previousHeight > 0 ? previousHeight : estimatedRowHeight;
         });
       } else {
         section.blockHeights = blocks.map((block, index) => (
           block.kind === 'subheading'
             ? this.subsectionLabelHeight
-            : (section.blockHeights[index] || this.collapsedRowHeight)
+            : (section.blockHeights[index] || estimatedRowHeight)
         ));
       }
       section.blockMeasureKeys = nextMeasureKeys;
@@ -1823,9 +1834,7 @@ class VirtualArtistGrid {
     const renderAlbumHtml = typeof layoutConfig.renderAlbumHtml === 'function'
       ? layoutConfig.renderAlbumHtml
       : albumCardHtml;
-    if (section.kind === 'label') {
-      return `<div class="section-split-label">${escapeHtml(section.title)}</div>`;
-    }
+    if (section.kind === 'label') return buildGalleryDividerHtml(section);
     const group = section.group;
     const blocks = Array.isArray(section.blocksData) ? section.blocksData : [];
     const visibleRange = this.getVisibleBlockRange(section, start, end);
@@ -1851,7 +1860,7 @@ class VirtualArtistGrid {
       return `
         <div class="album-row" data-section-key="${escapeHtml(section.sectionKey)}" data-block-index="${blockIndex}" style="grid-template-columns:${buildAlbumRowGridTemplate(this.columns, this.cardTrackWidth)};justify-content:start;">
           ${Array.isArray(block.albums) ? block.albums.map((album) => (
-            renderAlbumHtml(album, { coverPriority })
+            renderAlbumHtml(album, { coverPriority, displayMode: state?.gallery?.mainState?.view })
           )).join('') : ''}
         </div>
       `;
@@ -1859,10 +1868,7 @@ class VirtualArtistGrid {
 
     return `
       <section class="artist-section ${section.sectionType}">
-        <div class="artist-header">
-          <h2 class="artist-name">${escapeHtml(group.artist_display || group.artist)}</h2>
-          <div class="artist-meta">${group.albums.length} ${group.albums.length === 1 ? 'album' : 'albums'}</div>
-        </div>
+        ${buildFamilyArtistHeaderHtml({ artist: group.artist_display || group.artist, infoArtist: group.artist, albumCount: group.albums.length })}
         <div class="artist-rows">${topSpacer}${rowBlocks}${bottomSpacer}</div>
       </section>
     `;
@@ -1907,10 +1913,7 @@ function buildArtistSectionHtml(
   const albums = Array.isArray(safeGroup.albums) ? safeGroup.albums : [];
   return `
     <section class="artist-section ${sectionType}">
-      <div class="artist-header">
-        <h2 class="artist-name">${escapeHtml(safeGroup.artist_display || safeGroup.artist || 'Artist')}</h2>
-        <div class="artist-meta">${albums.length} ${albums.length === 1 ? 'album' : 'albums'}</div>
-      </div>
+      ${buildFamilyArtistHeaderHtml({ artist: safeGroup.artist_display || safeGroup.artist || 'Artist', infoArtist: safeGroup.artist, albumCount: albums.length })}
       <div class="artist-rows">${buildArtistSectionRowsHtml(albums, columns, layoutConfig, cardTrackWidth)}</div>
     </section>
   `;
@@ -1938,9 +1941,8 @@ function renderArtistGroupsMarkupFallback(
     virtualGrid.bottomSpacerEl.style.height = '0px';
   }
   return [
-    ...(renderedPrimaryGroups.length ? ['<div class="section-split-label">Primary Artist</div>'] : []),
     ...renderedPrimaryGroups.map((group) => buildArtistSectionHtml(group, 'primary', columns, layoutConfig, cardTrackWidth)),
-    ...(renderedFamilyGroups.length ? ['<div class="section-split-label">Family</div>'] : []),
+    ...(renderedFamilyGroups.length ? [buildGalleryDividerHtml({ label: 'Family', albumCount: renderedFamilyGroups.reduce((total, group) => total + group.albums.length, 0) })] : []),
     ...renderedFamilyGroups.map((group) => buildArtistSectionHtml(group, 'family', columns, layoutConfig, cardTrackWidth)),
     ...(!renderedPrimaryGroups.length && !renderedFamilyGroups.length
       ? renderedFallbackGroups.map((group) => buildArtistSectionHtml(group, 'all', columns, layoutConfig, cardTrackWidth))
@@ -2015,29 +2017,21 @@ function getGalleryModeRenderer(mode) {
 }
 
 function renderArtistGroups(options = {}) {
-  const selectedArtist = String(state.view.selected_artist || '').trim();
-  const selectedArtistFamilyDisplayMode = String(
-    state.view.selected_artist_family_display_mode
-      ?? state.view.artist_page?.family_display_mode
-      ?? 'grouped',
-  ).trim().toLowerCase();
-  const displayGroupState = typeof buildSelectedArtistDisplayGroups === 'function'
-    ? buildSelectedArtistDisplayGroups(
-      state.view.primary_artist_groups || [],
-      state.view.family_artist_groups || [],
-      selectedArtist,
-    )
-    : {
-      primaryGroups: state.view.primary_artist_groups || [],
-      familyGroups: state.view.family_artist_groups || [],
-    };
-  const fallbackGroups = state.view.artist_groups || [];
-  const renderState = selectedArtist && selectedArtistFamilyDisplayMode === 'chronological'
-    ? {
-      primaryGroups: [],
-      familyGroups: [],
-    }
-    : displayGroupState;
-  const modeConfig = getGalleryModeConfig(state.view.gallery_display_mode);
-  modeConfig.renderer(renderState, fallbackGroups, options, modeConfig.layoutConfig);
+  const model = getFilteredGalleryMainModel();
+  const modeConfig = getGalleryModeConfig(state.gallery.mainState.view);
+  modeConfig.renderer(
+    { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
+    model.fallbackGroups,
+    options,
+    modeConfig.layoutConfig,
+  );
+  if (
+    state.gallery.mainState.familySelectionExplicit === true
+    && state.gallery.mainState.familyArtists.length === 0
+    && virtualGrid.containerEl
+  ) {
+    rebuildAlbumIndex([]);
+    virtualGrid.containerEl.innerHTML = buildGalleryEmptySelectionHtml();
+  }
+  if (typeof updateGalleryMainChrome === 'function' && typeof document?.querySelector === 'function') updateGalleryMainChrome();
 }

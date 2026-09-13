@@ -1,6 +1,7 @@
 // Keep this file as a thin registration seam; feature logic belongs in
 // feature-owned bootstrap handler files rather than accumulating here.
 document.addEventListener('click', (event) => {
+  if (handleLibraryWarningClick(event)) return;
   const closeScanPageButton = event.target?.closest?.('[data-close-scan-page]') || null;
   if (closeScanPageButton) {
     event.preventDefault();

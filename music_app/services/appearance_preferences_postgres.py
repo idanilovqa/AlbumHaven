@@ -105,11 +105,12 @@ def _item_outline(value: object) -> dict[str, str | None]:
 
 def _interaction_overrides(value: object) -> dict[str, object]:
     expected = {*_INTERACTION_COLOR_FIELDS, "item_outline"}
-    if not isinstance(value, Mapping) or set(value) != expected:
+    if not isinstance(value, Mapping) or set(value) not in (expected, expected | {"panel_outline"}):
         raise ValueError("Interaction overrides require the complete closed set.")
     return {
         **{name: _color(value[name]) for name in _INTERACTION_COLOR_FIELDS},
         "item_outline": _item_outline(value["item_outline"]),
+        **({"panel_outline": _color(value["panel_outline"])} if "panel_outline" in value else {}),
     }
 
 

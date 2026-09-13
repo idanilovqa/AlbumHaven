@@ -101,15 +101,18 @@
 }
 .album-track-table__play::after { --album-track-play-offset: 0.5turn; }
 .album-track-table__play--activating::before,
-.album-track-table__play--activating::after { animation: album-track-play-activation 680ms ease-out 1; }
+.album-track-table__play--activating::after { animation: album-track-play-activation 950ms ease-out 1; }
 @keyframes album-track-play-activation {
-  0% { opacity: 0; transform: rotate(0turn) scale(.9); }
+  0% { opacity: 0; transform: rotate(0turn) scale(.9); filter: brightness(1); }
   16% { opacity: 1; }
-  74% { opacity: .9; }
-  100% { opacity: 0; transform: rotate(1turn) scale(1); }
+  68% { opacity: .9; filter: brightness(1); }
+  80% { opacity: 1; filter: brightness(1.8) drop-shadow(0 0 3px var(--album-track-accent)); }
+  88% { opacity: .8; filter: brightness(1.2) drop-shadow(0 0 2px var(--album-track-accent)); }
+  100% { opacity: 0; transform: rotate(1turn) scale(1); filter: brightness(1); }
 }
 .album-track-table__title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table__secondary { display: block; color: var(--appearance-muted, var(--muted)); font-size: 0.7rem; line-height: 1.15; }
+.album-track-table__path { display: block; min-width: 0; overflow: hidden; color: var(--appearance-muted, var(--muted)); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
 .album-track-table .track-duration { margin-left: 0; color: var(--appearance-ink, var(--text)); }
 .album-track-table [data-cdt-column="duration"] { text-align: right; font-variant-numeric: tabular-nums; }
 .album-track-table__total {
@@ -147,3 +150,25 @@
   .album-track-table__play--activating::before,
   .album-track-table__play--activating::after { display: none; animation: none; }
 }
+
+/* Keep pointer activation on the stable button when playback changes its icon. */
+.album-track-table__play svg,
+.album-track-table__play svg * { pointer-events: none; }
+
+/* A steady accent wash makes the actively playing album track easy to find. */
+#track-modal .album-track-table .album-track-table__row--playing,
+#track-modal .album-track-table .album-track-table__row--playing:hover {
+  background: color-mix(in srgb, var(--album-track-accent) 16%, transparent);
+  box-shadow: inset 0 0 26px color-mix(in srgb, var(--album-track-accent) 18%, transparent),
+    0 0 18px color-mix(in srgb, var(--album-track-accent) 28%, transparent);
+}
+
+.album-track-table__number-play { position: relative; display: grid; place-items: center; width: 28px; height: 28px; }
+.album-track-table__number-play > .album-track-table__play { position: absolute; inset: 0; opacity: 0; }
+.album-track-table__number { font-variant-numeric: tabular-nums; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__number { visibility: hidden; }
+.album-track-table__row:is(:hover, :focus-within, .album-track-table__row--playing) .album-track-table__play { opacity: 1; }
+.album-track-table__title, .album-track-table__path { user-select: text; }
+.album-track-table__row, .album-track-table__title, .album-track-table__path { cursor: pointer; }
+
+.album-track-table [role="columnheader"][data-cdt-column="number"] { width: 28px; text-align: center; }

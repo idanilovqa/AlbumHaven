@@ -1,3 +1,4 @@
+import { parseVisibleAlbumMetadata } from '../helpers/visibleAlbumMetadata.js';
 import { BasePage } from './basePage.js';
 import { SmallAlert } from './components/smallAlert.js';
 
@@ -68,12 +69,16 @@ export class AlbumCard extends BasePage {
     return '.album-subtitle';
   }
 
+  get durationWithinCardSelector() {
+    return '.album-length';
+  }
+
   get trackCountWithinCardSelector() {
     return '.track-count';
   }
 
   get yearWithinCardSelector() {
-    return '.album-year';
+    return '.album-year, .album-subtitle';
   }
 
   get ratingRowWithinCardSelector() {
@@ -141,7 +146,7 @@ export class AlbumCard extends BasePage {
   cardByIdentity(artistName, albumName, year, options = {}) {
     return this.cardsByArtistAndAlbum(artistName, albumName, options).filter({
       has: this.page.locator(this.yearWithinCardSelector).filter({
-        hasText: exactNormalizedText(String(year)),
+        hasText: new RegExp(`(?:^| · )${String(year).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'u'),
       }),
     });
   }
@@ -160,6 +165,10 @@ export class AlbumCard extends BasePage {
 
   artboxByAlbumName(albumName) {
     return this.cardByAlbumName(albumName).locator('.album-artbox').first();
+  }
+
+  emptyArtboxMarkByAlbumName(albumName) {
+    return this.artboxByAlbumName(albumName).locator('.album-artbox__missing-mark svg');
   }
 
   missingAlertByAlbumName(albumName) {
@@ -306,6 +315,17 @@ export class AlbumCard extends BasePage {
 
   detailsButtonByAlbumName(albumName) {
     return this.cardByAlbumName(albumName).locator(this.detailsButtonWithinCardSelector);
+  }
+
+  async readVisibleMetadata(card) {
+    const subtitle = await card.locator(this.subtitleWithinCardSelector).first().textContent();
+    const separateYear = card.locator('.album-year');
+    return parseVisibleAlbumMetadata(subtitle,
+      await separateYear.count() ? await separateYear.first().textContent() : null);
+  }
+
+  async readVisibleMetadataByAlbumName(albumName) {
+    return this.readVisibleMetadata(this.cardByAlbumName(albumName).first());
   }
 
   subtitleByAlbumName(albumName) {

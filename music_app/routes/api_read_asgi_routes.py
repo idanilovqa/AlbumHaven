@@ -34,6 +34,8 @@ from music_app.services.album_details import build_album_detail_payload
 from music_app.services.album_ratings_postgres import PostgresAlbumRatingsService
 from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 from music_app.services.library_watch_health import LibraryWatchHealthService
+from music_app.services.library_warning_dismissals import PostgresLibraryWarningDismissals, warning_token
+from music_app.routes.bounded_json import read_bounded_json_object, JSONBodyTooLarge
 from music_app.services.policy_asgi import allowed_actions_for_request
 from music_app.services.listen_through import (
     apply_album_preference_overlay,
@@ -320,6 +322,31 @@ def _client_surface_class_from_asgi(request: Request) -> str:
     return resolve_client_surface_class(requested_value)
 
 
+def _warning_dismissals(request):
+    return getattr(request.app.state, "library_warning_dismissals", None) or PostgresLibraryWarningDismissals(_app_config(request))
+
+
+@router.post("/account/library-warning/dismiss")
+async def dismiss_library_warning(request: Request) -> JSONResponse:
+    headers = {"Cache-Control": "no-store"}
+    try:
+        body = await read_bounded_json_object(request)
+        token = (body or {}).get("token")
+        if not isinstance(token, str) or len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+            return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
+    except (ValueError, UnicodeDecodeError, JSONBodyTooLarge):
+        return JSONResponse({"error": "invalid_warning_token"}, status_code=400, headers=headers)
+    health = await run_in_threadpool(_project_library_watch_health_for_request, request)
+    # A stale alert cannot acknowledge a warning that arrived while it was open.
+    if token != warning_token(health):
+        return JSONResponse({"error": "warning_changed"}, status_code=409, headers=headers)
+    try:
+        await run_in_threadpool(_warning_dismissals(request).save, request.state.current_actor.account_id, token)
+    except Exception:
+        return JSONResponse({"error": "dismissal_unavailable"}, status_code=503, headers=headers)
+    return JSONResponse({"dismissed_token": token}, headers=headers)
+
+
 @router.get("/status")
 async def status(request: Request) -> JSONResponse:
     library_state = _library_state(request)
@@ -337,6 +364,18 @@ async def status(request: Request) -> JSONResponse:
         _project_library_watch_health_for_request,
         request,
     )
+    health = payload["watcher_health"]
+    health["warning_token"] = warning_token(health)
+    health["dismissed"] = False
+    actor = getattr(request.state, "current_actor", None)
+    if health["warning_token"] and getattr(actor, "account_id", None) is not None:
+        try:
+            dismissed = await run_in_threadpool(_warning_dismissals(request).load, actor.account_id)
+            health["dismissed"] = dismissed == health["warning_token"]
+        except Exception:
+            # A failed preference read must not hide a health warning.
+            pass
+
     return JSONResponse(payload)
 
 

@@ -140,7 +140,7 @@ for (const palette of [null, 'steelblue']) {
       const rgb = `rgb(${hex.slice(1).match(/../g).map(part => parseInt(part, 16)).join(', ')})`;
       await swatch.hover();
       await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 });
-      await expect(swatch).toHaveCSS('outline-width', '2px');
+      await expect(swatch).toHaveCSS('outline-width', '1px');
       await page.mouse.down();
       try { await expect.soft(swatch).toHaveCSS('background-color', rgb, { timeout: 800 }); }
       finally { await page.mouse.up(); }
@@ -180,11 +180,12 @@ for (const action of ['theme', 'reset']) {
     }, action);
     const effective = await page.evaluate(() => {
       const api = window.AlbumHavenAppearance;
-      const tokens = api.resolveAppearance(api.instance.controller.getState().draft).tokens;
+      const resolved = api.resolveAppearance(api.instance.controller.getState().draft);
+      const tokens = resolved.tokens;
       const toRgb = value => { const probe = document.createElement('span'); probe.style.backgroundColor = value; document.body.append(probe); const result = getComputedStyle(probe).backgroundColor; probe.remove(); return result; };
-      return { hover: toRgb(tokens.hover), control: toRgb(tokens.control) };
+      return { hover: toRgb(tokens.hover), selected: toRgb(`color-mix(in srgb, ${tokens.ink} 10%, ${resolved.panel})`), control: toRgb(tokens.control) };
     });
-    for (const [index, state] of selectors.entries()) await expect(page.locator(`[data-preview-state="${state}"]`)).toHaveCSS('background-color', index < 2 ? effective.hover : effective.control);
+    for (const [index, state] of selectors.entries()) await expect(page.locator(`[data-preview-state="${state}"]`)).toHaveCSS('background-color', index === 1 ? effective.selected : index === 0 ? effective.hover : effective.control);
     expect(await page.evaluate(() => document.documentElement.style.cssText)).toBe(before);
     await page.evaluate(() => window.AlbumHavenAppearance.instance.controller.cancel());
     await expect(page.locator('[data-preview-state="navigation-hover"]')).toHaveCSS('background-color', 'rgb(255, 17, 34)');

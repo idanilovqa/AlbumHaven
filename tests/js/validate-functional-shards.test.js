@@ -17,10 +17,10 @@ const validatorTest = validatorExists ? test : test.skip;
 const { FUNCTIONAL_SHARDS } = require('../../scripts/ci/resolve-ci-shard.cjs');
 
 const EXPECTED_SHARD_COUNTS = new Map([
-  ['gallery-search-visual', 36],
+  ['gallery-search-visual', 41],
   ['cover-providers', 18],
   ['metadata-mutations', 13],
-  ['playback-utilities', 30],
+  ['playback-utilities', 31],
 ]);
 const EXPECTED_SHARD_DISPLAY_NAMES = new Map([
   ['gallery-search-visual', 'Gallery, Search & Visual'],
@@ -35,8 +35,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.22';
-const FIXTURE_MANIFEST_SHA256 = 'f9f357744464acec5b6bfa2f3b7dc69476d1c6df497ab3318399756cd5b9aa75';
+const FIXTURE_RELEASE = 'fixtures-v1.0.23';
+const FIXTURE_MANIFEST_SHA256 = 'e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -110,7 +110,7 @@ function functionalJobSource() {
   return { workflow, job: workflow.slice(start, end) };
 }
 
-test('functional shard contract pins the approved four-way 97-case assignment', () => {
+test('functional shard contract pins the approved four-way 103-case assignment', () => {
   const contract = readJson(shardContractPath);
   assert.equal(contract.browser, 'chrome');
   assert.equal(contract.workersPerInvocation, 1);
@@ -124,7 +124,7 @@ test('functional shard contract pins the approved four-way 97-case assignment', 
     assert.ok(shard.invocations.length > 0, `${shard.name} must not be empty`);
     assert.ok(shard.suitePrerequisites.length > 0, `${shard.name} must declare prerequisites`);
   }
-  assert.equal(total, 97);
+  assert.equal(total, 103);
   for (const ownedCase of ownedCases(contract)) {
     assert.match(ownedCase.area, /^[a-z]+(?:-[a-z]+)*$/, ownedCase.case);
   }
@@ -740,7 +740,7 @@ validatorTest('gallery startup projections share one early app process before is
   assert.equal(waves[0].invocations[0], isolatedFirstWave[0]);
   assert.equal(waves[0].invocations[1].baselineMode, 'shared-setup');
   const sharedReaderNames = waves[0].invocations[1].cases.map((ownedCase) => ownedCase.case);
-  assert.equal(sharedReaderNames.length, 20);
+  assert.equal(sharedReaderNames.length, 21);
   for (const caseName of [
     'FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover',
     'FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes',
@@ -874,10 +874,10 @@ validatorTest('all four shards use explicit effect-compatible wave budgets', () 
   const contract = readJson(shardContractPath);
   const matrix = readJson(path.join(repoRoot, 'tests', 'ci', 'test-data-matrix.json'));
   const expected = new Map([
-    ['gallery-search-visual', { cases: 36, waves: [1, 2] }],
+    ['gallery-search-visual', { cases: 41, waves: [1, 2] }],
     ['cover-providers', { cases: 18, waves: [1, 2] }],
     ['metadata-mutations', { cases: 13, waves: [1, 2, 3] }],
-    ['playback-utilities', { cases: 30, waves: [1, 2, 3] }],
+    ['playback-utilities', { cases: 31, waves: [1, 2, 3] }],
   ]);
   const matrixByCase = new Map(matrix.map((row) => [row.case, row]));
 

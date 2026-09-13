@@ -7,12 +7,18 @@ const responseStateHelperPath = path.join(__dirname, '..', '..', '..', 'music_ap
 const alertComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'alert-components.js');
 const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');
 const galleryCardComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-card-component.js');
+const galleryMainStatePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
+const galleryMainComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-components.js');
+const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
 const virtualGridHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSources = [
   { path: responseStateHelperPath, source: fs.readFileSync(responseStateHelperPath, 'utf8') },
   { path: alertComponentsPath, source: fs.readFileSync(alertComponentsPath, 'utf8') },
   { path: albumArtboxPath, source: fs.readFileSync(albumArtboxPath, 'utf8') },
   { path: galleryCardComponentPath, source: fs.readFileSync(galleryCardComponentPath, 'utf8') },
+  { path: galleryMainStatePath, source: fs.readFileSync(galleryMainStatePath, 'utf8') },
+  { path: galleryMainComponentsPath, source: fs.readFileSync(galleryMainComponentsPath, 'utf8') },
+  { path: galleryMainInteractionsPath, source: fs.readFileSync(galleryMainInteractionsPath, 'utf8') },
   { path: virtualGridHelperPath, source: fs.readFileSync(virtualGridHelperPath, 'utf8') },
 ];
 
@@ -308,7 +314,7 @@ function buildTreeSelectionPayload(selectedArtist, familyArtists) {
   context.applyViewPayload(warmPayload, { trackSidebarReveal: false });
   context.renderArtistGroups();
   assert.match(containerEl.innerHTML, /Cosmic Cathedral/);
-  assert.match(containerEl.innerHTML, /Primary Artist/);
+  assert.match(containerEl.innerHTML, /<h2 class="artist-name">Cosmic Cathedral<\/h2>/);
   assert.ok(Array.isArray(context.state.view.family_artist_groups));
   assert.ok(context.state.view.family_artist_groups.length > 0);
 

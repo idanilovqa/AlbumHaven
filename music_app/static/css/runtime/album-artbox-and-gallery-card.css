@@ -46,3 +46,8 @@
   pointer-events: none;
 }
 .album-artbox__action .small-alert { max-width: 100%; pointer-events: auto; }
+/* The ready cover's rounded corners reveal the album panel, not placeholder tint. */
+.track-modal-cover-shell .album-artbox--ready {
+  border-radius: 14px;
+  background: transparent;
+}

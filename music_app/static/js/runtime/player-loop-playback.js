@@ -76,6 +76,7 @@ function updatePlayerUi() {
     els.timeline.disabled = !hasTrack || lockedByAnotherTab;
   }
   if (els.time) {
+    els.time.hidden = !hasTrack;
     els.time.textContent = state.player.loopActive
       ? `${formatLoopTime(state.player.loopStart, true)} - ${formatLoopTime(state.player.loopEnd, true)}`
       : lockedByAnotherTab
@@ -88,7 +89,7 @@ function updatePlayerUi() {
     busy: state.player.saveBusy || lockedByAnotherTab,
   });
   if (els.play) {
-    els.play.textContent = lockedByAnotherTab ? 'Locked' : (playback.paused ? '\u25B6' : '\u23F8');
+    els.play.textContent = playback.paused ? '\u25B6' : '\u23F8';
     els.play.setAttribute('aria-label', lockedByAnotherTab ? 'Playback locked in another tab' : (playback.paused ? 'Play' : 'Pause'));
     els.play.disabled = lockedByAnotherTab || !hasTrack;
   }
@@ -870,7 +871,13 @@ function attachSharedPlayer() {
   document.querySelectorAll('.play-track-button').forEach((btn) => {
     if (btn.dataset.bound === '1') return;
     btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
+    const trackRow = btn.closest?.('.album-track-table__row');
+    if (trackRow && trackRow.dataset.doubleClickBound !== '1') {
+      trackRow.dataset.doubleClickBound = '1';
+      trackRow.addEventListener('dblclick', handleAlbumTrackRowDoubleClick);
+    }
+    btn.addEventListener('click', (event) => {
+      const focusTimeline = event?.isTrusted !== false;
       const src = btn.getAttribute('data-src');
       if (!src) return;
       if (typeof triggerAlbumTrackPlayActivation === 'function' && btn.classList?.contains('album-track-table__play')) {
@@ -881,7 +888,7 @@ function attachSharedPlayer() {
       const playback = getPlayerPlaybackSnapshot();
       const isLoadedCurrentTrack = isCurrentTrack && String(playback.src || '') === String(src);
       if (isLoadedCurrentTrack) {
-        togglePlayerPlayback();
+        togglePlayerPlayback({ focusTimelineOnResume: focusTimeline });
         updatePlayerUi();
         return;
       }
@@ -910,7 +917,7 @@ function attachSharedPlayer() {
           console.warn('[AlbumHaven][Playback] Track selection failed.', error);
         });
       }
-      focusPlayerTimeline();
+      if (focusTimeline) focusPlayerTimeline();
     });
   });
 }

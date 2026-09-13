@@ -1956,3 +1956,164 @@ test('successful saved-loop deletion stops the editor expiry once after confirma
 
   assert.deepEqual(stops, ['saved-loop-loop-1']);
 });
+
+ test('saved loop uses the combined L+R renderer and reuses peaks across progress updates', async () => {
+  const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } };
+  const audio = { duration: 20, currentTime: 5 };
+  const peaks = { left: [0.2, 0.8], right: [0.7, 0.3] };
+  let loads = 0;
+  const draws = [];
+  const state = { player: { appearance: { seekbarMode: 'default' } }, utility: { loopEditors: {} } };
+  const context = loadHelper({ state, document: { querySelector: () => canvas },
+    loadSavedLoopWaveformPeaks: async () => { loads++; return peaks; },
+    drawCombinedLoopWaveform: (...args) => draws.push(args),
+  });
+  context.loadSavedLoopWaveformPeaks = async () => { loads++; return peaks; };
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(loads, 0);
+  assert.equal(canvas.hidden, true);
+  state.player.appearance.seekbarMode = 'waveform';
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(canvas.hidden, false);
+  assert.equal(draws[0][1], peaks);
+  assert.equal(draws[0][2], 0.25);
+  audio.currentTime = 10;
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(loads, 1);
+  assert.equal(draws.at(-1)[2], 0.5);
+  state.utility.loopEditors.loop = { active: true };
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, true);
+  state.utility.loopEditors.loop.active = false;
+  state.player.appearance.seekbarMode = 'default';
+  context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, true);
+});
+
+test('loop progress updates preserve the play button content until playback changes', () => {
+  let writes = 0;
+  let text = '';
+  const button = { get textContent() { return text; }, set textContent(value) { text = value; writes++; }, setAttribute() {} };
+  const audio = { paused: false, duration: 20, currentTime: 1 };
+  const context = loadHelper({ document: { querySelector: selector => selector.includes('data-loop-play=') ? button : null } });
+  context.getSavedLoopRangeElements = () => ({ audio });
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 1);
+  audio.currentTime = 2;
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 1, 'progress should not replace the pressed button content');
+  audio.paused = true;
+  context.updateUtilityLoopPlayerUi('one');
+  assert.equal(writes, 2);
+  assert.equal(text, '▶');
+});
+
+test('five paused saved-loop rows all receive waveforms through the bounded shared peak cache', async () => {
+  const ids = ['first', 'second', 'third', 'fourth', 'fifth'];
+  const canvases = new Map(ids.map(id => [id, {
+    hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
+  }]));
+  const audios = ids.map(id => ({
+    paused: true, duration: 20, currentTime: 0,
+    getAttribute: () => id,
+  }));
+  const requests = [];
+  const drawn = new Set();
+  const context = loadHelper({
+    state: { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } },
+    document: {
+      querySelectorAll: () => audios,
+      querySelector: selector => canvases.get(selector.match(/="([^"]+)"/)?.[1]) || null,
+    },
+    fetch: (url, { signal }) => new Promise((resolve, reject) => {
+      const request = { id: new URL(url, 'http://localhost').searchParams.get('loop_id'), signal, resolve, settled: false };
+      requests.push(request);
+      signal.addEventListener('abort', () => {
+        request.settled = true;
+        reject(new Error('aborted'));
+      }, { once: true });
+    }),
+    drawCombinedLoopWaveform: canvas => drawn.add(ids.find(id => canvases.get(id) === canvas)),
+  });
+
+  // The real group path refreshes every mounted row before any network response.
+  // Resolve successive admitted requests without playback or another UI refresh.
+  context.refreshUtilityLoopStereoWaveforms();
+  for (let wave = 0; wave < ids.length; wave += 1) {
+    for (const request of requests.filter(item => !item.settled)) {
+      request.settled = true;
+      request.resolve({ ok: true, json: async () => ({
+        sampleCount: 280, left: Array(280).fill(0.2), right: Array(280).fill(0.4),
+      }) });
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.deepEqual([...drawn].sort(), [...ids].sort(), 'paused rows must not require interaction to recover evicted loads');
+  assert.ok([...canvases.values()].every(canvas => !canvas.hidden));
+  assert.equal(vm.runInContext('SAVED_LOOP_WAVEFORM_CACHE_LIMIT', context), 4);
+  assert.ok(vm.runInContext('savedLoopWaveformPeakCache.size', context) <= 4);
+});
+
+for (const discarded of ['detached', 'mode-off']) {
+  test(`queued saved-loop waveform work is discarded when ${discarded}`, async () => {
+    const ids = ['active', 'queued'];
+    const canvases = new Map(ids.map(id => [id, {
+      hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
+    }]));
+    const audios = ids.map(id => ({ duration: 20, currentTime: 0, getAttribute: () => id }));
+    const state = { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } };
+    const requests = [];
+    const context = loadHelper({ state,
+      document: {
+        querySelectorAll: () => audios,
+        querySelector: selector => canvases.get(selector.match(/="([^"]+)"/)?.[1]) || null,
+      },
+      fetch: (url) => new Promise(resolve => requests.push({ url, resolve })),
+      drawCombinedLoopWaveform() {},
+    });
+    context.refreshUtilityLoopStereoWaveforms();
+    assert.equal(requests.length, 1, 'only one background request is admitted');
+    if (discarded === 'detached') canvases.get('queued').isConnected = false;
+    else state.player.appearance.seekbarMode = 'default';
+    context.refreshUtilityLoopStereoWaveforms();
+    requests[0].resolve({ ok: true, json: async () => ({
+      sampleCount: 280, left: Array(280).fill(0.2), right: Array(280).fill(0.4),
+    }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 1, 'discarded work must not start after the active load');
+    assert.equal(canvases.get('queued').hidden, true);
+    assert.equal(vm.runInContext('utilityLoopStereoQueue.length', context), 0);
+    assert.equal(vm.runInContext('utilityLoopStereoLoadActive', context), false);
+  });
+}
+
+for (const failure of ['null', 'reject']) {
+  test(`saved loop retains regular seeking and retries a ${failure} waveform failure after backoff`, async () => {
+    let waveformMode = false;
+    const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle(_name, enabled) { waveformMode = enabled; } } } };
+    const audio = { duration: 20, currentTime: 5 };
+    const state = { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } };
+    const context = loadHelper({ state, document: { querySelector: () => canvas }, drawCombinedLoopWaveform() {} });
+    let now = 1000, loads = 0;
+    context.Date = { now: () => now };
+    context.loadSavedLoopWaveformPeaks = async () => {
+      loads++;
+      if (loads > 1) return { left: [0.5], right: [0.4] };
+      if (failure === 'reject') throw new Error('temporary network failure');
+      return null;
+    };
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(canvas.hidden, true);
+    assert.equal(waveformMode, false);
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    assert.equal(loads, 1);
+    now += 5000;
+    context.updateUtilityLoopStereoWaveform('loop', audio);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(loads, 2);
+    assert.equal(canvas.hidden, false);
+    assert.equal(waveformMode, true);
+  });
+}

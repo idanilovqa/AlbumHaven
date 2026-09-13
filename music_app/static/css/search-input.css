@@ -58,3 +58,24 @@
   color: var(--search-field-color, var(--text));
 }
 .search-field-action > .search-field-button:disabled { opacity: .5; cursor: default; }
+
+.recent-search-popover { position: fixed; z-index: 105; }
+
+.search-field-control:has(input[aria-expanded="true"]) {
+  outline: none;
+  border: 1px solid var(--search-field-focus, var(--accent));
+  border-bottom-color: transparent;
+  border-radius: var(--search-field-radius, 8px) var(--search-field-radius, 8px) 0 0;
+}
+.recent-search-popover {
+  box-sizing: border-box;
+  border: 1px solid var(--search-joined-focus, var(--accent));
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+  background: var(--search-joined-background, var(--panel));
+}
+:root .search-field-control > input[type="search"],
+:root .search-field-control .search-field-button {
+  outline: none !important;
+  box-shadow: none !important;
+}

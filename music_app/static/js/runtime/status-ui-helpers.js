@@ -133,7 +133,7 @@ function ensureStatusContextMenu() {
   menu.id = 'status-context-menu';
   menu.className = 'status-context-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button>';
+  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button><button type="button" class="status-context-menu-item" data-status-role="scan-page" data-status-action="go-to-scan-page">Open Library/Scan</button>';
   document.body.appendChild(menu);
   return menu;
 }
@@ -180,6 +180,8 @@ function syncStatusContextMenu() {
     const primaryAction = resolvePrimaryStatusContextAction(state.status || {}, { scanPageVisible });
     syncStatusContextButtonPresentation(primaryButton, primaryAction);
   }
+  const scanPageButton = menu.querySelector('[data-status-role="scan-page"]');
+  if (scanPageButton) scanPageButton.hidden = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress || state.status?.covers_in_progress);
   if (!fetchOrCancelButton) return menu;
   const scanBusy = Boolean(state.status?.scan_in_progress || state.status?.relations_in_progress);
   const coverBusy = Boolean(state.status?.covers_in_progress);
@@ -249,6 +251,7 @@ function startStatusIndicatorImmediately(overrides = {}) {
 function updateStatusIndicator(data) {
   const normalizedStatus = applyStatusPayload(data);
   syncStatusContextMenu();
+  if (typeof renderLibraryWarning === 'function') renderLibraryWarning(normalizedStatus);
   const indicator = document.getElementById('scan-indicator');
   if (!indicator) return;
   ensureStatusIndicatorHoverSnapshotBehavior(indicator);

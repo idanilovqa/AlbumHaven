@@ -91,6 +91,44 @@ test('Album Details header actions use the approved outline icons instead of tex
   assert.match(html, /data-open-track-modal-folder="1"/);
 });
 
+test('Loose Tracks uses the shared Album Details header with custom copy and actions', () => {
+  const context = loadComponents();
+  const html = context.buildAlbumDetailsHeaderHtml({
+    variant: 'copy',
+    title: 'Loose Tracks',
+    subtitle: 'Non-album tracks found in Folkstone and family artist folders.',
+    titleId: 'non-album-modal-title',
+    subtitleId: 'non-album-modal-subtitle',
+    actionsHtml: context.buildLooseTracksHeaderActionsHtml(),
+  });
+
+  assert.match(html, /class="album-details-header"/);
+  assert.match(html, /data-album-details-variant="copy"/);
+  assert.match(html, /id="non-album-modal-title">Loose Tracks</);
+  assert.match(html, /id="non-album-modal-subtitle">Non-album tracks found in Folkstone and family artist folders\.<\/div>/);
+  assert.match(html, /id="non-album-modal-edit-tags"/);
+  assert.match(html, /data-open-non-album-tag-editor="1"/);
+  assert.match(html, /album-details-header__action-icon--edit/);
+  assert.match(html, /id="non-album-modal-close"/);
+  assert.match(html, /data-close-non-album-modal="1"/);
+  assert.match(html, /album-details-header__action-icon--close/);
+  assert.equal((html.match(/ui-button--icon ui-button--medium action-button/g) || []).length, 2);
+  assert.doesNotMatch(html, /album-details-header__action-icon--folder|&#9998;|✕/);
+});
+
+test('Loose Tracks template delegates its header contents to AlbumDetailsHeader', () => {
+  const template = fs.readFileSync(
+    path.join(repoRoot, 'music_app', 'templates', 'partials', 'primary-modals.html'),
+    'utf8',
+  );
+  const modalStart = template.indexOf('<div class="non-album-modal"');
+  const modalEnd = template.indexOf('</div>\n\n  <div', modalStart);
+  const modal = template.slice(modalStart, modalEnd);
+
+  assert.match(modal, /<div class="non-album-modal-header" id="non-album-modal-header"><\/div>/);
+  assert.doesNotMatch(modal, /&#9998;|>✕<|class="icon-button/);
+});
+
 test('missing Album Details disables edit and folder actions while leaving Close active', () => {
   const context = loadComponents();
   const html = context.buildAlbumDetailsHeaderActionsHtml({ missing: true });
@@ -150,7 +188,7 @@ test('Editorial Album Details aligns the track table with its title and metadata
 test('Editorial mobile stacking wins the same-selector cascade after desktop layout rules', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/track-modal-and-lightbox.css'), 'utf8');
   const dialog = '.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"])';
-  for (const [selector, display] of [[dialog, 'block'], [`${dialog} > .track-modal-body`, 'grid']]) {
+  for (const [selector, display] of [[dialog, 'flex'], [`${dialog} > .track-modal-body`, 'grid']]) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rules = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))];
     assert.ok(rules.length >= 2);

@@ -327,6 +327,18 @@ export class CoverLookup extends BasePage {
     }).first();
   }
 
+  taskInfoByTitle(taskTitle) {
+    return this.taskCardByTitle(taskTitle).locator('.cover-lookup-task-open');
+  }
+
+  async readTaskClearHoverStyle(taskTitle) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real sibling control's hover styles
+    return this.taskClearButtonByTitle(taskTitle).evaluate(element=>{
+      const style=getComputedStyle(element);
+      return {outline:style.outline,background:style.backgroundColor,cursor:style.cursor};
+    });
+  }
+
   taskCancelButtonByTitle(taskTitle) {
     return this.taskCardByTitle(taskTitle).getByRole('button', { name: 'Stop lookup' });
   }

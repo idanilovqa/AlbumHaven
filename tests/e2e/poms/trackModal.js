@@ -78,11 +78,11 @@ export class TrackModal extends BasePage {
   }
 
   get coverImageSelector() {
-    return '#track-modal-cover img';
+    return '#track-modal-cover .track-modal-cover-visual > img';
   }
 
   get detailedCoverImageSelector() {
-    return '#track-modal-cover .track-modal-cover-visual img';
+    return this.coverImageSelector;
   }
 
   get coverPlaceholderSelector() {

@@ -241,3 +241,12 @@
 .settings-host.settings-shell[hidden],
 .shell-navigation-rail-backdrop[hidden],
 .artists-drawer-button[hidden] { display: none; }
+
+/* Contain content layers so app-bar dropdowns stay above Gallery controls. */
+.shell-layout > .shell-main-surface {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
+}
+
+.shell-main-surface:has(> .gallery-bar) { padding-top: 6px; }

@@ -118,12 +118,12 @@
   }
   function normalizeInteractionOverrides(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Invalid interaction overrides.');
-    const presentKeys = Object.keys(value).sort().join(',');
+    const presentKeys = Object.keys(value).filter(key => key !== 'panel_outline').sort().join(',');
     const currentKeys = [...interactionColorKeys, 'item_outline'].sort().join(',');
     const legacyKeys = [...interactionColorKeys, 'button_hover_border', 'focus'].sort().join(',');
     if (presentKeys !== currentKeys && presentKeys !== legacyKeys) throw new TypeError('Invalid interaction overrides.');
     const colors = Object.fromEntries(interactionColorKeys.map(key => [key, normalizeColor(value[key])]));
-    if (presentKeys === currentKeys) return { ...colors, item_outline: normalizeItemOutline(value.item_outline) };
+    if (presentKeys === currentKeys) return { ...colors, ...(Object.hasOwn(value, 'panel_outline') ? { panel_outline: normalizeColor(value.panel_outline) } : {}), item_outline: normalizeItemOutline(value.item_outline) };
     const legacyColor = normalizeColor(value.focus) || normalizeColor(value.button_hover_border);
     return {
       ...colors,
@@ -222,6 +222,10 @@
       style.removeProperty('--appearance-primary-button-ink');
     }
     const interactions = preference.interaction_overrides || {};
+    if (interactions.panel_outline) style.setProperty('--appearance-selected-accent', interactions.panel_outline);
+    else style.removeProperty('--appearance-selected-accent');
+    if (interactions.item_selected) style.setProperty('--selection-body-background', interactions.item_selected);
+    else style.removeProperty('--selection-body-background');
     const interactionTokens = {
       'item-hover': interactions.item_hover,
       'item-selected': interactions.item_selected,
@@ -277,6 +281,9 @@
     editor.style.setProperty('--appearance-primary-button', effective.tokens.control);
     editor.style.setProperty('--appearance-primary-button-ink', effective.tokens.ink);
     const interactions = value.interaction_overrides || {};
+    editor.style.setProperty('--appearance-selected-accent', interactions.panel_outline || '#55C7FF');
+    editor.style.setProperty('--selection-body-background', interactions.item_selected
+      || 'color-mix(in srgb, var(--appearance-ink, #eee) 10%, var(--appearance-panel-background, #171717))');
     for (const [token, color] of Object.entries({
       'item-hover': interactions.item_hover,
       'item-selected': interactions.item_selected,
@@ -653,8 +660,8 @@
     ['neutral', 'Neutral', ['#4B5057', '#666B72', '#393D43', '#A1A8B0', '#2D3136']],
   ].map(([id, label, colors]) => ({ id, label, colors: Object.fromEntries(interactionRoles.map((role, index) => [role, colors[index]])) }));
   function interactionControlsMarkup() {
-    const rows = [['item_hover', 'Navigation hover'], ['item_selected', 'Navigation selected'], ['button_hover_background', 'Item hover background'], ['item_outline', 'Item hover &amp; keyboard focus outline'], ['button_pressed', 'Item pressed']];
-    return `<section class="appearance-interactions" aria-labelledby="appearance-interactions-title"><h4 id="appearance-interactions-title"><span>2</span>Hover &amp; interaction states</h4><p class="background-help">Each column is a coordinated color family. Override only the states you want.</p>${rows.map(([key, label]) => `<div class="appearance-interaction-row"><strong>${label}</strong><div class="appearance-interaction-options"><div class="appearance-muted-spectrum">${interactionColorFamilies.map(family => { const color = family.colors[key]; return key === 'item_outline' ? `<button type="button" data-item-outline-color data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>` : `<button type="button" data-interaction-color="${key}" data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>`; }).join('')}</div>${key === 'item_outline' ? '<button class="button button-secondary appearance-outline-source" type="button" data-item-outline-source="player" aria-pressed="false">Use player colors</button>' : ''}</div></div>`).join('')}</section>`;
+    const rows = [['item_hover', 'Navigation hover'], ['item_selected', 'Navigation selected'], ['button_hover_background', 'Item hover background'], ['item_outline', 'Item hover &amp; keyboard focus outline'], ['button_pressed', 'Item pressed'], ['panel_outline', 'Panel &amp; dropdown outline']];
+    return `<section class="appearance-interactions" aria-labelledby="appearance-interactions-title"><h4 id="appearance-interactions-title"><span>2</span>Hover &amp; interaction states</h4><p class="background-help">Each column is a coordinated color family. Override only the states you want.</p>${rows.map(([key, label]) => `<div class="appearance-interaction-row"><strong>${label}</strong><div class="appearance-interaction-options"><div class="appearance-muted-spectrum">${interactionColorFamilies.map(family => { const color = family.colors[key === 'panel_outline' ? 'item_outline' : key]; return key === 'item_outline' ? `<button type="button" data-item-outline-color data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>` : `<button type="button" data-interaction-color="${key}" data-color="${color}" data-color-family="${family.id}" style="--swatch:${color}" aria-label="Use ${family.label} ${color} for ${label}"></button>`; }).join('')}</div>${key === 'panel_outline' ? '<input type="color" data-panel-outline-custom aria-label="Custom panel and dropdown outline color"><button type="button" class="button button-secondary" data-panel-outline-theme>Default blue</button>' : ''}${key === 'item_outline' ? '<button class="button button-secondary appearance-outline-source" type="button" data-item-outline-source="player" aria-pressed="false">Use player colors</button>' : ''}</div></div>`).join('')}</section>`;
   }
   function playerStyleField(path, label) {
     const id = 'player-style-' + path.replace('.', '-');
@@ -712,7 +719,8 @@
           </svg>` : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
         </div>
       </div>
-      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Display mode applies immediately in this browser.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section></div>
+      </div>
+      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Display mode applies immediately in this browser.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section>
       <div class="player-editor-workspace">
         <div class="player-editor-controls">
           <section class="player-theme-suggestions" aria-labelledby="appearance-player-themes-label"><h4 id="appearance-player-themes-label">Player themes</h4><p class="background-help">Choose a complete starting style, then adjust any individual color below.</p><div class="player-theme-grid">${playerThemes.map(theme => `<button type="button" class="player-theme-card" data-player-theme="${theme.id}" aria-pressed="false" title="${theme.description}" style="--theme-surface-start:${theme.style.surface.start};--theme-surface-end:${theme.style.surface.end};--theme-surface-angle:${theme.style.surface.angle}deg;--theme-control:${theme.style.controls.fill};--theme-wave-fill:${theme.style.waveform.fill};--theme-wave-edge:${theme.style.waveform.edge}"><span class="player-theme-swatch"><i></i><b></b></span><strong>${theme.name}</strong></button>`).join('')}</div></section>
@@ -733,7 +741,7 @@
       <div class="background-actions"><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function selectionAccentMarkup() {
-    return `<section class="appearance-background-editor selection-accent-editor" aria-labelledby="appearance-selection-title"><h3 id="appearance-selection-title">Selection &amp; Hover</h3><p class="background-intro">Control selection, hover, pressed, and keyboard-focus colors for navigation, lists, and buttons.</p><div class="selection-hover-workspace"><div class="selection-hover-controls"><section class="selection-accent-section" aria-labelledby="selection-accent-color-title"><h4 id="selection-accent-color-title"><span>1</span>Selection accent</h4><label class="selection-accent-toggle"><input type="checkbox" data-aggregate-accent-enabled>Show selection accent</label><div class="appearance-muted-spectrum appearance-accent-spectrum">${selectionAccentColors.map(color => `<button type="button" data-aggregate-accent-color="${color}" style="--swatch:${color}" aria-label="Use selection accent ${color}"></button>`).join('')}<label class="appearance-spectrum-picker" aria-label="Choose any selection accent color"><input type="color" value="${defaultSelectionAccent.color}" data-aggregate-accent-custom aria-label="Choose any selection accent color"></label></div></section>${interactionControlsMarkup()}</div><aside class="selection-hover-preview" aria-labelledby="selection-hover-preview-title"><div class="selection-hover-preview-heading"><strong id="selection-hover-preview-title">Preview</strong><small>Updates immediately</small></div><div class="selection-preview-stack"><div class="selection-preview-example is-navigation-hover" data-preview-state="navigation-hover"><strong>Navigation hover</strong><small>Artist item</small></div><div class="selection-preview-example is-navigation-selected" data-preview-state="navigation-selected"><strong>Navigation selected</strong><small>Selected artist</small></div><div class="selection-preview-example is-item-hover-background" data-preview-state="item-hover-background"><strong>Item hover background</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-outline" data-preview-state="item-outline"><strong>Item hover &amp; keyboard focus outline</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-pressed" data-preview-state="item-pressed"><strong>Item pressed</strong><small>Pressed action</small></div></div></aside></div><div class="selection-hover-revert"><button class="button button-secondary" type="button" data-interaction-use-theme>Use theme</button></div><p class="background-request-error" data-background-request-error role="alert" hidden></p><div class="background-actions"><button class="button button-secondary background-reset" type="button" data-selection-reset>Reset Selection &amp; Hover</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button></div><p class="background-status" data-background-status role="status"></p></section>`;
+    return `<section class="appearance-background-editor selection-accent-editor" aria-labelledby="appearance-selection-title"><h3 id="appearance-selection-title">Selection &amp; Hover</h3><p class="background-intro">Control selection, hover, pressed, and keyboard-focus colors for navigation, lists, and buttons.</p><div class="selection-hover-workspace"><div class="selection-hover-controls"><section class="selection-accent-section" aria-labelledby="selection-accent-color-title"><h4 id="selection-accent-color-title"><span>1</span>Selection accent</h4><label class="selection-accent-toggle"><input type="checkbox" data-aggregate-accent-enabled>Show selection accent</label><div class="appearance-muted-spectrum appearance-accent-spectrum">${selectionAccentColors.map(color => `<button type="button" data-aggregate-accent-color="${color}" style="--swatch:${color}" aria-label="Use selection accent ${color}"></button>`).join('')}<label class="appearance-spectrum-picker" aria-label="Choose any selection accent color"><input type="color" value="${defaultSelectionAccent.color}" data-aggregate-accent-custom aria-label="Choose any selection accent color"></label></div></section>${interactionControlsMarkup()}</div><aside class="selection-hover-preview" aria-labelledby="selection-hover-preview-title"><div class="selection-hover-preview-heading"><strong id="selection-hover-preview-title">Preview</strong><small>Updates immediately</small></div><div class="selection-preview-stack"><div class="selection-preview-example" style="border-top:2px solid var(--appearance-selected-accent);border-left:2px solid transparent;border-image:linear-gradient(to bottom,var(--appearance-selected-accent),transparent) 1"><strong>Panel &amp; dropdown outline</strong><small>Fades into the panel edge</small></div><div class="selection-preview-example is-navigation-hover" data-preview-state="navigation-hover"><strong>Navigation hover</strong><small>Artist item</small></div><div class="selection-preview-example is-navigation-selected" data-preview-state="navigation-selected"><strong>Navigation selected</strong><small>Selected artist</small></div><div class="selection-preview-example is-item-hover-background" data-preview-state="item-hover-background"><strong>Item hover background</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-outline" data-preview-state="item-outline"><strong>Item hover &amp; keyboard focus outline</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-pressed" data-preview-state="item-pressed"><strong>Item pressed</strong><small>Pressed action</small></div></div></aside></div><div class="selection-hover-revert"><button class="button button-secondary" type="button" data-interaction-use-theme>Use theme</button></div><p class="background-request-error" data-background-request-error role="alert" hidden></p><div class="background-actions"><button class="button button-secondary background-reset" type="button" data-selection-reset>Reset Selection &amp; Hover</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function installBrowser(window, document) {
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
@@ -996,6 +1004,9 @@
           const key = button.getAttribute('data-interaction-color');
           button.setAttribute('aria-pressed', String(state.draft.interaction_overrides?.[key] === button.getAttribute('data-color')));
         });
+        const panelColor = state.draft.interaction_overrides?.panel_outline;
+        find('[data-panel-outline-custom]').value = panelColor || '#55C7FF';
+        find('[data-panel-outline-theme]').setAttribute('aria-pressed', String(!panelColor));
         const outline = state.draft.interaction_overrides?.item_outline || defaultItemOutline;
         editor.querySelectorAll('[data-item-outline-color]').forEach(button => button.setAttribute('aria-pressed', String(outline.source === 'custom' && outline.color === button.getAttribute('data-color'))));
         find('[data-item-outline-source="player"]').setAttribute('aria-pressed', String(outline.source === 'player'));
@@ -1013,6 +1024,7 @@
         footerFind('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
       };
       editor.addEventListener('change', event => {
+        if (event.target.hasAttribute('data-panel-outline-custom')) { controller.setInteractionOverrides({ ...controller.getState().draft.interaction_overrides, panel_outline: event.target.value }); return; }
         if (!event.target.hasAttribute('data-aggregate-accent-enabled')) return;
         const current = controller.getState().draft.selection_accent;
         const color = current?.color || find('[data-aggregate-accent-custom]').value;
@@ -1023,6 +1035,7 @@
         const button = event.target.closest('button'); if (!button || button.disabled) return;
         if (button.hasAttribute('data-aggregate-accent-color')) controller.setSelectionAccent({ enabled: true, color: button.getAttribute('data-aggregate-accent-color') });
         else if (button.hasAttribute('data-interaction-color')) controller.setInteractionOverrides({ ...(controller.getState().draft.interaction_overrides || {}), [button.getAttribute('data-interaction-color')]: button.getAttribute('data-color') });
+        else if (button.hasAttribute('data-panel-outline-theme')) controller.setInteractionOverrides({ ...controller.getState().draft.interaction_overrides, panel_outline: null });
         else if (button.hasAttribute('data-item-outline-color')) controller.setItemOutline('custom', button.getAttribute('data-color'));
         else if (button.getAttribute('data-item-outline-source') === 'player') controller.setItemOutline('player');
         else if (button.hasAttribute('data-interaction-use-theme')) controller.useThemeInteractions();
@@ -1064,7 +1077,7 @@
             hex.setAttribute('aria-invalid', String(Boolean(state.errors[key]))); find(`[data-player-error="${field}"]`).textContent = state.errors[key] || '';
             find(`[data-waveform-recents="${field}"]`).innerHTML = history.map(color => `<button class="waveform-recent-swatch" type="button" data-waveform-recent="${color}" data-waveform-field="${field}" style="background:${color}" aria-label="Use ${color} for waveform ${field}" title="${color}" ${disabled ? 'disabled' : ''}></button>`).join('');
           }
-          find('[data-waveform-recents-help]').textContent = history.length ? 'Recent colors · last five choices. Choose a swatch below either field.' : 'Your five most recent waveform colors will appear here.';
+          find('[data-waveform-recents-help]').textContent = history.length ? 'Recent colors' : 'Your five most recent waveform colors will appear here.';
         }
         const style = effectivePlayerStyle(state);
         applyDraftEditorTheme(state.saved, editor);

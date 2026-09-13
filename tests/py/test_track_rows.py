@@ -905,3 +905,16 @@ def test_build_playlist_track_rows_supports_object_backed_entries():
             "can_edit_preferences": False,
         },
     ]
+
+
+@pytest.mark.parametrize(("album_artist", "track_artist", "expected"), [
+    ("Charlotte Wessels", "Charlotte Wessels / Simone Simons", "feat. Simone Simons"),
+    ("Charlotte Wessels", "Charlotte Wessels / Alissa White-Gluz", "feat. Alissa White-Gluz"),
+    ("Various Artists", "Charlotte Wessels / Simone Simons", "Charlotte Wessels / Simone Simons"),
+    ("Album Owner", "Charlotte Wessels / Simone Simons", "Charlotte Wessels / Simone Simons"),
+    ("Primary One / Primary Two", "Primary One / Primary Two / Guest", "feat. Guest"),
+    ("Primary One / Primary Two", "Primary One / Guest", "Primary One / Guest"),
+])
+def test_additional_composite_credit_is_featured_only_with_complete_album_ownership(album_artist, track_artist, expected):
+    track = SimpleNamespace(title="Song", artist=track_artist, album_artist=album_artist)
+    assert build_track_row_payload(track)["secondary_artist"] == expected

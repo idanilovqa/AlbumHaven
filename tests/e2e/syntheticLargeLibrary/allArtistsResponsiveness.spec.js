@@ -537,8 +537,7 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
       );
       defaultArtistHeadings = await galleryActions.readArtistHeadings();
       expect(defaultArtistHeadings).toEqual([SEARCH_EXPECTED.primary]);
-      await artistFamilyActions.clickChipByName(SEARCH_EXPECTED.filterArtist);
-      await artistFamilyActions.waitForChipActive(SEARCH_EXPECTED.filterArtist, true);
+      await artistFamilyActions.selectOnlyChipByName(SEARCH_EXPECTED.filterArtist);
       await galleryActions.waitForOnlyArtistHeadings([SEARCH_EXPECTED.filterArtist], {
         timeout: 60000,
       });
@@ -592,9 +591,8 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
         () => artistFamilyActions.clickChipByName(SEARCH_EXPECTED.filterArtist),
         async () => {
           await artistFamilyActions.waitForChipActive(SEARCH_EXPECTED.filterArtist, false);
-          await galleryActions.waitForDisplayedArtistSections(defaultArtistHeadings, {
-            timeout: 60000,
-          });
+          await galleryActions.waitForOnlyArtistHeadings([], { timeout: 60000 });
+          await galleryActions.waitForEmptyFamilySelection({ timeout: 60000 });
         },
       );
       expect(transition).toEqual(expect.objectContaining({
@@ -607,7 +605,7 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
         spinnerMutationCount: 0,
         viewDataRequests: [],
       }));
-      expect(await galleryActions.readArtistHeadings()).toEqual(defaultArtistHeadings);
+      expect(await galleryActions.readArtistHeadings()).toEqual([]);
       expect(await artistFamilyActions.readChipTexts()).toEqual(
         expect.arrayContaining(SEARCH_EXPECTED.familyMembers),
       );
@@ -696,6 +694,10 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
     });
 
     await stepLogger.step('Expand Artist Family and confirm the expected Ария family members are present', async () => {
+      await artistFamilyActions.expand();
+      const chipTexts = await artistFamilyActions.readChipTexts();
+      expect(chipTexts).toEqual(expect.arrayContaining(SEARCH_EXPECTED.familyMembers));
+      await artistFamilyActions.waitForAllChipsActive(SEARCH_EXPECTED.familyMembers);
     });
 
     const searchIdleMemory = await stepLogger.step('Sample idle memory after the search-loaded Ария view settles', async () => (
@@ -732,8 +734,7 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
     });
 
     await stepLogger.step('Filter to Ария & Хелависа without leaking another Ария collaboration', async () => {
-      await artistFamilyActions.clickChipByName(SEARCH_EXPECTED.helavisa);
-      await artistFamilyActions.waitForChipActive(SEARCH_EXPECTED.helavisa);
+      await artistFamilyActions.selectOnlyChipByName(SEARCH_EXPECTED.helavisa);
       await galleryActions.waitForOnlyArtistHeadings([SEARCH_EXPECTED.helavisa]);
       expect(await galleryActions.readArtistHeadings()).toEqual([SEARCH_EXPECTED.helavisa]);
       expect(await galleryActions.readAlbumNamesByHeading(SEARCH_EXPECTED.helavisa)).toEqual(

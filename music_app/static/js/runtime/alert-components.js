@@ -18,6 +18,35 @@ function buildSmallAlertHtml(config = {}) {
   return `<span class="small-alert small-alert--${severity}${className ? ` ${escapeHtml(className)}` : ''}" role="status" aria-label="${escapeHtml(message)}" data-small-alert="${severity}"><span class="small-alert__icon">${buildAlertIconHtml(severity)}</span><span class="small-alert__text">${escapeHtml(message)}</span></span>`;
 }
 
+function buildAlertLabelAttributes(attributes = {}) {
+  if (!attributes || typeof attributes !== 'object') return '';
+  return Object.entries(attributes).map(([name, value]) => {
+    const allowed = /^(?:id|title|aria-label|data-problem-exclusion-(?:scope|row-key|reason|row-index))$/.test(name);
+    if (!allowed || value == null || value === false) return '';
+    return ` ${name}="${escapeHtml(value)}"`;
+  }).join('');
+}
+
+function buildAlertLabelHtml(config = {}) {
+  const severity = normalizeAlertSeverity(config.severity);
+  const message = String(config.message || '').trim();
+  const interactive = Boolean(config.interactive);
+  const pressed = Boolean(config.pressed);
+  const disabled = Boolean(config.disabled);
+  const className = String(config.className || '').trim();
+  const classes = [
+    'alert-label',
+    `alert-label--${severity}`,
+    className,
+    interactive && pressed ? 'is-active' : '',
+  ].filter(Boolean).join(' ');
+  const attributes = buildAlertLabelAttributes(config.attributes);
+  if (!interactive) {
+    return `<span class="${escapeHtml(classes)}" data-alert-label="${severity}"${attributes}>${escapeHtml(message)}</span>`;
+  }
+  return `<button class="${escapeHtml(classes)}" data-alert-label="${severity}" type="button"${attributes} aria-pressed="${pressed ? 'true' : 'false'}"${disabled ? ' aria-disabled="true" disabled' : ''}>${escapeHtml(message)}</button>`;
+}
+
 function buildOnPageAlertHtml(config = {}) {
   const severity = normalizeAlertSeverity(config.severity);
   const title = String(config.title || '').trim();

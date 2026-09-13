@@ -536,7 +536,7 @@ export class GalleryActions {
       const headings = Array.from(document.querySelectorAll(selectors.artistHeadingSelector))
         .map((element) => (element.textContent || '').trim())
         .filter(Boolean);
-      if (!headings.length) return false;
+      if (!headings.length) return selectors.expectedArtists.length === 0;
       return headings.length === selectors.expectedArtists.length
         && selectors.expectedArtists.every((expectedArtist) => headings.includes(expectedArtist));
     }, {
@@ -545,6 +545,21 @@ export class GalleryActions {
       artistHeadingSelector: this.galleryPage.artistHeadingSelector,
       expectedArtists,
     });
+  }
+
+  async waitForEmptyFamilySelection(options = {}) {
+    await this.galleryPage.emptyFamilySelection.waitFor({
+      state: 'visible',
+      timeout: options.timeout || 30000,
+    });
+    await expect(this.galleryPage.emptyFamilySelection).toHaveText(
+      'Select at least one artist in Artist Family.',
+      { timeout: options.timeout || 30000 },
+    );
+    await expect(this.galleryPage.galleryContextSummary).toHaveText(
+      '0 artists · 0 albums',
+      { timeout: options.timeout || 30000 },
+    );
   }
 
   async waitForDisplayedArtistSections(expectedArtists, options = {}) {
@@ -1042,15 +1057,11 @@ export class GalleryActions {
   }
 
   async readAlbumCreditByName(albumName) {
-    return String(
-      await this.galleryPage.albumCard.subtitleByAlbumName(albumName).textContent() || '',
-    ).trim();
+    return (await this.galleryPage.albumCard.readVisibleMetadataByAlbumName(albumName)).artist;
   }
 
   async readAlbumYearByName(albumName) {
-    return String(
-      await this.galleryPage.albumCard.yearByAlbumName(albumName).textContent() || '',
-    ).trim();
+    return (await this.galleryPage.albumCard.readVisibleMetadataByAlbumName(albumName)).year;
   }
 
   async clickAlbumDetailsByArtistAndAlbum(artistName, albumName) {
@@ -1064,7 +1075,7 @@ export class GalleryActions {
       titleSelector: this.galleryPage.albumCard.titleButtonSelector,
     };
     // parity-check: allow-read-only-measurement-evaluate -- verify visible card-label layout
-    return card.evaluate((element, labelSelectors) => {
+    const labels = await card.evaluate((element, labelSelectors) => {
       const title = element.querySelector(labelSelectors.titleSelector);
       const artist = element.querySelector(labelSelectors.artistSelector);
       if (!(title instanceof HTMLElement) || !(artist instanceof HTMLElement)) {
@@ -1086,6 +1097,7 @@ export class GalleryActions {
         titleVisible: titleBounds.width > 0 && titleBounds.height > 0,
       };
     }, selectors);
+    return { ...labels, artistText: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist };
   }
 
   async selectAlbumDetailsByIdentity(expected, options = {}) {
@@ -1686,6 +1698,48 @@ export class GalleryActions {
     ).count();
   }
 
+  async expectAlbumAbsentFromSettledGallery(expected) {
+    await expect.poll(async () => {
+      const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      return {
+        settled: !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
+          && !snapshot.startupHydrating && snapshot.canonicalApplied
+          && snapshot.inputQuery === snapshot.expectedQuery
+          && snapshot.locationQuery === snapshot.expectedQuery,
+        canonicalMatch: snapshot.canonicalMatch,
+        attachedMatch: snapshot.attachedMatch,
+      };
+    }, { timeout: 30000 }).toEqual({ settled: true, canonicalMatch: false, attachedMatch: false });
+  }
+
+  async openOwnedAlbumOrLooseTracksInTagEditor({ artist, album, year, searchToolbarActions,
+    trackModalActions, artistPageSettingsActions, tagEditorActions, expectedTrackCount }) {
+    await this.goto('/?surface=albums');
+    await this.waitForGalleryReady();
+    await searchToolbarActions.search(album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(album);
+    if (await this.readAlbumIdentityCardCount({ artist, album, year })) {
+      await this.selectAlbumDetailsByIdentity({ artist, album, year });
+      await trackModalActions.waitForInteractiveSummary();
+      await trackModalActions.openTagEditor();
+    } else {
+      await this.goto(`/?surface=albums&artist=${encodeURIComponent(artist)}`);
+      await this.waitForGalleryReady();
+      await artistPageSettingsActions.openNonAlbumTracks(expectedTrackCount);
+      await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
+    }
+    await tagEditorActions.waitForOpen({ expectedTrackCount });
+  }
+
+  async openSearchedAlbumDetails({ artist, album, year, searchToolbarActions, trackModalActions }) {
+    await this.goto('/?surface=albums');
+    await this.waitForGalleryReady();
+    await searchToolbarActions.search(album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(album);
+    await this.selectAlbumDetailsByIdentity({ artist, album, year });
+    await trackModalActions.waitForInteractiveSummary();
+  }
+
   async readAlbumCardSummaryByIdentity(expected) {
     const card = this.galleryPage.albumCard.cardByIdentity(
       String(expected.artist || '').trim(),
@@ -1694,11 +1748,7 @@ export class GalleryActions {
     );
     await expect(card).toHaveCount(1);
     return {
-      subtitle: String(
-        await card.locator(
-          this.galleryPage.albumCard.subtitleWithinCardSelector,
-        ).textContent() || '',
-      ).trim(),
+      subtitle: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist,
       trackCount: String(
         await card.locator(
           this.galleryPage.albumCard.trackCountWithinCardSelector,

@@ -76,6 +76,18 @@ const compactDataTablePath = path.join(
   'compact-data-table.js',
 );
 const compactDataTableSource = fs.readFileSync(compactDataTablePath, 'utf8');
+const alertComponentsPath = path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'runtime',
+  'alert-components.js',
+);
+const alertComponentsSource = fs.readFileSync(alertComponentsPath, 'utf8');
 const tagEditorHelperPath = path.join(
   __dirname,
   '..',
@@ -477,6 +489,7 @@ function loadProblematicTrackNavigationHelpers() {
     context,
     { filename: compactDataTablePath },
   );
+  vm.runInContext(alertComponentsSource, context, { filename: alertComponentsPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { album, context, trackPath };
 }
@@ -6189,6 +6202,45 @@ test('Problematic Files detail renders the approved album-first compact table co
   assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|>Problems<|overflow menu|Not a problem|data-open-repair-confirm/);
 });
 
+test('Problematic Files routes static and selectable reasons through AlertLabel', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.problemExclusionSelections = {
+    'opaque-album-cover': true,
+    'opaque-file-year': true,
+  };
+  const html = context.buildDetectedProblemsHtml({
+    album_problem_rows: [
+      { row_key: 'opaque-album-cover', reason: 'Missing cover art' },
+      { row_key: '', reason: 'Missing year' },
+    ],
+    track_problem_rows: [{
+      path: 'C:\\Music\\Artist Alpha\\Album Alpha\\01 First.flac',
+      filename: '01 First.flac',
+      reasons: ['Missing year', 'Missing track number'],
+      ignorable_reasons: [
+        { row_key: 'opaque-file-year', reason: 'Missing year' },
+        { row_key: '', reason: 'Missing track number' },
+      ],
+    }],
+  });
+
+  assert.equal((html.match(/alert-label alert-label--error/g) || []).length, 4);
+  assert.match(html, /alert-label--error[^>]*utility-problem-exclusion-pill is-active[^>]*data-problem-exclusion-row-key="opaque-album-cover"[^>]*aria-pressed="true"/);
+  assert.match(html, /data-problem-exclusion-scope="file"[^>]*data-problem-exclusion-row-key="opaque-file-year"[^>]*aria-pressed="true"/);
+  assert.match(html, /data-problem-exclusion-reason="Missing track number"[^>]*aria-pressed="false"[^>]*aria-disabled="true" disabled/);
+});
+
+test('missing-album reason uses a static error AlertLabel without becoming excludable', () => {
+  const { context } = loadProblematicTrackNavigationHelpers();
+  const html = context.buildDetectedProblemsHtml({
+    inventory_status: 'missing',
+    allowed_actions: { 'library.inventory.manage': true },
+  });
+
+  assert.match(html, /<span class="alert-label alert-label--error" data-alert-label="error">Album not found<\/span>/);
+  assert.doesNotMatch(html, /data-problem-exclusion-reason="Album not found"/);
+});
+
 test('missing album is an album-level non-excludable problem with the shared removal action', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   const album = {
@@ -6368,7 +6420,7 @@ test('Problematic Files keeps watcher health mounted when there are zero problem
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
 
-test('watcher warning drives the existing Library Status amber variant and title copy', () => {
+test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {
   const context = {
     formatDurationCompact(value) { return String(value); },
   };
@@ -6398,7 +6450,7 @@ test('watcher warning drives the existing Library Status amber variant and title
       'runtime',
       'non-album-and-player.css',
     ), 'utf8'),
-    /\.status-indicator\.is-warning[^}]*var\(--star-on|#f59e0b|#fbbf24/is,
+    /\.status-indicator\.is-warning[^}]*color:\s*var\(--success\)/s,
   );
 });
 

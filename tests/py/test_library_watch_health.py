@@ -341,6 +341,8 @@ class _HealthConnection:
                 "state": str(received["state"]),
                 "detected_at": str(received["detected_at"]),
             }
+            if "event_id" in received:
+                self.problems[str(received["root_id"])]["event_id"] = received["event_id"]
             return _Rows([])
         if "watch_health_clear" in normalized:
             detected_before = str(received.get("detected_before") or "")
@@ -355,6 +357,63 @@ class _HealthConnection:
         if "watch_health_load" in normalized:
             return _Rows([{"library_watch_health": dict(self.problems)}])
         raise AssertionError(f"Unexpected health SQL: {normalized}")
+
+
+def test_recovered_same_clock_warning_has_a_new_durable_dismissal_token():
+    from datetime import datetime, timezone
+    from music_app.services.library_warning_dismissals import warning_token
+
+    health = _health_module()
+    connection = _HealthConnection()
+    tick = datetime(2026, 9, 10, tzinfo=timezone.utc)
+
+    def new_service():
+        return health.LibraryWatchHealthService(
+            health.PostgresLibraryWatchHealthStore(
+                {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+                connect=lambda _url: connection,
+            ), now=lambda: tick,
+        )
+
+    def token(service):
+        from music_app.services.allowed_actions import AllowedActions
+        from music_app.services.view_payloads import project_library_watch_health
+        return warning_token(project_library_watch_health(service.load_problems(), AllowedActions(())))
+
+    service = new_service()
+    event = health.LibraryEvent(health.LibraryEventKind.OVERFLOW, "main", Path("C:/Music"))
+    service.record_event(event)
+    from uuid import UUID
+    first_event_id = connection.problems["main"]["event_id"]
+    assert str(UUID(first_event_id)) == first_event_id
+    acknowledged_token = token(service)
+    assert token(new_service()) == acknowledged_token, "reload must preserve an existing acknowledgement identity"
+    assert service.clear_after_scan(scan_mode="manual_full_rescan", observed_root_ids=["main"]) == 1
+    service.record_event(event)
+    assert connection.problems["main"]["event_id"] != first_event_id
+    repeated_token = token(service)
+    assert repeated_token != acknowledged_token, "a distinct same-clock warning must resurface after acknowledgement"
+    assert token(new_service()) == repeated_token, "the replacement identity must survive a fresh repository/service"
+
+
+def test_legacy_health_without_event_identity_remains_readable_and_stable():
+    from music_app.services.library_warning_dismissals import warning_token
+
+    health = _health_module()
+    connection = _HealthConnection()
+    connection.problems["legacy-root"] = {"state": "overflow", "detected_at": "2026-09-10T00:00:00+00:00"}
+    tokens = []
+    for _ in range(2):
+        store = health.PostgresLibraryWatchHealthStore(
+            {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://health-test"},
+            connect=lambda _url: connection,
+        )
+        [problem] = store.load()
+        assert (problem.root_id, problem.state, problem.detected_at) == (
+            "legacy-root", "overflow", "2026-09-10T00:00:00+00:00",
+        )
+        tokens.append(warning_token({"state": "warning", "problems": [problem.as_public_dict()]}))
+    assert tokens == ["7e6f8fac103a94d5ab7e07922ed27a4f7405502bd337563fdc4ed3374be6584c"] * 2
 
 
 def test_overflow_and_disconnect_persist_one_problem_for_the_same_root():
@@ -551,6 +610,7 @@ def test_reconciliation_failure_persists_path_free_warning_until_manual_full_sca
                 "state": "reconciliation_failed",
                 "root_key": module.opaque_root_key("main-root"),
                 "detected_at": problem.detected_at,
+                "event_id": problem.event_id,
                 "message": "Some library changes may have been missed.",
                 "allowed_actions": {"library.refresh": True},
             }
@@ -1053,3 +1113,22 @@ def test_manual_recovery_clears_observed_health_and_reattaches_current_roots():
     )
     assert calls[1] == ("reconciler", roots)
     assert calls[2] == ("watcher", roots)
+
+@pytest.mark.parametrize("as_mapping", [False, True])
+def test_public_health_projection_preserves_same_clock_event_identity(as_mapping):
+    from music_app.services.allowed_actions import AllowedActions
+    from music_app.services.library_warning_dismissals import warning_token
+    from music_app.services.view_payloads import project_library_watch_health
+
+    health = _health_module()
+    tokens = []
+    for event_id in ("52bbe3c4-cdd0-42cc-a742-a4c1d722fb1f", "ae42b32c-ad81-4059-ba51-ea6e9d6684ad"):
+        fields = {"root_id": "C:/Private Music/Main", "state": "overflow",
+                  "detected_at": "2026-09-10T00:00:00+00:00", "event_id": event_id}
+        problem = fields if as_mapping else health.LibraryWatchHealthProblem(**fields)
+        projected = project_library_watch_health([problem], AllowedActions(()))
+        assert projected["problems"][0]["event_id"] == event_id
+        assert projected["problems"][0]["allowed_actions"] == {}
+        assert "Private Music" not in json.dumps(projected)
+        tokens.append(warning_token(projected))
+    assert tokens[0] != tokens[1]

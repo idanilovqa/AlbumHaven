@@ -221,6 +221,11 @@ export class TagEditorActions {
     await expect(this.tagEditor.albumNameInput).toHaveValue(expectedAlbumName);
   }
 
+  async setArtist(artist) {
+    await this.tagEditor.artistInput.fill(String(artist));
+    await expect(this.tagEditor.artistInput).toHaveValue(String(artist));
+  }
+
   async expectAlbumName(albumName) {
     await expect(this.tagEditor.albumNameInput).toHaveValue(String(albumName || ''));
   }
@@ -305,6 +310,7 @@ export class TagEditorActions {
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,
+      { useInnerText: true },
     );
     await expect(this.tagEditor.autoNumberControls).toContainText(
       /^\s*Start at\s*Auto-number\s*$/u,

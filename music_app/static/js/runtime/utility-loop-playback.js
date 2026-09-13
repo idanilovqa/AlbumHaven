@@ -1,3 +1,61 @@
+const utilityLoopStereoLoads = new WeakMap();
+const utilityLoopStereoQueue = [];
+let utilityLoopStereoLoadActive = false;
+
+function drainUtilityLoopStereoQueue() {
+  const eligible = job => job.canvas.isConnected
+    && state.player.appearance?.seekbarMode === 'waveform'
+    && !state.utility.loopEditors?.[job.loopId]?.active
+    && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(job.loopId)}"]`) === job.canvas;
+  for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
+    const job = utilityLoopStereoQueue[index];
+    if (eligible(job)) continue;
+    utilityLoopStereoQueue.splice(index, 1);
+    utilityLoopStereoLoads.delete(job.canvas);
+  }
+  if (utilityLoopStereoLoadActive || !utilityLoopStereoQueue.length) return;
+  const job = utilityLoopStereoQueue.shift();
+  utilityLoopStereoLoadActive = true;
+  Promise.resolve(loadSavedLoopWaveformPeaks(job.loopId)).catch(() => null).then(peaks => {
+    job.entry.loading = false;
+    job.entry.peaks = peaks;
+    job.entry.retryAt = Date.now() + 5000;
+    if (eligible(job)) updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+  }).finally(() => {
+    utilityLoopStereoLoadActive = false;
+    drainUtilityLoopStereoQueue();
+  });
+}
+
+function updateUtilityLoopStereoWaveform(loopId, audio) {
+  const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
+  if (!canvas || !audio) return;
+  const enabled = state.player.appearance?.seekbarMode === 'waveform';
+  const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
+  const cached = utilityLoopStereoLoads.get(canvas);
+  const ready = enabled && !editing && Boolean(cached?.peaks);
+  canvas.hidden = !ready;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
+  if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
+  if (cached?.peaks) {
+    const duration = Number(audio.duration) || 0;
+    drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
+    return;
+  }
+  if (cached && (cached.loading || Date.now() < cached.retryAt)) return;
+  const entry = { peaks: null, loading: true, retryAt: 0 };
+  utilityLoopStereoLoads.set(canvas, entry);
+  utilityLoopStereoQueue.push({ loopId, audio, canvas, entry });
+  drainUtilityLoopStereoQueue();
+}
+
+function refreshUtilityLoopStereoWaveforms() {
+  drainUtilityLoopStereoQueue();
+  document.querySelectorAll('[data-loop-audio]').forEach(audio => {
+    updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
+  });
+}
+
 function isUtilityLoopTextEntry(element) {
   if (!(element instanceof HTMLElement)) return false;
   const tagName = String(element.tagName || '').toUpperCase();
@@ -261,18 +319,24 @@ function positionUtilityLoopSpeedMenu(loopId) {
 
   const triggerRect = trigger.getBoundingClientRect();
   const menuRect = menu.getBoundingClientRect();
-  const activeRect = activeOption.getBoundingClientRect();
-  const activeOffset = activeOption.offsetTop + (activeRect.height / 2);
+
+
 
   let left = triggerRect.left + (triggerRect.width / 2) - (menuRect.width / 2);
-  let top = triggerRect.top + (triggerRect.height / 2) - activeOffset;
+  const below = window.innerHeight - triggerRect.bottom - 8;
+  const above = triggerRect.top - 8;
+  const opensBelow = below >= menuRect.height || below >= above;
+  menu.style.maxHeight = `${Math.max(0, (opensBelow ? below : above) - 6)}px`;
+  const popupHeight = Math.min(menuRect.height, Math.max(0, (opensBelow ? below : above) - 6));
+  let top = opensBelow ? triggerRect.bottom + 6 : triggerRect.top - popupHeight - 6;
 
   const padding = 8;
-  const clamped = clampPositionToViewport(left, top, menuRect.width, menuRect.height, padding);
+  const clamped = clampPositionToViewport(left, top, menuRect.width, popupHeight, padding);
 
   menu.style.left = `${clamped.left}px`;
   menu.style.top = `${clamped.top}px`;
   menu.style.visibility = '';
+  if (typeof syncTriggerAnchor === 'function') syncTriggerAnchor(menu, trigger);
 }
 
 function updateUtilityLoopPlayerUi(loopId) {
@@ -289,6 +353,7 @@ function updateUtilityLoopPlayerUi(loopId) {
     timeline.max = String(Math.max(duration, 0.1));
     timeline.value = String(Math.min(current, duration || current));
   }
+  updateUtilityLoopStereoWaveform(id, audio);
   const waveform = state.utility.savedLoopWaveforms?.[id];
   if (elements.canvas && waveform && state.utility.loopEditors?.[id]?.active) {
     drawCombinedLoopWaveform(elements.canvas, waveform, duration > 0 ? current / duration : 0);
@@ -297,7 +362,8 @@ function updateUtilityLoopPlayerUi(loopId) {
     time.textContent = `${formatLoopTime(current)} / ${formatLoopTime(duration)}`;
   }
   if (playButton) {
-    playButton.textContent = audio.paused ? '\u25B6' : '\u23F8';
+    const icon = audio.paused ? '\u25B6' : '\u23F8';
+    if (playButton.textContent !== icon) playButton.textContent = icon;
     playButton.setAttribute('aria-label', audio.paused ? 'Play' : 'Pause');
   }
 }

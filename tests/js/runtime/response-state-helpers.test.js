@@ -2427,6 +2427,41 @@ function loadHelpers() {
 
 {
   const context = loadHelpers();
+  context.applyViewPayload({
+    surface: { active: 'albums' },
+    gallery_scope: 'new_arrivals',
+    visible_library_categories: ['new_arrivals'],
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'initial' }] }],
+  }, { trackSidebarReveal: false });
+
+  const hydrated = context.applyViewPayload({
+    surface: { active: 'albums' },
+    gallery_scope: 'all',
+    visible_library_categories: ['main_library', 'new_arrivals'],
+    selected_artist: 'Broadcast',
+    artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'hydrated' }] }],
+    non_album_tracks: [{ path: '/fixture/main/loose.mp3', title: 'Loose' }],
+  }, {
+    trackSidebarReveal: false,
+    preserveGalleryBrowseLocationState: true,
+  });
+
+  assert.equal(hydrated.gallery_scope, 'new_arrivals');
+  assert.deepEqual(JSON.parse(JSON.stringify(hydrated.visible_library_categories)), ['new_arrivals']);
+  assert.equal(hydrated.artist_groups[0].albums[0].key, 'hydrated');
+  assert.deepEqual(Array.from(hydrated.non_album_library_categories), ['main_library', 'new_arrivals']);
+  const compacted = context.compactRuntimeViewPayload(hydrated);
+  assert.deepEqual(Array.from(compacted.non_album_library_categories), ['main_library', 'new_arrivals']);
+  const scoped = context.applyViewPayload({
+    ...hydrated, non_album_library_categories: undefined, loaded_library_categories: undefined,
+    visible_library_categories: ['new_arrivals'], non_album_tracks: [],
+  }, { preserveGalleryBrowseLocationState: true });
+  assert.deepEqual(Array.from(scoped.non_album_library_categories), ['new_arrivals']);
+}
+
+{
+  const context = loadHelpers();
   const compacted = context.compactRuntimeAlbumPayload({
     key: 'explicitly-cleared-album',
     preview_only: true,
@@ -2444,3 +2479,18 @@ function loadHelpers() {
   assert.equal(compacted.tag_album_rating, 9);
   assert.equal(compacted.tag_album_rating_source, 'file_tag_scan');
 }
+
+require('node:test')('sidebar count provenance follows its own response across source-only hydration', () => {
+  const { applyViewPayload, state } = loadHelpers();
+  applyViewPayload({ artists_sidebar: [{ artist: 'Family Member', count: 10 }],
+    visible_library_categories: ['main_library'] });
+  applyViewPayload({ artists_sidebar: [], visible_library_categories: ['main_library', 'hoard'] },
+    { preserveSidebarState: true, preserveGalleryBrowseLocationState: true });
+  assert.deepEqual(Array.from(state.view.sidebar_library_categories), ['main_library']);
+  assert.deepEqual(Array.from(state.view.loaded_library_categories), ['main_library', 'hoard']);
+  assert.equal(state.view.artists_sidebar[0].count, 10);
+  applyViewPayload({ artists_sidebar: [{ artist: 'Family Member', count: 12 }],
+    visible_library_categories: ['main_library', 'hoard'] });
+  assert.deepEqual(Array.from(state.view.sidebar_library_categories), ['main_library', 'hoard']);
+  assert.equal(state.view.artists_sidebar[0].count, 12);
+});

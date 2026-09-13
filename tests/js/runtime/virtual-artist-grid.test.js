@@ -10,8 +10,14 @@ const alertComponentPath = path.join(__dirname, '..', '..', '..', 'music_app', '
 const alertComponentSource = fs.readFileSync(alertComponentPath, 'utf8');
 const albumArtboxPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'album-artbox.js');
 const albumArtboxSource = fs.readFileSync(albumArtboxPath, 'utf8');
+const galleryMainComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-components.js');
+const galleryMainComponentsSource = fs.readFileSync(galleryMainComponentsPath, 'utf8');
 const galleryCardPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-card-component.js');
 const galleryCardSource = fs.readFileSync(galleryCardPath, 'utf8');
+const galleryMainStatePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
+const galleryMainStateSource = fs.readFileSync(galleryMainStatePath, 'utf8');
+const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
+const galleryMainInteractionsSource = fs.readFileSync(galleryMainInteractionsPath, 'utf8');
 const schedulerPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-cover-load-scheduler.js');
 const schedulerSource = fs.readFileSync(schedulerPath, 'utf8');
 const galleryCssPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'non-album-and-player.css');
@@ -460,7 +466,10 @@ function createRuntimeContext() {
   vm.createContext(context);
   vm.runInContext(alertComponentSource, context, { filename: alertComponentPath });
   vm.runInContext(albumArtboxSource, context, { filename: albumArtboxPath });
+  vm.runInContext(galleryMainComponentsSource, context, { filename: galleryMainComponentsPath });
   vm.runInContext(galleryCardSource, context, { filename: galleryCardPath });
+  vm.runInContext(galleryMainStateSource, context, { filename: galleryMainStatePath });
+  vm.runInContext(galleryMainInteractionsSource, context, { filename: galleryMainInteractionsPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   context.createDeferredCoverPlaceholders = (count) => {
     context.__deferredCoverPlaceholders = Array.from(
@@ -1695,8 +1704,16 @@ test('scroll render timer completes a pending frame when animation frames are st
     },
   ];
   virtualGrid.setGroups(primaryGroups, familyGroups, null, {});
-  assert.equal(virtualGrid.sections[0].title, 'Primary Artist');
-  assert.equal(virtualGrid.sections[2].title, 'Family');
+  assert.equal(virtualGrid.sections[0].kind, 'artist');
+  assert.equal(virtualGrid.sections[0].group.artist, 'Broadcast');
+  assert.equal(virtualGrid.sections[0].group.albums.length, 1);
+  assert.equal(virtualGrid.sections[1].title, 'Family');
+  assert.equal(virtualGrid.sections[1].albumCount, 1);
+  assert.equal(virtualGrid.sections[2].group.artist, 'Trish Keenan');
+  assert.equal(virtualGrid.sections[2].group.albums.length, 1);
+  assert.match(virtualGrid.renderSection(virtualGrid.sections[0], 0, Number.POSITIVE_INFINITY), /Broadcast[\s\S]*1 album/);
+  assert.match(virtualGrid.renderSection(virtualGrid.sections[1], 0, Number.POSITIVE_INFINITY), /Family[\s\S]*1 album/);
+  assert.match(virtualGrid.renderSection(virtualGrid.sections[2], 0, Number.POSITIVE_INFINITY), /Trish Keenan[\s\S]*1 album/);
   assert.equal(context.getIndexedAlbum('tender-buttons')?.name, 'Tender Buttons');
   assert.equal(context.getIndexedAlbum('solo-path')?.name, 'Solo');
 }
@@ -2812,12 +2829,41 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
     containerEl.innerHTML = '';
   };
   context.renderArtistGroups();
-  assert.match(containerEl.innerHTML, /Primary Artist/);
-  assert.match(containerEl.innerHTML, /Rendered Artist/);
+  assert.match(containerEl.innerHTML, /Rendered Artist[\s\S]*1 album/);
   assert.match(containerEl.innerHTML, /Rendered Album/);
   assert.equal(topSpacerEl.style.height, '0px');
   assert.equal(bottomSpacerEl.style.height, '0px');
   assert.equal(context.getIndexedAlbum('rendered-1')?.name, 'Rendered Album');
+}
+
+{
+  const { context, containerEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  context.state.view.selected_artist = 'Neal Morse';
+  context.state.view.primary_artist_groups = [{
+    artist: 'Neal Morse',
+    artist_display: 'Neal Morse',
+    albums: [{ key: 'neal-1', name: 'One', tracks: [] }],
+  }];
+  context.state.view.family_artist_groups = [{
+    artist: 'Cosmic Cathedral',
+    artist_display: 'Cosmic Cathedral',
+    albums: [{ key: 'cosmic-1', name: 'Deep Water', tracks: [] }],
+  }];
+  context.state.gallery.mainState = context.createGalleryMainState({
+    familyArtists: [],
+    familySelectionExplicit: true,
+  });
+  virtualGrid.setGroups = () => {
+    containerEl.children = [];
+    containerEl.innerHTML = '';
+  };
+
+  context.renderArtistGroups();
+
+  assert.match(containerEl.innerHTML, /data-gallery-empty-selection/);
+  assert.match(containerEl.innerHTML, /Select at least one artist in Artist Family\./);
+  assert.doesNotMatch(containerEl.innerHTML, /Neal Morse|Cosmic Cathedral/);
 }
 
 {
@@ -2856,12 +2902,50 @@ test('canonical same-artist reconciliation retains mounted cards without an opti
 
   context.renderArtistGroups();
 
-  assert.doesNotMatch(containerEl.innerHTML, /Primary Artist/);
-  assert.doesNotMatch(containerEl.innerHTML, /Family/);
-  assert.match(containerEl.innerHTML, /Chronological/);
+  assert.match(containerEl.innerHTML, /Chronological[\s\S]*2 albums/);
+  assert.doesNotMatch(containerEl.innerHTML, />Family</);
   assert.match(containerEl.innerHTML, /Palmless Prayer \/ Mass Murder Refrain/);
   assert.match(containerEl.innerHTML, /Hymn to the Immortal Wind/);
 }
+
+test('switching Cards to No info invalidates mounted card markup without replacing the virtual root or resetting scroll', () => {
+  const { context, containerEl, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const album = {
+    key: 'broadcast-tender-buttons',
+    name: 'Tender Buttons',
+    album_artist: 'Broadcast',
+    year: 2005,
+    release_type: 'studio',
+    album_preference: { rating: 9 },
+    tracks: [{ duration_seconds: 180 }],
+  };
+  context.state.view.selected_artist = 'Broadcast';
+  context.state.view.primary_artist_groups = [{ artist: 'Broadcast', artist_display: 'Broadcast', albums: [album] }];
+  context.state.gallery.mainState = context.createGalleryMainState({ view: 'cards' });
+  scrollEl.scrollTop = 420;
+
+  context.renderArtistGroups({ preserveScroll: true });
+  const virtualRoot = virtualGrid.containerEl;
+  const cardsMarkup = containerEl.innerHTML;
+  const cardsRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'cards' });
+  assert.match(cardsMarkup, /data-gallery-display="cards"/);
+  assert.match(cardsMarkup, /class="album-subtitle">Broadcast · 2005<\/div>/);
+  assert.doesNotMatch(cardsMarkup, /class="album-year"/);
+
+  context.state.gallery.mainState = context.reduceGalleryMainState(
+    context.state.gallery.mainState,
+    { type: 'set-view', view: 'covers' },
+  );
+  context.renderArtistGroups({ preserveScroll: true });
+  const coversRenderKey = context.getAlbumCardRenderKey(album, { displayMode: 'covers' });
+
+  assert.strictEqual(virtualGrid.containerEl, virtualRoot);
+  assert.equal(scrollEl.scrollTop, 420);
+  assert.notEqual(cardsRenderKey, coversRenderKey, 'display mode must participate in retained-card cache identity');
+  assert.match(containerEl.innerHTML, /data-gallery-display="covers"/);
+  assert.doesNotMatch(containerEl.innerHTML, /Broadcast\s*·\s*2005/);
+});
 
 {
   const { context } = createRuntimeContext();
@@ -3157,8 +3241,8 @@ test('selected primary section remains mounted while browsing related family sec
   scrollEl.scrollTop = Math.max(0, virtualGrid.totalHeight - scrollEl.clientHeight);
   virtualGrid.render(true);
 
-  assert.match(containerEl.innerHTML, /<h2 class="artist-name">Selected Artist<\/h2>/);
-  assert.match(containerEl.innerHTML, /<h2 class="artist-name">Family Two<\/h2>/);
+  assert.match(containerEl.innerHTML, /<h2 class="artist-name">Selected Artist<\/h2>[\s\S]*10 albums/);
+  assert.match(containerEl.innerHTML, /<h2 class="artist-name">Family Two<\/h2>[\s\S]*10 albums/);
 });
 
 test('deferred pointer render retains the scroll frame owner across a render generation change', () => {
@@ -3730,17 +3814,17 @@ test('narrower viewport drops a column without exceeding the 100-scale card widt
       galleryScalePercent: 100,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 240px))',
+        gridTemplate: 'repeat(3, minmax(0, 242.666px))',
       },
       narrow: {
         columns: 2,
-        gridTemplate: 'repeat(2, minmax(0, 240px))',
+        gridTemplate: 'repeat(2, minmax(0, 366px))',
       },
     },
   );
 });
 
-test('selected gallery scale controls both the breakpoint and card-width cap', () => {
+test('selected gallery scale controls the breakpoint while cards fill available width', () => {
   const scenario = createResponsiveGalleryScenario(125, 940);
   const { context, scrollEl, section, virtualGrid } = scenario;
   const wide = {
@@ -3769,11 +3853,11 @@ test('selected gallery scale controls both the breakpoint and card-width cap', (
       galleryScalePercent: 125,
       wide: {
         columns: 3,
-        gridTemplate: 'repeat(3, minmax(0, 300px))',
+        gridTemplate: 'repeat(3, minmax(0, 302.666px))',
       },
       narrow: {
         columns: 2,
-        gridTemplate: 'repeat(2, minmax(0, 300px))',
+        gridTemplate: 'repeat(2, minmax(0, 451px))',
       },
     },
   );
@@ -3924,4 +4008,63 @@ test('missing album inventory state invalidates a retained gallery card', () => 
     missingKey,
     'the reconciler must be able to replace a retained normal card with its missing tombstone',
   );
+});
+
+test('picture-only rows cover a partial viewport row immediately after switching from cards', () => {
+  const { context } = createRuntimeContext();
+  const grid = vm.runInContext('virtualGrid', context);
+  grid.render = () => {};
+  grid.primeVisibleCoverImages = () => {};
+  const groups = [{ artist: 'Artist', albums: Array.from({ length: 32 }, (_, i) => ({ key: `album-${i}`, name: `Album ${i}`, album_artist: 'Artist', tracks: [] })) }];
+  context.state.gallery.mainState = context.createGalleryMainState({ view: 'cards' });
+  grid.setGroups([], [], groups);
+  let section = grid.sections[0];
+  section.blockHeights.fill(420);
+  section.measuredBlockKeys = section.blockMeasureKeys.slice();
+  context.state.gallery.mainState.view = 'covers';
+  grid.setGroups([], [], groups);
+  section = grid.sections[0];
+  assert.equal(section.blockHeights[0], grid.cardTrackWidth);
+  assert.equal(section.measuredBlockKeys[0], '');
+  const viewportBottom = grid.sectionHeaderHeight + 2 * (grid.cardTrackWidth + grid.rowGap) + 50;
+  const range = grid.getVisibleBlockRange(section, 0, viewportBottom);
+  assert.equal(range.lastIndex, 2, 'the partly visible third row must be mounted');
+  const height = grid.totalHeight;
+  grid.recalculate();
+  assert.equal(grid.totalHeight, height, 'unchanged geometry must remain stable');
+  context.state.view.gallery_scale_percent = 110;
+  grid.recalculate();
+  assert.equal(section.blockHeights[0], grid.cardTrackWidth, 'resizing without changing columns must update row geometry');
+});
+
+test('combining selected family artists preserves their albums and reports one display group', () => {
+  const { context, containerEl } = createRuntimeContext();
+  const primary = { artist: 'Neal Morse', albums: [{ key: 'neal', name: 'Solo', album_artist: 'Neal Morse', tracks: [] }] };
+  const family = { artist: 'Neal Morse & The Resonance', albums: [{ key: 'resonance', name: 'Resonance', album_artist: 'Neal Morse & The Resonance', tracks: [] }] };
+  context.state.view.selected_artist = primary.artist;
+  context.state.view.primary_artist_groups = [primary];
+  context.state.view.family_artist_groups = [family];
+  context.state.gallery.mainState = context.createGalleryMainState({ familyArtists: [primary.artist, family.artist] });
+  context.buildSelectedArtistDisplayGroups = (primaryGroups, familyGroups) => ({ primaryGroups: primaryGroups.map(group => ({ ...group, artist_display: 'Neal Morse / Resonance', albums: [...group.albums, ...familyGroups.flatMap(item => item.albums)] })), familyGroups: [] });
+  context.renderArtistGroups();
+  assert.match(containerEl.innerHTML, /Resonance/);
+  const model = context.getFilteredGalleryMainModel();
+  assert.equal(model.totals.artistCount, 1);
+  assert.equal(model.totals.albumCount, 2);
+  context.state.gallery.mainState.familyArtists = [primary.artist];
+  context.renderArtistGroups();
+  assert.equal(context.getFilteredGalleryMainModel().totals.albumCount, 1, 'combining must not reintroduce deselected albums');
+});
+
+test('family-only selection renders albums from the same scoped cache as the family panel', () => {
+  const { context, containerEl } = createRuntimeContext();
+  const primary = { artist: 'Devin Townsend', albums: [{ key: 'devin', name: 'Solo', album_artist: 'Devin Townsend', tracks: [] }] };
+  const family = { artist: 'Casualties of Cool', albums: [{ key: 'cool', name: 'Casualties of Cool', album_artist: 'Casualties of Cool', tracks: [] }] };
+  Object.assign(context.state.view, { selected_artist: primary.artist, query: 'devin', related_artists: [family.artist], primary_artist_groups: [primary], family_artist_groups: [], artist_groups: [primary] });
+  Object.assign(context.state.gallery, { relatedFilterBaseArtist: primary.artist, relatedFilterBaseQuery: 'devin', relatedFilterBasePrimaryGroups: [primary], relatedFilterBaseFamilyGroups: [family] });
+  context.state.gallery.mainState = context.createGalleryMainState({ familyArtists: [family.artist], familySelectionExplicit: true });
+  context.renderArtistGroups();
+  assert.match(containerEl.innerHTML, /Casualties of Cool/);
+  assert.equal(context.getFilteredGalleryMainModel().totals.albumCount, 1);
+  assert.equal(context.getFilteredGalleryMainModel().groups[0].artist, family.artist);
 });

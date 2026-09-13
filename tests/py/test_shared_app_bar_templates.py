@@ -140,6 +140,59 @@ def test_library_search_preserves_selected_scope_and_repeated_categories(render)
     assert form.one("button", type="submit").attrs["aria-label"] == "Search"
 
 
+def test_library_app_bar_owns_sources_and_aligns_search_with_gallery_body(render):
+    document = render()
+    shell = document.one(id="app-shell")
+    bar = shell.one(**{"data-shell-slot": "app_bar"})
+    form = bar.one("form", id="search-form")
+    gallery = shell.one(id="albums-viewport")
+    assert form.attrs["data-shell-horizontal-align"] == "gallery-body"
+    assert gallery.attrs["data-shell-horizontal-align"] == "gallery-body"
+
+    sources = bar.one("button", **{"data-gallery-sources-anchor": "1"})
+    assert sources.attrs["aria-label"] == "Sources"
+    assert "aria-haspopup" not in sources.attrs
+    assert sources.attrs["aria-expanded"] == "false"
+    menu_id = sources.attrs["aria-controls"]
+    menu = bar.one(id=menu_id)
+    assert menu.attrs["data-anchored-surface"] == "sources"
+    assert menu.attrs["role"] == "group"
+    assert menu.attrs["aria-label"] == "Sources"
+    switches = menu.find_all(**{"role": "switch"})
+    assert [switch.attrs["data-gallery-source"] for switch in switches] == [
+        "main_library", "new_arrivals", "hoard",
+    ]
+    assert not any("Open New Arrivals" in switch.text for switch in menu.find_all())
+
+
+def test_gallery_template_hosts_exact_controls_and_album_type_defaults(render):
+    shell = render().one(id="app-shell")
+    gallery_bar = shell.one(**{"data-gallery-bar": None})
+    actions = gallery_bar.find_all("button", **{"data-gallery-bar-action": None})
+    assert [action.attrs["data-gallery-bar-action"] for action in actions] == [
+        "artist-family", "view", "album-types",
+    ]
+    assert "aria-haspopup" not in actions[-1].attrs
+    album_types = shell.one(**{"data-anchored-surface": "album-types"})
+    assert album_types.attrs["role"] == "group"
+    assert album_types.attrs["aria-label"] == "Album types"
+    choices = album_types.find_all("button", **{"data-gallery-album-type": None})
+    assert [choice.attrs["data-gallery-album-type"] for choice in choices] == [
+        "studio", "live", "demo", "compilation", "ep", "single",
+    ]
+    selected = [choice.attrs["data-gallery-album-type"] for choice in choices if choice.attrs.get("aria-pressed") == "true"]
+    assert selected == ["studio", "ep"]
+    choices_by_type = {choice.attrs["data-gallery-album-type"]: choice for choice in choices}
+    assert "disabled" not in choices_by_type["studio"].attrs
+    assert "disabled" not in choices_by_type["compilation"].attrs
+    for release_type in ("live", "demo", "ep", "single"):
+        assert "disabled" in choices_by_type[release_type].attrs
+        assert choices_by_type[release_type].attrs["aria-disabled"] == "true"
+    album_types.one("button", **{"data-open-non-album-tracks": "1"})
+    customize = album_types.one("button", **{"data-gallery-customize-preview": "1"})
+    assert "disabled" in customize.attrs or customize.attrs.get("aria-disabled") == "true"
+
+
 @pytest.mark.parametrize("administrator", [False, True])
 def test_library_actions_retain_handlers_and_server_filtered_admin_entry(render, administrator):
     bar = render(administrator=administrator).one(id="app-shell").one(**{"data-shell-slot": "app_bar"})

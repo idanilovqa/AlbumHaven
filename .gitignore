@@ -33,3 +33,6 @@ tests/e2e/fixtures/real-cover-pool/
 # Windows / editor noise
 .vscode/
 .idea/
+
+# Agent skills are installed locally in the Codex skills folder.
+/.agents/skills/

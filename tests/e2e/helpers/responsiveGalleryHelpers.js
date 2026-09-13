@@ -121,6 +121,10 @@ export async function readResponsiveGalleryLayout(galleryPage, options = {}) {
       galleryBounds,
       columnCount: rowCardCounts.length ? Math.max(...rowCardCounts) : 0,
       rowCardCounts,
+      fullRowRightGaps: rows.filter(row => row.querySelectorAll(selectors.albumCardSelector).length === Math.max(...rowCardCounts)).map(row => {
+        const last = row.querySelectorAll(selectors.albumCardSelector);
+        return row.getBoundingClientRect().right - last[last.length - 1].getBoundingClientRect().right;
+      }),
       cardWidths: cardBounds.map((bounds) => bounds.width),
       maxCardWidth: cardBounds.length ? Math.max(...cardBounds.map((bounds) => bounds.width)) : 0,
       cardsInsideGallery,
@@ -191,6 +195,16 @@ export function expectCardsWithinSelectedScale(expectApi, snapshot, selectedScal
   expectApi(snapshot.maxCardWidth).toBeLessThanOrEqual(
     selectedScaleCeilingPx + GEOMETRY_TOLERANCE_PX,
   );
+  expectApi(snapshot.cardsInsideGallery).toBe(true);
+  expectApi(snapshot.galleryHasHorizontalOverflow).toBe(false);
+  expectApi(snapshot.documentHasHorizontalOverflow).toBe(false);
+}
+
+export function expectCardsFillGalleryWidth(expectApi, snapshot) {
+  expectApi(snapshot.columnCount).toBeGreaterThan(0);
+  expectApi(snapshot.fullRowRightGaps.length).toBeGreaterThan(0);
+  for (const gap of snapshot.fullRowRightGaps) expectApi(Math.abs(gap)).toBeLessThanOrEqual(1);
+  expectApi(Math.max(...snapshot.cardWidths) - Math.min(...snapshot.cardWidths)).toBeLessThanOrEqual(1);
   expectApi(snapshot.cardsInsideGallery).toBe(true);
   expectApi(snapshot.galleryHasHorizontalOverflow).toBe(false);
   expectApi(snapshot.documentHasHorizontalOverflow).toBe(false);

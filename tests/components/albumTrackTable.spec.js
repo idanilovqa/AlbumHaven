@@ -153,6 +153,7 @@ async function mountAlbumDetailsComponents(page) {
   await page.addScriptTag({
     content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }`,
   });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'button-component.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'compact-data-table.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js') });
   await page.locator('#table-host').evaluate((host) => {
@@ -259,7 +260,7 @@ for (const scenario of [
   });
 }
 
-test('long album track titles preserve all five usable columns inside a narrow dialog', async ({ page }) => {
+test('long album track titles preserve all four usable columns with combined number and Play inside a narrow dialog', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
   await page.setViewportSize({ width: 390, height: 844 });
   const row = page.locator('[data-track-row-path="two.flac"]');
@@ -269,7 +270,7 @@ test('long album track titles preserve all five usable columns inside a narrow d
   const [tableBox, dialogBox, rowBox] = await Promise.all([table.boundingBox(), dialog.boundingBox(), row.boundingBox()]);
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
-  await expect(row.locator('[role="cell"]')).toHaveCount(5);
+  await expect(row.locator('[role="cell"]')).toHaveCount(4);
   for (const name of ['Play track', 'Open this track in Problematic Files']) {
     const button = row.getByRole('button', { name, exact: true });
     await expect(button).toBeVisible();
@@ -328,7 +329,7 @@ test('ActionButton hover and keyboard focus share the same outline without shift
   expect(restingBox).not.toBeNull();
 
   await action.hover();
-  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-width', '1px');
   await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
   const hoverOutline = await action.evaluate((element) => getComputedStyle(element).outlineColor);
   expect(await action.boundingBox()).toEqual(restingBox);
@@ -336,7 +337,7 @@ test('ActionButton hover and keyboard focus share the same outline without shift
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await expect(action).toBeFocused();
-  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-width', '1px');
   await expect(action).toHaveCSS('outline-color', hoverOutline);
   expect(await action.boundingBox()).toEqual(restingBox);
 });
@@ -393,4 +394,54 @@ test('Editorial table aligns left while its final 1px outline fades into the ori
   expect(edge.backgroundImage).toContain('/ 0.75)');
   await expect(total).toHaveCSS('border-right-width', '1px');
   expect(await total.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('none');
+});
+
+
+test('decoded Album Details artwork stays square and visible while only tracks scroll at short desktop heights', async ({ page }) => {
+  const art = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="teal"/></svg>');
+  for (const { height, trackCount } of [{ height: 960, trackCount: 5 }, { height: 400, trackCount: 30 }]) {
+    await page.setViewportSize({ width: 1440, height });
+    await page.route('http://album-track-table-component.test/artwork', route => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><html><head><style>:root{--panel:#101a29;--border:#526172;--text:#f3f6fa;--muted:#9aa9bc}*{box-sizing:border-box}body{margin:0}</style></head><body>
+        <div id="track-modal" class="track-modal"><div class="track-modal-dialog">
+          <header class="track-modal-header"><div class="album-details-header"><h2>Natural Filename Order Fixture</h2></div></header>
+          <div class="track-modal-body"><div id="track-modal-cover" class="track-modal-cover">
+            <div class="track-modal-cover-shell"><div class="album-artbox album-artbox--ready" data-album-artbox-state="ready">
+              <button class="track-modal-cover-button" data-open-lightbox="1"><span class="track-modal-cover-visual"><img alt="Album cover" src="${art}"></span></button>
+            </div><div class="track-modal-cover-tools"><button class="track-modal-cover-tool"><img alt="Look up" src="${art}"></button><button class="track-modal-cover-tool"><img alt="Fetch" src="${art}"></button></div></div>
+          </div><main class="track-modal-main"><div class="track-modal-list" id="table-host"></div></main></div>
+        </div></div></body></html>`,
+    }));
+    await page.goto('http://album-track-table-component.test/artwork');
+    for (const cssPath of [baseLayoutCssPath, buttonComponentCssPath, compactDataTableCssPath, albumTrackTableCssPath, albumDetailsComponentsCssPath, trackModalCssPath,
+      path.join(repositoryRoot, 'music_app/static/css/runtime/album-artbox-and-gallery-card.css')]) await page.addStyleTag({ path: cssPath });
+    await page.addScriptTag({ content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }` });
+    for (const file of ['button-component.js', 'runtime/compact-data-table.js', 'runtime/album-track-table.js']) await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app/static/js', file) });
+    await page.locator('#table-host').evaluate((host, count) => {
+      host.innerHTML = buildAlbumTrackTableHtml({ groups: [{ tracks: Array.from({ length: count }, (_, i) => ({ path: `track-${i}`, title: `Track ${i + 1}`, trackNumber: i + 1, duration: '3:00' })) }], totalLength: '15m' });
+    }, trackCount);
+    const image = page.locator('#track-modal-cover .track-modal-cover-visual > img');
+    await expect(image).toHaveCount(1);
+    await expect(image).toBeVisible();
+    const geometry = await image.evaluate(img => {
+      const rect = img.getBoundingClientRect(), cover = img.closest('.track-modal-cover').getBoundingClientRect();
+      const list = document.querySelector('.track-modal-list'), dialog = document.querySelector('.track-modal-dialog');
+      return { width: rect.width, height: rect.height, coverHeight: cover.height, complete: img.complete, naturalWidth: img.naturalWidth,
+        listScroll: list.scrollHeight > list.clientHeight, listOverflow: getComputedStyle(list).overflowY,
+        dialogOverflow: getComputedStyle(dialog).overflowY, dialogBottom: dialog.getBoundingClientRect().bottom };
+    });
+    expect(geometry.complete).toBe(true);
+    expect(geometry.naturalWidth).toBe(480);
+    expect(geometry.width).toBeGreaterThan(0);
+    expect(geometry.width).toBeCloseTo(geometry.height, 0);
+    expect(geometry.height).toBeLessThanOrEqual(geometry.coverHeight);
+    expect(geometry.dialogBottom).toBeLessThanOrEqual(height);
+    expect(geometry.dialogOverflow).toBe('hidden');
+    if (height === 400) {
+      expect(geometry.listScroll).toBe(true);
+      expect(geometry.listOverflow).toBe('auto');
+    }
+    await page.unroute('http://album-track-table-component.test/artwork');
+  }
 });

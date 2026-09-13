@@ -3,6 +3,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const ButtonComponent = require(path.join(
+  __dirname,
+  '..',
+  '..',
+  '..',
+  'music_app',
+  'static',
+  'js',
+  'button-component.js',
+));
 
 const helperPath = path.join(
   __dirname,
@@ -50,6 +60,7 @@ const primaryModalsTemplate = fs.readFileSync(path.join(
 function loadHelper(albums, overrides = {}) {
   const context = {
     console,
+    ButtonComponent,
     claimTagEditViewMutation(album, editedPaths, updates) {
       return { album, editedPaths, updates };
     },
@@ -180,12 +191,79 @@ test('track modal playback refresh preserves generic Play track and Pause track 
 
   context.refreshTrackModalPlaybackState();
   assert.equal(attributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
   assert.equal(durationEl.innerHTML, '0:00 / 0:00');
   assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
 
+  let iconWrites = 0;
+  let iconMarkup = button.innerHTML;
+  Object.defineProperty(button, 'innerHTML', {
+    get() { return iconMarkup; },
+    set(value) { iconWrites += 1; iconMarkup = value; },
+  });
+  playback.currentTime = 1;
+  context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 0, 'time updates must preserve the icon targeted by an in-progress click');
+
   playback.paused = true;
   context.refreshTrackModalPlaybackState();
+  assert.equal(iconWrites, 1, 'a playback state change updates the icon once');
   assert.equal(attributes.get('aria-label'), 'Play track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--play"/);
+  assert.doesNotMatch(button.innerHTML, /&#x25B6;|▶/);
+});
+
+test('Loose Tracks playback refresh applies the AlbumTrackTable current and animation contract', () => {
+  const trackPath = 'C:\\Music\\Loose Track.flac';
+  const attributes = new Map([['data-track-row-path', trackPath]]);
+  const classes = new Map();
+  const buttonAttributes = new Map();
+  const button = {
+    innerHTML: '',
+    getAttribute(name) { return buttonAttributes.get(name) || ''; },
+    setAttribute(name, value) { buttonAttributes.set(name, String(value)); },
+  };
+  const durationEl = { dataset: { originalDuration: '3:00' }, innerHTML: '' };
+  const row = {
+    dataset: {},
+    classList: { toggle(name, active) { classes.set(name, Boolean(active)); } },
+    getAttribute(name) { return attributes.get(name) || ''; },
+    querySelector(selector) {
+      if (selector === '.play-track-button') return button;
+      if (selector === '[data-track-duration-path]') return durationEl;
+      return null;
+    },
+  };
+  const rootAttributes = new Map();
+  const context = loadHelper([], {
+    state: { player: { current: { path: trackPath } } },
+    document: {
+      documentElement: { getAttribute(name) { return rootAttributes.get(name) || ''; } },
+      getElementById(id) { return id === 'non-album-modal' ? { hidden: false } : null; },
+      querySelectorAll(selector) {
+        return selector === '#non-album-modal [data-track-row-path]' ? [row] : [];
+      },
+    },
+    formatTrackDuration(value) { return Number(value) === 42 ? '0:42' : '3:00'; },
+    getPlayerPlaybackSnapshot: () => ({ currentTime: 42, duration: 180, ended: false, paused: false }),
+    escapeHtml: (value) => String(value ?? ''),
+  });
+
+  context.refreshNonAlbumModalPlaybackState();
+  assert.equal(classes.get('album-track-table__row--current'), true);
+  assert.equal(classes.get('album-track-table__row--playing'), true);
+  assert.equal(classes.get('album-track-table__row--animated'), true);
+  assert.equal(row.dataset.trackPlaying, 'true');
+  assert.equal(buttonAttributes.get('aria-label'), 'Pause track');
+  assert.match(button.innerHTML, /^<svg class="ui-icon album-track-table__play-icon ui-icon--pause"/);
+  assert.doesNotMatch(button.innerHTML, /&#x23F8;|⏸/);
+  assert.equal(durationEl.innerHTML, '0:42 / 3:00');
+  assert.doesNotMatch(durationEl.innerHTML, /sep|8226|•/);
+
+  rootAttributes.set('data-album-playing-row-animation', 'disabled');
+  context.refreshNonAlbumModalPlaybackState();
+  assert.equal(classes.get('album-track-table__row--animated'), false);
 });
 
 test('track modal cover transition hides pending image chrome over a blank placeholder', () => {
@@ -2662,6 +2740,7 @@ function createTrackModalCoverContext(options = {}) {
   const directFetchCalls = [];
   const documentBody = new TrackModalTestElement('body');
   const context = {
+    ButtonComponent,
     console,
     Promise,
     URL,
@@ -3705,6 +3784,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   const folder = { dataset: {} };
   const editTags = { dataset: {} };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3809,6 +3889,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     ],
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {
@@ -3988,6 +4069,7 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     editTags: { dataset: {} },
   };
   const context = {
+    ButtonComponent,
     console,
     document: {
       getElementById() {

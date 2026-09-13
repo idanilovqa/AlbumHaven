@@ -2127,7 +2127,7 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
   });
   if (typeof buildAlbumTrackTableHtml !== 'function') {
     return componentGroups.flatMap((group) => group.tracks).map((track) => (
-      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${track.isPlaying ? '&#x23F8;' : '&#x25B6;'}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
+      `<div data-track-row-path="${escapeHtml(track.path)}"><button class="play-track-button" data-src="/track?path=${encodeURIComponent(track.path)}" data-track-path="${escapeHtml(track.path)}" data-track-title="${escapeHtml(track.playbackTitle || track.title)}" data-track-artist="${escapeHtml(track.artist)}" data-track-album-artist="${escapeHtml(track.albumArtist)}" data-track-album="${escapeHtml(track.album)}" data-track-cover="${escapeHtml(track.coverPath)}" data-track-duration-seconds="${track.durationSeconds}" type="button">${ButtonComponent.renderIconSvg(track.isPlaying ? 'pause' : 'play', { className: `album-track-table__play-icon ui-icon--${track.isPlaying ? 'pause' : 'play'}` })}</button><span class="track-title">${escapeHtml(track.title)}${track.secondaryArtist ? `<span class="track-artist-name">${escapeHtml(track.secondaryArtist)}</span>` : ''}</span></div>`
     )).join('');
   }
   const hasBonusDisc = componentGroups.some((group) => group.isBonus);
@@ -2339,8 +2339,14 @@ function refreshTrackModalPlaybackState() {
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
@@ -2366,20 +2372,31 @@ function refreshNonAlbumModalPlaybackState() {
     const isActivelyPlaying = isCurrentTrack && !playback.paused && !playback.ended;
     row.classList.toggle('is-current', isCurrentTrack);
     row.classList.toggle('is-playing', isActivelyPlaying);
+    row.classList.toggle('album-track-table__row--current', isCurrentTrack);
+    row.classList.toggle('album-track-table__row--playing', isActivelyPlaying);
+    row.classList.toggle(
+      'album-track-table__row--animated',
+      Boolean(isActivelyPlaying && document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled'),
+    );
+    if (row.dataset) row.dataset.trackPlaying = isActivelyPlaying ? 'true' : '';
 
     const button = row.querySelector('.play-track-button');
     if (button) {
-      button.innerHTML = isActivelyPlaying ? '&#x23F8;' : '&#x25B6;';
-      button.setAttribute('aria-label', isActivelyPlaying ? 'Pause track' : 'Play track');
+      const iconName = isActivelyPlaying ? 'pause' : 'play';
+      const label = isActivelyPlaying ? 'Pause track' : 'Play track';
+      if (button.getAttribute('aria-label') !== label) {
+        button.innerHTML = ButtonComponent.renderIconSvg(iconName, {
+          className: `album-track-table__play-icon ui-icon--${iconName}`,
+        });
+        button.setAttribute('aria-label', label);
+      }
     }
 
     const durationEl = row.querySelector('[data-track-duration-path]');
     if (durationEl) {
       const originalDuration = durationEl.dataset.originalDuration || '';
       const displayedTime = isCurrentTrack ? `${activeCurrent} / ${activeDuration || originalDuration || '0:00'}` : originalDuration;
-      durationEl.innerHTML = displayedTime
-        ? `<span class="sep">&#8226;</span> ${escapeHtml(displayedTime)}`
-        : '';
+      durationEl.innerHTML = displayedTime ? escapeHtml(displayedTime) : '';
     }
   });
 }

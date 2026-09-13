@@ -131,12 +131,14 @@ def project_library_watch_health(
             root_id = str(problem.get("root_id") or "").strip()
             state = str(problem.get("state") or "").strip()
             detected_at = str(problem.get("detected_at") or "").strip()
+            event_id = str(problem.get("event_id") or "").strip()
         else:
             root_id = str(getattr(problem, "root_id", "") or "").strip()
             state = str(getattr(problem, "state", "") or "").strip()
             detected_at = str(
                 getattr(problem, "detected_at", "") or ""
             ).strip()
+            event_id = str(getattr(problem, "event_id", "") or "").strip()
         if not root_id or state not in {
             "overflow",
             "reconciliation_failed",
@@ -151,6 +153,8 @@ def project_library_watch_health(
             "message": WATCH_HEALTH_MESSAGE,
             "allowed_actions": {},
         }
+        if event_id:
+            item["event_id"] = event_id
         if allowed_actions.allows("library.refresh"):
             item["allowed_actions"] = {"library.refresh": True}
         projected.append(item)

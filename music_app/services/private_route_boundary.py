@@ -50,6 +50,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/news"): "app.shell.read",
     ("GET", "/bootstrap-data"): "app.bootstrap.read",
     ("GET", "/status"): "app.status.read",
+    ("POST", "/account/library-warning/dismiss"): "account.self.library_warning.dismiss",
     ("GET", "/view-data"): "library.browse.read",
     ("GET", "/home-data"): "library.browse.read",
     ("GET", "/album-details"): "library.browse.read",

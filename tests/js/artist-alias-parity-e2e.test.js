@@ -422,8 +422,12 @@ test('alias parity support reads production responses and DOM locators without e
   assert.doesNotMatch(aliasActionMethods, /\.evaluate(?:All)?\s*\(/);
   assert.doesNotMatch(telemetryMethod, /\.evaluate(?:All)?\s*\(/);
   assert.doesNotMatch(responseMethod, /\.evaluate(?:All)?\s*\(/);
-  assert.match(pomSource, /new ProductionViewObserver\(page\)/);
-  assert.match(observerSource, /page\.on\('response'/);
+  assert.match(pomSource, /this\.productionViewObserver = getProductionViewObserver\(page\)/);
+  assert.match(observerSource, /const observersByPage = new WeakMap\(\)/);
+  assert.match(observerSource, /if \(!observersByPage\.has\(page\)\) observersByPage\.set\(page, new ProductionViewObserver\(page\)\)/);
+  assert.match(observerSource, /return observersByPage\.get\(page\)/);
+  assert.match(observerSource, /events = new CDPDocumentEvents\(page\)/);
+  assert.match(observerSource, /events\.on\('response'/);
   assert.match(observerSource, /\['\/view-data', '\/home-data'\]/);
   assert.match(observerSource, /latestFullRequestSequence/);
   assert.match(telemetryMethod, /readLatestProductionViewPayload/);

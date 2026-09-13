@@ -134,14 +134,15 @@ test('expanded waveform player uses the approved centerline and player-edge meta
     player.boundingBox(), collapse.boundingBox(), cover.boundingBox(), play.boundingBox(),
     waveform.boundingBox(), metadata.boundingBox(),
   ]);
-  const paddingLeft = Number.parseFloat(await player.evaluate((element) => getComputedStyle(element).paddingLeft));
+  expect(Number.parseFloat(await player.evaluate((element) => getComputedStyle(element).paddingLeft))).toBe(28);
   const expectedCenterline = playerBox.y + 57;
 
   expect(playerBox.height).toBe(92);
   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['waveform', waveformBox]]) {
     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
   }
-  expect(Math.abs(metadataBox.x - (playerBox.x + paddingLeft))).toBeLessThanOrEqual(1);
+  expect(Math.abs(metadataBox.x - (playerBox.x + 28))).toBeLessThanOrEqual(1);
+  expect(Math.abs(coverBox.x - (playerBox.x + 28))).toBeLessThanOrEqual(1);
   await expect(player).toHaveScreenshot('expanded-waveform-player.png', { animations: 'disabled' });
 });
 

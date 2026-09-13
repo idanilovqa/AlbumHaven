@@ -213,22 +213,39 @@ export async function expectSharedOutlineGeometry(surfaces) {
 }
 
 export async function expectAnchorFollowsUnfold(page, surfaces) {
-  // parity-check: allow-read-only-measurement-evaluate -- observe the rendered anchor and panel join
+  // parity-check: allow-read-only-measurement-evaluate -- observe each rendered anchor and panel join after its layout update
   const measurement = surfaces.familyPanel.evaluate(panel => new Promise(resolve => {
+    const trigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
     const samples = [];
-    // ResizeObserver synchronizes the join after rAF and layout, before paint.
-    // Read in the following task so this frame's rendering update has completed.
-    const nextFrame = () => requestAnimationFrame(() => setTimeout(sample, 0));
-    const sample = () => {
-      const trigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
+    let pendingSample = null;
+    const read = () => {
       const box = panel.getBoundingClientRect();
       const style = getComputedStyle(panel);
       const left = parseFloat(style.getPropertyValue('--trigger-anchor-left'));
-      samples.push({ offset: Math.abs(box.left + left - trigger.getBoundingClientRect().left),
-        visible: !panel.hidden && style.visibility !== 'hidden' && box.width > 0 && box.height > 0 });
-      if (samples.length === 24) resolve(samples); else nextFrame();
+      return { offset: Math.abs(box.left + left - trigger.getBoundingClientRect().left),
+        visible: !panel.hidden && style.visibility !== 'hidden' && box.width > 0 && box.height > 0 };
     };
-    nextFrame();
+    // Production registered its observer when the panel opened. This observer
+    // records the resulting geometry later in the same rendering update.
+    const resize = new ResizeObserver(() => {
+      if (pendingSample) pendingSample = read();
+    });
+    resize.observe(trigger);
+    resize.observe(panel);
+    resize.observe(trigger.parentElement);
+    const sampleFrame = () => {
+      // Finalize the preceding frame without forcing a newer animated layout.
+      // If no resize callback corrected it, its provisional result still counts.
+      if (pendingSample) samples.push(pendingSample);
+      if (samples.length === 24) {
+        resize.disconnect();
+        resolve(samples);
+        return;
+      }
+      pendingSample = read();
+      requestAnimationFrame(sampleFrame);
+    };
+    requestAnimationFrame(sampleFrame);
   }));
   await surfaces.viewTrigger.click();
   const samples = await measurement;

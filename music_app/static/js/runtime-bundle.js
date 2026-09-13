@@ -1649,6 +1649,14 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  // Sidebar counts retain the source scope of their own response when album-only
+  // hydration preserves the navigation tree.
+  const sidebarCategories = options.preserveSidebarState
+    ? previousView.sidebar_library_categories
+    : nextPayload?.sidebar_library_categories || nextPayload?.visible_library_categories;
+  nextView.sidebar_library_categories = Array.isArray(sidebarCategories)
+    ? [...sidebarCategories]
+    : null;
   // Loaded album coverage follows the response, independently of the browse URL.
   // Local merged patches carry this field forward; server replacements use their
   // own categories instead of inheriting coverage from the previous albums.
@@ -34627,6 +34635,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       ? deepCloneJson(state.view.artists_sidebar)
       : null;
     state.ui.preSearchView = {
+      ...(Array.isArray(state.view.sidebar_library_categories)
+        ? { sidebar_library_categories: [...state.view.sidebar_library_categories] }
+        : {}),
       selected_artist: String(state.view.selected_artist || ''),
       related_filter_artists: [...(Array.isArray(state.view.related_filter_artists) ? state.view.related_filter_artists : [])],
       primary_filter_active: Boolean(state.view.primary_filter_active),
@@ -35222,9 +35233,21 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
   const currentSidebarAlbumCount = currentSidebarCanCertifyCompleteness
     ? readSidebarAlbumCount(state.view?.artists_sidebar, normalizedSelectedArtist)
     : null;
+  const capturedSidebarMatchesSources = Array.isArray(
+    capturedPreSearchView?.sidebar_library_categories,
+  ) && gallerySourceScopesEqual(
+    capturedPreSearchView.sidebar_library_categories,
+    state.gallery.mainState
+      ? activeGallerySourceCategories(state.gallery.mainState)
+      : state.view.visible_library_categories || [],
+  );
+  const capturedSidebarAlbumCount = capturedSidebarMatchesSources
+    ? readSidebarAlbumCount(capturedPreSearchView.artists_sidebar, normalizedSelectedArtist)
+    : null;
   const expectedAlbumCount = [
     completionDenominator,
     canonicalRootAlbumCount,
+    capturedSidebarAlbumCount,
     currentSidebarAlbumCount,
   ].reduce(
     (largestCount, count) => (

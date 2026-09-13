@@ -33,7 +33,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
-              "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track credits without guest album leakage",
+              "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries",
               "area": "gallery-search"
             },
             {

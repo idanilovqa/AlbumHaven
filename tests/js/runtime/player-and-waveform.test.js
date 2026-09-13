@@ -550,7 +550,7 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
   assert.match(playerRule, /--player-regular-centerline:\s*39px/);
   assert.match(playerRule, /--player-controls-size:\s*48px/);
-  assert.match(playerRule, /--player-leading-width:\s*144px/);
+  assert.match(playerRule, /--player-leading-width:\s*114px/);
   assert.match(
     css,
     /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-controls\s*\{[^}]*margin-top:\s*calc\(var\(--player-waveform-centerline\)\s*-\s*\(var\(--player-controls-size\)\s*\/\s*2\)\)/s,

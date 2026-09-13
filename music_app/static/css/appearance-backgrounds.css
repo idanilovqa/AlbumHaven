@@ -868,8 +868,8 @@ html .cover-lookup-drawer {
   background-image: linear-gradient(var(--appearance-main-surface, var(--panel, #0b1929)), var(--appearance-main-surface, var(--panel, #0b1929)));
   pointer-events: auto;
 }
-@media (max-width: 700px) {
-  .player-preview-dock::before { inset: -14px -14px 0; }
+@media (max-width: 760px) {
+  .player-preview-dock::before { display: none; }
 }
 
 /* Search suggestions use neutral interaction colors, independent of accent. */

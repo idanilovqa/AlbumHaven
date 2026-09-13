@@ -364,7 +364,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
   --player-waveform-centerline: 57px;
   --player-regular-centerline: 39px;
   --player-controls-size: 48px;
-  --player-leading-width: 144px;
+  --player-leading-width: 114px;
   position: fixed;
   left: 0;
   right: 0;
@@ -1702,9 +1702,9 @@ body.modal-open { overflow: hidden; }
   color: var(--muted);
 }
 /* Player size controls stay in the visible row and use only a chevron. */
-:root .global-player:not(.is-compact) { padding-left: 6px; }
+:root .global-player:not(.is-compact) { padding-left: 28px; }
 :root .global-player .player-collapse-button {
-  position: relative; left: auto; top: auto; flex: 0 0 22px;
+  position: absolute; left: -28px; top: 0;
 }
 :root .global-player :is(.player-collapse-button, .compact-player-expand),
 :root .global-player :is(.player-collapse-button, .compact-player-expand):is(:hover, :focus, :focus-visible, :active) {

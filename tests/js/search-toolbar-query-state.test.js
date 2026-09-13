@@ -53,3 +53,28 @@ test('settled search canonical evidence follows local query and family-filter tr
     query: 'Ария', surface: 'albums', artists: [],
   }), { query: 'Ария', surface: 'albums', artists: [] });
 });
+
+
+test('Home settlement uses the preserved runtime sidebar when the latest response omits it', async () => {
+  const { resolveCurrentCanonicalSidebar, hasAppliedCanonicalSidebar } = await import(searchToolbarUrl);
+  const payload = { query: '', surface: { active: 'albums' } };
+  const runtime = { query: '', surface: 'home', sidebarArtists: ['Neal Morse', 'The Neal Morse Band'] };
+  const canonical = resolveCurrentCanonicalSidebar(payload, runtime);
+  const settled = { loaderVisible: false, payloadPresent: true, settledEmpty: false };
+  assert.deepEqual(canonical, runtime.sidebarArtists);
+  assert.equal(hasAppliedCanonicalSidebar(canonical, [...canonical], settled), true);
+  assert.equal(hasAppliedCanonicalSidebar(canonical, [], settled), false);
+  assert.equal(hasAppliedCanonicalSidebar(canonical, ['Neal Morse'], settled), false);
+  assert.equal(hasAppliedCanonicalSidebar(canonical, ['Neal Morse', 'Stale Artist'], settled), false);
+  assert.equal(hasAppliedCanonicalSidebar(canonical, [...canonical].reverse(), settled), false);
+});
+
+test('Home sidebar observation preserves explicit runtime clearing and real empty-state guards', async () => {
+  const { resolveCurrentCanonicalSidebar, hasAppliedCanonicalSidebar } = await import(searchToolbarUrl);
+  const payload = { artists_sidebar: [{ artist: 'Old Artist' }] };
+  assert.deepEqual(resolveCurrentCanonicalSidebar(payload, null), ['Old Artist']);
+  assert.deepEqual(resolveCurrentCanonicalSidebar(payload, { sidebarArtists: [] }), []);
+  assert.equal(hasAppliedCanonicalSidebar([], [], { loaderVisible: true, payloadPresent: true }), false);
+  assert.equal(hasAppliedCanonicalSidebar([], [], { loaderVisible: false, payloadPresent: false }), false);
+  assert.equal(hasAppliedCanonicalSidebar([], ['Stale Artist'], { loaderVisible: false, payloadPresent: true }), false);
+});

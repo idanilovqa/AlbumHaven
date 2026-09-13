@@ -107,8 +107,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
     await navigationPanelActions.waitForSidebarSelection('Neal Morse');
-    await searchToolbarActions.waitForQuery('');
-    await artistFamilyActions.waitForViewReady('Neal Morse');
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForAlbumVisibleUnderHeading(
       'Neal Morse',
       NEAL_MORSE_RETAINED_ALBUM,
@@ -116,8 +116,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName(MORSE_CANONICAL_ARTIST);
     await navigationPanelActions.waitForSidebarSelection(MORSE_CANONICAL_ARTIST);
-    await searchToolbarActions.waitForQuery('');
-    await artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST);
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady(MORSE_CANONICAL_ARTIST, { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForArtistHeadings([MORSE_CANONICAL_ARTIST, 'Neal Morse']);
 
     const deepScroll = await galleryActions.jumpGalleryToMiddle();
@@ -126,8 +126,8 @@ test('FTC-SEARCH-NAV-020 resolves punctuation-credit aliases through startup and
 
     await navigationPanelActions.selectSidebarArtistByName('Neal Morse');
     await navigationPanelActions.waitForSidebarSelection('Neal Morse');
-    await searchToolbarActions.waitForQuery('');
-    await artistFamilyActions.waitForViewReady('Neal Morse');
+    await searchToolbarActions.waitForQuery(MORSE_CANONICAL_ARTIST);
+    await artistFamilyActions.waitForViewReady('Neal Morse', { queryValue: MORSE_CANONICAL_ARTIST });
     await galleryActions.waitForAlbumVisibleUnderHeading(
       'Neal Morse',
       NEAL_MORSE_RETAINED_ALBUM,

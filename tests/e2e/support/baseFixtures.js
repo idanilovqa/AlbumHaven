@@ -1,3 +1,4 @@
+import { getProductionViewObserver } from '../helpers/productionViewObserver.js';
 import { expect, test as base } from '@playwright/test';
 import {
   readAuthenticatedStartupRelationProjectionReadiness,
@@ -360,14 +361,18 @@ export const test = base.extend({
             storageState: authenticateFreshBrowserSession ? storageState : { cookies: [], origins: [] },
           });
           const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);
+          let productionViewObserver = null;
           try {
             const page = await context.newPage();
+            productionViewObserver = getProductionViewObserver(page);
+            await productionViewObserver.initialize();
             const configuredOrigin = configuredBaseUrl ? new URL(configuredBaseUrl).origin : '';
             const runtimeLogObserver = observePageRuntimeLogs(page, configuredOrigin);
             session = {
               context,
               page,
               runtimeLogObserver,
+              productionViewObserver,
               restoreInterceptionGuard,
               galleryActions: new GalleryActions(new GalleryPage(page, testInfo)),
               coverLookupActions: new CoverLookupActions(new CoverLookup(page, testInfo)),
@@ -378,9 +383,10 @@ export const test = base.extend({
             return session;
           } catch (error) {
             try {
-              restoreInterceptionGuard();
+              await productionViewObserver?.dispose();
             } finally {
-              await context.close();
+              try { restoreInterceptionGuard(); }
+              finally { await context.close(); }
             }
             throw error;
           }
@@ -409,9 +415,10 @@ export const test = base.extend({
           }
         }
         try {
-          session.restoreInterceptionGuard();
+          await session.productionViewObserver.dispose();
         } finally {
-          await session.context.close();
+          try { session.restoreInterceptionGuard(); }
+          finally { await session.context.close(); }
         }
       }
     }
@@ -432,6 +439,16 @@ export const test = base.extend({
   }, { scope: 'worker', auto: true }],
 
   ...functionalBrowserWarmupFixtures,
+
+  productionViewObservation: [async ({ page }, use) => {
+    const observer = getProductionViewObserver(page);
+    try {
+      await observer.initialize();
+      await use(observer);
+    } finally {
+      await observer.dispose();
+    }
+  }, { auto: true }],
 
   requestInterceptionGuard: [async ({ page, context }, use) => {
     const restoreInterceptionGuard = installContextRequestInterceptionGuard(context);

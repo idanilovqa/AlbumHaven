@@ -1044,6 +1044,9 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       ? deepCloneJson(state.view.artists_sidebar)
       : null;
     state.ui.preSearchView = {
+      ...(Array.isArray(state.view.sidebar_library_categories)
+        ? { sidebar_library_categories: [...state.view.sidebar_library_categories] }
+        : {}),
       selected_artist: String(state.view.selected_artist || ''),
       related_filter_artists: [...(Array.isArray(state.view.related_filter_artists) ? state.view.related_filter_artists : [])],
       primary_filter_active: Boolean(state.view.primary_filter_active),
@@ -1639,9 +1642,21 @@ function isMountedSelectedGalleryComplete(selectedArtist, reusableRootBrowseView
   const currentSidebarAlbumCount = currentSidebarCanCertifyCompleteness
     ? readSidebarAlbumCount(state.view?.artists_sidebar, normalizedSelectedArtist)
     : null;
+  const capturedSidebarMatchesSources = Array.isArray(
+    capturedPreSearchView?.sidebar_library_categories,
+  ) && gallerySourceScopesEqual(
+    capturedPreSearchView.sidebar_library_categories,
+    state.gallery.mainState
+      ? activeGallerySourceCategories(state.gallery.mainState)
+      : state.view.visible_library_categories || [],
+  );
+  const capturedSidebarAlbumCount = capturedSidebarMatchesSources
+    ? readSidebarAlbumCount(capturedPreSearchView.artists_sidebar, normalizedSelectedArtist)
+    : null;
   const expectedAlbumCount = [
     completionDenominator,
     canonicalRootAlbumCount,
+    capturedSidebarAlbumCount,
     currentSidebarAlbumCount,
   ].reduce(
     (largestCount, count) => (

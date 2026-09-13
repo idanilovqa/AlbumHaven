@@ -13,7 +13,7 @@ const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 
 test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold reload', { tag: '@area:loops' }, async ({
-  page, galleryActions, globalPlayerActions, settingsModalAppBarActions,
+  page, galleryActions, globalPlayerActions, playbackEvidence, settingsModalAppBarActions,
   trackModalActions, utilityAppearanceActions, utilityLoopsActions, utilityTabBarActions,
 }) => {
   const names = Array.from({ length: 5 }, (_, index) => `Waveform ${Date.now()} ${test.info().workerIndex} ${index + 1}`);
@@ -26,9 +26,13 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
   await utilityAppearanceActions.selectSeekbarMode('waveform');
   await settingsModalAppBarActions.closeSettings();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const playbackMark = await playbackEvidence.playbackMark();
   const track = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
   await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
   await globalPlayerActions.waitForFullTrackTiming();
+  const evidence = await playbackEvidence.waitForTrackPlaybackEvidence({ after: playbackMark, path: track.path });
+  expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+  expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
   await globalPlayerActions.pauseIfPlaying();
   await trackModalActions.close();
   try {
@@ -46,23 +50,7 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
     const entries = await Promise.all(names.map(name => utilityLoopsActions.resolveLoopEntryByName(name)));
     expect(new Set(entries.map(item => item.loopId)).size).toBe(5);
     for (const { entry, loopId } of entries) {
-      await expect(entry).toBeAttached();
-      const audio = utilityLoopsActions.utilityLoopsTab.loopEntryCard.audioByLoopId(loopId);
-      await expect(audio).toHaveJSProperty('paused', true);
-      const canvas = utilityLoopsActions.utilityLoopsTab.loopEntryCard.ordinaryWaveformForEntry(entry);
-      await expect(canvas).toBeVisible();
-      // parity-check: allow-read-only-measurement-evaluate -- count real waveform paint away from the paused playhead at the left edge
-      await expect.poll(() => canvas.evaluate(element => {
-        const pixels = element.getContext('2d').getImageData(0, 0, element.width, element.height).data;
-        let painted = 0;
-        for (let y = 0; y < element.height; y += 1) {
-          for (let x = Math.ceil(element.width * 0.1); x < element.width * 0.9; x += 1) {
-            if (pixels[(y * element.width + x) * 4 + 3] > 0) painted += 1;
-          }
-        }
-        return painted;
-      })).toBeGreaterThan(0);
-      await expect(audio).toHaveJSProperty('paused', true);
+      await utilityLoopsActions.expectPausedLoopWaveformPainted(entry, loopId);
     }
   } finally {
     if (!await settingsModalAppBarActions.settingsModalAppBar.modal.isVisible()) {

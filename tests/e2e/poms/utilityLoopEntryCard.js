@@ -36,6 +36,20 @@ export class UtilityLoopEntryCard extends BasePage {
     return entry.locator('canvas[data-loop-stereo-waveform]');
   }
 
+  async readOrdinaryWaveformMiddlePaint(entry) {
+    // parity-check: allow-read-only-measurement-evaluate -- count real waveform paint in the middle 80%, away from the paused left-edge playhead
+    return this.ordinaryWaveformForEntry(entry).evaluate(element => {
+      const pixels = element.getContext('2d').getImageData(0, 0, element.width, element.height).data;
+      let painted = 0;
+      for (let y = 0; y < element.height; y += 1) {
+        for (let x = Math.ceil(element.width * 0.1); x < element.width * 0.9; x += 1) {
+          if (pixels[(y * element.width + x) * 4 + 3] > 0) painted += 1;
+        }
+      }
+      return painted;
+    });
+  }
+
   playButtonForEntry(entry) {
     return entry.locator('[data-loop-play]');
   }

@@ -1712,6 +1712,25 @@ export class GalleryActions {
     }, { timeout: 30000 }).toEqual({ settled: true, canonicalMatch: false, attachedMatch: false });
   }
 
+  async openOwnedAlbumOrLooseTracksInTagEditor({ artist, album, year, searchToolbarActions,
+    trackModalActions, artistPageSettingsActions, tagEditorActions, expectedTrackCount }) {
+    await this.goto('/?surface=albums');
+    await this.waitForGalleryReady();
+    await searchToolbarActions.search(album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(album);
+    if (await this.readAlbumIdentityCardCount({ artist, album, year })) {
+      await this.selectAlbumDetailsByIdentity({ artist, album, year });
+      await trackModalActions.waitForInteractiveSummary();
+      await trackModalActions.openTagEditor();
+    } else {
+      await this.goto(`/?surface=albums&artist=${encodeURIComponent(artist)}`);
+      await this.waitForGalleryReady();
+      await artistPageSettingsActions.openNonAlbumTracks(expectedTrackCount);
+      await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
+    }
+    await tagEditorActions.waitForOpen({ expectedTrackCount });
+  }
+
   async openSearchedAlbumDetails({ artist, album, year, searchToolbarActions, trackModalActions }) {
     await this.goto('/?surface=albums');
     await this.waitForGalleryReady();

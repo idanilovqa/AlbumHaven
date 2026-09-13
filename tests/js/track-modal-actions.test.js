@@ -30,7 +30,7 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
     waitCalls,
     trackModal: {
       coverPlaceholderSelector: '#track-modal-cover .album-artbox[data-album-artbox-state="empty"]',
-      detailedCoverImageSelector: '#track-modal-cover .track-modal-cover-visual img',
+      detailedCoverImageSelector: '#track-modal-cover .track-modal-cover-visual > img',
       dialogSelector: '#track-modal',
       loadingRowSelector: '#track-modal .track-modal-loading-row',
       trackRowSelector: '#track-modal [data-track-row-path]',
@@ -39,7 +39,7 @@ function createTrackModalStub({ coverLoaded, noCover = false, coverCheckpoint = 
       },
       dialog: {
         locator(selector) {
-          assert.equal(selector, '#track-modal-cover .track-modal-cover-visual img');
+          assert.equal(selector, '#track-modal-cover .track-modal-cover-visual > img');
           return albumCoverImage;
         },
       },
@@ -385,4 +385,47 @@ test('TrackModalActions waits for the exact production zoom target and settled t
   assert.match(waitSource, /getAnimations/);
   assert.match(waitSource, /DOMMatrixReadOnly/);
   assert.doesNotMatch(waitSource, /waitForTimeout|setTimeout/);
+});
+
+
+test('detailed cover readiness uses the owning cover image across shared and reused cover wrappers', async () => {
+  const { TrackModal } = await import('../e2e/poms/trackModal.js');
+  const modal = Object.create(TrackModal.prototype);
+  assert.equal(modal.detailedCoverImageSelector, modal.coverImageSelector);
+  assert.equal(modal.detailedCoverImageSelector, '#track-modal-cover .track-modal-cover-visual > img');
+});
+
+
+test('cover readiness rejects loaded toolbar icons when the actual artwork is unloaded or collapsed', async () => {
+  const vm = require('node:vm');
+  const { TrackModal } = await import('../e2e/poms/trackModal.js');
+  const { TrackModalActions } = await import('../e2e/actions/trackModalActions.js');
+  const modal = Object.create(TrackModal.prototype);
+  const { trackModal } = createTrackModalStub({ coverLoaded: true });
+  trackModal.detailedCoverImageSelector = modal.detailedCoverImageSelector;
+  const calls = [];
+  trackModal.waitForPageCondition = async (callback, options, selectors) => calls.push({ callback, selectors });
+  await new TrackModalActions(trackModal).waitForLoadedSummary();
+  const { callback, selectors } = calls[1];
+  class Element {}
+  class Image extends Element {
+    constructor(complete, naturalWidth, size) { super(); Object.assign(this, { complete, naturalWidth, size }); }
+    getBoundingClientRect() { return { width: this.size, height: this.size }; }
+  }
+  const icons = Array.from({ length: 4 }, () => new Image(true, 24, 24));
+  const art = new Image(false, 0, 280);
+  const context = {
+    HTMLImageElement: Image, HTMLElement: Element,
+    document: { querySelector(selector) {
+      if (selector === '#track-modal-cover img') return icons[0];
+      if (selector === '#track-modal-cover .track-modal-cover-visual > img') return art;
+      return null;
+    } },
+  };
+  const predicate = vm.runInNewContext(`(${callback.toString()})`, context);
+  assert.equal(predicate(selectors), false, 'decoded toolbar icons cannot satisfy artwork readiness');
+  Object.assign(art, { complete: true, naturalWidth: 480, size: 0 });
+  assert.equal(predicate(selectors), false, 'decoded but collapsed artwork remains unready');
+  art.size = 280;
+  assert.equal(predicate(selectors), true, 'the actual decoded visible artwork satisfies readiness');
 });

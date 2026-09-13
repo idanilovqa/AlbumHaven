@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 
 const MINIMUM_PYTEST_CASES = 3037;
 const MINIMUM_PYTEST_MODULES = 147;
-const EXPECTED_COMPONENT_CASES = 57;
+const EXPECTED_COMPONENT_CASES = 58;
 
 function jobSource(workflow, jobName, nextJobName) {
   const start = workflow.indexOf(`  ${jobName}:`);

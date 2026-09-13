@@ -4235,3 +4235,41 @@ test('enabled source remains in search requests after category-restricted hydrat
   assert.equal(cleared.searchParams.get('q'), null);
   assert.deepEqual(cleared.searchParams.getAll('category'), ['main_library', 'hoard']);
 });
+
+
+for (const [mountedCount, loadedCategories, sidebarCategories = ['main_library', 'new_arrivals', 'hoard']] of [[10, ['main_library', 'new_arrivals', 'hoard']], [9, ['main_library', 'new_arrivals', 'hoard']], [10, ['main_library']], [10, ['main_library', 'new_arrivals', 'hoard'], ['main_library']]]) {
+  test(`manual family clear validates captured full-tree completeness and source scope (${mountedCount}/10, ${loadedCategories.length} sources, ${sidebarCategories.length} sidebar sources)`, () => {
+    const { context, calls } = createContext({ searchInputValue: '' });
+    const categories = ['main_library', 'new_arrivals', 'hoard'];
+    const primaryGroups = [{ artist: 'Family Member', albums: Array.from({ length: mountedCount }, (_, index) => ({ key: `member-${index}` })) }];
+    const familyGroups = [{ artist: 'Original Primary', albums: [{ key: 'original' }] }];
+    context.state.gallery.mainState = context.createGalleryMainState({ sources: { main_library: true, new_arrivals: true, hoard: true } });
+    context.state.view = {
+      surface: { active: 'albums' }, query: 'Original Primary', selected_artist: 'Family Member',
+      all_artists_active: false, gallery_scope: 'all', visible_library_categories: categories,
+      loaded_library_categories: loadedCategories, non_album_library_categories: loadedCategories,
+      related_filter_artists: [], primary_filter_active: false,
+      search_context: { selected_artist: 'Family Member', selected_artist_source: 'requested_artist' },
+      primary_artist_groups: primaryGroups, family_artist_groups: familyGroups,
+      artist_groups: [...primaryGroups, ...familyGroups], related_artists: ['Original Primary'],
+      artists_sidebar: [{ artist: 'Original Primary', count: 1 }, { artist: 'Family Member', count: mountedCount }],
+    };
+    context.state.ui.preSearchView = {
+      selected_artist: 'Original Primary', related_filter_artists: [], primary_filter_active: false,
+      sidebar_library_categories: sidebarCategories,
+      artists_sidebar: [{ artist: 'Original Primary', count: 1 }, { artist: 'Family Member', count: 10 }],
+      show_all_artists_sidebar_link: true, artist_count: 2,
+    };
+    context.state.ui.preSearchViewOrigin = 'interactive';
+    context.commitGallerySearchQuery('');
+    if (mountedCount === 10 && loadedCategories.length === 3 && sidebarCategories.length === 3) {
+      assert.deepEqual(calls.fetchAndRender, []);
+      assert.equal(context.state.view.primary_artist_groups, primaryGroups);
+      assert.equal(context.state.view.family_artist_groups, familyGroups);
+      assert.equal(context.state.view.selected_artist, 'Family Member');
+      assert.equal(context.state.view.query, '');
+    } else {
+      assert.equal(calls.fetchAndRender.length, 1);
+    }
+  });
+}

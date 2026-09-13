@@ -1322,6 +1322,14 @@ function applyViewPayload(payload, options = {}) {
   const nextView = (options.retainFullAlbums || viewShouldRetainFullRuntimeAlbums(normalizedNextView))
     ? normalizedNextView
     : compactRuntimeViewPayload(normalizedNextView);
+  // Sidebar counts retain the source scope of their own response when album-only
+  // hydration preserves the navigation tree.
+  const sidebarCategories = options.preserveSidebarState
+    ? previousView.sidebar_library_categories
+    : nextPayload?.sidebar_library_categories || nextPayload?.visible_library_categories;
+  nextView.sidebar_library_categories = Array.isArray(sidebarCategories)
+    ? [...sidebarCategories]
+    : null;
   // Loaded album coverage follows the response, independently of the browse URL.
   // Local merged patches carry this field forward; server replacements use their
   // own categories instead of inheriting coverage from the previous albums.

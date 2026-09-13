@@ -4,6 +4,7 @@ param(
     [Parameter(ParameterSetName = 'All')][switch]$All,
     [Parameter(ParameterSetName = 'Shard', Mandatory = $true)][string]$Shard,
     [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string]$Case,
+    [Parameter(ParameterSetName = 'All')][Parameter(ParameterSetName = 'Shard')][string[]]$Cases,
     [string]$FixtureDistribution,
     [string]$PythonPath = $env:PLAYWRIGHT_PYTHON
 )
@@ -35,34 +36,62 @@ if ($List) {
 
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
-if ($All -and -not [string]::IsNullOrWhiteSpace($Case)) {
-    throw '-All cannot be combined with -Case. Omit -All to resolve the exact case automatically.'
-}
-
-$selectedShards = @()
-if (-not [string]::IsNullOrWhiteSpace($Case)) {
-    $caseMatches = @(
-        foreach ($ownedShard in $contract.shards) {
-            foreach ($ownedCase in (Get-OwnedCases $ownedShard)) {
-                if ([string]$ownedCase.case -ceq $Case) {
-                    [pscustomobject]@{ Shard = $ownedShard; Case = $ownedCase }
+function Resolve-FunctionalSelection {
+    param([object]$Contract, [string]$Case, [string[]]$Cases, [string]$Shard,
+        [switch]$All, [switch]$CaseSpecified, [switch]$CasesSpecified)
+    if (($CaseSpecified -and $CasesSpecified) -or ($All -and ($CaseSpecified -or $CasesSpecified))) {
+        throw '-Case, -Cases, and -All are mutually exclusive.'
+    }
+    $requestedCases = @()
+    if ($CaseSpecified) { $requestedCases = @($Case) }
+    if ($CasesSpecified) { $requestedCases = @($Cases) }
+    if (($CaseSpecified -or $CasesSpecified) -and ($requestedCases.Count -eq 0 -or
+        @($requestedCases | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -gt 0)) {
+        throw 'Focused selection requires at least one nonempty exact approved title.'
+    }
+    $resolvedCases = @()
+    $resolvedShards = @()
+    foreach ($requestedCase in $requestedCases) {
+        if ($resolvedCases -ccontains $requestedCase) {
+            throw "Duplicate functional case: $requestedCase"
+        }
+        $caseMatches = @(
+            foreach ($ownedShard in $Contract.shards) {
+                foreach ($ownedCase in (Get-OwnedCases $ownedShard)) {
+                    if ([string]$ownedCase.case -ceq $requestedCase) {
+                        [pscustomobject]@{ Shard = $ownedShard; Case = $ownedCase }
+                    }
                 }
             }
+        )
+        if ($caseMatches.Count -ne 1) {
+            throw "Functional case must match one exact approved title; found $($caseMatches.Count): $requestedCase"
         }
-    )
-    if ($caseMatches.Count -ne 1) {
-        throw "Functional case must match one exact approved title; found $($caseMatches.Count): $Case"
+        $owner = $caseMatches[0].Shard
+        if (-not [string]::IsNullOrWhiteSpace($Shard) -and $owner.name -cne $Shard) {
+            throw "Functional case is owned by shard $($owner.name), not $Shard."
+        }
+        if ($resolvedShards.Count -gt 0 -and $resolvedShards[0].name -cne $owner.name) {
+            throw '-Cases must belong to one functional shard; run other shards separately.'
+        }
+        $resolvedCases += $requestedCase
+        $resolvedShards = @($owner)
     }
-    if (-not [string]::IsNullOrWhiteSpace($Shard) -and $caseMatches[0].Shard.name -cne $Shard) {
-        throw "Functional case is owned by shard $($caseMatches[0].Shard.name), not $Shard."
+    if ($resolvedCases.Count -eq 0) {
+        if (-not [string]::IsNullOrWhiteSpace($Shard)) {
+            $resolvedShards = @($Contract.shards | Where-Object { $_.name -ceq $Shard })
+            if ($resolvedShards.Count -ne 1) { throw "Unknown functional shard: $Shard" }
+        } else {
+            $resolvedShards = @($Contract.shards)
+        }
     }
-    $selectedShards = @($caseMatches[0].Shard)
-} elseif (-not [string]::IsNullOrWhiteSpace($Shard)) {
-    $selectedShards = @($contract.shards | Where-Object { $_.name -ceq $Shard })
-    if ($selectedShards.Count -ne 1) { throw "Unknown functional shard: $Shard" }
-} else {
-    $selectedShards = @($contract.shards)
+    return [pscustomobject]@{ Shards = @($resolvedShards); Cases = @($resolvedCases) }
 }
+
+$selection = Resolve-FunctionalSelection -Contract $contract -Case $Case -Cases $Cases -Shard $Shard -All:$All `
+    -CaseSpecified:($PSBoundParameters.ContainsKey('Case')) -CasesSpecified:($PSBoundParameters.ContainsKey('Cases'))
+$selectedShards = @($selection.Shards)
+$selectedCases = @($selection.Cases)
 
 function Resolve-Executable([string]$Requested, [string[]]$Fallbacks, [string]$Label) {
     if (-not [string]::IsNullOrWhiteSpace($Requested)) {
@@ -339,8 +368,8 @@ foreach ($selectedShard in $selectedShards) {
         if ($LASTEXITCODE -ne 0) { throw 'Functional fixture loading failed.' }
 
         $validatorArguments = @($validator, "--run-shard=$($selectedShard.name)")
-        if (-not [string]::IsNullOrWhiteSpace($Case)) {
-            $validatorArguments += "--run-case=$Case"
+        foreach ($selectedCase in $selectedCases) {
+            $validatorArguments += "--run-case=$selectedCase"
         }
         Write-Host "Running shard $($selectedShard.name) on ports $portBase/$($portBase + 2)..."
         & $node @validatorArguments

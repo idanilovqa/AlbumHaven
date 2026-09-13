@@ -12,6 +12,16 @@ function parseLoopTimeLabel(label) {
 }
 
 export class UtilityLoopsActions {
+  async expectPausedLoopWaveformPainted(entry, loopId) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    await expect(entry).toBeAttached();
+    const audio = card.audioByLoopId(loopId);
+    await expect(audio).toHaveJSProperty('paused', true);
+    await expect(card.ordinaryWaveformForEntry(entry)).toBeVisible();
+    await expect.poll(() => card.readOrdinaryWaveformMiddlePaint(entry)).toBeGreaterThan(0);
+    await expect(audio).toHaveJSProperty('paused', true);
+  }
+
   constructor(utilityLoopsTab) {
     this.utilityLoopsTab = utilityLoopsTab;
   }

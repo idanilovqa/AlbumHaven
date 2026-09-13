@@ -129,6 +129,9 @@ export class ArtistFamilyActions {
 
   async selectOnlyChipByName(name, options = {}) {
     await this.expand(options);
+    await this.artistFamily.chipByName(name).waitFor({
+      state: 'visible', timeout: options.timeout || 30000,
+    });
     const labels = (await this.readChipTexts())
       .map((text) => String(text || '').trim())
       .filter(Boolean);
@@ -148,6 +151,22 @@ export class ArtistFamilyActions {
       await target.click({ noWaitAfter: true, ...options });
     }
     await this.waitForChipActive(name, true, options);
+  }
+
+  async expectInterviewAlbumExcludedFromFamily({ primaryArtist, excludedArtist, excludedAlbum,
+    controls, query = '', galleryActions, navigationPanelActions, searchToolbarActions }) {
+    await navigationPanelActions.selectSidebarArtistByName(primaryArtist);
+    await navigationPanelActions.waitForSidebarSelection(primaryArtist);
+    await searchToolbarActions.waitForQuery(query);
+    await this.waitForViewReady(primaryArtist, { queryValue: query });
+    await this.selectAllChips();
+    for (const [artist, album] of controls) {
+      await galleryActions.scrollToAlbumUnderHeading(artist, album);
+      await galleryActions.waitForAlbumVisibleUnderHeading(artist, album);
+    }
+    await galleryActions.expectAlbumAbsentFromSettledGallery({
+      artist: excludedArtist, album: excludedAlbum, query,
+    });
   }
 
   async selectMemberAndVerifyAlbumScope({ primaryArtist, memberArtist, ownedAlbum, excludedAlbum,

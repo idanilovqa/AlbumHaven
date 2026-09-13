@@ -11,7 +11,7 @@ to the same functional-shard runner used by CI, and removes its state afterward.
   `postgresql-x64-18` service is available.
 - Python resolves from `PLAYWRIGHT_PYTHON` or `PATH` and has the application test
   dependencies installed.
-- The expanded `fixtures-v1.0.22` distribution is available at
+- The expanded `fixtures-v1.0.23` distribution is available at
   `..\album-haven-test-data\dist`. Its `profiles\functional-core` directory must
   contain `database`, `media`, and `loopback`.
 - PostgreSQL passwordless automation is configured in `PGPASSFILE`. When that
@@ -36,6 +36,21 @@ Run one exact case. The command resolves its owning shard automatically:
 ```powershell
 npm run test:e2e:functional:local -- -Case "FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries preserve selected card scale"
 ```
+
+Run several exact cases from one shard in the same isolated setup. Use a
+PowerShell array directly so each complete title remains one argument:
+
+```powershell
+$cases = @(
+  'FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename'
+  'FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split'
+)
+& ./scripts/run-functional-e2e-local.ps1 -Cases $cases
+```
+
+`-Case`, `-Cases`, and `-All` are mutually exclusive. Batch titles must be exact,
+unique, and owned by one shard. The existing runner retains each case's isolated
+application requirements, mutation ordering, one worker, and cleanup checks.
 
 During release repair work, reproduce and verify the failing exact case locally,
 then run the complete review-first CI pipeline. Use focused hosted runs only for

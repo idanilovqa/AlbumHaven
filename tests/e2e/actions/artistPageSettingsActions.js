@@ -62,6 +62,12 @@ export class ArtistPageSettingsActions {
       .filter(Boolean);
   }
 
+  async expectNonAlbumSectionAndTitles(section, titles) {
+    await expect(this.artistPageSettings.nonAlbumTrackSectionTitles).toHaveText([section]);
+    await expect(this.artistPageSettings.nonAlbumTrackRows).toHaveCount(titles.length);
+    expect((await this.readNonAlbumTrackTitles()).sort()).toEqual([...titles].sort());
+  }
+
   async expectNoNonAlbumTracks() {
     await this.open();
     await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();

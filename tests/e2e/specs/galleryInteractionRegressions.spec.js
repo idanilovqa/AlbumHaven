@@ -110,7 +110,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
   });
 });
 
-test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,searchToolbarActions,trackModalActions,globalPlayerActions,stepLogger})=>{
+test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,searchToolbarActions,trackModalActions,globalPlayerActions,playbackEvidence,stepLogger})=>{
   const fixture=await createGalleryRegressionFixture(PERFORMANCE_AUTH_USERNAME);
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
@@ -156,8 +156,14 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,s
     await stepLogger.step('Double-click plays without a word highlight; dragging still selects copyable text',async()=>{
       const row=ui.rows.filter({hasText:'Clean Signal'}).first();
       const title=ui.title(row);
+      const trackPath=await ui.readTrackPath(row);
+      expect(trackPath).not.toBe('');
+      const playbackMark=await playbackEvidence.playbackMark();
       await title.dblclick(); await expect(row).toHaveAttribute('data-track-playing','true');
       await globalPlayerActions.waitForPlaybackState({paused:false,minimumCurrentTime:0.1});
+      const evidence=await playbackEvidence.waitForTrackPlaybackEvidence({after:playbackMark,path:trackPath});
+      expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+      expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
       await expect.poll(()=>ui.selection()).toBe('');
       await page.mouse.move(1,1); await expect(ui.play(row)).toHaveCSS('opacity','1');
       await title.dblclick(); await expect(row).toHaveAttribute('data-track-playing','true');

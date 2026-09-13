@@ -35,6 +35,11 @@ export class GalleryRegressions {
   cover(card) { return card.locator('img').first(); }
   yearWithin(card) { return card.locator('.gallery-card__hover-year'); }
   numberPlay(row) { return row.locator('.album-track-table__number-play'); }
+  async readTrackPath(row) {
+    const path = String(await row.getAttribute('data-track-row-path') || '');
+    if (!path) throw new Error('The selected production track row has no playback path.');
+    return path;
+  }
   title(row) { return row.locator('.album-track-table__title'); }
   number(row) { return row.locator('.album-track-table__number'); }
   play(row) { return row.locator('.album-track-table__play'); }

@@ -738,7 +738,7 @@
     contain-intrinsic-size: 334px 334px;
   }
   /* Fit the square into the available track pane height, including short windows. */
-  .track-modal-cover-shell { width: min(100%, 100cqh); }
+  .track-modal-cover-shell { width: auto; height: 100%; max-width: 100%; aspect-ratio: 1; }
 }
 .track-modal-main { min-height: 0; overflow: hidden; }
 .track-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }

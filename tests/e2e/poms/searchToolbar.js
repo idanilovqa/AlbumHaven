@@ -1,6 +1,6 @@
 import { BasePage } from './basePage.js';
 import {
-  ProductionViewObserver,
+  getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
   readCanonicalArtistGroups,
@@ -36,6 +36,23 @@ export function resolveCurrentCanonicalView(payload = {}, runtimeView = null) {
   };
 }
 
+export function resolveCurrentCanonicalSidebar(payload = {}, runtimeView = null) {
+  const names = Array.isArray(runtimeView?.sidebarArtists)
+    ? runtimeView.sidebarArtists
+    : (Array.isArray(payload?.artists_sidebar) ? payload.artists_sidebar : [])
+      .map(artist => artist?.artist_display || artist?.artist);
+  return names.map(artist => String(artist || '').trim()).filter(Boolean);
+}
+
+export function hasAppliedCanonicalSidebar(canonicalArtists, attachedArtists, options) {
+  const normalize = artists => artists.map(artist => String(artist || '').trim()).filter(Boolean);
+  const canonical = normalize(canonicalArtists);
+  const attached = normalize(attachedArtists);
+  return canonical.length === attached.length
+    && canonical.every((artist, index) => artist === attached[index])
+    && hasAppliedCanonicalArtistSurface(canonical, attached, options);
+}
+
 export class SearchToolbar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
@@ -46,7 +63,7 @@ export class SearchToolbar extends BasePage {
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });
     this.recentSearchOptions = this.recentSearchPopover.getByRole('option');
     this.mainContent = page.getByRole('main');
-    this.productionViewObserver = new ProductionViewObserver(page);
+    this.productionViewObserver = getProductionViewObserver(page);
   }
 
   get formSelector() {
@@ -752,6 +769,9 @@ export class SearchToolbar extends BasePage {
           query: String(state?.view?.query || '').trim(),
           surface: String(state?.view?.surface?.active || '').trim().toLowerCase(),
           artists,
+          sidebarArtists: (Array.isArray(state.view.artists_sidebar) ? state.view.artists_sidebar : [])
+            .map(artist => String(artist?.artist_display || artist?.artist || '').trim())
+            .filter(Boolean),
           activeViewRequestId: Number(state?.ui?.activeViewRequestId || 0),
           activeViewRequestUrl: String(state?.ui?.activeViewRequestUrl || ''),
           busy: Boolean(state?.busy),
@@ -781,9 +801,7 @@ export class SearchToolbar extends BasePage {
         .map((artist) => String(artist || '').trim())
         .filter(Boolean);
       const canonicalSurface = canonicalView.surface;
-      const canonicalSidebarArtists = (Array.isArray(payload?.artists_sidebar) ? payload.artists_sidebar : [])
-        .map((artist) => String(artist?.artist_display || artist?.artist || '').trim())
-        .filter(Boolean);
+      const canonicalSidebarArtists = resolveCurrentCanonicalSidebar(payload, runtimeView);
       const attachedSidebarArtists = (await this.page
         .locator(this.sidebarArtistNameSelector)
         .allTextContents())
@@ -820,7 +838,7 @@ export class SearchToolbar extends BasePage {
         || observationChanged
         || domChanged;
       const canonicalApplied = canonicalSurface === 'home'
-        ? hasAppliedCanonicalArtistSurface(
+        ? hasAppliedCanonicalSidebar(
           canonicalSidebarArtists,
           finalAttachedSidebarArtists,
           { loaderVisible, payloadPresent: payload !== null, settledEmpty },

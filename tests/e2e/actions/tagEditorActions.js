@@ -310,6 +310,7 @@ export class TagEditorActions {
     ]);
     await expect(this.tagEditor.footer).toContainText(
       /^\s*Start at\s*Auto-number\s*Cancel\s*Apply\s*$/u,
+      { useInnerText: true },
     );
     await expect(this.tagEditor.autoNumberControls).toContainText(
       /^\s*Start at\s*Auto-number\s*$/u,

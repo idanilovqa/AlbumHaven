@@ -1362,3 +1362,22 @@ test('replacement evidence follows the promoted open when an earlier same-track 
     promotionIndex: 3,
   });
 });
+
+
+test('new gallery and cold saved-loop playback cases own their exact sample evidence', () => {
+  const gallery = readRepoFile('tests/e2e/specs/galleryInteractionRegressions.spec.js');
+  const loops = readRepoFile('tests/e2e/specs/loops.functional.spec.js');
+  const cases = [
+    gallery.split('test(TABLE_CASE', 2)[1].split('test(WARNING_CASE', 1)[0],
+    loops.split("test('FTC-UTIL-LOOPS-028", 2)[1].split('test(`${CASE_ID}', 1)[0],
+  ];
+  for (const source of cases) {
+    assert.match(source, /async\s*\(\s*\{[^}]*playbackEvidence/s);
+    assert.match(source, /playbackEvidence\.playbackMark\(/);
+    assert.match(source, /waitForTrackPlaybackEvidence\(\{[^}]*after:[^}]*path:/s);
+    assert.match(source, /nonZeroSamples\)\.toBeGreaterThan\(0\)/);
+    assert.match(source, /renderedFrameDelta\)\.toBeGreaterThan\(0\)/);
+  }
+  assert.match(cases[0], /const row=ui\.rows\.filter\(\{hasText:'Clean Signal'\}\)\.first\(\);[\s\S]*?const trackPath=await ui\.readTrackPath\(row\);/);
+  assert.match(cases[1], /path: track\.path/);
+});

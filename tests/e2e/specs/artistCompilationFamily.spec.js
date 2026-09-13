@@ -20,14 +20,16 @@ const SOUNDTRACK_GUEST = 'Soundtrack Signal Guest';
 const SOUNDTRACK_OWNER = 'Sia / Soundtrack Signal Guest';
 const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
-test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track credits without guest album leakage', { tag: '@area:gallery-search' }, async ({
-  artistFamilyActions, galleryActions, navigationPanelActions, page,
+test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries', { tag: '@area:gallery-search' }, async ({
+  artistFamilyActions, artistPageSettingsActions, galleryActions, navigationPanelActions, page,
   searchToolbarActions, stepLogger, tagEditorActions, trackModalActions,
 }) => {
   const filenames = ['01 - Track 1.mp3', '02 - Track 2.mp3', '03 - Track 3.mp3'];
   const editedArtists = [CONTROL_OWNER, `${CONTROL_LEAD}, ${CONTROL_PARTNER}`, 'Independent Credit Voice'];
   let originalCredits = [];
   let saveMayHaveStarted = false;
+  let exceptionSaveMayHaveStarted = false;
+  const interviewTitles = Array.from({ length: 18 }, (_, index) => `${CONTROL_LEAD_SOLO} Track ${index + 1}`);
   const ownedAlbum = { artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026', searchToolbarActions, trackModalActions };
   const partnerScope = { primaryArtist: CONTROL_LEAD, memberArtist: CONTROL_PARTNER,
     ownedAlbum: CONTROL_PARTNER_SOLO, excludedAlbum: CONTROL_LEAD_SOLO, galleryActions, navigationPanelActions };
@@ -68,7 +70,82 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track cr
       await searchToolbarActions.waitForQuery(CONTROL_PARTNER);
       await artistFamilyActions.selectMemberAndVerifyAlbumScope({ ...partnerScope, query: CONTROL_PARTNER });
     });
+    await stepLogger.step('Prove the owned album contributes to a genuine related-artist family before marking it Interview', async () => {
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await navigationPanelActions.selectSidebarArtistByName(CONTROL_PARTNER);
+      await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
+      await searchToolbarActions.waitForQuery('');
+      await artistFamilyActions.waitForViewReady(CONTROL_PARTNER);
+      await artistFamilyActions.selectOnlyChipByName(CONTROL_LEAD);
+      await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_LEAD, CONTROL_LEAD_SOLO);
+      await galleryActions.openSearchedAlbumDetails(ownedAlbum);
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+      await tagEditorActions.selectAllTracks();
+      await tagEditorActions.setException('Interview');
+      exceptionSaveMayHaveStarted = true;
+      await tagEditorActions.applyAndWaitForSavedFiles();
+      await trackModalActions.closeIfOpen();
+    });
+    await stepLogger.step('Exclude Interview albums from the nonempty root gallery', async () => {
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await navigationPanelActions.clickAllArtists({ expectArtistQueryCleared: true });
+      await galleryActions.waitForGalleryReady();
+      await galleryActions.scrollToAlbumUnderHeading(CONTROL_PARTNER, CONTROL_PARTNER_SOLO);
+      await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_PARTNER, CONTROL_PARTNER_SOLO);
+      await galleryActions.expectAlbumAbsentFromSettledGallery({
+        artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, query: '',
+      });
+    });
+    await stepLogger.step('Exclude Interview albums from the settled family across reload and retained artist search', async () => {
+      await artistFamilyActions.expectInterviewAlbumExcludedFromFamily({
+        primaryArtist: CONTROL_PARTNER, excludedArtist: CONTROL_LEAD, excludedAlbum: CONTROL_LEAD_SOLO,
+        controls: [[CONTROL_PARTNER, CONTROL_PARTNER_SOLO], [CONTROL_PARTNER, CONTROL_SHARED_ALBUM]],
+        galleryActions, navigationPanelActions, searchToolbarActions,
+      });
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await artistFamilyActions.expectInterviewAlbumExcludedFromFamily({
+        primaryArtist: CONTROL_PARTNER, excludedArtist: CONTROL_LEAD, excludedAlbum: CONTROL_LEAD_SOLO,
+        controls: [[CONTROL_PARTNER, CONTROL_PARTNER_SOLO], [CONTROL_PARTNER, CONTROL_SHARED_ALBUM]],
+        galleryActions, navigationPanelActions, searchToolbarActions,
+      });
+      await searchToolbarActions.search(CONTROL_LEAD, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(CONTROL_LEAD);
+      await artistFamilyActions.expectInterviewAlbumExcludedFromFamily({
+        primaryArtist: CONTROL_PARTNER, excludedArtist: CONTROL_LEAD, excludedAlbum: CONTROL_LEAD_SOLO,
+        controls: [[CONTROL_PARTNER, CONTROL_SHARED_ALBUM]], query: CONTROL_LEAD,
+        galleryActions, navigationPanelActions, searchToolbarActions,
+      });
+    });
+    await stepLogger.step('Retain all eighteen Interview tracks in Loose Tracks and restore their exceptions through the editor', async () => {
+      await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(CONTROL_LEAD)}`);
+      await galleryActions.waitForGalleryReady();
+      await navigationPanelActions.waitForSidebarSelection(CONTROL_LEAD);
+      await artistPageSettingsActions.openNonAlbumTracks(18);
+      await artistPageSettingsActions.expectNonAlbumSectionAndTitles('Interviews', interviewTitles);
+      await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+      await tagEditorActions.selectAllTracks();
+      expect((await tagEditorActions.readSummary()).exceptionType).toBe('Interview');
+      await tagEditorActions.clearException();
+      await tagEditorActions.applyAndWaitForSavedFiles();
+      exceptionSaveMayHaveStarted = false;
+    });
   } finally {
+    if (exceptionSaveMayHaveStarted) {
+      await stepLogger.step('Restore any committed Interview exceptions before restoring the owned credits', async () => {
+        await galleryActions.openOwnedAlbumOrLooseTracksInTagEditor({
+          ...ownedAlbum, artistPageSettingsActions, tagEditorActions, expectedTrackCount: 18,
+        });
+        await tagEditorActions.selectAllTracks();
+        await tagEditorActions.clearException();
+        await tagEditorActions.applyAndWaitForSavedFiles();
+        exceptionSaveMayHaveStarted = false;
+      });
+    }
     if (saveMayHaveStarted) {
       await stepLogger.step('Restore and verify all three owned Artist values through the UI', async () => {
         await galleryActions.openSearchedAlbumDetails(ownedAlbum);
@@ -87,6 +164,14 @@ test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track cr
         await trackModalActions.waitForInteractiveSummary();
         expect(await trackModalActions.readTrackCredits(3)).toEqual(originalCredits);
         await trackModalActions.close();
+        await searchToolbarActions.clearSearch({ submitWithEnter: true });
+        await searchToolbarActions.waitForQuery('');
+        await navigationPanelActions.selectSidebarArtistByName(CONTROL_PARTNER);
+        await navigationPanelActions.waitForSidebarSelection(CONTROL_PARTNER);
+        await searchToolbarActions.waitForQuery('');
+        await artistFamilyActions.waitForViewReady(CONTROL_PARTNER);
+        await artistFamilyActions.selectOnlyChipByName(CONTROL_LEAD);
+        await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_LEAD, CONTROL_LEAD_SOLO);
       });
     }
   }

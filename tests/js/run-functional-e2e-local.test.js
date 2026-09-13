@@ -70,7 +70,7 @@ test('local functional runner owns safe setup, exact delegation, and teardown', 
   assert.equal(fs.existsSync(runnerPath), true, 'Missing scripts/run-functional-e2e-local.ps1');
   const source = fs.readFileSync(runnerPath, 'utf8');
 
-  assert.match(source, /fixtures-v1\.0\.22/);
+  assert.match(source, /fixtures-v1\.0\.23/);
   assert.match(source, /functional-core/);
   assert.match(source, /manifest\.json/);
   assert.match(source, /Import-Module\s+Microsoft\.PowerShell\.Utility/);
@@ -169,7 +169,7 @@ test('npm aliases and local guide expose only the supported runner', () => {
   assert.match(guide, /npm run test:e2e:functional:local -- -All/);
   assert.match(guide, /localhost/);
   assert.match(guide, /PGPASSFILE/);
-  assert.match(guide, /fixtures-v1\.0\.22/);
+  assert.match(guide, /fixtures-v1\.0\.23/);
   assert.match(guide, /Do not[^.]*run-playwright\.cjs/is);
 });
 
@@ -261,4 +261,59 @@ try {
   assert.equal(observed.Selected, observed.Expected, 'an occupied provider port must reject the entire pair');
   assert.equal(observed.Requests, 2);
   assert.equal(observed.Rebound, 3, 'both accepted probes and the rejected partial probe must be disposed');
+});
+
+
+test('focused batch selection resolves exact same-shard titles and rejects ambiguous or conflicting requests', () => {
+  const source = fs.readFileSync(runnerPath, 'utf8');
+  const helpers = source.slice(source.indexOf('function Get-OwnedCases'), source.indexOf('if ($List)'))
+    + source.slice(source.indexOf('function Resolve-FunctionalSelection'), source.indexOf('$selection = Resolve-FunctionalSelection'));
+  const script = `
+$ErrorActionPreference = 'Stop'
+${helpers}
+$contract = [pscustomobject]@{ shards = @(
+  [pscustomobject]@{ name = 'gallery'; invocations = @([pscustomobject]@{ cases = @(
+    [pscustomobject]@{ case = 'FTC-A exact alpha' }, [pscustomobject]@{ case = 'FTC-B exact beta' }
+  ) }) },
+  [pscustomobject]@{ name = 'playback'; invocations = @([pscustomobject]@{ cases = @(
+    [pscustomobject]@{ case = 'FTC-C exact gamma' }
+  ) }) }
+) }
+$requests = @(
+  @{ Cases = @('FTC-A exact alpha', 'FTC-B exact beta'); CasesSpecified = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; Shard = 'gallery' },
+  @{ Cases = @('FTC-A exact alpha', 'FTC-C exact gamma'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; Shard = 'playback' },
+  @{ Cases = @('FTC-A'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha', 'FTC-A exact alpha'); CasesSpecified = $true },
+  @{ Cases = @(''); CasesSpecified = $true },
+  @{ Cases = @(); CasesSpecified = $true },
+  @{ Case = ''; CaseSpecified = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true; Cases = @('FTC-B exact beta'); CasesSpecified = $true },
+  @{ Cases = @('FTC-A exact alpha'); CasesSpecified = $true; All = $true },
+  @{ Case = 'FTC-A exact alpha'; CaseSpecified = $true; All = $true },
+  @{ All = $true }
+)
+$results = foreach ($request in $requests) {
+  try {
+    $result = Resolve-FunctionalSelection -Contract $contract @request
+    [pscustomobject]@{ ok = $true; cases = @($result.Cases); shards = @($result.Shards | ForEach-Object { $_.name }) }
+  } catch { [pscustomobject]@{ ok = $false; error = $_.Exception.Message } }
+}
+ConvertTo-Json -InputObject @($results) -Depth 6 -Compress
+`;
+  const result = spawnSync(powerShellExecutable, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const results = JSON.parse(result.stdout.trim());
+  assert.deepEqual(results[0], { ok: true, cases: ['FTC-A exact alpha', 'FTC-B exact beta'], shards: ['gallery'] });
+  assert.deepEqual(results[1], { ok: true, cases: ['FTC-A exact alpha'], shards: ['gallery'] });
+  assert.equal(results[2].ok, true);
+  assert.equal(results.length, 14);
+  for (let index = 3; index <= 12; index += 1) {
+    assert.equal(results[index].ok, false, `request ${index} must reject before setup`);
+  }
+  assert.deepEqual(results[13], { ok: true, cases: [], shards: ['gallery', 'playback'] });
+  assert.match(source, /foreach \(\$selectedCase in \$selectedCases\)\s*\{\s*\$validatorArguments \+= "--run-case=\$selectedCase"/);
 });

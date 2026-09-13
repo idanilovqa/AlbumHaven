@@ -3,7 +3,7 @@ import { AlbumCard } from './albumCard.js';
 import { BasePage } from './basePage.js';
 import { authenticatedPageGet } from '../helpers/authenticatedPageRequest.js';
 import {
-  ProductionViewObserver,
+  getProductionViewObserver,
   hasAppliedCanonicalArtistSurface,
   hasStableDomEvidence,
   readCanonicalAlbumTargetEvidence,
@@ -153,7 +153,7 @@ export class GalleryPage extends BasePage {
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
     this.coverReadyStates = page.locator(this.coverReadyStateSelector);
     this.galleryOptionsButton = page.locator('[data-gallery-bar-action="album-types"]');
-    this.productionViewObserver = new ProductionViewObserver(page);
+    this.productionViewObserver = getProductionViewObserver(page);
   }
 
   async hasVisibleAlbum(albumName) {

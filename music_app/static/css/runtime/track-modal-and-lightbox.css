@@ -731,6 +731,15 @@
   overflow: hidden;
 }
 .track-modal-cover { align-self: start; min-height: 0; }
+@media (min-width: 721px) {
+  .track-modal-cover {
+    align-self: stretch;
+    container-type: size;
+    contain-intrinsic-size: 334px 334px;
+  }
+  /* Fit the square into the available track pane height, including short windows. */
+  .track-modal-cover-shell { width: min(100%, 100cqh); }
+}
 .track-modal-main { min-height: 0; overflow: hidden; }
 .track-modal-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"]) {

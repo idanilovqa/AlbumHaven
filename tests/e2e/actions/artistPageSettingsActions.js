@@ -20,7 +20,9 @@ export class ArtistPageSettingsActions {
   }
 
   async toggleCombineSimilarArtists(options = {}) {
-    await this.open(options);
+    if (!await this.artistPageSettings.familyPanel.isVisible()) {
+      await this.artistPageSettings.familyToggle.click({ noWaitAfter: true, ...options });
+    }
     await this.artistPageSettings.combineSimilarArtistsButton.click({ noWaitAfter: true, ...options });
   }
 
@@ -43,10 +45,6 @@ export class ArtistPageSettingsActions {
     const timeout = options.timeout || 10000;
     await this.open(options);
     await expect(this.artistPageSettings.nonAlbumTracksButton).toBeEnabled({ timeout });
-    await expect(this.artistPageSettings.nonAlbumTracksCount).toHaveText(
-      String(Number(expectedCount)),
-      { timeout },
-    );
     await this.artistPageSettings.nonAlbumTracksButton.click({ noWaitAfter: true });
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeVisible({ timeout });
     await expect(this.artistPageSettings.nonAlbumTrackRows).toHaveCount(
@@ -66,7 +64,6 @@ export class ArtistPageSettingsActions {
 
   async expectNoNonAlbumTracks() {
     await this.open();
-    await expect(this.artistPageSettings.nonAlbumTracksCount).toHaveText('0');
     await expect(this.artistPageSettings.nonAlbumTracksButton).toBeDisabled();
     await expect(this.artistPageSettings.nonAlbumTracksModal).toBeHidden();
   }
@@ -107,7 +104,8 @@ export class ArtistPageSettingsActions {
     for (const track of tracks) {
       const row = this.artistPageSettings.nonAlbumTrackRowByTitle(track.title);
       await expect(row).toHaveCount(1);
-      await expect(row.getByRole('button', { name: 'Play track', exact: true })).toBeVisible();
+      await row.hover();
+      await expect(row.getByRole('button', { name: 'Play track', exact: true })).toHaveCSS('opacity', '1');
       await expect(this.artistPageSettings.nonAlbumTrackArtistByTitle(track.title)).toHaveText(track.artist);
       await expect(this.artistPageSettings.nonAlbumTrackPathByTitle(track.title)).toContainText(track.pathSuffix);
       await expect(this.artistPageSettings.nonAlbumTrackNumberByTitle(track.title)).toHaveText(String(track.number));

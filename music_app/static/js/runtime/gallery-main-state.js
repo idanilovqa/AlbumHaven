@@ -132,6 +132,18 @@ function applyGalleryClientTransition({ state: current, action } = {}) {
   return reduceGalleryMainState(current, action);
 }
 
+function activeGallerySourceCategories(mainState) {
+  return ['main_library', 'new_arrivals', 'hoard'].filter(source => mainState.sources?.[source] !== false);
+}
+
+function gallerySourceScopesEqual(left = [], right = []) {
+  return left.length === right.length && left.every(source => right.includes(source));
+}
+
+function withActiveGallerySources(view, mainState) {
+  return mainState ? { ...view, gallery_scope: 'all', visible_library_categories: activeGallerySourceCategories(mainState) } : view;
+}
+
 function resolveGallerySourceHydrationRequest({ currentCategories = [], nextState, action } = {}) {
   if (action?.type !== 'toggle-source' || !nextState?.sources?.[action.source]) return null;
   const available = new Set(Array.isArray(currentCategories) ? currentCategories : []);
@@ -192,10 +204,29 @@ function resolveGalleryBarContext(config = {}) {
     : summaryContext;
 }
 
-function resolveGallerySummaryTotals(view, mountedTotals) {
-  if (!view.initial_view_partial || view.selected_artist || view.query) return mountedTotals;
+function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
+  if (view.selected_artist) return mountedTotals;
+  let rootTotals = mountedTotals;
+  if (Array.isArray(groups)) {
+    const keys = new Set();
+    let unkeyedCount = 0;
+    groups.forEach(group => (group.albums || []).forEach(album => {
+      const key = String(album.key || '').trim();
+      if (key) keys.add(key);
+      else unkeyedCount += 1;
+    }));
+    rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
+  }
+  if (!view.initial_view_partial || view.query) return rootTotals;
+  if (filterState && (
+    filterState.familySelectionExplicit || filterState.familyArtists?.length
+    || filterState.albumTypes?.length !== 2
+    || !filterState.albumTypes.includes('studio') || !filterState.albumTypes.includes('ep')
+    || !gallerySourceScopesEqual(activeGallerySourceCategories(filterState),
+      view.loaded_library_categories || view.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'])
+  )) return rootTotals;
   return {
-    artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : mountedTotals.artistCount,
-    albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : mountedTotals.albumCount,
+    artistCount: Number.isFinite(Number(view.artist_count)) ? Number(view.artist_count) : rootTotals.artistCount,
+    albumCount: Number.isFinite(Number(view.album_count)) ? Number(view.album_count) : rootTotals.albumCount,
   };
 }

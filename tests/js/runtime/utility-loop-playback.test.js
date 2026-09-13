@@ -2009,6 +2009,85 @@ test('loop progress updates preserve the play button content until playback chan
   assert.equal(text, '▶');
 });
 
+test('five paused saved-loop rows all receive waveforms through the bounded shared peak cache', async () => {
+  const ids = ['first', 'second', 'third', 'fourth', 'fifth'];
+  const canvases = new Map(ids.map(id => [id, {
+    hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
+  }]));
+  const audios = ids.map(id => ({
+    paused: true, duration: 20, currentTime: 0,
+    getAttribute: () => id,
+  }));
+  const requests = [];
+  const drawn = new Set();
+  const context = loadHelper({
+    state: { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } },
+    document: {
+      querySelectorAll: () => audios,
+      querySelector: selector => canvases.get(selector.match(/="([^"]+)"/)?.[1]) || null,
+    },
+    fetch: (url, { signal }) => new Promise((resolve, reject) => {
+      const request = { id: new URL(url, 'http://localhost').searchParams.get('loop_id'), signal, resolve, settled: false };
+      requests.push(request);
+      signal.addEventListener('abort', () => {
+        request.settled = true;
+        reject(new Error('aborted'));
+      }, { once: true });
+    }),
+    drawCombinedLoopWaveform: canvas => drawn.add(ids.find(id => canvases.get(id) === canvas)),
+  });
+
+  // The real group path refreshes every mounted row before any network response.
+  // Resolve successive admitted requests without playback or another UI refresh.
+  context.refreshUtilityLoopStereoWaveforms();
+  for (let wave = 0; wave < ids.length; wave += 1) {
+    for (const request of requests.filter(item => !item.settled)) {
+      request.settled = true;
+      request.resolve({ ok: true, json: async () => ({
+        sampleCount: 280, left: Array(280).fill(0.2), right: Array(280).fill(0.4),
+      }) });
+    }
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.deepEqual([...drawn].sort(), [...ids].sort(), 'paused rows must not require interaction to recover evicted loads');
+  assert.ok([...canvases.values()].every(canvas => !canvas.hidden));
+  assert.equal(vm.runInContext('SAVED_LOOP_WAVEFORM_CACHE_LIMIT', context), 4);
+  assert.ok(vm.runInContext('savedLoopWaveformPeakCache.size', context) <= 4);
+});
+
+for (const discarded of ['detached', 'mode-off']) {
+  test(`queued saved-loop waveform work is discarded when ${discarded}`, async () => {
+    const ids = ['active', 'queued'];
+    const canvases = new Map(ids.map(id => [id, {
+      hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } },
+    }]));
+    const audios = ids.map(id => ({ duration: 20, currentTime: 0, getAttribute: () => id }));
+    const state = { player: { appearance: { seekbarMode: 'waveform' } }, utility: { loopEditors: {} } };
+    const requests = [];
+    const context = loadHelper({ state,
+      document: {
+        querySelectorAll: () => audios,
+        querySelector: selector => canvases.get(selector.match(/="([^"]+)"/)?.[1]) || null,
+      },
+      fetch: (url) => new Promise(resolve => requests.push({ url, resolve })),
+      drawCombinedLoopWaveform() {},
+    });
+    context.refreshUtilityLoopStereoWaveforms();
+    assert.equal(requests.length, 1, 'only one background request is admitted');
+    if (discarded === 'detached') canvases.get('queued').isConnected = false;
+    else state.player.appearance.seekbarMode = 'default';
+    context.refreshUtilityLoopStereoWaveforms();
+    requests[0].resolve({ ok: true, json: async () => ({
+      sampleCount: 280, left: Array(280).fill(0.2), right: Array(280).fill(0.4),
+    }) });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(requests.length, 1, 'discarded work must not start after the active load');
+    assert.equal(canvases.get('queued').hidden, true);
+    assert.equal(vm.runInContext('utilityLoopStereoQueue.length', context), 0);
+    assert.equal(vm.runInContext('utilityLoopStereoLoadActive', context), false);
+  });
+}
+
 for (const failure of ['null', 'reject']) {
   test(`saved loop retains regular seeking and retries a ${failure} waveform failure after backoff`, async () => {
     let waveformMode = false;

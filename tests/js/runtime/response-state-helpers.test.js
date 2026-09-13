@@ -2441,6 +2441,7 @@ function loadHelpers() {
     visible_library_categories: ['main_library', 'new_arrivals'],
     selected_artist: 'Broadcast',
     artist_groups: [{ artist: 'Broadcast', albums: [{ key: 'hydrated' }] }],
+    non_album_tracks: [{ path: '/fixture/main/loose.mp3', title: 'Loose' }],
   }, {
     trackSidebarReveal: false,
     preserveGalleryBrowseLocationState: true,
@@ -2449,6 +2450,14 @@ function loadHelpers() {
   assert.equal(hydrated.gallery_scope, 'new_arrivals');
   assert.deepEqual(JSON.parse(JSON.stringify(hydrated.visible_library_categories)), ['new_arrivals']);
   assert.equal(hydrated.artist_groups[0].albums[0].key, 'hydrated');
+  assert.deepEqual(Array.from(hydrated.non_album_library_categories), ['main_library', 'new_arrivals']);
+  const compacted = context.compactRuntimeViewPayload(hydrated);
+  assert.deepEqual(Array.from(compacted.non_album_library_categories), ['main_library', 'new_arrivals']);
+  const scoped = context.applyViewPayload({
+    ...hydrated, non_album_library_categories: undefined, loaded_library_categories: undefined,
+    visible_library_categories: ['new_arrivals'], non_album_tracks: [],
+  }, { preserveGalleryBrowseLocationState: true });
+  assert.deepEqual(Array.from(scoped.non_album_library_categories), ['new_arrivals']);
 }
 
 {

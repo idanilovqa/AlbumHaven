@@ -70,7 +70,7 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
       // parity-check: allow-read-only-measurement-evaluate -- compare the real ActionButton hover border and outline
       await expect.poll(async () => editAction.evaluate((button) => {
         const style = getComputedStyle(button);
-        return style.outlineWidth === '2px'
+        return style.outlineWidth === '1px'
           && style.outlineColor === style.borderColor
           && style.outlineColor !== 'rgba(0, 0, 0, 0)';
       })).toBe(true);

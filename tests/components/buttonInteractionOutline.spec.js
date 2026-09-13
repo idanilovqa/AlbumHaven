@@ -114,8 +114,8 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await expect(save).toBeDisabled();
   await reset.hover();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
-  await expect(reset).toHaveCSS('outline-offset', '2px');
+  await expect(reset).toHaveCSS('outline-width', '1px');
+  await expect(reset).toHaveCSS('outline-offset', '1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
   await expect(reset).toHaveCSS('border-color', outlineColor);
 
@@ -123,7 +123,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await page.keyboard.press('Tab');
   await expect(reset).toBeFocused();
   await expect(reset).toHaveCSS('outline-style', 'solid');
-  await expect(reset).toHaveCSS('outline-width', '2px');
+  await expect(reset).toHaveCSS('outline-width', '1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
 
   await cancel.hover();

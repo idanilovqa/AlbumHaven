@@ -108,13 +108,9 @@ test('gallery action shapes production status telemetry and reads exact card cre
       };
     },
     albumCard: {
-      subtitleByAlbumName(albumName) {
+      async readVisibleMetadataByAlbumName(albumName) {
         assert.equal(albumName, 'Cover 2 Cover');
-        return { async textContent() { return 'Morse, Portnoy & George · 2012'; } };
-      },
-      yearByAlbumName(albumName) {
-        assert.equal(albumName, 'Cover 2 Cover');
-        return { async textContent() { return '2012'; } };
+        return { artist: 'Morse, Portnoy & George', year: '2012' };
       },
     },
   });
@@ -127,7 +123,7 @@ test('gallery action shapes production status telemetry and reads exact card cre
   });
   assert.equal(
     await actions.readAlbumCreditByName('Cover 2 Cover'),
-    'Morse, Portnoy & George · 2012',
+    'Morse, Portnoy & George',
   );
   assert.equal(await actions.readAlbumYearByName('Cover 2 Cover'), '2012');
   assert.deepEqual(await actions.readBrowseTelemetry(), {
@@ -450,4 +446,15 @@ test('Morse helper requires exactly two titles, exact years, and exact raw subti
     async readAlbumCreditByName(album) { return observed[album].credit; },
     async readAlbumYearByName(album) { return observed[album].year; },
   });
+});
+
+
+test('visible album metadata separates the final year while preserving exact artist identities', async () => {
+  const { parseVisibleAlbumMetadata } = await import(moduleUrl('tests/e2e/helpers/visibleAlbumMetadata.js'));
+  assert.deepEqual(parseVisibleAlbumMetadata('Signal  Family Lead · 2011'), { artist: 'Signal  Family Lead', year: '2011' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Artist · Guest · 2004'), { artist: 'Artist · Guest', year: '2004' });
+  assert.deepEqual(parseVisibleAlbumMetadata('東京事変', '2007'), { artist: '東京事変', year: '2007' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Earth · Wind'), { artist: 'Earth · Wind', year: '' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Ancient Artist · 99'), { artist: 'Ancient Artist', year: '99' });
+  assert.deepEqual(parseVisibleAlbumMetadata('Undated Artist'), { artist: 'Undated Artist', year: '' });
 });

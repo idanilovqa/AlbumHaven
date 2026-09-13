@@ -1,4 +1,31 @@
 const utilityLoopStereoLoads = new WeakMap();
+const utilityLoopStereoQueue = [];
+let utilityLoopStereoLoadActive = false;
+
+function drainUtilityLoopStereoQueue() {
+  const eligible = job => job.canvas.isConnected
+    && state.player.appearance?.seekbarMode === 'waveform'
+    && !state.utility.loopEditors?.[job.loopId]?.active
+    && document.querySelector(`[data-loop-stereo-waveform="${cssEscape(job.loopId)}"]`) === job.canvas;
+  for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
+    const job = utilityLoopStereoQueue[index];
+    if (eligible(job)) continue;
+    utilityLoopStereoQueue.splice(index, 1);
+    utilityLoopStereoLoads.delete(job.canvas);
+  }
+  if (utilityLoopStereoLoadActive || !utilityLoopStereoQueue.length) return;
+  const job = utilityLoopStereoQueue.shift();
+  utilityLoopStereoLoadActive = true;
+  Promise.resolve(loadSavedLoopWaveformPeaks(job.loopId)).catch(() => null).then(peaks => {
+    job.entry.loading = false;
+    job.entry.peaks = peaks;
+    job.entry.retryAt = Date.now() + 5000;
+    if (eligible(job)) updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+  }).finally(() => {
+    utilityLoopStereoLoadActive = false;
+    drainUtilityLoopStereoQueue();
+  });
+}
 
 function updateUtilityLoopStereoWaveform(loopId, audio) {
   const canvas = document.querySelector(`[data-loop-stereo-waveform="${cssEscape(loopId)}"]`);
@@ -9,7 +36,7 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const ready = enabled && !editing && Boolean(cached?.peaks);
   canvas.hidden = !ready;
   canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
-  if (!enabled || editing) return;
+  if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
   if (cached?.peaks) {
     const duration = Number(audio.duration) || 0;
     drawCombinedLoopWaveform(canvas, cached.peaks, duration > 0 ? (Number(audio.currentTime) || 0) / duration : 0);
@@ -18,15 +45,12 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   if (cached && (cached.loading || Date.now() < cached.retryAt)) return;
   const entry = { peaks: null, loading: true, retryAt: 0 };
   utilityLoopStereoLoads.set(canvas, entry);
-  Promise.resolve(loadSavedLoopWaveformPeaks(loopId)).catch(() => null).then(peaks => {
-    entry.loading = false;
-    entry.peaks = peaks;
-    entry.retryAt = Date.now() + 5000;
-    if (canvas.isConnected) updateUtilityLoopStereoWaveform(loopId, audio);
-  });
+  utilityLoopStereoQueue.push({ loopId, audio, canvas, entry });
+  drainUtilityLoopStereoQueue();
 }
 
 function refreshUtilityLoopStereoWaveforms() {
+  drainUtilityLoopStereoQueue();
   document.querySelectorAll('[data-loop-audio]').forEach(audio => {
     updateUtilityLoopStereoWaveform(audio.getAttribute('data-loop-audio'), audio);
   });

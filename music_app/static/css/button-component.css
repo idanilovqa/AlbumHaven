@@ -43,7 +43,7 @@
 .ui-button--quiet:active:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
-.ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: default; }
+.ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: not-allowed; }
 
 /* Shared app-bar-style specialization for compact icon actions. */
 .action-button {

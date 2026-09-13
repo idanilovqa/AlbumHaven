@@ -269,8 +269,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await artistFamilyActions.waitForViewReady('Neal Morse');
     await artistFamilyActions.expand();
     await artistFamilyActions.waitForPrimaryChipActive('Neal Morse');
-    await artistFamilyActions.clickPrimaryChip();
-    await artistFamilyActions.waitForChipActive('Neal Morse');
+    await artistFamilyActions.selectOnlyChipByName('Neal Morse');
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
@@ -479,6 +478,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(searchToolbarActions.searchToolbar.recentSearchPopover).toBeVisible();
     await expect(searchToolbarActions.searchToolbar.recentSearchOptions.first()).toBeVisible();
     await searchToolbarActions.searchToolbar.input.press('Escape');
+    await searchToolbarActions.waitForQuery('Neal');
   });
 
   await stepLogger.step('Opening another dropdown dismisses the previous surface', async () => {

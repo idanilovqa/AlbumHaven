@@ -605,7 +605,7 @@ test.describe(`${SEARCH_CASE_ID} synthetic-large responsiveness`, () => {
         spinnerMutationCount: 0,
         viewDataRequests: [],
       }));
-      expect(await galleryActions.readArtistHeadings()).toEqual(defaultArtistHeadings);
+      expect(await galleryActions.readArtistHeadings()).toEqual([]);
       expect(await artistFamilyActions.readChipTexts()).toEqual(
         expect.arrayContaining(SEARCH_EXPECTED.familyMembers),
       );

@@ -22,6 +22,7 @@ export class TagEditor extends BasePage {
     this.activeTrackButtons = this.overlay.locator('[data-tag-editor-track][aria-pressed="true"]');
     this.activeTrackTitles = this.activeTrackButtons.locator('.tag-editor-track-title');
     this.albumNameInput = this.overlay.locator('input[data-tag-field="album"]');
+    this.artistInput = this.overlay.locator('input[data-tag-field="artist"]');
     this.trackNameInput = this.overlay.locator('input[data-tag-field="title"]');
     this.genreInput = this.overlay.locator('input[data-tag-field="genre"]');
     this.yearInput = this.overlay.locator('input[data-tag-field="year"]');

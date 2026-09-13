@@ -483,12 +483,10 @@ function handleSidebarArtistSelectionClick(event) {
   if (primaryArtistChanged) {
     clearPendingSelectedArtistReconcile();
     clearPendingGallerySearchCommit();
-    updateGallerySearchDraftQuery('');
+    updateGallerySearchDraftQuery(activeSearchQuery);
     state.ui.pendingSearchClearOnBlur = false;
-    state.ui.preSearchView = null;
-    state.ui.preSearchViewOrigin = '';
     const searchInput = document.getElementById('search-input');
-    if (searchInput) searchInput.value = '';
+    if (searchInput) searchInput.value = activeSearchQuery;
     closeRecentSearchPopover();
     releaseAlbumDetailPrewarmSearchSuspension(
       Number(state.ui.albumDetailPrewarmSearchGeneration || 0),
@@ -500,7 +498,7 @@ function handleSidebarArtistSelectionClick(event) {
   }
   const nextView = {
     ...state.view,
-    query: primaryArtistChanged ? '' : state.view.query,
+    query: state.view.query,
     selected_artist: artist,
     all_artists_active: false,
     visible_library_categories: primaryArtistChanged
@@ -508,8 +506,8 @@ function handleSidebarArtistSelectionClick(event) {
       : state.view.visible_library_categories,
     related_filter_artists: [],
     primary_filter_active: false,
-    search_context: primaryArtistChanged ? null : state.view.search_context,
-    ...(!primaryArtistChanged && activeSearchQuery ? {
+    search_context: state.view.search_context,
+    ...(activeSearchQuery ? {
       search_context: {
         ...(state.view?.search_context && typeof state.view.search_context === 'object'
           ? state.view.search_context
@@ -1065,17 +1063,22 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     ) ? 'canonical_root' : 'interactive';
   }
   if (!String(normalizedQuery || '').trim() && String(state.view.query || '').trim()) {
-    const next = buildClearedSearchView();
+    const next = withActiveGallerySources(buildClearedSearchView(), state.gallery.mainState);
     const reusableRootBrowseView = readReusableRootBrowseViewForClearedSearch(next);
     const retainsSelectedArtist = Boolean(String(next?.selected_artist || '').trim());
     const mountedSelectedGalleryComplete = Boolean(
       retainsSelectedArtist
       && isMountedSelectedGalleryComplete(next.selected_artist, reusableRootBrowseView)
     );
-    const canRestoreCachedClear = Boolean(
-      !retainsSelectedArtist
-      || mountedSelectedGalleryComplete
+    const clearSourceView = reusableRootBrowseView || state.view;
+    const clearScopeMatches = !state.gallery.mainState || gallerySourceScopesEqual(
+      activeGallerySourceCategories(state.gallery.mainState),
+      clearSourceView.non_album_library_categories || clearSourceView.loaded_library_categories
+        || clearSourceView.visible_library_categories || ['main_library', 'new_arrivals', 'hoard'],
     );
+    const canRestoreCachedClear = Boolean(clearScopeMatches && (
+      !retainsSelectedArtist || mountedSelectedGalleryComplete
+    ));
     if (
       canRestoreCachedClear
       && tryRestoreClearedSearchView(next, { reusableRootBrowseView })
@@ -1108,6 +1111,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
       const retainMountedSelectedArtist = Boolean(
         retainsSelectedArtist
         && mountedSelectedGalleryComplete
+        && clearScopeMatches
       );
       if (retainMountedSelectedArtist) {
         fetchAndRender(buildApiUrl({
@@ -1128,7 +1132,7 @@ function commitGallerySearchQuery(nextQuery, options = {}) {
     return;
   }
   const next = {
-    ...state.view,
+    ...withActiveGallerySources(state.view, state.gallery.mainState),
     query: normalizedQuery,
     selected_artist: '',
     all_artists_active: false,

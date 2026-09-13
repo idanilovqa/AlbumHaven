@@ -198,7 +198,6 @@ def _runtime_asset_version(asset_paths: tuple[Path, ...] | None = None) -> str:
 
 
 def _template_response(request: Request, context: dict[str, object]) -> Response:
-    request.app.state.runtime_asset_version = _runtime_asset_version()
     return request.app.state.templates.TemplateResponse(
         request,
         "index.html",

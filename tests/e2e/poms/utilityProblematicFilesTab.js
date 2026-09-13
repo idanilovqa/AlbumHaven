@@ -31,9 +31,9 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.detailTitle = page.locator(this.detailTitleSelector).first();
     this.detailScroller = page.locator(this.detailScrollerSelector).first();
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
-    this.detailProblemChips = page.locator('#utility-problematic-detail .utility-track-problem-chip');
+    this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
-      '#utility-problematic-detail .utility-track-problem-chip, #utility-problematic-detail .utility-problem-item',
+      '#utility-problematic-detail .alert-label[data-problem-exclusion-scope]',
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');

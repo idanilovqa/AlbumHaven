@@ -87,14 +87,15 @@ test('full-cover lightbox restores viewport coverage above the persistent player
   assert.match(imageDeclarations, /max-height:\s*calc\(100vh\s*-\s*40px\)\s*;/);
 });
 
-test('the template loads the persistent shell ownership layer last', () => {
+test('the template loads persistent shell ownership after modal styles and before shared trigger anchors', () => {
   const template = fs.readFileSync(templatePath, 'utf8');
   const runtimeStyles = Array.from(
     template.matchAll(/filename='css\/runtime\/([^']+\.css)'/g),
     (match) => match[1],
   );
 
-  assert.equal(runtimeStyles.at(-1), 'shell-persistent-player.css');
+  assert.equal(runtimeStyles.at(-1), 'trigger-anchor.css');
+  assert.ok(runtimeStyles.indexOf('trigger-anchor.css') > runtimeStyles.indexOf('shell-persistent-player.css'));
   assert.ok(
     runtimeStyles.indexOf('shell-persistent-player.css')
       > runtimeStyles.indexOf('cover-lookup-modal.css'),

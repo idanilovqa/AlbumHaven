@@ -54,6 +54,70 @@ function plain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+test('Artist Family controls follow selected artist and close without focusing a hidden root trigger', () => {
+  let focusCount = 0;
+  const trigger = { hidden: false, setAttribute() {}, focus() { focusCount += 1; } };
+  const view = { selected_artist: '' };
+  const context = loadRuntime({
+    state: { view }, window: {},
+    document: { querySelectorAll: () => [], getElementById: () => null,
+      querySelector: selector => selector === '[data-gallery-bar-action="artist-family"]' ? trigger : null },
+  });
+  context.ensureGalleryMainState = () => ({});
+  context.focusGalleryMainSurface = () => {};
+  context.updateGalleryMainControls();
+  assert.equal(trigger.hidden, true);
+  view.selected_artist = 'Neal Morse';
+  context.updateGalleryMainControls();
+  assert.equal(trigger.hidden, false);
+  const panel = { hidden: true, matches: () => false, setAttribute() {},
+    classList: { add() {}, remove() {} } };
+  context.openGalleryMainSurface('artist-family', trigger, panel);
+  assert.equal(panel.hidden, false);
+  view.selected_artist = '';
+  context.updateGalleryMainControls();
+  assert.equal(trigger.hidden, true);
+  assert.equal(panel.hidden, true);
+  assert.equal(focusCount, 0);
+});
+
+test('initial Artist Family markup is hidden only when no effective artist is selected', () => {
+  const button = indexTemplateSource.match(/<button[^>]*data-gallery-bar-action="artist-family"[^>]*>/)?.[0];
+  assert.match(button, /\{% if not effective_selected_artist %\} hidden\{% endif %\}/);
+});
+
+test('artist info ignores queued pre-open scroll but dismisses real post-open movement', () => {
+  const listeners = {};
+  const scroll = { scrollTop: 0, scrollLeft: 0, addEventListener: (type, callback) => { listeners[type] = callback; } };
+  const context = loadRuntime({
+    document: { getElementById: id => id === 'albums-scroll' ? scroll : null,
+      querySelector: () => null, addEventListener() {} },
+    window: { addEventListener() {} },
+    requestAnimationFrame: () => 1,
+  });
+  // Keep unrelated chrome/layout work outside this event-lifecycle test.
+  context.ensureGalleryMainState = () => ({});
+  context.observeArtistFamilyPanelBounds = () => null;
+  context.updateGalleryMainChrome = () => {};
+  context.focusGalleryMainSurface = () => {};
+  context.initGalleryMain();
+  const anchor = { setAttribute() {} };
+  const surface = { hidden: true, matches: () => false, setAttribute() {},
+    classList: { add() {}, remove() {} } };
+  context.openGalleryMainSurface('artist:Neal Morse', anchor, surface);
+  listeners.scroll();
+  assert.equal(surface.hidden, false, 'queued event at the opening position must not close the popup');
+  scroll.scrollTop = 1;
+  listeners.scroll();
+  assert.equal(surface.hidden, true, 'actual vertical movement dismisses the popup');
+  context.openGalleryMainSurface('artist:Neal Morse', anchor, surface);
+  listeners.scroll();
+  assert.equal(surface.hidden, false, 'reopening records the new position');
+  scroll.scrollLeft = 1;
+  listeners.scroll();
+  assert.equal(surface.hidden, true, 'actual horizontal movement dismisses the popup');
+});
+
 test('reusable GalleryBar, switch, panel, info overlay, divider, and artist heading render accessible contracts', () => {
   const context = loadRuntime();
   const buildGalleryBarHtml = requireContract(context, 'buildGalleryBarHtml');
@@ -794,4 +858,70 @@ test('partial root gallery summary uses known totals instead of preview album co
   assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals({initial_view_partial:true,artist_count:120,album_count:900},preview))), {artistCount:120,albumCount:900});
   assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:false,artist_count:120,album_count:900},preview),preview);
   assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:true,selected_artist:'Artist'},preview),preview);
+});
+test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
+  const name = { textContent: '' };
+  const summary = { textContent: '' };
+  const bar = { offsetHeight: 54,
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null };
+  const scroll = { scrollTop: 0 };
+  const context = loadRuntime({ state: { gallery: {}, view: {
+    initial_view_partial: true, artist_count: 120, album_count: 900,
+    artist_groups: [{ artist: 'Preview artist', albums: [{ key: 'preview', source: 'main_library' }] }],
+  } }, document: {
+    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    getElementById: id => id === 'albums-scroll' ? scroll : null,
+  } });
+  context.updateGalleryMainControls = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState({
+    sources: { main_library: false, new_arrivals: false, hoard: false },
+  });
+  context.updateGalleryMainChrome();
+  assert.equal(summary.textContent, '0 artists · 0 albums');
+});
+
+test('root gallery summary counts canonical albums once across artist credits after filtering', () => {
+  const name = { textContent: '' };
+  const summary = { textContent: '' };
+  const bar = { offsetHeight: 54,
+    querySelector: selector => selector === '[data-gallery-context-name]' ? name
+      : selector === '[data-gallery-context-summary]' ? summary : null };
+  const shared = { key: 'shared-release', album: 'Same title', source: 'main_library' };
+  const distinctVersion = { key: 'distinct-release', album: 'Same title', source: 'hoard' };
+  const context = loadRuntime({ state: { gallery: {}, view: {
+    artist_count: 2, album_count: 2,
+    artist_groups: [
+      { artist: 'Lead', albums: [shared, distinctVersion] },
+      { artist: 'Guest', albums: [{ ...shared }] },
+    ],
+  } }, document: {
+    querySelector: selector => selector === '[data-gallery-bar]' ? bar : null,
+    getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
+  } });
+  context.updateGalleryMainControls = () => {};
+  context.state.gallery.mainState = context.createGalleryMainState();
+  context.updateGalleryMainChrome();
+  assert.equal(summary.textContent, '2 artists · 2 albums');
+  assert.equal(context.getFilteredGalleryMainModel().totals.albumCount, 3,
+    'card placements remain available to existing model consumers');
+  context.state.gallery.mainState.sources.hoard = false;
+  context.updateGalleryMainChrome();
+  assert.equal(summary.textContent, '2 artists · 1 album');
+  context.state.gallery.mainState.sources.main_library = false;
+  context.updateGalleryMainChrome();
+  assert.equal(summary.textContent, '0 artists · 0 albums');
+});
+
+test('root summary preserves unkeyed occurrences and selected-artist family totals', () => {
+  const context = loadRuntime();
+  const groups = [
+    { artist: 'Lead', albums: [{ key: 'shared' }, { album: 'Untitled' }] },
+    { artist: 'Guest', albums: [{ key: 'shared' }, { album: 'Untitled' }] },
+  ];
+  const mounted = { artistCount: 2, albumCount: 4 };
+  const root = context.resolveGallerySummaryTotals({}, mounted, context.createGalleryMainState(), groups);
+  assert.equal(root.albumCount, 3, 'missing keys must not collapse unrelated records');
+  assert.equal(context.resolveGallerySummaryTotals({ selected_artist: 'Lead' }, mounted,
+    context.createGalleryMainState(), groups), mounted);
 });

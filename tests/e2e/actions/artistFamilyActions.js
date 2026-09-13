@@ -79,10 +79,12 @@ export class ArtistFamilyActions {
   }
 
   async clickPrimaryChip(options = {}) {
+    await this.expand(options);
     await this.artistFamily.primaryChip.click({ noWaitAfter: true, ...options });
   }
 
   async clickChipByName(name, options = {}) {
+    await this.expand(options);
     await this.artistFamily.chipByName(name).click({ noWaitAfter: true, ...options });
   }
 
@@ -110,21 +112,19 @@ export class ArtistFamilyActions {
     };
   }
 
-  async dragChipBefore(sourceName, targetName) {
-    const source = this.artistFamily.chipByName(sourceName);
-    const target = this.artistFamily.chipByName(targetName);
-    await source.dragTo(target);
-    await this.artistFamily.waitForPageCondition((expected) => {
-      const names = Array.from(document.querySelectorAll(expected.chipSelector))
-        .map((chip) => (chip.querySelector(expected.chipLabelSelector)?.textContent || '').trim());
-      return names.indexOf(expected.sourceName) >= 0
-        && names.indexOf(expected.sourceName) < names.indexOf(expected.targetName);
-    }, { timeout: 10000 }, {
-      chipSelector: this.artistFamily.chipSelector,
-      chipLabelSelector: this.artistFamily.chipLabelSelector,
-      sourceName,
-      targetName,
-    });
+  async dragAcrossChips(sourceName, targetName) {
+    await this.expand();
+    const source = await this.artistFamily.chipByName(sourceName).boundingBox();
+    const target = await this.artistFamily.chipByName(targetName).boundingBox();
+    if (!source || !target) throw new Error('Both family chips must be visible before dragging.');
+    const page = this.artistFamily.page;
+    await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+    await page.mouse.down();
+    try {
+      await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 24 });
+    } finally {
+      await page.mouse.up();
+    }
   }
 
   async selectOnlyChipByName(name, options = {}) {
@@ -148,6 +148,16 @@ export class ArtistFamilyActions {
       await target.click({ noWaitAfter: true, ...options });
     }
     await this.waitForChipActive(name, true, options);
+  }
+
+  async selectMemberAndVerifyAlbumScope({ primaryArtist, memberArtist, ownedAlbum, excludedAlbum,
+    query = '', galleryActions, navigationPanelActions }) {
+    await navigationPanelActions.selectSidebarArtistByName(primaryArtist);
+    await navigationPanelActions.waitForSidebarSelection(primaryArtist);
+    await this.waitForViewReady(primaryArtist, { queryValue: query });
+    await this.selectOnlyChipByName(memberArtist);
+    await galleryActions.waitForAlbumVisibleUnderHeading(memberArtist, ownedAlbum);
+    await galleryActions.expectAlbumAbsentFromSettledGallery({ artist: memberArtist, album: excludedAlbum, query });
   }
 
   async waitForAllChipsActive(expectedNames, options = {}) {

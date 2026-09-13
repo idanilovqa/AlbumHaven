@@ -1332,6 +1332,12 @@ function applyViewPayload(payload, options = {}) {
         ? normalizedNextView.visible_library_categories
         : previousView.loaded_library_categories || normalizedNextView.visible_library_categories
   )];
+  nextView.non_album_library_categories = [...(
+    nextPayload?.non_album_library_categories
+    || (Array.isArray(nextPayload?.non_album_tracks)
+      ? nextView.loaded_library_categories
+      : previousView.non_album_library_categories || nextView.loaded_library_categories)
+  )];
   if (options.preserveGalleryBrowseLocationState === true) {
     nextView.gallery_scope = previousView.gallery_scope;
     nextView.visible_library_categories = [...previousView.visible_library_categories];

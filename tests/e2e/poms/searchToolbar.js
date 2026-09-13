@@ -18,7 +18,7 @@ export function resolveCurrentCanonicalView(payload = {}, runtimeView = null) {
   const runtimeQuery = runtimeView && typeof runtimeView === 'object'
     ? String(runtimeView.query || '').trim()
     : null;
-  if (runtimeQuery !== null && runtimeQuery !== payloadQuery) {
+  if (runtimeQuery !== null && runtimeView.surface && Array.isArray(runtimeView.artists)) {
     return {
       query: runtimeQuery,
       surface: String(runtimeView.surface || '').trim().toLowerCase(),
@@ -743,17 +743,11 @@ export class SearchToolbar extends BasePage {
         || null;
       // parity-check: allow-read-only-measurement-evaluate -- runtime view is canonical for local transitions that intentionally reuse a prior production payload
       const runtimeView = await this.page.evaluate(() => {
-        if (typeof state === 'undefined') return null;
-        const artists = [];
-        const seenArtists = new Set();
-        for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups']) {
-          for (const group of Array.isArray(state?.view?.[field]) ? state.view[field] : []) {
-            const artist = String(group?.artist || group?.artist_display || '').trim();
-            if (!artist || seenArtists.has(artist)) continue;
-            seenArtists.add(artist);
-            artists.push(artist);
-          }
-        }
+        if (typeof state === 'undefined' || !state.gallery?.mainState
+          || typeof getFilteredGalleryMainModel !== 'function') return null;
+        const artists = [...new Set(getFilteredGalleryMainModel().groups
+          .map(group => String(group?.artist_display || group?.artist || '').trim())
+          .filter(Boolean))];
         return {
           query: String(state?.view?.query || '').trim(),
           surface: String(state?.view?.surface?.active || '').trim().toLowerCase(),

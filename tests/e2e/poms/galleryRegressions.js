@@ -1,6 +1,10 @@
 export class GalleryRegressions {
   constructor(page) {
     this.page=page;
+    this.familyToggle=page.locator('[data-gallery-bar-action="artist-family"]');
+    this.familyPanel=page.locator('#artist-family-panel');
+    this.nealSidebar=page.locator('[data-sidebar-artist="Neal Morse"]');
+    this.rootSidebar=page.locator('[data-sidebar-all-artists="1"]');
     this.search=page.getByRole('combobox',{name:'Search music'});
     this.options=page.locator('.recent-search-option');
     this.summary=page.locator('[data-gallery-context-summary]');
@@ -15,9 +19,10 @@ export class GalleryRegressions {
     this.info=page.locator('[data-artist-info-trigger]').first();
     this.infoPanel=page.locator('[data-artist-info-overlay]');
     this.modal=page.locator('#track-modal');
+    this.dialog=this.modal.locator('.track-modal-dialog');
     this.header=this.modal.locator('.track-modal-header');
     this.activeReleaseTab=this.modal.locator('[data-track-tab-index].is-active');
-    this.art=this.modal.locator('.track-modal-cover');
+    this.art=this.modal.locator('.track-modal-cover .album-artbox');
     this.tracks=this.modal.locator('.track-modal-list');
     this.rows=this.modal.locator('.album-track-table__row');
     this.warning=page.getByRole('button',{name:'Library warning',exact:true});

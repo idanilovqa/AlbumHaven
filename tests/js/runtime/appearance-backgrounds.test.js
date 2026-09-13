@@ -319,12 +319,12 @@ for (const stage of ['response', 'body']) {
 }
 
 
-test('automatic application outlines use the play color while explicit color choices remain authoritative', () => {
+test('automatic application outlines use the theme accent while player and custom choices remain authoritative', () => {
   const appearance = runtime();
   const effective = { tokens: { play: '#24B86B', 'waveform-fill': '#387F68', 'player-control-border': '#86EFAC', accent: '#AAAAAA' } };
   const preference = source => ({ interaction_overrides: { item_outline: { source, color: '#123456' } } });
-  assert.equal(appearance.resolveInteractionOutline(preference('automatic'), effective), '#24B86B');
-  assert.equal(appearance.resolveInteractionOutline(preference('player'), effective), '#24B86B');
+  assert.equal(appearance.resolveInteractionOutline(preference('automatic'), effective), '#AAAAAA');
+  assert.equal(appearance.resolveInteractionOutline(preference('player'), effective), '#86EFAC');
   assert.equal(appearance.resolveInteractionOutline(preference('custom'), effective), '#123456');
   assert.equal(appearance.resolveInteractionOutline(preference('theme'), effective), '#AAAAAA');
 });
@@ -358,4 +358,23 @@ test('explicit selected fill overrides neutral default and reset removes the ove
   appearance.applyTheme(preference, root);
   assert.equal(values.has('--appearance-selected-accent'), false);
   assert.throws(() => appearance.normalizeInteractionOverrides({ ...preference.interaction_overrides, panel_outline: 'invalid' }), TypeError);
+});
+
+test('Artist Family panel and artist states retain Appearance palette and interaction tokens', () => {
+  const css = require('node:fs').readFileSync(path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'appearance-backgrounds.css'), 'utf8');
+  const rules = Array.from(css.matchAll(/([^{}]+)\{([^{}]+)\}/g), ([, selector, declarations]) => ({ selector, declarations }));
+  function hasMapping(selector, declaration) {
+    assert.ok(rules.some(rule => rule.selector.includes(selector) && rule.declarations.includes(declaration)), `${selector} must map ${declaration}`);
+  }
+  hasMapping('.artist-family-panel)', 'background: var(--appearance-card)');
+  hasMapping('.artist-family-panel)', 'border-color: var(--appearance-line)');
+  hasMapping('.artist-family-panel__artist)', 'background: var(--appearance-control)');
+  hasMapping('.artist-family-panel__artist):hover', 'background: var(--appearance-item-hover, var(--appearance-hover))');
+  hasMapping('.artist-family-panel__artist.is-active)', 'background: var(--appearance-item-selected, var(--appearance-hover))');
+  hasMapping('.artist-family-panel__artist.is-active)', 'color: var(--appearance-ink)');
+  for (const token of ['--appearance-item-action-hover-background', '--appearance-item-action-pressed']) {
+    const actionRules = rules.filter(rule => rule.selector.includes(":is(button, .button, [role='button'], [data-actionable])") && rule.declarations.includes(`background: var(${token}`));
+    assert.ok(actionRules.length > 0);
+    assert.ok(actionRules.every(rule => rule.selector.includes(':not(.artist-family-panel__artist)')), 'Artist Family navigation rows must not inherit generic action fills');
+  }
 });

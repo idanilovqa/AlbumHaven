@@ -1,6 +1,12 @@
 # Chat interaction E2E coverage
 
-Updated in the b14c application worktree, not the companion fixture repository.
+The September 8 sections below preserve historical verification. Current gallery work runs in the isolated gallery checkout; the settings worktree is not modified.
+
+## Current verification, September 12
+
+The complete Appearance case, player views, saved-loop interactions, five paused waveforms, gallery cases 030–033, and the strengthened Interview/Loose Tracks case have focused passing browser evidence. The Appearance alignment helper measures after the rendering update while retaining 24 samples and the two-pixel tolerance. See [the current local review](gallery-local-review.md) for exact fixes, evidence, and full-CI limits.
+
+Additional focused browser coverage passes for guest-credit labels and family album eligibility (combined FTC-ALBUM-DETAILS-021 / FTC-ARTIST-FAMILY-019), notification information hover styling (FTC-COVERS-007), and Artist Family button visibility at the library root (FTC-GALLERY-031). A fresh complete CI pipeline remains required before publication.
 
 | Case | Added coverage |
 | --- | --- |

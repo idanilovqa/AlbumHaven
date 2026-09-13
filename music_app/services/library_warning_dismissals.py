@@ -10,8 +10,14 @@ from music_app.services.library_watch_health import _BOOTSTRAP_LIBRARY_SQL, _con
 def warning_token(health: dict) -> str:
     if health.get("state") != "warning":
         return ""
-    events = sorted((str(p.get("root_key", "")), str(p.get("state", "")),
-                     str(p.get("detected_at", ""))) for p in health.get("problems", []))
+    events = []
+    for problem in health.get("problems", []):
+        identity = (str(problem.get("root_key", "")), str(problem.get("state", "")),
+                    str(problem.get("detected_at", "")))
+        event_id = str(problem.get("event_id") or "")
+        # Retain the exact legacy hash until that warning is replaced.
+        events.append((*identity, event_id) if event_id else identity)
+    events.sort()
     return sha256(json.dumps(events, separators=(",", ":")).encode()).hexdigest()
 
 

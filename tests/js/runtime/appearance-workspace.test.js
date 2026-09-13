@@ -599,8 +599,8 @@ test('interaction overrides use seven coordinated families and the former focus 
   const roles = ['item_hover', 'item_selected', 'button_hover_background', 'item_outline', 'button_pressed'];
   assert.deepEqual(appearance.interactionColorFamilies.map(family => [family.id, family.label, roles.map(role => family.colors[role])]), expected);
   const markup = appearance.interactionControlsMarkup();
-  for (const label of ['Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
-  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 5);
+  for (const label of ['Panel &amp; dropdown outline', 'Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
+  assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 6);
   assert.doesNotMatch(markup, /data-interaction-clear=/);
   assert.match(markup, /data-interaction-color="item_hover" data-color="#31465D"/);
   assert.match(markup, /data-item-outline-color[^>]*data-color-family="blue"[^>]*style="--swatch:#86B7EF"/);

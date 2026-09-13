@@ -113,7 +113,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       await artistFamilyActions.waitForAllChipsActive(chipTexts);
     });
 
-    await stepLogger.step('Keep the family control in its own row, envelope its anchor, and reorder related artists by mouse', async () => {
+    await stepLogger.step('Keep the family control in its own row, envelope its anchor, and paint artist selection by dragging', async () => {
       await artistFamilyActions.expand();
       const before = (await artistFamilyActions.readChipTexts()).map((text) => String(text || '').trim());
       const structure = await artistFamilyActions.readPanelStructure();
@@ -127,11 +127,16 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
 
       const source = EXPECTED_FAMILY.resonance;
       const target = EXPECTED_FAMILY.cosmic;
-      expect(before.indexOf(source)).toBeGreaterThan(before.indexOf(target));
-      await artistFamilyActions.dragChipBefore(source, target);
+      await artistFamilyActions.dragAcrossChips(source, target);
+      await artistFamilyActions.waitForChipActive(source, false);
+      await artistFamilyActions.waitForChipActive(target, false);
+      await artistFamilyActions.waitForPrimaryChipActive(EXPECTED_FAMILY.primary);
+      expect((await artistFamilyActions.readChipTexts()).map(text => String(text || '').trim())).toEqual(before);
+      await artistFamilyActions.dragAcrossChips(source, target);
+      await artistFamilyActions.waitForAllChipsActive(before);
       const after = (await artistFamilyActions.readChipTexts()).map((text) => String(text || '').trim());
+      expect(after).toEqual(before);
       expect(after[0]).toBe(EXPECTED_FAMILY.primary);
-      expect(after.indexOf(source)).toBeLessThan(after.indexOf(target));
       expect((await artistFamilyActions.readPanelStructure()).total).toBe(structure.total);
     });
 
@@ -525,7 +530,7 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
     const cosmicPrimaryOnlyChipMs = await stepLogger.step('Use the primary Cosmic Cathedral family chip to show only its own album section', async () => (
       measureActionTime(
         async () => {
-          await artistFamilyActions.clickPrimaryChip();
+          await artistFamilyActions.selectOnlyChipByName(EXPECTED_FAMILY.cosmic);
         },
         async () => {
           await galleryActions.waitForOnlyArtistHeadings([EXPECTED_FAMILY.cosmic], { timeout: 60000 });

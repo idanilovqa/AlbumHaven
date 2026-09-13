@@ -10,9 +10,10 @@ export class ArtistPageSettings extends BasePage {
     super(page, testInfo);
     this.button = page.locator(this.buttonSelector);
     this.menu = page.locator(this.menuSelector);
+    this.familyToggle = page.locator('[data-gallery-bar-action="artist-family"]');
+    this.familyPanel = page.locator('#artist-family-panel');
     this.combineSimilarArtistsButton = page.locator(this.combineSimilarArtistsButtonSelector);
     this.nonAlbumTracksButton = page.locator(this.nonAlbumTracksButtonSelector);
-    this.nonAlbumTracksCount = this.nonAlbumTracksButton.locator(this.countSelector);
     this.nonAlbumTracksModal = page.locator(this.nonAlbumTracksModalSelector);
     this.nonAlbumTrackRows = page.locator(this.nonAlbumTrackRowSelector);
     this.nonAlbumTrackTitles = page.locator(this.nonAlbumTrackTitleSelector);
@@ -22,7 +23,7 @@ export class ArtistPageSettings extends BasePage {
     this.nonAlbumTrackTotal = this.nonAlbumTracksModal.locator('.album-track-table__total');
     this.nonAlbumCompactTables = this.nonAlbumTracksModal.getByRole('table');
     this.nonAlbumColumnHeaders = this.nonAlbumTracksModal.getByRole('columnheader');
-    this.nonAlbumPlayCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="play"]');
+    this.nonAlbumPlayCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="number"] .album-track-table__play');
     this.nonAlbumNumberCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="number"]');
     this.nonAlbumTrackCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="title"]');
     this.nonAlbumPathCells = this.nonAlbumTracksModal.locator('.compact-data-table-row [data-cdt-column="path"]');
@@ -40,19 +41,19 @@ export class ArtistPageSettings extends BasePage {
   }
 
   get buttonSelector() {
-    return '#gallery-options-button';
+    return '[data-gallery-bar-action="album-types"]';
   }
 
   get menuSelector() {
-    return '#gallery-options-menu';
+    return '#gallery-album-types-menu';
   }
 
   get combineSimilarArtistsButtonSelector() {
-    return '#gallery-options-menu [data-toggle-combine-similar-artists="1"]';
+    return '#artist-family-panel [data-toggle-combine-similar-artists="1"]';
   }
 
   get nonAlbumTracksButtonSelector() {
-    return '#gallery-options-menu [data-open-non-album-modal="1"]';
+    return '#gallery-album-types-menu [data-open-non-album-tracks="1"]';
   }
 
   get nonAlbumTracksModalSelector() {
@@ -130,7 +131,7 @@ export class ArtistPageSettings extends BasePage {
     const [trackHeader, pathHeader, trackCell, pathCell] = await Promise.all([
       table.getByRole('columnheader', { name: 'Track', exact: true }).boundingBox(),
       table.getByRole('columnheader', { name: 'File path', exact: true }).boundingBox(),
-      firstRow.locator('[data-cdt-column="track"]').boundingBox(),
+      firstRow.locator('[data-cdt-column="title"]').boundingBox(),
       firstRow.locator('[data-cdt-column="path"]').boundingBox(),
     ]);
     if (!trackHeader || !pathHeader || !trackCell || !pathCell) return null;

@@ -12,6 +12,72 @@ const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 
+test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold reload', { tag: '@area:loops' }, async ({
+  page, galleryActions, globalPlayerActions, settingsModalAppBarActions,
+  trackModalActions, utilityAppearanceActions, utilityLoopsActions, utilityTabBarActions,
+}) => {
+  const names = Array.from({ length: 5 }, (_, index) => `Waveform ${Date.now()} ${test.info().workerIndex} ${index + 1}`);
+  const created = [];
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.selectSeekbarMode('waveform');
+  await settingsModalAppBarActions.closeSettings();
+  await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const track = await trackModalActions.playTrackByTitle(LOOP_TRACK_TITLE);
+  await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
+  await globalPlayerActions.waitForFullTrackTiming();
+  await globalPlayerActions.pauseIfPlaying();
+  await trackModalActions.close();
+  try {
+    for (const name of names) {
+      await globalPlayerActions.openLoopEditor();
+      expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
+      created.push(name);
+    }
+    await page.reload();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('loops');
+    await utilityLoopsActions.waitForReady();
+    await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    const entries = await Promise.all(names.map(name => utilityLoopsActions.resolveLoopEntryByName(name)));
+    expect(new Set(entries.map(item => item.loopId)).size).toBe(5);
+    for (const { entry, loopId } of entries) {
+      await expect(entry).toBeAttached();
+      const audio = utilityLoopsActions.utilityLoopsTab.loopEntryCard.audioByLoopId(loopId);
+      await expect(audio).toHaveJSProperty('paused', true);
+      const canvas = utilityLoopsActions.utilityLoopsTab.loopEntryCard.ordinaryWaveformForEntry(entry);
+      await expect(canvas).toBeVisible();
+      // parity-check: allow-read-only-measurement-evaluate -- count real waveform paint away from the paused playhead at the left edge
+      await expect.poll(() => canvas.evaluate(element => {
+        const pixels = element.getContext('2d').getImageData(0, 0, element.width, element.height).data;
+        let painted = 0;
+        for (let y = 0; y < element.height; y += 1) {
+          for (let x = Math.ceil(element.width * 0.1); x < element.width * 0.9; x += 1) {
+            if (pixels[(y * element.width + x) * 4 + 3] > 0) painted += 1;
+          }
+        }
+        return painted;
+      })).toBeGreaterThan(0);
+      await expect(audio).toHaveJSProperty('paused', true);
+    }
+  } finally {
+    if (!await settingsModalAppBarActions.settingsModalAppBar.modal.isVisible()) {
+      await settingsModalAppBarActions.openSettings();
+    }
+    await utilityTabBarActions.openTab('loops');
+    await utilityLoopsActions.waitForReady();
+    if (created.length) await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    for (const name of created) {
+      await utilityLoopsActions.openDeleteConfirmationByName(name);
+      expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
+    }
+  }
+});
+
 test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback stay grouped under one track`, { tag: '@area:loops' }, async ({
   galleryActions,
   globalPlayerActions,
@@ -329,7 +395,6 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
     await expectCombinedLoopWaveform(page);
     await expectStableButtonHover(page, surfaces.loopPlay);
-    await expectLoopPauseFirstClick(page);
     const detail = await utilityLoopsActions.readDetailSummary();
     expect(detail.title).toBe(LOOP_TRACK_TITLE);
     expect(detail.entryCount).toBe(1);
@@ -387,6 +452,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await utilityLoopsActions.pressSpaceBeforeLoopOwnership(LOOP_TRACK_TITLE, {
       afterSpace: () => globalPlayerActions.waitForPlaybackState({ paused: true }),
     });
+    await expectLoopPauseFirstClick(page);
     const ownedStart = await utilityLoopsActions.pressSpaceForOwnedLoopByName(
       'Warmup Loop',
       { paused: false },

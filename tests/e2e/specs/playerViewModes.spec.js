@@ -187,7 +187,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   await stepLogger.step('A second tab shows a disabled play icon rather than a Locked label', async () => {
     await galleryActions.selectAlbumDetailsByIdentity(ALBUM);
     await trackModalActions.waitForLoadedSummary();
-    await trackModalActions.playTrackAt(0);
+    await trackModalActions.trackModal.trackTitleAt(0).dblclick();
     await globalPlayerActions.waitForPlaybackState({ paused: false });
     const peer = await page.context().newPage();
     try {

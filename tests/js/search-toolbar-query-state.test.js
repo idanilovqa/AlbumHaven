@@ -19,7 +19,7 @@ test('settled search query prefers the current runtime view after a local clear'
   assert.equal(resolveCurrentCanonicalQuery('Joseph', null), 'Joseph');
 });
 
-test('settled search canonical evidence follows a proven local query transition', async () => {
+test('settled search canonical evidence follows local query and family-filter transitions', async () => {
   const { resolveCurrentCanonicalView } = await import(searchToolbarUrl);
   const networkPayload = {
     query: 'Ария',
@@ -44,6 +44,12 @@ test('settled search canonical evidence follows a proven local query transition'
   }), {
     query: 'Ария',
     surface: 'albums',
-    artists: ['Ария'],
+    artists: ['Виталий Дубинин'],
   });
+  assert.deepEqual(resolveCurrentCanonicalView(networkPayload, null), {
+    query: 'Ария', surface: 'albums', artists: ['Ария'],
+  });
+  assert.deepEqual(resolveCurrentCanonicalView(networkPayload, {
+    query: 'Ария', surface: 'albums', artists: [],
+  }), { query: 'Ария', surface: 'albums', artists: [] });
 });

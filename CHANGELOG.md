@@ -6,18 +6,36 @@
   artist information panels; kept selection, search, and direct navigation in sync.
 - Balanced gallery card widths and cover-only layouts, added hover years with
   a border opening, and restored startup totals, recent searches, and cover sizing.
+- Hid Artist Family controls at the library root and removed the notification
+  information hover outline while preserving keyboard focus and card controls.
+- Excluded guest-only album appearances from related Artist Family sections
+  while retaining owned and genuinely shared releases, including during search.
+- Labelled additional track artists as featured guests when the track credits
+  include the album artists, while preserving distinct primary artist credits.
 - Shared album headers, track tables, playback icons, and problem labels with
   loose tracks; preserved version-tab identity and loaded tracks on first open.
 - Refined saved-loop controls and the combined waveform, retained regular seeking
   while waveform data loads, and allowed failed waveform requests to recover.
 - Kept player controls and highlights stable during pointer interactions and
   limited sticky appearance previews to the player while preserving saved colors.
+- Applied saved Appearance colors to the new Artist Family panel and preserved
+  related-artist albums when search results refresh after a sidebar selection.
+- Migrated the appearance constraint so default and custom panel outlines can be
+  saved while preserving existing preferences and color validation.
+- Kept Interview and Non-album rarity tracks out of gallery and startup album
+  cards while preserving scanned and overridden exceptions in Loose Tracks.
 - Corrected soundtrack totals for tracks credited to multiple artists, including
   the 14-track Mulan soundtrack, without merging equal-duration tracks.
 - Added account-scoped warning dismissal backed by Postgres. Library/Scan keeps
   unresolved watcher health visible, and new warning events restore the alert.
 - Preserved track playback and text selection during double-click and drag actions,
   and kept album identity and artwork fixed while scrolling modal tracks.
+- Preserved enabled library sources across search and kept loose-track actions
+  scoped to those sources while refreshed results load.
+- Loaded paused saved-loop waveforms without evicting pending requests and kept
+  their Play controls visibly focused for keyboard users.
+- Reused startup asset digests and preserved the gallery scroll position when
+  returning from Scan, while preserving the approved account-menu hover styling.
 - Expanded isolated real-application regression coverage. PR2 uses the owner's
   hosted-review waiver; all required test suites must pass before publication.
 

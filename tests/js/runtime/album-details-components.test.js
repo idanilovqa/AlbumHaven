@@ -188,7 +188,7 @@ test('Editorial Album Details aligns the track table with its title and metadata
 test('Editorial mobile stacking wins the same-selector cascade after desktop layout rules', () => {
   const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/track-modal-and-lightbox.css'), 'utf8');
   const dialog = '.track-modal-dialog:has(> .track-modal-header > .album-details-header[data-album-details-layout="editorial_canvas"])';
-  for (const [selector, display] of [[dialog, 'block'], [`${dialog} > .track-modal-body`, 'grid']]) {
+  for (const [selector, display] of [[dialog, 'flex'], [`${dialog} > .track-modal-body`, 'grid']]) {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rules = [...css.matchAll(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`, 'g'))];
     assert.ok(rules.length >= 2);

@@ -12,17 +12,39 @@ const WARNING_CASE='FTC-GALLERY-033 acknowledges warning alerts without hiding S
 test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryActions,searchToolbarActions,stepLogger})=>{
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
+  let firstPaintSummary;
   await stepLogger.step('Server first paint shows known totals before any JavaScript hydration',async()=>{
     const response=await page.goto(new URL('/?surface=albums',test.info().project.use.baseURL).href);
     const html=await response.text();
     const scripts=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
     const payload=parseProductionBootstrapPayloadScriptSources(scripts);
     const view=payload.initial_view;
-    expect(html).toContain(`data-gallery-context-summary>${view.artist_count} artists · ${view.album_count} albums`);
+    firstPaintSummary = `${view.artist_count} artists · ${view.album_count} albums`;
+    expect(html).toContain(`data-gallery-context-summary>${firstPaintSummary}`);
     expect(view.album_count).toBeGreaterThan(7);
   });
-  await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
+  await expect(ui.summary).toHaveText(firstPaintSummary);
+  await stepLogger.step('Artist Family is hidden at root and closes when returning from a selected artist',async()=>{
+    const familyToggle=ui.familyToggle;
+    const familyPanel=ui.familyPanel;
+    await expect(familyToggle).toBeHidden();
+    await expect(familyPanel).toBeHidden();
+    const neal=ui.nealSidebar;
+    await neal.click();
+    await galleryActions.waitForGalleryReady();
+    await expect(neal).toHaveAttribute('aria-current','true');
+    await expect(familyToggle).toBeVisible();
+    await familyToggle.click();
+    await expect(familyPanel).toBeVisible();
+    const root=ui.rootSidebar;
+    await root.click();
+    await galleryActions.waitForGalleryReady();
+    await expect(root).toHaveAttribute('aria-current','true');
+    await expect(familyToggle).toBeHidden();
+    await expect(familyPanel).toBeHidden();
+    await expect(ui.summary).toHaveText(firstPaintSummary);
+  });
   await stepLogger.step('A search paints usable covers without switching artists',async()=>{
     await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
     await searchToolbarActions.waitForQuery('Neal Morse');
@@ -60,10 +82,11 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
     await yearCard.hover(); await expect(year).toHaveCSS('opacity','1');
     await expect(year).toHaveCSS('color','rgb(255, 255, 255)');
     await expect(year).toHaveCSS('-webkit-text-stroke-color','rgb(0, 0, 0)');
+    await expect(year).toHaveCSS('-webkit-text-stroke-width','1px');
     // parity-check: allow-read-only-measurement-evaluate -- inspect the animated border gap and luminous tip
     await expect.poll(()=>yearCard.evaluate(e=>getComputedStyle(e).getPropertyValue('--gallery-year-gap').trim())).toBe('34px');
     // parity-check: allow-read-only-measurement-evaluate -- verify the glowing border-gap endpoint remains rendered
-    expect(await year.evaluate(e=>getComputedStyle(e,'::before').boxShadow)).not.toBe('none');
+    expect(await year.evaluate(e=>getComputedStyle(e,'::before').boxShadow)).toContain('rgb(85, 199, 255)');
     await ui.noInfo.click(); await ui.cardsView.click();
     await expect(ui.cards.first()).toHaveAttribute('data-gallery-display','cards');
     await ui.cards.first().hover();
@@ -87,7 +110,7 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
   });
 });
 
-test(TABLE_CASE,{tag:'@area:album-details'},async({page,galleryActions,searchToolbarActions,trackModalActions,stepLogger})=>{
+test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,searchToolbarActions,trackModalActions,globalPlayerActions,stepLogger})=>{
   const fixture=await createGalleryRegressionFixture(PERFORMANCE_AUTH_USERNAME);
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
@@ -134,6 +157,7 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,galleryActions,searchToo
       const row=ui.rows.filter({hasText:'Clean Signal'}).first();
       const title=ui.title(row);
       await title.dblclick(); await expect(row).toHaveAttribute('data-track-playing','true');
+      await globalPlayerActions.waitForPlaybackState({paused:false,minimumCurrentTime:0.1});
       await expect.poll(()=>ui.selection()).toBe('');
       await page.mouse.move(1,1); await expect(ui.play(row)).toHaveCSS('opacity','1');
       await title.dblclick(); await expect(row).toHaveAttribute('data-track-playing','true');
@@ -142,12 +166,21 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,galleryActions,searchToo
       await page.mouse.move(box.x+2,box.y+8);await page.mouse.down();
       try {await page.mouse.move(box.x+Math.min(110,box.width-3),box.y+8,{steps:12});} finally {await page.mouse.up();}
       await expect.poll(()=>ui.selection()).toContain('Clean');
+      const selectedText=await ui.selection();
+      await context.grantPermissions(['clipboard-read','clipboard-write'],{origin:new URL(page.url()).origin});
+      await page.keyboard.press('ControlOrMeta+C');
+      // parity-check: allow-read-only-measurement-evaluate -- read the clipboard after the real native copy gesture
+      expect(await page.evaluate(()=>navigator.clipboard.readText())).toBe(selectedText);
       await ui.play(row).click(); await expect(row).not.toHaveAttribute('data-track-playing','true');
+      await globalPlayerActions.waitForPlaybackState({paused:true});
     });
     await stepLogger.step('Only the table scrolls; header and art stay fixed',async()=>{
       await trackModalActions.trackModal.releaseTabs.nth(1-initialReleaseIndex).click();await trackModalActions.waitForReady();
       await page.setViewportSize({width:1200,height:430});
       const header=await ui.header.boundingBox(),art=await ui.art.boundingBox();
+      const dialog=await ui.dialog.boundingBox();
+      expect(Math.abs(art.width-art.height)).toBeLessThanOrEqual(1);
+      expect(art.y + art.height, 'The fixed artwork must fit inside the modal instead of being clipped').toBeLessThanOrEqual(dialog.y + dialog.height);
       await ui.tracks.hover();await page.mouse.wheel(0,700);
       // parity-check: allow-read-only-measurement-evaluate -- measure scroll owner after real wheel input
       await expect.poll(()=>ui.tracks.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
@@ -182,6 +215,21 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,stepLo
       await expect(ui.library).toHaveClass(/is-warning/,{timeout:60000});
       await expect(ui.warning).toBeHidden();
       await ui.library.click({button:'right'}); await ui.openScan.click();
+      await expect(ui.scanWarning).toBeVisible();
+      await page.getByRole('button',{name:'Back to previous library view'}).click();
+    });
+    await stepLogger.step('A distinct same-clock event resurfaces without an intervening healthy response',async()=>{
+      await expect(ui.warning).toBeHidden();
+      // Replace only this fixture root atomically; keep this page and its dismissed token alive.
+      await fixture.warn('2026-09-12T11:00:00Z',{eventId:'a3c91f73-2031-4e3b-9b44-f1e05c85ac36'});
+      await expect(ui.warning).toBeVisible({timeout:60000});
+      await ui.warning.click();
+      await ui.warningPanel.getByRole('button',{name:'Dismiss',exact:true}).click();
+      await expect(ui.warning).toBeHidden();await expect(ui.warningPanel).toBeHidden();
+      await page.reload();await galleryActions.waitForGalleryReady();
+      await expect(ui.library).toHaveClass(/is-warning/,{timeout:60000});
+      await expect(ui.warning).toBeHidden();
+      await ui.library.click({button:'right'});await ui.openScan.click();
       await expect(ui.scanWarning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
     });

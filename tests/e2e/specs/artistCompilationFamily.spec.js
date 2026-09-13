@@ -20,6 +20,78 @@ const SOUNDTRACK_GUEST = 'Soundtrack Signal Guest';
 const SOUNDTRACK_OWNER = 'Sia / Soundtrack Signal Guest';
 const SOUNDTRACK_LEAD_SOLO = 'Sia Soundtrack Solo';
 
+test('FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track credits without guest album leakage', { tag: '@area:gallery-search' }, async ({
+  artistFamilyActions, galleryActions, navigationPanelActions, page,
+  searchToolbarActions, stepLogger, tagEditorActions, trackModalActions,
+}) => {
+  const filenames = ['01 - Track 1.mp3', '02 - Track 2.mp3', '03 - Track 3.mp3'];
+  const editedArtists = [CONTROL_OWNER, `${CONTROL_LEAD}, ${CONTROL_PARTNER}`, 'Independent Credit Voice'];
+  let originalCredits = [];
+  let saveMayHaveStarted = false;
+  const ownedAlbum = { artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026', searchToolbarActions, trackModalActions };
+  const partnerScope = { primaryArtist: CONTROL_LEAD, memberArtist: CONTROL_PARTNER,
+    ownedAlbum: CONTROL_PARTNER_SOLO, excludedAlbum: CONTROL_LEAD_SOLO, galleryActions, navigationPanelActions };
+  try {
+    await stepLogger.step('Edit three owned generated credits through the shared tag editor', async () => {
+      await galleryActions.openSearchedAlbumDetails(ownedAlbum);
+      originalCredits = await trackModalActions.readTrackCredits(3);
+      await trackModalActions.openTagEditor();
+      await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+      for (let index = 0; index < filenames.length; index += 1) {
+        await tagEditorActions.selectTrackByFilename(filenames[index]);
+        await tagEditorActions.setArtist(editedArtists[index]);
+      }
+      saveMayHaveStarted = true;
+      await tagEditorActions.applyAndWaitForSavedFiles();
+      await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
+    });
+    await stepLogger.step('Reload and retain raw credits while distinguishing guests, comma names, and another primary artist', async () => {
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
+      await galleryActions.selectAlbumDetailsByIdentity({ artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026' });
+      await trackModalActions.waitForInteractiveSummary();
+      expect(await trackModalActions.readTrackCredits(3)).toEqual(originalCredits.map((credit, index) => ({
+        ...credit, rawArtist: editedArtists[index],
+        secondaryArtist: index === 0 ? `feat. ${CONTROL_PARTNER}` : editedArtists[index],
+      })));
+      await trackModalActions.close();
+    });
+    await stepLogger.step('Keep guest-only foreign albums out of the partner family while preserving genuine owned and shared releases', async () => {
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await artistFamilyActions.selectMemberAndVerifyAlbumScope(partnerScope);
+      await artistFamilyActions.selectOnlyChipByName(CONTROL_OWNER);
+      await galleryActions.scrollToAlbumUnderHeading(CONTROL_OWNER, CONTROL_SHARED_ALBUM);
+      await galleryActions.waitForAlbumVisibleUnderHeading(CONTROL_OWNER, CONTROL_SHARED_ALBUM);
+      await searchToolbarActions.search(CONTROL_PARTNER, { submitWithEnter: true });
+      await searchToolbarActions.waitForQuery(CONTROL_PARTNER);
+      await artistFamilyActions.selectMemberAndVerifyAlbumScope({ ...partnerScope, query: CONTROL_PARTNER });
+    });
+  } finally {
+    if (saveMayHaveStarted) {
+      await stepLogger.step('Restore and verify all three owned Artist values through the UI', async () => {
+        await galleryActions.openSearchedAlbumDetails(ownedAlbum);
+        await trackModalActions.openTagEditor();
+        await tagEditorActions.waitForOpen({ expectedTrackCount: 18 });
+        for (let index = 0; index < filenames.length; index += 1) {
+          await tagEditorActions.selectTrackByFilename(filenames[index]);
+          await tagEditorActions.setArtist(originalCredits[index].rawArtist);
+        }
+        await tagEditorActions.applyAndWaitForSavedFiles();
+        await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
+        await page.reload();
+        await galleryActions.waitForGalleryReady();
+        await searchToolbarActions.waitForQuery(CONTROL_LEAD_SOLO);
+        await galleryActions.selectAlbumDetailsByIdentity({ artist: CONTROL_LEAD, album: CONTROL_LEAD_SOLO, year: '2026' });
+        await trackModalActions.waitForInteractiveSummary();
+        expect(await trackModalActions.readTrackCredits(3)).toEqual(originalCredits);
+        await trackModalActions.close();
+      });
+    }
+  }
+});
+
 test('FTC-ARTIST-FAMILY-015 excludes compilation track credits from family relations while keeping ordinary shared releases related', { tag: '@area:gallery-search' }, async ({
   artistFamilyActions,
   galleryActions,

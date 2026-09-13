@@ -32,6 +32,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
+              "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 preserve featured track credits without guest album leakage",
+              "area": "gallery-search"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/albumIdentityConsolidation.spec.js",
               "case": "FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release",
               "area": "tag-edit"
@@ -661,6 +668,13 @@
               "project": "functional",
               "test": "tests/e2e/specs/loops.functional.spec.js",
               "case": "FTC-PLAYER-017 paused reload restores the current waveform",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold reload",
               "area": "loops"
             },
             {

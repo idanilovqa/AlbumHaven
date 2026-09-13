@@ -1,3 +1,4 @@
+import { parseVisibleAlbumMetadata } from '../helpers/visibleAlbumMetadata.js';
 import { BasePage } from './basePage.js';
 import { SmallAlert } from './components/smallAlert.js';
 
@@ -77,7 +78,7 @@ export class AlbumCard extends BasePage {
   }
 
   get yearWithinCardSelector() {
-    return '.album-subtitle';
+    return '.album-year, .album-subtitle';
   }
 
   get ratingRowWithinCardSelector() {
@@ -314,6 +315,17 @@ export class AlbumCard extends BasePage {
 
   detailsButtonByAlbumName(albumName) {
     return this.cardByAlbumName(albumName).locator(this.detailsButtonWithinCardSelector);
+  }
+
+  async readVisibleMetadata(card) {
+    const subtitle = await card.locator(this.subtitleWithinCardSelector).first().textContent();
+    const separateYear = card.locator('.album-year');
+    return parseVisibleAlbumMetadata(subtitle,
+      await separateYear.count() ? await separateYear.first().textContent() : null);
+  }
+
+  async readVisibleMetadataByAlbumName(albumName) {
+    return this.readVisibleMetadata(this.cardByAlbumName(albumName).first());
   }
 
   subtitleByAlbumName(albumName) {

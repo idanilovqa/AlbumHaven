@@ -23,8 +23,8 @@ export async function createGalleryRegressionFixture(username) {
   const root=`e2e-warning-${randomUUID()}`;
   const owner=`e2e-gallery-${randomUUID()}`;
   return {
-    async warn(at) {
-      const payload=Buffer.from(JSON.stringify({[root]:{state:'overflow',detected_at:at}})).toString('base64');
+    async warn(at, {eventId=randomUUID()} = {}) {
+      const payload=Buffer.from(JSON.stringify({[root]:{state:'overflow',detected_at:at,event_id:eventId}})).toString('base64');
       await sql(`update library.libraries set metadata=jsonb_set(coalesce(metadata,'{}'),'{library_watch_health}',coalesce(metadata->'library_watch_health','{}') || convert_from(decode('${payload}','base64'),'UTF8')::jsonb) where id=${identity.library}`);
     },
     async linkVersions() {

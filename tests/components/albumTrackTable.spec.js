@@ -153,6 +153,7 @@ async function mountAlbumDetailsComponents(page) {
   await page.addScriptTag({
     content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }`,
   });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'button-component.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'compact-data-table.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js') });
   await page.locator('#table-host').evaluate((host) => {
@@ -259,7 +260,7 @@ for (const scenario of [
   });
 }
 
-test('long album track titles preserve all five usable columns inside a narrow dialog', async ({ page }) => {
+test('long album track titles preserve all four usable columns with combined number and Play inside a narrow dialog', async ({ page }) => {
   await mountAlbumDetailsComponents(page);
   await page.setViewportSize({ width: 390, height: 844 });
   const row = page.locator('[data-track-row-path="two.flac"]');
@@ -269,7 +270,7 @@ test('long album track titles preserve all five usable columns inside a narrow d
   const [tableBox, dialogBox, rowBox] = await Promise.all([table.boundingBox(), dialog.boundingBox(), row.boundingBox()]);
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(tableBox.x + tableBox.width + 1);
   expect(rowBox.x + rowBox.width).toBeLessThanOrEqual(dialogBox.x + dialogBox.width + 1);
-  await expect(row.locator('[role="cell"]')).toHaveCount(5);
+  await expect(row.locator('[role="cell"]')).toHaveCount(4);
   for (const name of ['Play track', 'Open this track in Problematic Files']) {
     const button = row.getByRole('button', { name, exact: true });
     await expect(button).toBeVisible();
@@ -328,7 +329,7 @@ test('ActionButton hover and keyboard focus share the same outline without shift
   expect(restingBox).not.toBeNull();
 
   await action.hover();
-  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-width', '1px');
   await expect(action).toHaveCSS('outline-color', 'rgb(114, 186, 255)');
   const hoverOutline = await action.evaluate((element) => getComputedStyle(element).outlineColor);
   expect(await action.boundingBox()).toEqual(restingBox);
@@ -336,7 +337,7 @@ test('ActionButton hover and keyboard focus share the same outline without shift
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await expect(action).toBeFocused();
-  await expect(action).toHaveCSS('outline-width', '2px');
+  await expect(action).toHaveCSS('outline-width', '1px');
   await expect(action).toHaveCSS('outline-color', hoverOutline);
   expect(await action.boundingBox()).toEqual(restingBox);
 });

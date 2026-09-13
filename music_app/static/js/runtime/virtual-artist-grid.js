@@ -2022,7 +2022,7 @@ function renderArtistGroups(options = {}) {
   modeConfig.renderer(
     { primaryGroups: model.primaryGroups, familyGroups: model.familyGroups },
     model.fallbackGroups,
-    { ...options, preserveScroll: options.preserveScroll !== false },
+    options,
     modeConfig.layoutConfig,
   );
   if (

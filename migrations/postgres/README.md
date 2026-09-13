@@ -12,6 +12,18 @@ validates and round-trips this field with the existing revisioned preferences.
 The migration replaces the existing JSON validator without changing columns,
 saved rows, capabilities, or function privileges.
 
+Migration `0066_allow_appearance_panel_outline.sql` permits an optional
+`panel_outline` RGB color or JSON null in interaction overrides. Omitted values
+retain the default outline. It replaces only the aggregate shape constraint,
+preserving existing rows, other validation, and function privileges.
+
+Migration `0067_add_scanned_exception_candidate_index.sql` adds a partial index
+for active files tagged Interview or Non-album rarity, including the accepted
+non-hyphenated alias. The Loose Tracks query uses a separate candidate branch
+with the matching predicate, preserving the album-name index from `0045`.
+Final classification still honors explicit exception overrides, including clears.
+The migration changes no saved rows or privileges.
+
 Use lowercase, zero-padded filenames and apply them in lexical order:
 
 ```text
@@ -79,6 +91,9 @@ Use lowercase, zero-padded filenames and apply them in lexical order:
 0062_narrow_readonly_account_privileges.sql
 0063_replace_missing_album_removal_lock_snapshot.sql
 0064_grant_library_membership_delete.sql
+0065_native_player_component_provenance.sql
+0066_allow_appearance_panel_outline.sql
+0067_add_scanned_exception_candidate_index.sql
 ```
 
 Section 3 owns the first baseline schema migration. Do not add future-feature reservation schemas here. Phase 6 migration files should stay current-stack scoped and target app-owned durable data for `album_haven_core`.

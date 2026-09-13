@@ -157,6 +157,14 @@ function closeVersionPickerModal() {
 
 function getVisibleNonAlbumTracks() {
   const view = state.view;
+  const mainState = state.gallery?.mainState;
+  if (mainState) {
+    const activeSources = activeGallerySourceCategories(mainState);
+    const payloadSources = view.non_album_library_categories
+      || view.loaded_library_categories || view.visible_library_categories
+      || ['main_library', 'new_arrivals', 'hoard'];
+    if (!activeSources.length || !gallerySourceScopesEqual(activeSources, payloadSources)) return [];
+  }
   const tracks = Array.isArray(view.non_album_tracks) ? view.non_album_tracks : [];
   const selectedArtist = String(view.selected_artist || '').trim();
   if (!selectedArtist) return tracks;

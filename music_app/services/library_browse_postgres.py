@@ -77,6 +77,12 @@ except ImportError:  # pragma: no cover - keeps the module importable without ps
     dict_row = None
 
 
+# SQL uses the same accepted labels and aliases as normalize_exception_value.
+_NON_ALBUM_EXCEPTION_SQL_VALUES = ", ".join(
+    "'" + value.replace("'", "''") + "'"
+    for value in sorted(NON_ALBUM_EXCEPTION_VALUES)
+)
+
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _UTILITY_PROJECTION_PREWARM_CONFIG_KEY = "ALBUM_HAVEN_UTILITY_PROJECTION_PREWARM_ENABLED"
 _LIBRARY_BROWSE_SEAM_ID = "library_browse"
@@ -527,6 +533,31 @@ class PostgresLibraryBrowseRepository:
                 ),
                 selected_artist_alias_to_canonical,
             )
+        family_context = _selected_artist_family_context_from_state(
+            selected_artist,
+            config=self._config,
+            connect=self._connect,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+            connection=_connection,
+        )
+        selected_scope_keys = {
+            local_inventory_identity_key(artist) for artist in selected_artist_scope
+        }
+        related_artist_name_query = bool(
+            query_search_rows is not None
+            and not any(
+                local_inventory_identity_key(str(_row_mapping(row).get("artist_name") or ""))
+                in selected_scope_keys
+                for row in query_search_rows
+            )
+            and any(
+                _artist_name_matches_search_query(
+                    query, artist, family_context["canonical_to_aliases"].get(artist, []),
+                )
+                for artist in family_context["family_artists"]
+            )
+        )
         omit_sidebar = _request_flag((query_params or {}).get("omit_sidebar"))
         use_preview_albums = bool(query)
         hydrate_query_primary_albums = bool(
@@ -549,7 +580,7 @@ class PostgresLibraryBrowseRepository:
                         for artist in selected_artist_scope
                     }
                 ]
-                if query_search_rows is not None
+                if query_search_rows is not None and not related_artist_name_query
                 else self._load_selected_artist_preview_rows(
                     selected_artist_scope,
                     view_state,
@@ -586,6 +617,7 @@ class PostgresLibraryBrowseRepository:
                 query=(
                     query
                     if not hydrate_query_primary_albums and not selected_artist_name_matches_query
+                    and not related_artist_name_query
                     else ""
                 ),
                 alias_to_canonical=alias_to_canonical,
@@ -597,14 +629,6 @@ class PostgresLibraryBrowseRepository:
         _replace_active_albums_with_missing(albums, missing_albums)
         if not use_preview_albums or hydrate_query_primary_albums:
             _annotate_album_payload_problematic_tracks(albums, rows)
-        family_context = _selected_artist_family_context_from_state(
-            artist_display,
-            config=self._config,
-            connect=self._connect,
-            alias_to_canonical=alias_to_canonical,
-            canonical_to_aliases=canonical_to_aliases,
-            connection=_connection,
-        )
         family_artists = list(family_context["family_artists"])
         full_family_artist_scope = _expanded_artist_name_list(
             [artist_display, *family_artists],
@@ -623,35 +647,28 @@ class PostgresLibraryBrowseRepository:
             non_album_entries,
             config=self._config,
         )
-        family_preview_rows = (
-            [
-                row
-                for row in query_search_rows
-                if local_inventory_identity_key(
-                    str(_row_mapping(row).get("artist_name") or "")
+        family_preview_rows = self._load_artist_preview_rows(
+            _expanded_artist_name_list(family_artists, alias_to_canonical, canonical_to_aliases),
+            view_state,
+            connection=_connection,
+            family_only=True,
+        ) if family_artists else []
+        if query_search_rows is not None:
+            query_album_pairs = {
+                (
+                    _row_mapping(row).get("source_artist_id") or _row_mapping(row).get("artist_id"),
+                    _row_mapping(row).get("album_id"),
                 )
-                in {
-                    local_inventory_identity_key(artist)
-                    for artist in _expanded_artist_name_list(
-                        family_artists,
-                        alias_to_canonical,
-                        canonical_to_aliases,
-                    )
-                }
+                for row in query_search_rows
+            }
+            family_preview_rows = [
+                row for row in family_preview_rows
+                if (
+                    _row_mapping(row).get("source_artist_id") or _row_mapping(row).get("artist_id"),
+                    _row_mapping(row).get("album_id"),
+                )
+                in query_album_pairs
             ]
-            if query_search_rows is not None and family_artists
-            else self._load_artist_preview_rows(
-                _expanded_artist_name_list(
-                    family_artists,
-                    alias_to_canonical,
-                    canonical_to_aliases,
-                ),
-                view_state,
-                connection=_connection,
-            )
-            if family_artists
-            else []
-        )
         primary_artist_groups = _selected_artist_primary_groups(
             artist_display,
             albums,
@@ -728,7 +745,7 @@ class PostgresLibraryBrowseRepository:
             in visible_family_artist_keys
         ]
         if (query and artist_display and not selected_artist_name_matches_query
-                and not related_filter_artists):
+                and not related_artist_name_query and not related_filter_artists):
             family_artist_groups = []
         artist_groups = (
             _render_selected_artist_artist_groups(
@@ -1313,6 +1330,7 @@ class PostgresLibraryBrowseRepository:
                 ),
                 view_state,
                 connection=connection,
+                family_only=True,
             )
             if selected_artist and family_artists
             else []
@@ -1924,6 +1942,7 @@ class PostgresLibraryBrowseRepository:
         view_state: Mapping[str, object],
         *,
         connection: Any | None = None,
+        family_only: bool = False,
     ) -> list[object]:
         normalized_artists = [str(artist or "").strip() for artist in artists if str(artist or "").strip()]
         if not normalized_artists:
@@ -1934,10 +1953,10 @@ class PostgresLibraryBrowseRepository:
             **_root_sidebar_params(view_state),
         }
         if connection is not None:
-            cursor = connection.execute(_artist_preview_rows_sql(), params)
+            cursor = connection.execute(_artist_preview_rows_sql(family_only=family_only), params)
             return list(cursor.fetchall())
         with self._connect_to_database() as owned_connection:
-            cursor = owned_connection.execute(_artist_preview_rows_sql(), params)
+            cursor = owned_connection.execute(_artist_preview_rows_sql(family_only=family_only), params)
             return list(cursor.fetchall())
 
     def _load_album_detail_rows(self, album_key: str) -> list[object]:
@@ -5466,7 +5485,7 @@ def _eligible_album_tracks_cte_sql(
                 #>> '{{scan_cache,file_entry,exception_type}}'
             end,
             ''
-          ))) <> 'non-album rarity'
+          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
           group by
             library.local_tracks.library_id,
             library.local_tracks.album_id,
@@ -5938,7 +5957,7 @@ def _root_startup_payload_sql(artist_limit: int) -> str:
                 #>> '{{scan_cache,file_entry,exception_type}}'
             end,
             ''
-          ))) <> 'non-album rarity'
+          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
         ),
         artist_album_rows as materialized (
           select distinct
@@ -6068,7 +6087,7 @@ def _root_startup_payload_sql(artist_limit: int) -> str:
                 #>> '{{scan_cache,file_entry,exception_type}}'
             end,
             ''
-          ))) <> 'non-album rarity'
+          ))) not in ({_NON_ALBUM_EXCEPTION_SQL_VALUES})
           group by
             library.local_tracks.library_id,
             library.local_tracks.album_id,
@@ -6102,7 +6121,7 @@ def _root_startup_payload_sql(artist_limit: int) -> str:
               0
             ) as total_duration_seconds
           from matched_album_rows
-          left join track_rollups
+          join track_rollups
             on track_rollups.album_id = matched_album_rows.album_id
         )
         select
@@ -6261,7 +6280,11 @@ def _selected_artist_preview_sql() -> str:
     """
 
 
-def _artist_preview_rows_sql() -> str:
+def _artist_preview_rows_sql(*, family_only: bool = False) -> str:
+    family_role_clause = (
+        "and library.local_album_featured_artists.featured_kind in ('owner', 'featured_member')"
+        if family_only else ""
+    )
     return f"""
         with bootstrap_context as (
           select library.libraries.id as library_id
@@ -6292,6 +6315,7 @@ def _artist_preview_rows_sql() -> str:
           join library.local_album_featured_artists
             on library.local_album_featured_artists.library_id = target_artists.library_id
            and library.local_album_featured_artists.artist_id = target_artists.id
+           {family_role_clause}
           join library.local_albums
             on library.local_albums.id = library.local_album_featured_artists.album_id
            and ({_visible_album_clause("library.local_albums")})
@@ -6313,6 +6337,7 @@ def _artist_preview_rows_sql() -> str:
           join library.local_album_featured_artists
             on library.local_album_featured_artists.library_id = target_artists.library_id
            and library.local_album_featured_artists.artist_id = target_artists.id
+           {family_role_clause}
           join library.local_albums
             on library.local_albums.id = library.local_album_featured_artists.album_id
            and ({_visible_album_clause("library.local_albums")})
@@ -6904,9 +6929,11 @@ def _missing_albums_sql(*, scoped_artists: bool = False) -> str:
                then exception_override.override_payload ->> 'exception_type'
                else library.local_track_files.metadata #>> '{scan_cache,file_entry,exception_type}' end,
           ''
-        ))) <> 'non-album rarity'
+        ))) not in (__NON_ALBUM_EXCEPTION_VALUES__)
         order by library.local_albums.album_key, library.local_tracks.id;
-    """.replace("__ARTIST_SCOPE__", artist_scope)
+    """.replace("__ARTIST_SCOPE__", artist_scope).replace(
+        "__NON_ALBUM_EXCEPTION_VALUES__", _NON_ALBUM_EXCEPTION_SQL_VALUES,
+    )
 
 
 def _problematic_files_sql(

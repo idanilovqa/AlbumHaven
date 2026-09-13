@@ -361,6 +361,13 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
         await navigationPanelActions.selectSidebarArtistByName(RARITY_ARTIST);
       }
       await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
+      await page.reload();
+      await galleryActions.waitForGalleryReady();
+      await navigationPanelActions.waitForSidebarSelection(RARITY_ARTIST);
+      await galleryActions.waitForSelectedArtistGallery(RARITY_ARTIST);
+      await galleryActions.expectAlbumAbsentFromSettledGallery({
+        artist: RARITY_ARTIST, album: RARITY_ALBUM, query: '',
+      });
       await artistPageSettingsActions.openNonAlbumTracks(2);
       await artistPageSettingsActions.expectCompactGroupedNonAlbumTable({
         sections: ['Non-album rarity', 'Interviews'],
@@ -384,6 +391,10 @@ test('FTC-NON-ALBUM-012 renders exception groups as the approved compact track t
     await stepLogger.step('Restore both generated exceptions through the shared editor', async () => {
       await artistPageSettingsActions.openNonAlbumTracksInTagEditor();
       await tagEditorActions.waitForOpen({ expectedTrackCount: 2 });
+      await tagEditorActions.selectTrackByFilename(RARITY_TRACK_FILENAME);
+      expect((await tagEditorActions.readSummary()).exceptionType).toBe('Non-album rarity');
+      await tagEditorActions.selectTrackByFilename(SIBLING_TRACK_FILENAME);
+      expect((await tagEditorActions.readSummary()).exceptionType).toBe('Interview');
       await tagEditorActions.selectAllTracks();
       await tagEditorActions.clearException();
       await tagEditorActions.applyAndWaitForSavedFiles();

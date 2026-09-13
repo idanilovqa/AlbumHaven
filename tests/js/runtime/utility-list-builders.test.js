@@ -6420,7 +6420,7 @@ test('Problematic Files keeps watcher health mounted when there are zero problem
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
 
-test('watcher warning drives the existing Library Status amber variant and title copy', () => {
+test('watcher warning retains title copy while the status icon stays green beside the separate warning control', () => {
   const context = {
     formatDurationCompact(value) { return String(value); },
   };
@@ -6450,7 +6450,7 @@ test('watcher warning drives the existing Library Status amber variant and title
       'runtime',
       'non-album-and-player.css',
     ), 'utf8'),
-    /\.status-indicator\.is-warning[^}]*var\(--star-on|#f59e0b|#fbbf24/is,
+    /\.status-indicator\.is-warning[^}]*color:\s*var\(--success\)/s,
   );
 });
 

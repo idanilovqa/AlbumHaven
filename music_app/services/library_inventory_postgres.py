@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
+from music_app.services.metadata import NON_ALBUM_EXCEPTION_VALUES
+
 try:  # pragma: no cover - exercised only when the optional runtime driver exists.
     import psycopg
     from psycopg.rows import dict_row
@@ -196,6 +198,8 @@ def _non_album_candidates_sql() -> str:
       ''
     )"""
     effective_non_album_predicate = _non_album_value_predicate_sql(effective_album)
+    exception_sql_values = ", ".join("'" + value.replace("'", "''") + "'" for value in sorted(NON_ALBUM_EXCEPTION_VALUES))
+    scanned_exception_predicate = f"lower(btrim(coalesce(library.local_track_files.metadata #>> '{{scan_cache,file_entry,exception_type}}', ''))) in ({exception_sql_values})"
     return f"""
         with bootstrap_context as (
           {_bootstrap_context_sql()}
@@ -209,6 +213,17 @@ def _non_album_candidates_sql() -> str:
             on library.local_track_files.track_id = library.local_tracks.id
           where library.local_track_files.scan_cache_stale is false
             and {stored_non_album_predicate}
+
+          union
+
+          select library.local_track_files.id as track_file_id
+          from library.local_tracks
+          join bootstrap_context
+            on bootstrap_context.library_id = library.local_tracks.library_id
+          join library.local_track_files
+            on library.local_track_files.track_id = library.local_tracks.id
+          where library.local_track_files.scan_cache_stale is false
+            and {scanned_exception_predicate}
 
           union
 
@@ -391,6 +406,10 @@ def _non_album_candidates_sql() -> str:
           and (
             {effective_non_album_predicate}
             or exception_override.exception_type is not null
+            or (
+              not coalesce(exception_override.override_payload ? 'exception_type', false)
+              and {scanned_exception_predicate}
+            )
           )
         order by
           coalesce(nullif(library.local_artists.sort_name, ''), library.local_artists.name, ''),

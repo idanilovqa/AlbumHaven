@@ -2876,7 +2876,7 @@ def test_root_startup_payload_preserves_override_precedence_for_both_eligibility
     assert compact_sql.count("and path_override.id is null") == 2
     assert compact_sql.count("when path_override.override_payload ? 'exception_type'") == 2
     assert compact_sql.count("when track_override.override_payload ? 'exception_type'") == 2
-    assert compact_sql.count("<> 'non-album rarity'") == 2
+    assert compact_sql.count("not in ('interview', 'non album rarity', 'non-album rarity')") == 2
 
 
 def test_root_startup_payload_keeps_canonical_ranking_and_one_snapshot_json_result():
@@ -4259,6 +4259,8 @@ def test_postgres_selected_artist_content_match_excludes_family_gallery_groups(m
         lambda *_args, **_kwargs: [matching_primary_row, matching_family_row],
     )
     # Explicit primary selection hydrates complete rows rather than search previews.
+    monkeypatch.setattr(repository, "_load_artist_preview_rows",
+                        lambda *_args, **_kwargs: [matching_family_row])
     monkeypatch.setattr(repository, "_load_selected_artist_rows",
                         lambda *_args, **_kwargs: [matching_primary_row])
     monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
@@ -5071,7 +5073,7 @@ def test_postgres_search_payload_reuses_one_read_snapshot_for_every_projection(m
     monkeypatch.setattr(
         repository,
         "_load_artist_preview_rows",
-        lambda _artists, _state, *, connection=None: seen.append(("family-preview", connection)) or [],
+        lambda _artists, _state, *, connection=None, family_only=False: seen.append(("family-preview", connection)) or [],
     )
     monkeypatch.setattr(
         repository,
@@ -5208,7 +5210,7 @@ def test_postgres_selected_artist_payload_reuses_one_read_snapshot_for_every_pro
     monkeypatch.setattr(
         repository,
         "_load_artist_preview_rows",
-        lambda _artists, _state, *, connection=None: seen.append(("family-preview", connection)) or [],
+        lambda _artists, _state, *, connection=None, family_only=False: seen.append(("family-preview", connection)) or [],
     )
     monkeypatch.setattr(
         repository,
@@ -11374,7 +11376,7 @@ def test_root_startup_gallery_and_search_sql_exclude_persisted_non_album_raritie
         assert "library.exception_overrides" in compact_sql, surface
         assert "non-album rarity" in compact_sql, surface
         assert "library.local_track_files.private_path" in compact_sql, surface
-        assert "<> 'non-album rarity'" in compact_sql, surface
+        assert "not in ('interview', 'non album rarity', 'non-album rarity')" in compact_sql, surface
 
 
 @pytest.fixture
@@ -11708,3 +11710,94 @@ def test_selected_artist_missing_album_search_preserves_featured_artist_matches(
     assert "album_featured_artist_names" not in missing
     assert missing["tracks"] == []
     assert missing["_file_entries"] == []
+
+@pytest.mark.parametrize("family_artist, aliases, expected_primary", [
+    ("Neal Morse", {}, ["Deep Water"]),
+    ("Neal", {"Neal": ["Neal Morse"]}, ["Deep Water"]),
+    ("Unrelated Artist", {}, []),
+])
+def test_postgres_requested_related_artist_keeps_albums_under_artist_name_query(monkeypatch, family_artist, aliases, expected_primary):
+    from music_app.services import library_browse_postgres as browse_module
+
+    cosmic = _browse_album_row(artist="Cosmic Cathedral", album_id=10, album_key="cosmic-deep-water", title="Deep Water")
+    neal = _browse_album_row(artist="Neal Morse", album_id=11, album_key="neal-one", title="One")
+    monkeypatch.setattr(browse_module, "_selected_artist_family_context_from_state", lambda *_args, **_kwargs: {
+        "family_artists": [family_artist], "alias_to_canonical": {"Neal Morse": family_artist} if aliases else {}, "canonical_to_aliases": aliases,
+    })
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}})
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {
+        "alias_to_canonical": {"Neal Morse": family_artist} if aliases else {},
+        "canonical_to_aliases": aliases,
+    })
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: [neal])
+    monkeypatch.setattr(repository, "_load_selected_artist_preview_rows", lambda *_args, **_kwargs: [cosmic])
+    monkeypatch.setattr(repository, "_load_artist_preview_rows", lambda *_args, **_kwargs: [neal])
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+    payload = repository.build_selected_artist_payload(query_params={
+        "surface": "albums", "q": "Neal Morse", "artist": "Cosmic Cathedral", "omit_sidebar": "1",
+        "gallery_scope": "all", "category": ["main_library", "new_arrivals", "hoard"],
+    }, library_state={})
+    assert payload["selected_artist"] == "Cosmic Cathedral"
+    assert payload["search_context"]["committed_query"] == "Neal Morse"
+    assert [album["name"] for group in payload["primary_artist_groups"] for album in group["albums"]] == expected_primary
+    assert [album["name"] for group in payload["family_artist_groups"] for album in group["albums"]] == (["One"] if expected_primary else [])
+
+
+@pytest.mark.parametrize("search_artist", ["Simone Simons", "Simone Alias"])
+def test_selected_artist_query_family_excludes_guest_albums_without_broadening_search(monkeypatch, search_artist):
+    from music_app.services import library_browse_postgres as browse_module
+
+    primary = _browse_album_row(artist="Ayreon", album_id=31, album_key="ayreon-own", title="Ayreon Album")
+    owned = _browse_album_row(artist="Simone Simons", album_id=32, album_key="simone-own", title="Simone Album")
+    shared = _browse_album_row(artist="Simone Simons", album_id=33, album_key="shared", title="Genuine Shared Release")
+    shared["album_metadata"] = {"album_artist": "Simone Simons / Shared Partner", "artists": ["Simone Simons", "Shared Partner"]}
+    guest = _browse_album_row(artist="Simone Simons", album_id=34, album_key="charlotte-obsession", title="The Obsession")
+    guest["album_metadata"] = {"album_artist": "Charlotte Wessels", "artists": ["Charlotte Wessels"]}
+    unmatched = _browse_album_row(artist="Simone Simons", album_id=35, album_key="unmatched", title="Outside Search Scope")
+    for row in (owned, shared, guest, unmatched):
+        row["artist_id"] = 2
+    aliases = {"Simone Alias": "Simone Simons"} if search_artist != "Simone Simons" else {}
+    canonical_aliases = {"Simone Simons": ["Simone Alias"]} if aliases else {}
+    search_rows = [{**row, "artist_name": search_artist} for row in (owned, shared, guest)]
+    monkeypatch.setattr(browse_module, "_selected_artist_family_context_from_state", lambda *_args, **_kwargs: {
+        "family_artists": ["Simone Simons"], "alias_to_canonical": aliases, "canonical_to_aliases": canonical_aliases,
+    })
+    repository = browse_module.PostgresLibraryBrowseRepository(
+        {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
+        connect=lambda _database_url: _NoopSearchSnapshotConnection(),
+        album_ratings_service=_EmptyAlbumRatingsService(),
+    )
+    monkeypatch.setattr(repository._inventory_repository, "load_support_state", lambda **_kwargs: {"ignored_version_keys": [], "manual_version_links": {}})
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda **_kwargs: {"alias_to_canonical": aliases, "canonical_to_aliases": canonical_aliases})
+    # The real payload builder canonicalizes these rows: artist_id becomes None,
+    # while source_artist_id retains the identity used by fresh family rows.
+    monkeypatch.setattr(repository, "_load_search_rows", lambda *_args, **_kwargs: search_rows)
+    monkeypatch.setattr(repository, "_load_selected_artist_preview_rows", lambda *_args, **_kwargs: [primary])
+    family_loads = []
+
+    def load_family_rows(artists, view_state, **kwargs):
+        family_loads.append((list(artists), kwargs.get("family_only")))
+        return [owned, shared, unmatched]
+
+    monkeypatch.setattr(repository, "_load_artist_preview_rows", load_family_rows)
+    monkeypatch.setattr(repository, "_load_non_album_entries", lambda **_kwargs: [])
+    monkeypatch.setattr(repository, "queue_settings_projection_prewarm", lambda: None)
+    payload = repository.build_selected_artist_payload(query_params={
+        "surface": "albums", "q": "Simone Simons", "artist": "Ayreon", "omit_sidebar": "1",
+        "related_artist": "Simone Simons",
+        "gallery_scope": "all", "category": ["main_library", "new_arrivals", "hoard"],
+    }, library_state={})
+
+    family_albums = {album["key"] for group in payload["family_artist_groups"] for album in group["albums"]}
+    assert family_albums == {"simone-own", "shared"}
+    assert len(family_loads) == 1
+    assert set(family_loads[0][0]) == {"Simone Simons", *canonical_aliases.get("Simone Simons", [])}
+    assert family_loads[0][1] is True
+    assert payload["selected_artist"] == "Ayreon"
+    assert payload["search_context"]["committed_query"] == "Simone Simons"

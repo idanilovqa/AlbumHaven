@@ -32,6 +32,10 @@ export class UtilityLoopEntryCard extends BasePage {
     });
   }
 
+  ordinaryWaveformForEntry(entry) {
+    return entry.locator('canvas[data-loop-stereo-waveform]');
+  }
+
   playButtonForEntry(entry) {
     return entry.locator('[data-loop-play]');
   }

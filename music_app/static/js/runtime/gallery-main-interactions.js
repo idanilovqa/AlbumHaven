@@ -309,7 +309,9 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
   if (typeof activateTriggerSurface === 'function') activateTriggerSurface(surface, () => {
     if (galleryMainSurfaceController.current()?.surface === surface) closeGalleryMainSurface(false);
   });
-  galleryMainSurfaceController.activate({ key, anchor, surface });
+  const scroll = key.startsWith('artist:') ? document.getElementById('albums-scroll') : null;
+  galleryMainSurfaceController.activate({ key, anchor, surface,
+    openingScrollPosition: scroll ? { top: scroll.scrollTop, left: scroll.scrollLeft } : null });
   anchor.setAttribute('aria-expanded', 'true');
   surface.hidden = false;
   if (surface.matches?.('.artist-family-panel')) {
@@ -326,6 +328,12 @@ function openGalleryMainSurface(key, anchor, surface, align = 'right') {
 
 function updateGalleryMainControls() {
   const mainState = ensureGalleryMainState();
+  const hasSelectedArtist = Boolean(String(state.view.selected_artist || '').trim());
+  const familyTrigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
+  if (familyTrigger) familyTrigger.hidden = !hasSelectedArtist;
+  if (!hasSelectedArtist && galleryMainSurfaceController?.current?.()?.key === 'artist-family') {
+    closeGalleryMainSurface(false);
+  }
   document.querySelectorAll('[data-gallery-source]').forEach((button) => {
     button.setAttribute('aria-checked', mainState.sources[button.dataset.gallerySource] === false ? 'false' : 'true');
   });
@@ -346,7 +354,7 @@ function updateGalleryMainControls() {
     button.disabled = !preferenceArtist;
   });
   document.querySelectorAll('[data-open-non-album-tracks]').forEach((button) => {
-    const enabled = hasGalleryNonAlbumTracks(state.view);
+    const enabled = getVisibleNonAlbumTracks().length > 0;
     button.disabled = !enabled;
     button.setAttribute('aria-disabled', enabled ? 'false' : 'true');
   });
@@ -414,12 +422,13 @@ function updateGalleryMainChrome() {
   const model = getFilteredGalleryMainModel();
   const primaryArtist = String(state.view.selected_artist || '').trim();
   const sections = getGalleryMainContextSections();
+  const summaryTotals = resolveGallerySummaryTotals(state.view, model.totals, state.gallery.mainState, model.groups);
   const context = resolveGalleryBarContext({
     scrollTop: scroll.scrollTop,
     galleryBarBottom: bar.offsetHeight + 12,
     primaryArtist,
-    artistCount: resolveGallerySummaryTotals(state.view, model.totals).artistCount,
-    albumCount: resolveGallerySummaryTotals(state.view, model.totals).albumCount,
+    artistCount: summaryTotals.artistCount,
+    albumCount: summaryTotals.albumCount,
     groups: sections,
   });
   const name = bar.querySelector('[data-gallery-context-name]');
@@ -462,15 +471,14 @@ function updateGalleryMainChrome() {
 function transitionGalleryMain(action) {
   const previousView = ensureGalleryMainState().view;
   const nextState = applyGalleryClientTransition({ state: state.gallery.mainState, action, location: window.location, history: window.history });
-  const hydrationCategories = resolveGallerySourceHydrationRequest({
-    currentCategories: state.view.loaded_library_categories ?? state.view.visible_library_categories,
-    nextState,
-    action,
-  });
+  // Loose-track payloads have no per-track source provenance. Refresh their
+  // authoritative scope on both hide and show; scope mismatch blocks stale edits.
+  const hydrationCategories = action.type === 'toggle-source'
+    ? activeGallerySourceCategories(nextState) : null;
   state.gallery.mainState = nextState;
   if (previousView !== state.gallery.mainState.view && virtualGrid) virtualGrid.lastKey = '';
   renderArtistGroups({ preserveScroll: true, preserveAbsoluteScroll: true });
-  if (hydrationCategories && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
+  if (hydrationCategories?.length && typeof buildApiUrl === 'function' && typeof fetchAndRender === 'function') {
     const hydrationUrl = buildApiUrl(buildGallerySourceHydrationView({
       currentView: state.view,
       hydrationCategories,
@@ -557,7 +565,9 @@ function initGalleryMain() {
   const scroll = document.getElementById('albums-scroll');
   scroll?.addEventListener('scroll', () => {
     const active = galleryMainSurfaceController?.current?.();
-    if (active?.key?.startsWith?.('artist:')) closeGalleryMainSurface(false);
+    if (active?.key?.startsWith?.('artist:') && active.openingScrollPosition
+        && (scroll.scrollTop !== active.openingScrollPosition.top
+          || scroll.scrollLeft !== active.openingScrollPosition.left)) closeGalleryMainSurface(false);
     if (galleryMainScrollFrame) return;
     galleryMainScrollFrame = requestAnimationFrame(() => { galleryMainScrollFrame = 0; updateGalleryMainChrome(); });
   }, { passive: true });

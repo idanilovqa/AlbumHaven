@@ -213,19 +213,26 @@ export async function expectSharedOutlineGeometry(surfaces) {
 }
 
 export async function expectAnchorFollowsUnfold(page, surfaces) {
-  // parity-check: allow-read-only-measurement-evaluate -- observe the anchor and panel join on animation frames
+  // parity-check: allow-read-only-measurement-evaluate -- observe the rendered anchor and panel join
   const measurement = surfaces.familyPanel.evaluate(panel => new Promise(resolve => {
     const samples = [];
+    // ResizeObserver synchronizes the join after rAF and layout, before paint.
+    // Read in the following task so this frame's rendering update has completed.
+    const nextFrame = () => requestAnimationFrame(() => setTimeout(sample, 0));
     const sample = () => {
       const trigger = document.querySelector('[data-gallery-bar-action="artist-family"]');
       const box = panel.getBoundingClientRect();
-      const left = parseFloat(getComputedStyle(panel).getPropertyValue('--trigger-anchor-left'));
-      samples.push(Math.abs(box.left + left - trigger.getBoundingClientRect().left));
-      if (samples.length === 24) resolve(samples); else requestAnimationFrame(sample);
+      const style = getComputedStyle(panel);
+      const left = parseFloat(style.getPropertyValue('--trigger-anchor-left'));
+      samples.push({ offset: Math.abs(box.left + left - trigger.getBoundingClientRect().left),
+        visible: !panel.hidden && style.visibility !== 'hidden' && box.width > 0 && box.height > 0 });
+      if (samples.length === 24) resolve(samples); else nextFrame();
     };
-    requestAnimationFrame(sample);
+    nextFrame();
   }));
   await surfaces.viewTrigger.click();
-  expect(Math.max(...await measurement)).toBeLessThanOrEqual(2);
+  const samples = await measurement;
+  expect(samples.every(sample => sample.visible)).toBe(true);
+  expect(Math.max(...samples.map(sample => sample.offset))).toBeLessThanOrEqual(2);
   await surfaces.viewTrigger.click();
 }

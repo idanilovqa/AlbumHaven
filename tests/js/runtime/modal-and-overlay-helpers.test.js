@@ -270,6 +270,56 @@ test('non-album tracks follow the displayed artist family instead of a retained 
   assert.equal(context.getVisibleNonAlbumTracks().length, 0);
 });
 
+test('hiding a loaded source scopes Loose Tracks and its Edit tags collection', async () => {
+  const { context } = loadHelper();
+  for (const filename of ['gallery-main-state.js', 'gallery-main-interactions.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), filename), 'utf8'), context, { filename });
+  }
+  // These are the current public non-album payload shape: no root/category field.
+  const mainTrack = { path: '/fixture/main/song.mp3', artist: 'Main Artist', title: 'Main loose song' };
+  const hoardTrack = { path: '/fixture/hoard/song.mp3', artist: 'Hoard Artist', title: 'Hoard loose song' };
+  const categories = ['main_library', 'new_arrivals', 'hoard'];
+  context.state.view = {
+    selected_artist: '', gallery_scope: 'all', query: '',
+    visible_library_categories: categories, loaded_library_categories: categories,
+    non_album_tracks: [mainTrack, hoardTrack],
+  };
+  context.window = { location: { href: 'http://localhost/' }, history: {} };
+  context.renderArtistGroups = () => {};
+  const requests = [];
+  let completeRefresh;
+  const responseReady = new Promise(resolve => { completeRefresh = resolve; });
+  context.buildApiUrl = view => '/view?' + new URLSearchParams(
+    view.visible_library_categories.map(category => ['category', category]),
+  ).toString();
+  context.fetchAndRender = async url => {
+    requests.push(url);
+    await responseReady;
+    // Network boundary: the server already returns a category-scoped list.
+    const selected = new URL(url, 'http://localhost').searchParams.getAll('category');
+    if (!selected.includes('hoard')) context.state.view = {
+      ...context.state.view, non_album_tracks: [mainTrack],
+      visible_library_categories: selected, loaded_library_categories: selected,
+    };
+  };
+  const edited = [];
+  context.closeNonAlbumModal = () => {};
+  context.openTagEditor = album => edited.push(album);
+  context.showRepairAlert = () => {};
+
+  context.transitionGalleryMain({ type: 'toggle-source', source: 'hoard' });
+  assert.equal(context.getVisibleNonAlbumTracks().length, 0, 'unscoped records stay unavailable during refresh');
+  context.openNonAlbumTagEditor();
+  assert.equal(edited.length, 0, 'an immediate Edit tags action cannot use stale records');
+  completeRefresh();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(Array.from(context.getVisibleNonAlbumTracks(), track => track.path), [mainTrack.path],
+    'a hidden source must not remain in the Loose Tracks collection');
+  context.openNonAlbumTagEditor();
+  assert.deepEqual(Array.from(edited[0].tracks, track => track.path), [mainTrack.path]);
+  assert.ok(requests.length > 0, 'payloads without category provenance need an authoritative scoped refresh');
+});
+
 test('backend-scoped non-album search matches survive an empty album gallery', () => {
   const { context } = loadHelper();
   const tracks = [
@@ -349,8 +399,8 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   );
   assert.equal((markup.match(/class="album-track-table"/g) || []).length, 1);
   assert.equal((markup.match(/class="album-track-table__total"/g) || []).length, 1);
-  assert.match(markup, /--cdt-columns: 34px 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
-  assert.match(markup, /data-cdt-column="play"/);
+  assert.match(markup, /--cdt-columns: 36px minmax\(180px, 1fr\) minmax\(220px, \.9fr\) 20px minmax\(54px, auto\)/);
+  assert.doesNotMatch(markup, /data-cdt-column="play"/);
   assert.match(markup, /data-cdt-column="number"/);
   assert.match(markup, /data-cdt-column="title"/);
   assert.match(markup, /data-cdt-column="path"/);
@@ -358,12 +408,12 @@ test('non-album modal adapts ordered exception groups into one shared AlbumTrack
   assert.match(markup, /data-cdt-column="duration"/);
   assert.match(
     markup,
-    /compact-data-table-header"><div data-cdt-column="play"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
+    /compact-data-table-header"><div role="columnheader" data-cdt-column="number"[^>]*>#<\/div><div role="columnheader" data-cdt-column="title"[^>]*>Track<\/div><div role="columnheader" data-cdt-column="path"[^>]*>File path<\/div><div data-cdt-column="problem"[^>]*aria-hidden="true"><\/div><div role="columnheader" data-cdt-column="duration"[^>]*>Length<\/div>/,
   );
   assert.match(markup, /class="album-track-table__secondary">Main Artist feat\. Guest</);
   assert.match(markup, /data-track-row-path="C:\/Music\/Artist\/Rarity\.mp3"/);
   assert.match(markup, /class="play-track-button album-track-table__play"/);
-  assert.match(markup, /data-cdt-column="number"[^>]*>1<\/div>/);
+  assert.match(markup, /data-cdt-column="number"[^>]*><span class="album-track-table__number-play"><span class="album-track-table__number">1<\/span><button class="play-track-button/);
   assert.match(markup, /Artist\/Rarity\.mp3/);
   assert.doesNotMatch(markup, /non-album-type-cell/);
   assert.match(markup, /class="track-duration"[^>]*>4:05<\/span>/);

@@ -1057,15 +1057,11 @@ export class GalleryActions {
   }
 
   async readAlbumCreditByName(albumName) {
-    return String(
-      await this.galleryPage.albumCard.subtitleByAlbumName(albumName).textContent() || '',
-    ).trim();
+    return (await this.galleryPage.albumCard.readVisibleMetadataByAlbumName(albumName)).artist;
   }
 
   async readAlbumYearByName(albumName) {
-    return String(
-      await this.galleryPage.albumCard.yearByAlbumName(albumName).textContent() || '',
-    ).trim();
+    return (await this.galleryPage.albumCard.readVisibleMetadataByAlbumName(albumName)).year;
   }
 
   async clickAlbumDetailsByArtistAndAlbum(artistName, albumName) {
@@ -1079,7 +1075,7 @@ export class GalleryActions {
       titleSelector: this.galleryPage.albumCard.titleButtonSelector,
     };
     // parity-check: allow-read-only-measurement-evaluate -- verify visible card-label layout
-    return card.evaluate((element, labelSelectors) => {
+    const labels = await card.evaluate((element, labelSelectors) => {
       const title = element.querySelector(labelSelectors.titleSelector);
       const artist = element.querySelector(labelSelectors.artistSelector);
       if (!(title instanceof HTMLElement) || !(artist instanceof HTMLElement)) {
@@ -1101,6 +1097,7 @@ export class GalleryActions {
         titleVisible: titleBounds.width > 0 && titleBounds.height > 0,
       };
     }, selectors);
+    return { ...labels, artistText: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist };
   }
 
   async selectAlbumDetailsByIdentity(expected, options = {}) {
@@ -1701,6 +1698,29 @@ export class GalleryActions {
     ).count();
   }
 
+  async expectAlbumAbsentFromSettledGallery(expected) {
+    await expect.poll(async () => {
+      const snapshot = await this.galleryPage.readAlbumTargetState(expected);
+      return {
+        settled: !snapshot.busy && !snapshot.activeLoader && !snapshot.pendingViewTransition
+          && !snapshot.startupHydrating && snapshot.canonicalApplied
+          && snapshot.inputQuery === snapshot.expectedQuery
+          && snapshot.locationQuery === snapshot.expectedQuery,
+        canonicalMatch: snapshot.canonicalMatch,
+        attachedMatch: snapshot.attachedMatch,
+      };
+    }, { timeout: 30000 }).toEqual({ settled: true, canonicalMatch: false, attachedMatch: false });
+  }
+
+  async openSearchedAlbumDetails({ artist, album, year, searchToolbarActions, trackModalActions }) {
+    await this.goto('/?surface=albums');
+    await this.waitForGalleryReady();
+    await searchToolbarActions.search(album, { submitWithEnter: true });
+    await searchToolbarActions.waitForQuery(album);
+    await this.selectAlbumDetailsByIdentity({ artist, album, year });
+    await trackModalActions.waitForInteractiveSummary();
+  }
+
   async readAlbumCardSummaryByIdentity(expected) {
     const card = this.galleryPage.albumCard.cardByIdentity(
       String(expected.artist || '').trim(),
@@ -1709,11 +1729,7 @@ export class GalleryActions {
     );
     await expect(card).toHaveCount(1);
     return {
-      subtitle: String(
-        await card.locator(
-          this.galleryPage.albumCard.subtitleWithinCardSelector,
-        ).textContent() || '',
-      ).trim(),
+      subtitle: (await this.galleryPage.albumCard.readVisibleMetadata(card)).artist,
       trackCount: String(
         await card.locator(
           this.galleryPage.albumCard.trackCountWithinCardSelector,

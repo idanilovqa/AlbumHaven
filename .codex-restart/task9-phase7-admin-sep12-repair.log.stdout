@@ -1,0 +1,103 @@
+[WebServer] Phase 7 production E2E app listening on http://127.0.0.1:6210; SMTP capture control on http://127.0.0.1:6212
+
+Running 8 tests using 1 worker
+
+  x  1 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu (5.4s)
+  x  2 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:93:1 › FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu (9.7s)
+  ok 3 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:162:1 › creates, rotates, accepts, and signs in through a copied invitation (9.2s)
+  ok 4 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:201:1 › delivers a usable invitation through the local SMTP capture server (6.6s)
+  ok 5 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:221:1 › FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority (9.8s)
+  ok 6 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:330:1 › Owner save preserves inherited capabilities and membership (5.2s)
+  ok 7 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:6:1 › FTC-PERMISSIONS-013 Settings keeps one sidebar through account, editor, save and browser history (10.7s)
+  ok 8 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:58:1 › FTC-PERMISSIONS-013 music keeps the same audible stream while Settings navigation changes content (11.2s)
+
+
+  1) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+
+    Error: Unsupported theme color serialization: oklab(0.31981 -0.00621782 -0.0265559 / 0.982478)
+
+       at ..\..\poms\settingsModalAppBar.js:14
+
+      12 |     return first.map((channel, index) => channel * weight + second[index] * (1 - weight));
+      13 |   }
+    > 14 |   throw new Error(`Unsupported theme color serialization: ${color}`);
+         |         ^
+      15 | }
+      16 |
+      17 | export class SettingsModalAppBar extends BasePage {
+        at readThemeColorChannels (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\poms\settingsModalAppBar.js:14:9)
+        at SettingsModalAppBar.readAdminHoverTheme (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\poms\settingsModalAppBar.js:45:73)
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:60:34
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:59:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:93:1 › FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: false
+    Received: undefined
+
+      112 |   const statusResponse = await authenticatedPageGet(recipient.page, '/status');
+      113 |   expect(statusResponse.ok()).toBe(true);
+    > 114 |   expect((await statusResponse.json()).allowed_actions['library.loops.create']).toBe(false);
+          |                                                                                 ^
+      115 |   await menu.settingsMenuItem.click();
+      116 |   const appearance = new UtilityAppearanceTab(recipient.page);
+      117 |   const appearanceActions = new UtilityAppearanceActions(appearance);
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:114:81
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-594e2-out-through-the-shared-menu-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-594e2-out-through-the-shared-menu-phase7-admin-management\test-failed-2.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: fresh-browser-session-runtime-log.txt (text/plain) ──────────────────────────────
+    [2026-09-12T19:34:50.275Z] console/verbose: [DOM] Password forms should have (optionally hidden) username fields for accessibility: (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:6210/accept-invitation:0:0
+    [2026-09-12T19:34:52.779Z] console/error: WebSocket connection to 'ws://127.0.0.1:62...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #5: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+    Error 1
+    Error: expect(received).toBe(expected) // Object.is equality
+    
+    Expected: false
+    Received: undefined
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.j...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #6: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+    [2026-09-12T19:34:47.890Z] console/warning: WebSocket connection to 'ws://127.0.0.1:6210/playback/pcm' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:6210/static/js/runtime-bundle.js?v=f878cf7f813813d8a5d0:7432:0
+    [2026-09-12T19:34:47.896Z] requestfailed/net::ERR...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-594e2-out-through-the-shared-menu-phase7-admin-management\error-context.md
+
+    attachment #9: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-594e2-out-through-the-shared-menu-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-594e2-out-through-the-shared-menu-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:93:1 › FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu 
+  6 passed (1.4m)

@@ -83,3 +83,43 @@ def test_measured_retry_records_actual_provider_outcome_with_row_scope(ledger, m
     assert (scope.account_id, scope.library_id, scope.origin_kind) == (
         owner["account_id"], owner["library_id"], "retry")
     assert events[0]["level"] == ("warning" if fails else "info")
+
+
+@pytest.mark.parametrize('account_scoped', [False, True])
+def test_retry_limit_applies_after_connected_account_selection(ledger, monkeypatch, account_scoped):
+    config = {**ledger['config'], 'LASTFM_API_ENABLED': True}
+    own, other = ledger['own'], ledger['other']
+    def pending(owner, **changes):
+        body, status = bridge.record_playback_session_complete(
+            config, measured(owner, finalized=True, library_track_id=str(owner['track_id']), **changes),
+            account_id=owner['account_id'], library_id=owner['library_id'],
+            lastfm_session=None, user_timezone='UTC',
+            normalize_playback_track_payload=normalize_playback_track_payload,
+            is_meaningful_listen_session=history.is_meaningful_listen_session,
+            append_listen_history_entry=history.append_listen_history_entry,
+            update_listen_history_entry=history.update_listen_history_entry,
+            scrobble_track=lambda *args, **kwargs: pytest.fail('Disconnected seed cannot submit'),
+            log_lastfm_scrobble_event=lambda *args, **kwargs: None)
+        assert status == 200 and body['scrobbled'] is False
+        return body['entry']['id']
+    predecessor_ids = {pending(other, started_at='2026-09-08T12:00:00+00:00', started_at_unix=1788868800)
+                       for _ in range(101)}
+    target_id = pending(own)
+    LastfmPostgresAdapter(config).save_settings({'username': 'target-account', 'session_key': 'target-fixture'}, account_id=own['account_id'])
+    if account_scoped:
+        LastfmPostgresAdapter(config).save_settings({'username': 'other-account', 'session_key': 'other-fixture'}, account_id=other['account_id'])
+    # Generic inventory must retain disconnected rows; dispatch alone filters them.
+    inventory = history.load_pending_scrobble_entries(config, limit=1000)
+    assert predecessor_ids | {target_id} <= {item.entry['id'] for item in inventory}
+    calls = []
+    monkeypatch.setattr(lastfm_retry, 'scrobble_track', lambda config, item, *, session: calls.append(session.username))
+    monkeypatch.setattr(lastfm_retry, 'record_retry_summary', lambda *args, **kwargs: None)
+    monkeypatch.setattr(lastfm_retry, 'log_app_event', lambda *args, **kwargs: None)
+    kwargs = {'account_id': own['account_id'], 'reauthenticated': True} if account_scoped else {}
+    summary = lastfm_retry.retry_pending_lastfm_scrobbles(config, **kwargs)
+    assert calls == ['target-account']
+    assert summary['attempted'] == summary['succeeded'] == 1
+    remaining = history.load_pending_scrobble_entries(config, limit=1000)
+    remaining_ids = {item.entry['id'] for item in remaining}
+    assert target_id not in remaining_ids
+    assert predecessor_ids <= remaining_ids

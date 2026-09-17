@@ -64,7 +64,7 @@ def append_measured(adapter, entry, *, account_id, library_id):
         connection.execute("select pg_advisory_xact_lock(%s)", (lock_key,))
         path = str(item.get("path") or item.get("track_ref") or "")
         claimed = str((item.get("canonical_match") or {}).get("library_track_id") or "")
-        track = connection.execute("""select t.id from library.local_tracks t
+        track = connection.execute("""select t.id,t.track_key from library.local_tracks t
             join library.local_track_files f on f.track_id=t.id
             where t.library_id=%s and f.private_path=%s""", (library_id, path)).fetchone()
         if track is None or (claimed and claimed != str(track["id"])):
@@ -102,11 +102,11 @@ def append_measured(adapter, entry, *, account_id, library_id):
                 last_sequence=%s,finalized=%s,metadata=%s where id=%s""", (*values, current["id"]))
         else:
             connection.execute("""insert into integration.listen_history
-                (account_id,library_id,track_id,played_at,source_family,source_entry_id,
+                (account_id,library_id,track_id,track_key,played_at,source_family,source_entry_id,
                  device_id,session_id,measurement_version,measured_listened_seconds,
                  max_measured_contiguous_seconds,last_sequence,finalized,metadata)
-                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                (account_id,library_id,track["id"],item["started_at"],SOURCE,identity,
+                values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (account_id,library_id,track["id"],track["track_key"],item["started_at"],SOURCE,identity,
                  item["device_id"],item["session_id"],VERSION,*values))
     return item
 

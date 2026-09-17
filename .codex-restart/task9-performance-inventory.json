@@ -1,0 +1,960 @@
+{
+  "targetsStarted": 19,
+  "targetsCompleted": 19,
+  "caseTotals": {
+    "total": 26,
+    "completed": 26,
+    "failed": 14,
+    "skipped": 0,
+    "errors": 0,
+    "passed": 12
+  },
+  "targets": [
+    {
+      "target": "playback-start",
+      "profile": "playback",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "7927c965e0e3463161b7cf0a6897d0647db261e05744831b7974d278e9b38725",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\performance\\playbackStart.spec.js:23:1 › FTC-PLAYER-013 album-detail playback starts promptly regardless of song length or prior use ",
+          "diagnostic": "Error: expect(received).toContain(expected) // indexOf\r\n\r\n    Expected substring: \"Playback Start Signals - Length And Repetition\"\r\n    Received string:    \"Playback Start Signals • Length And Repetition • 2026\"\r\n\r\n      42 |       await galleryActions.clickAlbumDetailsByAlbumName(ALBUM);\r\n      43 |       const summary = await trackModalActions.waitForInteractiveSummary();\r\n    > 44 |       expect(summary.title).toContain(`${ARTIST} - ${ALBUM}`);\r\n         |                             ^\r\n      45 |       expect(summary.trackRows).toBeGreaterThan(ATTEMPTS.at(-1).rowIndex);\r\n      46 |     });\r\n      47 |\r\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\performance\\playbackStart.spec.js:44:29",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\playback-start\\attempt-1\\playbackStart-FTC-PLAYER-0-4bb31-of-song-length-or-prior-use-idle-memory\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "playback-start",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "reporter-finalization",
+            "processStatus": 1,
+            "reporterFinalized": false,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": null,
+            "metricsPath": null,
+            "reportPath": null
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-playback.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\playback-start"
+    },
+    {
+      "target": "gapless-playback",
+      "profile": "playback",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "6d9b0e897e8b793572b62feed688e51cee1e0a636a74e3668cdabdafd334050c",
+        "status": "failed",
+        "total": 2,
+        "completed": 2,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\performance\\gaplessPlayback.spec.js:17:1 › FTC-PLAYER-016 production playback crosses a sample-exact stable-stream boundary ",
+          "diagnostic": "Error: expect(received).toContain(expected) // indexOf\r\n\r\n    Expected substring: \"Gapless Playback Signals - Deterministic Boundaries\"\r\n    Received string:    \"Gapless Playback Signals • Deterministic Boundaries • 2026\"\r\n\r\n      44 |       await galleryActions.clickAlbumDetailsByAlbumName(gaplessPlaybackFixture.album);\r\n      45 |       const summary = await trackModalActions.waitForInteractiveSummary();\r\n    > 46 |       expect(summary.title).toContain(\r\n         |                             ^\r\n      47 |         `${gaplessPlaybackFixture.artist} - ${gaplessPlaybackFixture.album}`,\r\n      48 |       );\r\n      49 |       expect(summary.trackRows).toBeGreaterThanOrEqual(2);\r\n        at C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\performance\\gaplessPlayback.spec.js:46:29",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\gapless-playback\\attempt-1\\gaplessPlayback-FTC-PLAYER-38cb9-xact-stable-stream-boundary-idle-memory\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "gapless-playback",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "reporter-finalization",
+            "processStatus": 1,
+            "reporterFinalized": false,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": null,
+            "metricsPath": null,
+            "reportPath": null
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-playback.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\gapless-playback"
+    },
+    {
+      "target": "idle-memory",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "4073f435e02acf1069f75e3886679cb898f768225b87556a01d19c7a5c12e1dd",
+        "status": "passed",
+        "total": 2,
+        "completed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "idle-memory",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-05-18-493Z",
+            "metricsPath": "history/idleMemory/runs/2026-09-10T09-05-18-493Z/metrics.json",
+            "reportPath": "history/idleMemory/runs/2026-09-10T09-05-18-493Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\idle-memory"
+    },
+    {
+      "target": "all-artists",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "c47f17942912a1e8c6a18b432f8f1b2e7733bc04643fc2f503f829fc7cc4e077",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\allArtistsResponsiveness.spec.js:54:3 › FTC-GALLERY-STARTUP-005A synthetic-large responsiveness › All Artists round-trip reports synthetic-data responsiveness and memory timings ",
+          "diagnostic": "Error: Expected the album details modal footer to include album length.\r\n\r\n    expect(received).toContain(expected) // indexOf\r\n\r\n    Expected substring: \"Length\"\r\n    Received string:    \"\"\r\n\r\n      405 |\r\n      406 |       expect(summary.title, 'Expected the album details modal title to load.').not.toBe('');\r\n    > 407 |       expect(summary.footer, 'Expected the album details modal footer to include album length.').toContain('Length');\r\n          |                                                                                                  ^\r\n      408 |       expect(summary.playButtons, 'Expected per-track play buttons to render in the album details modal.').toBeGreaterThan(0);\r\n      409 |       expect(summary.trackRows, 'Expected the album details modal tracklist to render.').toBeGreaterThan(0);",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\all-artists\\attempt-1\\allArtistsResponsiveness-F-c90ba-siveness-and-memory-timings-synthetic-large-library\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "all-artists",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-06-06-413Z",
+            "metricsPath": "history/allArtistsLocal/runs/2026-09-10T09-06-06-413Z/metrics.json",
+            "reportPath": "history/allArtistsLocal/runs/2026-09-10T09-06-06-413Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\all-artists"
+    },
+    {
+      "target": "artist-family",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "505068c30dfbba88c12123d18c19fea920ddd492fadea18066ea5a213226030c",
+        "status": "failed",
+        "total": 2,
+        "completed": 2,
+        "failed": 2,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\artistFamilyResponsiveness.spec.js:44:3 › FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse scrolling keeps each displayed artist heading unique before and after filtering ",
+          "diagnostic": "TimeoutError: page.waitForFunction: Timeout 10000ms exceeded.\r\n\r\n       at ..\\poms\\basePage.js:53\r\n\r\n      51 |\r\n      52 |   async waitForPageCondition(callback, options = {}, arg = null) {\r\n    > 53 |     await this.page.waitForFunction(callback, arg, options);\r\n         |                     ^\r\n      54 |   }\r\n      55 |\r\n      56 |   async readProductionBootstrapPayload() {\r\n        at ArtistFamily.waitForPageCondition (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\poms\\basePage.js:53:21)\r\n        at ArtistFamilyActions.dragChipBefore (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\actions\\artistFamilyActions.js:117:29)",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\artist-family\\attempt-1\\artistFamilyResponsiveness-eb30e--before-and-after-filtering-synthetic-large-library\\error-context.md\r"
+          ]
+        },
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\artistFamilyResponsiveness.spec.js:191:3 › FTC-SEARCH-NAV-005A synthetic-large artist family responsiveness › Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data ",
+          "diagnostic": "Test timeout of 420000ms exceeded.\r\n\r\n    Error: locator.click: Test timeout of 420000ms exceeded.\r\n    Call log:\r\n      - waiting for locator('[data-gallery-family-panel-body] [data-gallery-family-artist].is-primary')\r\n        - locator resolved to <button type=\"button\" draggable=\"false\" aria-pressed=\"true\" data-gallery-family-artist=\"Cosmic Cathedral\" class=\"artist-family-panel__artist is-active is-primary\">…</button>\r\n      - attempting click action\r\n        2 × waiting for element to be visible, enabled and stable\r\n          - element is not visible\r\n        - retrying click action\r\n        - waiting 20ms\r\n        2 × waiting for element to be visible, enabled and stable\r\n          - element is not visible",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\artist-family\\attempt-1\\artistFamilyResponsiveness-84897-esponsive-on-synthetic-data-synthetic-large-library\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "artist-family",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-07-19-662Z",
+            "metricsPath": "history/artistFamilyLocal/runs/2026-09-10T09-07-19-662Z/metrics.json",
+            "reportPath": "history/artistFamilyLocal/runs/2026-09-10T09-07-19-662Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\artist-family"
+    },
+    {
+      "target": "search-all-artists",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "adb274b135499004d1b27ce90705ce367ebfdc713b67760e92f8064e5881bec3",
+        "status": "failed",
+        "total": 3,
+        "completed": 3,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\allArtistsResponsiveness.spec.js:493:3 › FTC-SEARCH-NAV-003A synthetic-large responsiveness › FTC-SEARCH-NAV-026 clears an Ария search after filtering to Виталий Дубинин without remounting the gallery or reducing Artist Family ",
+          "diagnostic": "Error: Timed out after 60000 ms waiting for settled search query \"\". Observed state: {\"activeLoader\":false,\"activeRuntimeRequestId\":3,\"activeRuntimeRequestUrl\":\"\",\"activeRequestCount\":0,\"canonicalQuery\":\"\",\"canonicalApplied\":false,\"canonicalSurface\":\"albums\",\"inputQuery\":\"\",\"latestFullRequestUrl\":\"http://127.0.0.1:5544/view-data?surface=albums&q=%D0%90%D1%80%D0%B8%D1%8F&gallery_scope=all&category=main_library&category=hoard&category=new_arrivals\",\"loaderStatus\":\"\",\"loaderTitle\":\"\",\"locationQuery\":\"\",\"pendingPayloadReadCount\":0,\"runtimeBusy\":false,\"runtimeViewStateRevision\":1,\"settledEmpty\":false,\"startupHydrating\":false}\r\n\r\n       at ..\\poms\\searchToolbar.js:866\r\n\r\n      864 |       await new Promise((resolve) => setTimeout(resolve, 25));\r\n      865 |     }\r\n    > 866 |     throw new Error(\r\n          |           ^\r\n      867 |       `Timed out after ${timeout} ms waiting for settled search query \"${expected}\". `\r\n      868 |       + `Observed state: ${JSON.stringify(lastObservedState)}`,\r\n      869 |     );\r\n        at SearchToolbar.waitForQuerySettled (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\poms\\searchToolbar.js:866:11)\r\n        at SearchToolbarActions.waitForQuery (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\actions\\searchToolbarActions.js:122:5)",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\search-all-artists\\attempt-1\\allArtistsResponsiveness-F-1979e-y-or-reducing-Artist-Family-synthetic-large-library\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "search-all-artists",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "assertion",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-16-17-601Z",
+            "metricsPath": "history/searchAllArtistsLocal/runs/2026-09-10T09-16-17-601Z/metrics.json",
+            "reportPath": "history/searchAllArtistsLocal/runs/2026-09-10T09-16-17-601Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\search-all-artists"
+    },
+    {
+      "target": "utility-rules",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "b4ce9ed582b864a5bce85ea345fa3f8fe46eabc33d46aa05db5bb307491004ac",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\utilitiesResponsiveness.spec.js:21:3 › FTC-UTIL-RULES-002 synthetic-large utilities rules and sibling-tab responsiveness › FTC-UTIL-RULES-002 warmed Rules and the other utility tabs stay responsive and render their main information ",
+          "diagnostic": "Test timeout of 240000ms exceeded.\r\n\r\n    Error: locator.waitFor: Test timeout of 240000ms exceeded.\r\n    Call log:\r\n      - waiting for locator('#utility-sidebar-label') to be visible\r\n        460 × locator resolved to hidden <span id=\"utility-sidebar-label\">Rules</span>\r\n\r\n\r\n       at ..\\poms\\basePage.js:39\r\n\r\n      37 |\r\n      38 |   async waitForVisible(locator, options = {}) {\r\n    > 39 |     await locator.waitFor({",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\utility-rules\\attempt-1\\utilitiesResponsiveness-FT-1b9f2-nder-their-main-information-synthetic-large-library\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "utility-rules",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-17-06-861Z",
+            "metricsPath": "history/utilityRulesLocal/runs/2026-09-10T09-17-06-861Z/metrics.json",
+            "reportPath": "history/utilityRulesLocal/runs/2026-09-10T09-17-06-861Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\utility-rules"
+    },
+    {
+      "target": "selected-artist",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "a1a8a87b0e19c07f065c6701ad6a5dab1a1a26846648e45733b1615e7431317d",
+        "status": "passed",
+        "total": 2,
+        "completed": 2,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "selected-artist",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-21-47-147Z",
+            "metricsPath": "history/selectedArtistFocusedLocal/runs/2026-09-10T09-21-47-147Z/metrics.json",
+            "reportPath": "history/selectedArtistFocusedLocal/runs/2026-09-10T09-21-47-147Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\selected-artist"
+    },
+    {
+      "target": "search-browse",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "bdf3235f84978919c1b12cbe047c4aa9d7ff94ac2be9cf7f3c707d915f8896ae",
+        "status": "passed",
+        "total": 1,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "search-browse",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-22-38-775Z",
+            "metricsPath": "history/searchBrowseFocusedLocal/runs/2026-09-10T09-22-38-775Z/metrics.json",
+            "reportPath": "history/searchBrowseFocusedLocal/runs/2026-09-10T09-22-38-775Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\search-browse"
+    },
+    {
+      "target": "root-album-browse",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "bdff541e905b6f38671f1b49470ac6faf4a2bedbca2ad2767c9ea4d89aeea779",
+        "status": "passed",
+        "total": 1,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "root-album-browse",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-23-24-798Z",
+            "metricsPath": "history/rootAlbumBrowseFocusedLocal/runs/2026-09-10T09-23-24-798Z/metrics.json",
+            "reportPath": "history/rootAlbumBrowseFocusedLocal/runs/2026-09-10T09-23-24-798Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\root-album-browse"
+    },
+    {
+      "target": "app-open-all-artists",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "b09b449812efbe24e7a22b4703599526f2708e69ee17bd88cbe7ca608c9295fc",
+        "status": "passed",
+        "total": 1,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "app-open-all-artists",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-24-11-237Z",
+            "metricsPath": "history/appOpenAllArtistsFocusedLocal/runs/2026-09-10T09-24-11-237Z/metrics.json",
+            "reportPath": "history/appOpenAllArtistsFocusedLocal/runs/2026-09-10T09-24-11-237Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\app-open-all-artists"
+    },
+    {
+      "target": "rules-focused",
+      "profile": "library",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "34fde8b6137a37f63d7f9b8760d2add649f5a0fdcbac2c502382bf9ee0ae26e6",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\syntheticLargeLibrary\\utilityRules.spec.js:32:3 › FTC-UTIL-RULES-002P synthetic-large utility rules and sibling-tab UI › Rules and sibling utility tabs report library_browse telemetry and timing ",
+          "diagnostic": "Test timeout of 240000ms exceeded.\r\n\r\n    Error: locator.waitFor: Test timeout of 240000ms exceeded.\r\n    Call log:\r\n      - waiting for locator('#utility-sidebar-label') to be visible\r\n        461 × locator resolved to hidden <span id=\"utility-sidebar-label\">Rules</span>\r\n\r\n\r\n       at ..\\poms\\basePage.js:39\r\n\r\n      37 |\r\n      38 |   async waitForVisible(locator, options = {}) {\r\n    > 39 |     await locator.waitFor({",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\rules-focused\\attempt-1\\utilityRules-FTC-UTIL-RULE-25de9-browse-telemetry-and-timing-synthetic-large-library\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "rules-focused",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-24-57-404Z",
+            "metricsPath": "history/rulesFocusedLocal/runs/2026-09-10T09-24-57-404Z/metrics.json",
+            "reportPath": "history/rulesFocusedLocal/runs/2026-09-10T09-24-57-404Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\rules-focused"
+    },
+    {
+      "target": "utility-problematic-files",
+      "profile": "problems",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "1bd671656935748a60e2bd6efec2142b6a083645d26c259ba8a824143dcde8f5",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\utilityProblematicFiles\\utilitiesResponsiveness.spec.js:27:3 › FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view ",
+          "diagnostic": "Test timeout of 240000ms exceeded.\r\n\r\n    Error: locator.waitFor: Test timeout of 240000ms exceeded.\r\n    Call log:\r\n      - waiting for locator('#utility-sidebar-label') to be visible\r\n        464 × locator resolved to hidden <span id=\"utility-sidebar-label\">Albums</span>\r\n\r\n\r\n       at ..\\poms\\basePage.js:39\r\n\r\n      37 |\r\n      38 |   async waitForVisible(locator, options = {}) {\r\n    > 39 |     await locator.waitFor({",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\utility-problematic-files\\attempt-1\\utilitiesResponsiveness-FT-df87f-ters-update-the-detail-view-utility-problematic-files\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "utility-problematic-files",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-30-07-059Z",
+            "metricsPath": "history/utilityProblematicFilesLocal/runs/2026-09-10T09-30-07-059Z/metrics.json",
+            "reportPath": "history/utilityProblematicFilesLocal/runs/2026-09-10T09-30-07-059Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-problems.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\utility-problematic-files"
+    },
+    {
+      "target": "problematic-files-focused",
+      "profile": "problems",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "c3057102bfe30a34dabf5dd1dd45262baa6a984235d2399afbbdf29306a37cbb",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\utilityProblematicFiles\\utilityProblematicFiles.spec.js:22:3 › FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail ",
+          "diagnostic": "Test timeout of 240000ms exceeded.\r\n\r\n    Error: locator.waitFor: Test timeout of 240000ms exceeded.\r\n    Call log:\r\n      - waiting for locator('#utility-sidebar-label') to be visible\r\n        467 × locator resolved to hidden <span id=\"utility-sidebar-label\">Albums</span>\r\n\r\n\r\n       at ..\\poms\\basePage.js:39\r\n\r\n      37 |\r\n      38 |   async waitForVisible(locator, options = {}) {\r\n    > 39 |     await locator.waitFor({",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\problematic-files-focused\\attempt-1\\utilityProblematicFiles-FT-23c30-ummary-and-automatic-detail-utility-problematic-files\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "problematic-files-focused",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-34-39-680Z",
+            "metricsPath": "history/problematicFilesFocusedLocal/runs/2026-09-10T09-34-39-680Z/metrics.json",
+            "reportPath": "history/problematicFilesFocusedLocal/runs/2026-09-10T09-34-39-680Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-problems.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\problematic-files-focused"
+    },
+    {
+      "target": "scan-cold",
+      "profile": "scan",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "9191ce88404064a1a001d6c413e26acc0a877261b2580fb15a254122f5146ff1",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\scanPerformance\\scanPerformance.spec.js:52:3 › isolated scan performance benchmarks › FTC-OPS-014 cold isolated scan captures loader, browse, and folder-threshold timings ",
+          "diagnostic": "Error: Scan Page exit never reached a fully rendered top-of-gallery state: {\"finalSample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\"},\"title\":\"Album 008\"}],\"coverGeneration\":6,\"foregroundIdle\":false,\"scheduler\":{\"active\":1,\"activeBackground\":0,\"activeForeground\":1,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\",\"Scan Artist 002\"],\"loaderTitle\":\"Scanning music files\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"firstReadyMs\":null,\"invalidSamples\":[],\"requireRealCovers\":false,\"sampleCount\":98,\"timeline\":[{\"elapsedMs\":1,\"sample\":{\"cards\":[],\"coverGeneration\":6,\"foregroundIdle\":false,\"scheduler\":{\"active\":0,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":2,\"queuedNear\":2,\"queuedVisible\":0,\"suspended\":true},\"galleryVisible\":false,\"headings\":[],\"loaderTitle\":\"Scanning music files\",\"loaderVisible\":true,\"renderGeneration\":6,\"scrollTop\":0},\"sampleSource\":\"initial\"},{\"elapsedMs\":38,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\"},\"title\":\"Album 008\"}],\"coverGeneration\":6,\"foregroundIdle\":false,\"scheduler\":{\"active\":2,\"activeBackground\":0,\"activeForeground\":2,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\",\"Scan Artist 002\"],\"loaderTitle\":\"Scanning music files\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"sampleSource\":\"mutation\"},{\"elapsedMs\":251,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5700/5f45ce99-8053-463b-aec2-c30f2e05f46c\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5700/25ecef21-9fea-486a-b7a4-56f228cdaee9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5700/1425c3fd-3a6f-4e45-81c9-36363aa593b3\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5700/b99fec85-d2ce-449e-b5d0-b203d096f1ac\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5700/a6931f3e-c3c7-485b-b3ee-e0f3a500994e\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5700/53b5693a-6dfe-4589-bee3-8f66f042e171\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5700/c016f625-598a-454a-be2c-13d631b591d8\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5700/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5700/e5d9e273-c827-4d3e-9c37-d8296aa5492d\"},\"title\":\"Album 008\"}],\"coverGeneration\":6,\"foregroundIdle\":false,\"scheduler\":{\"active\":1,\"activeBackground\":0,\"activeForeground\":1,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\",\"Scan Artist 002\"],\"loaderTitle\":\"Scanning music files\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"sampleSource\":\"animation-frame\"}]}\r\n\r\n    expect(received).not.toBeNull()\r\n\r\n    Received: null\r\n\r\n       at ..\\actions\\scanPageActions.js:183\r\n\r\n      181 |       result.firstReadyMs,\r\n      182 |       `Scan Page exit never reached a fully rendered top-of-gallery state: ${JSON.stringify(result)}`,\r\n    > 183 |     ).not.toBeNull();\r\n          |           ^\r\n      184 |     expect(",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\scan-cold\\attempt-1\\scanPerformance-isolated-s-56fce-nd-folder-threshold-timings-scan-performance\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "scan-cold",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-39-51-712Z",
+            "metricsPath": "history/scanColdLocal/runs/2026-09-10T09-39-51-712Z/metrics.json",
+            "reportPath": "history/scanColdLocal/runs/2026-09-10T09-39-51-712Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\scan-cold"
+    },
+    {
+      "target": "scan-cached",
+      "profile": "scan",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "668842926a9ae83b6e34ccbb5bce560cf4d07ebdd7a40e2201c4c1be63c5e0df",
+        "status": "passed",
+        "total": 1,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "scan-cached",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-41-17-331Z",
+            "metricsPath": "history/scanCachedLocal/runs/2026-09-10T09-41-17-331Z/metrics.json",
+            "reportPath": "history/scanCachedLocal/runs/2026-09-10T09-41-17-331Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\scan-cached"
+    },
+    {
+      "target": "scan-add-album",
+      "profile": "scan",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "236934579004a74b4bd31da36d6e4302bc13b70370be11d1c0252dc9a3f1e6e3",
+        "status": "passed",
+        "total": 1,
+        "completed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "scan-add-album",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "passed",
+        "recoveryUsed": false,
+        "primaryAttempt": 1,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "passed",
+            "eligibleForRecovery": false,
+            "failureCategory": null,
+            "processStatus": 0,
+            "reporterFinalized": true,
+            "metricsComplete": true,
+            "functionalChecksComplete": true,
+            "nonTimingChecksComplete": true,
+            "runId": "2026-09-10T09-42-33-785Z",
+            "metricsPath": "history/scanAddAlbumLocal/runs/2026-09-10T09-42-33-785Z/metrics.json",
+            "reportPath": "history/scanAddAlbumLocal/runs/2026-09-10T09-42-33-785Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\scan-add-album"
+    },
+    {
+      "target": "scan-metadata",
+      "profile": "scan",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "f4aa88c035331b6434b6bf3b93035df4c436ee932d35eabbbcef80adbc5e009f",
+        "status": "failed",
+        "total": 1,
+        "completed": 1,
+        "failed": 1,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\scanPerformance\\scanPerformance.spec.js:616:3 › isolated scan performance benchmarks › FTC-OPS-017 isolated incremental scan refreshes changed metadata promptly ",
+          "diagnostic": "TimeoutError: page.waitForFunction: Timeout 10000ms exceeded.\r\n\r\n       at ..\\poms\\basePage.js:53\r\n\r\n      51 |\r\n      52 |   async waitForPageCondition(callback, options = {}, arg = null) {\r\n    > 53 |     await this.page.waitForFunction(callback, arg, options);\r\n         |                     ^\r\n      54 |   }\r\n      55 |\r\n      56 |   async readProductionBootstrapPayload() {\r\n        at GalleryPage.waitForPageCondition (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\poms\\basePage.js:53:21)\r\n        at GalleryActions.waitForGalleryScrollAtStart (C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\tests\\e2e\\actions\\galleryActions.js:1538:28)",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\scan-metadata\\attempt-1\\scanPerformance-isolated-s-bd922-s-changed-metadata-promptly-scan-performance\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "scan-metadata",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": "2026-09-10T09-43-58-273Z",
+            "metricsPath": "history/scanMetadataLocal/runs/2026-09-10T09-43-58-273Z/metrics.json",
+            "reportPath": "history/scanMetadataLocal/runs/2026-09-10T09-43-58-273Z/report.html"
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\scan-metadata"
+    },
+    {
+      "target": "scan-page",
+      "profile": "scan",
+      "counts": {
+        "version": 1,
+        "phase": "run-final",
+        "nonce": "9210df1c52ad2d4a9bf46dae0fd0648ed3ae28bf6827f9f4aea809925de1502a",
+        "status": "failed",
+        "total": 2,
+        "completed": 2,
+        "failed": 2,
+        "skipped": 0,
+        "errors": 0
+      },
+      "cases": [],
+      "errors": [
+        {
+          "case": "tests\\e2e\\scanPerformance\\scanPerformance.spec.js:891:3 › isolated scan performance benchmarks › FTC-OPS-003C explicit Scan Page preserves and restores browse context through idle ",
+          "diagnostic": "Error: Scan Page exit never reached a fully rendered top-of-gallery state: {\"finalSample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\"},\"title\":\"Album 001\"}],\"coverGeneration\":6,\"foregroundIdle\":true,\"scheduler\":{\"active\":0,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"firstReadyMs\":null,\"invalidSamples\":[],\"requireRealCovers\":false,\"sampleCount\":92,\"timeline\":[{\"elapsedMs\":0,\"sample\":{\"cards\":[],\"coverGeneration\":5,\"foregroundIdle\":true,\"scheduler\":{\"active\":1,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":10,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":true},\"galleryVisible\":false,\"headings\":[],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":true,\"renderGeneration\":5,\"scrollTop\":0},\"sampleSource\":\"initial\"},{\"elapsedMs\":36,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\"},\"title\":\"Album 001\"}],\"coverGeneration\":6,\"foregroundIdle\":true,\"scheduler\":{\"active\":3,\"activeBackground\":2,\"activeForeground\":0,\"queuedBackground\":8,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"sampleSource\":\"mutation\"},{\"elapsedMs\":48,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/d5e45836-6c9a-41c5-af9c-530f1125c809\"},\"title\":\"Album 001\"}],\"coverGeneration\":6,\"foregroundIdle\":true,\"scheduler\":{\"active\":0,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":6,\"scrollTop\":43},\"sampleSource\":\"animation-frame\"}]}\r\n\r\n    expect(received).not.toBeNull()\r\n\r\n    Received: null\r\n\r\n       at ..\\actions\\scanPageActions.js:183\r\n\r\n      181 |       result.firstReadyMs,\r\n      182 |       `Scan Page exit never reached a fully rendered top-of-gallery state: ${JSON.stringify(result)}`,\r\n    > 183 |     ).not.toBeNull();\r\n          |           ^\r\n      184 |     expect(",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\scan-page\\attempt-1\\scanPerformance-isolated-s-f1dac-browse-context-through-idle-scan-performance\\error-context.md\r"
+          ]
+        },
+        {
+          "case": "tests\\e2e\\scanPerformance\\scanPerformance.spec.js:1004:3 › isolated scan performance benchmarks › FTC-OPS-003E dedicated Scan Page cancels regular and full scans ",
+          "diagnostic": "Error: Scan Page exit never reached a fully rendered top-of-gallery state: {\"finalSample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\"},\"title\":\"Album 008\"}],\"coverGeneration\":2,\"foregroundIdle\":true,\"scheduler\":{\"active\":1,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":2,\"scrollTop\":43},\"firstReadyMs\":null,\"invalidSamples\":[],\"requireRealCovers\":true,\"sampleCount\":80,\"timeline\":[{\"elapsedMs\":0,\"sample\":{\"cards\":[],\"coverGeneration\":2,\"foregroundIdle\":true,\"scheduler\":{\"active\":0,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":true},\"galleryVisible\":false,\"headings\":[],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":true,\"renderGeneration\":2,\"scrollTop\":0},\"sampleSource\":\"initial\"},{\"elapsedMs\":29,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\"},\"title\":\"Album 008\"}],\"coverGeneration\":2,\"foregroundIdle\":true,\"scheduler\":{\"active\":0,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":2,\"scrollTop\":43},\"sampleSource\":\"mutation\"},{\"elapsedMs\":365,\"sample\":{\"cards\":[{\"albumKey\":\"scan artist 001::album 001\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20001%5Ccover.jpg&size=480&v=087120377c133f638dcf20091d0b4046a770355fcc9a6bfec20a05abfaed9595\",\"src\":\"blob:http://127.0.0.1:5732/ef4993e7-4fde-4ccf-89fc-a3444dc5c14b\"},\"title\":\"Album 001\"},{\"albumKey\":\"scan artist 001::album 002\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20002%5Ccover.jpg&size=480&v=c807d5ef597880210b85f65bab3fdb2f7a735b40565f37dc3364d1042b2141dc\",\"src\":\"blob:http://127.0.0.1:5732/8bc88647-2e5b-44e1-8108-27a711e0abf9\"},\"title\":\"Album 002\"},{\"albumKey\":\"scan artist 001::album 003\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":252,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20003%5Ccover.jpg&size=480&v=0e1a8b106dd85d017b968a6b9ccda3dc544d2d257454b2d1fe87bdeb504e31a7\",\"src\":\"blob:http://127.0.0.1:5732/cfae7429-5f45-4519-8608-a6d381c40829\"},\"title\":\"Album 003\"},{\"albumKey\":\"scan artist 001::album 004\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":207,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20004%5Ccover.jpg&size=480&v=97e7e23a44df5e691f0fb0fe7dbd388042f010a704b8c58fb3fc81241fe25fc8\",\"src\":\"blob:http://127.0.0.1:5732/f712e851-d736-4f91-996b-63accc45b2ca\"},\"title\":\"Album 004\"},{\"albumKey\":\"scan artist 001::album 005\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":251,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20005%5Ccover.jpg&size=480&v=b2e1d715adc5a22421da17a21a24eb26a843c43addf5876ac9bfac2172300ca2\",\"src\":\"blob:http://127.0.0.1:5732/94f9ae69-bd27-44dc-8e94-1c1a95f1bc46\"},\"title\":\"Album 005\"},{\"albumKey\":\"scan artist 001::album 006\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":480,\"naturalWidth\":209,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20006%5Ccover.jpg&size=480&v=6cc5851c5eb2a0890428e3084681d2b9e38af9d4213d1f1504eb5c8c869baf47\",\"src\":\"blob:http://127.0.0.1:5732/cdad4cc2-26c4-4772-8773-43e859ee0ed8\"},\"title\":\"Album 006\"},{\"albumKey\":\"scan artist 001::album 007\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":211,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20007%5Ccover.jpg&size=480&v=3d9534dac1cb765b97e762c6f5ac9feb2732c3d83b66317142af1d16d32f58a2\",\"src\":\"blob:http://127.0.0.1:5732/3c38244f-070b-4d5d-9e8d-473922d0c34b\"},\"title\":\"Album 007\"},{\"albumKey\":\"scan artist 001::album 008\",\"coverSettled\":true,\"productionCoverReady\":true,\"image\":{\"complete\":true,\"currentSrc\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\",\"galleryCoverLoading\":\"1\",\"galleryCoverSrc\":null,\"naturalHeight\":209,\"naturalWidth\":480,\"productionCoverSrc\":\"http://127.0.0.1:5732/cover?path=C%3A%5CUsers%5CRendref%5C.codex%5Cworktrees%5Cb14c%5Calbum-haven-app%5C.tmp%5Ctask9-performance-7dc537d6%5Calbum-haven-performance-shard-settings-scan%5Cprepared-profile%5Cmusic%5CScan%20Artist%20001%5CAlbum%20008%5Ccover.jpg&size=480&v=737add651a93f5cd26d3e2a38d59bb2c7c5c06bad7e9e6af2bc117288c7636c6\",\"src\":\"blob:http://127.0.0.1:5732/fb6d7176-fe4e-4459-a0b4-5abb32324145\"},\"title\":\"Album 008\"}],\"coverGeneration\":2,\"foregroundIdle\":true,\"scheduler\":{\"active\":1,\"activeBackground\":0,\"activeForeground\":0,\"queuedBackground\":0,\"queuedForeground\":0,\"queuedNear\":0,\"queuedVisible\":0,\"suspended\":false},\"galleryVisible\":true,\"headings\":[\"Scan Artist 001\"],\"loaderTitle\":\"No Active Scan Running\",\"loaderVisible\":false,\"renderGeneration\":2,\"scrollTop\":43},\"sampleSource\":\"mutation\"}]}\r\n\r\n    expect(received).not.toBeNull()\r\n\r\n    Received: null\r\n\r\n       at ..\\actions\\scanPageActions.js:183\r\n\r\n      181 |       result.firstReadyMs,\r\n      182 |       `Scan Page exit never reached a fully rendered top-of-gallery state: ${JSON.stringify(result)}`,\r\n    > 183 |     ).not.toBeNull();\r\n          |           ^\r\n      184 |     expect(",
+          "errorContexts": [
+            "test-results\\playwright-performance-targets\\scan-page\\attempt-1\\scanPerformance-isolated-s-e9e2c-cels-regular-and-full-scans-scan-performance\\error-context.md\r"
+          ]
+        }
+      ],
+      "policy": {
+        "schemaVersion": 1,
+        "target": "scan-page",
+        "selectedContract": "local",
+        "attemptCount": 1,
+        "finalStatus": "failed",
+        "recoveryUsed": false,
+        "primaryAttempt": null,
+        "attemptRecords": [
+          {
+            "attemptNumber": 1,
+            "outcome": "failed",
+            "eligibleForRecovery": false,
+            "failureCategory": "missing-metrics",
+            "processStatus": 1,
+            "reporterFinalized": true,
+            "metricsComplete": false,
+            "functionalChecksComplete": false,
+            "nonTimingChecksComplete": false,
+            "runId": null,
+            "metricsPath": null,
+            "reportPath": null
+          }
+        ]
+      },
+      "log": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log",
+      "artifactRoot": "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\test-results\\playwright-performance-targets\\scan-page"
+    }
+  ]
+}

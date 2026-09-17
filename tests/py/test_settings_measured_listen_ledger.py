@@ -196,3 +196,32 @@ def test_same_sequence_requires_identical_accepted_completion_payload(ledger, ch
         append(ledger, {**entry, **changes})
     assert getattr(caught.value, "status_code", None) == 409
     assert rows(ledger) == before
+
+
+def test_deleting_indexed_track_retains_measured_history(ledger):
+    entry = append(ledger, measured(ledger['own'], finalized=True))
+    before = rows(ledger)[0]
+    with ledger['connect']() as connection:
+        connection.execute('delete from library.local_tracks where id=%s', (ledger['own']['track_id'],))
+    after = rows(ledger)
+    assert len(after) == 1
+    assert after[0]['id'] == before['id']
+    assert after[0]['track_id'] is None
+    assert after[0]['session_id'] == before['session_id']
+    assert after[0]['measured_listened_seconds'] == before['measured_listened_seconds']
+    assert after[0]['metadata']['source_payload']['id'] == entry['id']
+
+
+def test_deleting_listener_retains_measured_history_after_library_transfer(ledger):
+    append(ledger, measured(ledger['own'], finalized=True))
+    before = rows(ledger)[0]
+    with ledger['connect']() as connection:
+        connection.execute('update library.libraries set owner_account_id=%s where id=%s',
+                           (ledger['other']['account_id'], ledger['own']['library_id']))
+        connection.execute('delete from app.accounts where id=%s', (ledger['own']['account_id'],))
+        after = connection.execute('select * from integration.listen_history where id=%s', (before['id'],)).fetchone()
+    assert after is not None
+    assert after['account_id'] is None
+    assert after['library_id'] == before['library_id']
+    assert after['track_id'] == before['track_id']
+    assert after['measured_listened_seconds'] == before['measured_listened_seconds']

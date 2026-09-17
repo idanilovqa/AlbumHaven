@@ -1,0 +1,50 @@
+[WebServer] Phase 7 production E2E app listening on http://127.0.0.1:6210; SMTP capture control on http://127.0.0.1:6212
+
+Running 8 tests using 1 worker
+
+  x  1 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu (15.2s)
+  ok 2 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:93:1 › FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu (12.6s)
+  ok 3 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:162:1 › creates, rotates, accepts, and signs in through a copied invitation (8.6s)
+  ok 4 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:201:1 › delivers a usable invitation through the local SMTP capture server (7.8s)
+  ok 5 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:221:1 › FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority (10.8s)
+  ok 6 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:330:1 › Owner save preserves inherited capabilities and membership (7.7s)
+  ok 7 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:6:1 › FTC-PERMISSIONS-013 Settings keeps one sidebar through account, editor, save and browser history (9.6s)
+  ok 8 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:58:1 › FTC-PERMISSIONS-013 music keeps the same audible stream while Settings navigation changes content (16.5s)
+
+
+  1) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: false
+
+    Call Log:
+    - Timeout 10000ms exceeded while waiting on the predicate
+
+      60 |     const { actual, expected } = await menu.readAdminHoverTheme();
+      61 |     return actual.every((channel, index) => Math.abs(channel - expected[index]) <= 1);
+    > 62 |   }).toBe(true);
+         |      ^
+      63 |   await menu.settingsMenuItem.press('Escape');
+      64 |   await expect(menu.accountMenu).toBeHidden();
+      65 |   await expect(menu.settingsButton).toBeFocused();
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:62:6
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:44:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+  7 passed (1.7m)

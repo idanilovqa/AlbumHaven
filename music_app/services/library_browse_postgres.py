@@ -5688,7 +5688,7 @@ def _album_detail_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        scrobble_counts as (
+        legacy_scrobble_counts as (
           select
             integration.listen_history.track_key,
             count(*)::int as scrobble_count
@@ -5702,6 +5702,19 @@ def _album_detail_sql() -> str:
           )
             and integration.listen_history.scrobble_status = 'scrobbled'
           group by integration.listen_history.track_key
+        ),
+        measured_scrobble_counts as (
+          select t.track_key,count(*)::int as scrobble_count
+          from integration.listen_history h
+          join bootstrap_context b on b.library_id=h.library_id and b.account_id=h.account_id
+          join library.local_tracks t on t.id=h.track_id and t.library_id=h.library_id
+          where h.source_family='rendered_local_listen_session' and h.scrobble_status='scrobbled'
+          group by t.track_key
+        ),
+        scrobble_counts as (
+          select track_key,sum(scrobble_count)::int as scrobble_count
+          from (select * from legacy_scrobble_counts union all select * from measured_scrobble_counts) counts
+          group by track_key
         ),
         track_preferences as (
           select

@@ -1,0 +1,50 @@
+[
+  {
+    "ProcessId": 3552,
+    "ParentProcessId": 37012,
+    "CreationDate": "2026-09-10T04:17:06.170597-06:00",
+    "Name": "node.exe"
+  },
+  {
+    "ProcessId": 7676,
+    "ParentProcessId": 33396,
+    "CreationDate": "2026-09-10T04:15:11.921473-06:00",
+    "Name": "python.exe"
+  },
+  {
+    "ProcessId": 14252,
+    "ParentProcessId": 34156,
+    "CreationDate": "2026-09-10T04:17:13.226612-06:00",
+    "Name": "conhost.exe"
+  },
+  {
+    "ProcessId": 16584,
+    "ParentProcessId": 3552,
+    "CreationDate": "2026-09-10T04:17:06.181991-06:00",
+    "Name": "conhost.exe"
+  },
+  {
+    "ProcessId": 33180,
+    "ParentProcessId": 10220,
+    "CreationDate": "2026-09-10T04:14:55.633614-06:00",
+    "Name": "powershell.exe"
+  },
+  {
+    "ProcessId": 33396,
+    "ParentProcessId": 33180,
+    "CreationDate": "2026-09-10T04:14:58.014818-06:00",
+    "Name": "powershell.exe"
+  },
+  {
+    "ProcessId": 34156,
+    "ParentProcessId": 3552,
+    "CreationDate": "2026-09-10T04:17:13.218743-06:00",
+    "Name": "python.exe"
+  },
+  {
+    "ProcessId": 37012,
+    "ParentProcessId": 33396,
+    "CreationDate": "2026-09-10T04:17:05.461439-06:00",
+    "Name": "node.exe"
+  }
+]

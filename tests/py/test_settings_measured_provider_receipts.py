@@ -111,3 +111,43 @@ def test_sent_unconfirmed_receipt_survives_next_sequence_without_resubmission(le
     assert code==200 and body['scrobbled'] is False
     assert calls==[1]
     assert rows(ledger)[0]['metadata']['source_payload']['scrobble_submission_state'] in ('sent','uncertain')
+
+
+@pytest.mark.parametrize('code', [11, 16, 29, 9])
+def test_explicit_provider_rejection_can_retry_without_duplicating_acceptance(ledger, monkeypatch, code):
+    from music_app.services.lastfm import LastfmError
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise LastfmError('Explicit provider rejection', code=code, retryable=code != 9,
+                              reauthentication_required=code == 9, error_kind='provider_error')
+    entry = payload(ledger)
+    body, status = complete(ledger, entry, provider, monkeypatch)
+    assert status == 200 and body['scrobbled'] is False
+    receipt = rows(ledger)[0]['metadata']['source_payload']
+    assert receipt['scrobble_submission_state'] == 'not_sent'
+    assert receipt['scrobble_retryable'] is True
+    assert len(history.load_pending_scrobble_entries(ledger['config'])) == 1
+    body, status = complete(ledger, entry, provider, monkeypatch)
+    assert status == 200 and body['scrobbled'] is True
+    complete(ledger, entry, provider, monkeypatch)
+    assert len(calls) == 2
+    assert len(rows(ledger)) == 1
+
+
+@pytest.mark.parametrize('kind', ['network_error', 'malformed_response', 'provider_error'])
+def test_ambiguous_retryable_error_never_resubmits_without_provider_rejection(ledger, monkeypatch, kind):
+    from music_app.services.lastfm import LastfmError
+    calls = []
+    def provider(*args, **kwargs):
+        calls.append(True)
+        raise LastfmError('No authoritative provider result', retryable=True, error_kind=kind)
+    entry = payload(ledger)
+    complete(ledger, entry, provider, monkeypatch)
+    receipt = rows(ledger)[0]['metadata']['source_payload']
+    assert receipt['scrobble_submission_state'] == 'uncertain'
+    assert receipt['scrobble_retryable'] is False
+    complete(ledger, entry, provider, monkeypatch)
+    assert calls == [True]
+    assert history.load_pending_scrobble_entries(ledger['config']) == []

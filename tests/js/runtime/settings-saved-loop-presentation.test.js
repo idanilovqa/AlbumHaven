@@ -9,7 +9,7 @@ const loops = [
   { id: 'first', name: 'First chorus', title: 'Owned song', start_seconds: 2.5, end_seconds: 6.75, duration_seconds: 4.25, original_start_seconds: 65.5, original_end_seconds: 69.75 },
   { id: 'second', name: 'Second chorus', title: 'Owned song', start_seconds: 8, end_seconds: 12, duration_seconds: 4, original_start_seconds: 71, original_end_seconds: 75 },
 ];
-function setup() {
+function setup({ realGrouping = false } = {}) {
   const context = {
     window: {}, state: { coverLookup: { drawerOpen: false }, utility: {
       loops: loops.map(loop => ({ ...loop })), selectedLoopId: 'first', selectedLoopGroupKey: 'song',
@@ -31,7 +31,7 @@ function setup() {
   for (const name of ['player-and-waveform', 'utility-list-builders', 'bootstrap-utility-event-handlers', 'utility-loaders-and-cover-lookup', 'tag-editor-and-optimistic-updates']) {
     vm.runInContext(read(name), context);
   }
-  context.groupUtilityLoops = () => [group(context)];
+  if (!realGrouping) context.groupUtilityLoops = () => [group(context)];
   return context;
 }
 function group(context) { return { key: 'song', loops: context.state.utility.loops, representativeLoop: context.state.utility.loops[0] }; }
@@ -233,4 +233,36 @@ test('L06 late loaded loops cannot mount controls while Settings is hidden', () 
   context.initializeUtilityLoopPlayer = () => { mounts += 1; };
   context.renderUtilityLoops();
   assert.equal(mounts, 0);
+});
+
+
+test('filtered loop navigation remains filtered through group expansion and collapse', () => {
+  const context = setup({ realGrouping: true });
+  // Use the production grouping, tree markup, and filtered list renderer.
+  context.document.getElementById = id => id === 'navigation-tree-item-template'
+    ? { textContent: fs.readFileSync(path.join(root, 'music_app/templates/components/navigation-tree-item.html'), 'utf8') }
+    : { hidden: true };
+  vm.runInContext(read('utility-renderers-and-actions'), context);
+  context.state.utility.loops = [
+    { ...loops[0], song_key: 'song', song_identity_status: 'resolved' },
+    { ...loops[1], song_key: 'song', song_identity_status: 'resolved' },
+    { ...loops[1], id: 'other', title: 'Unrelated song', song_key: 'other-song', song_identity_status: 'resolved' },
+  ];
+  context.state.utility.loopsSearchQuery = 'First chorus';
+  context.state.utility.collapsedLoopGroups = { song: true };
+  const list = { innerHTML: '', scrollTop: 42 };
+  context.getUtilityModalElements = () => ({ list });
+  // Drag listeners have a separate contract; this test observes rendered membership.
+  context.bindUtilityLoopDragAndDrop = () => {};
+  context.renderUtilityLoopList({ list }, context.getFilteredUtilityLoops());
+  assert.doesNotMatch(list.innerHTML, /other-song|Second chorus/);
+  for (const collapsed of [false, true, false]) {
+    context.toggleUtilityLoopGroupCollapse('song');
+    assert.equal(context.state.utility.collapsedLoopGroups.song, collapsed);
+    assert.match(list.innerHTML, /data-utility-loop-tree="song"/);
+    if (!collapsed) assert.match(list.innerHTML, /First chorus/);
+    assert.doesNotMatch(list.innerHTML, /other-song|Second chorus/);
+    assert.equal(context.state.utility.loopsSearchQuery, 'First chorus');
+    assert.equal(list.scrollTop, 42);
+  }
 });

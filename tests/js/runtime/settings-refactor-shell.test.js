@@ -114,6 +114,26 @@ test('S03 ArrowDown opens Filters and focuses its first option', () => {
   assert.equal(prevented, true);
 });
 
+for (const key of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+  for (const hasProblems of [false, true]) {
+    test(`Logs Period ${key} never opens Problems filters (${hasProblems ? 'with' : 'without'} problems)`, () => {
+      const { context, els } = harness();
+      context.state.utility.activeTab = 'log-history';
+      context.state.utility.problematicFiles = hasProblems ? [{ problem_reasons: ['Missing year'] }] : [];
+      els.problemFilterMenu.hidden = true;
+      els.problemFilterMenu.querySelectorAll = () => [];
+      els.problemFilterButton.setAttribute('aria-label', 'Period');
+      els.problemFilterButton.closest = selector => selector.includes('problem-filter') ? els.problemFilterButton : null;
+      context.handleUtilityBootstrapKeyDown({ key, target: els.problemFilterButton, preventDefault() {} });
+      assert.equal(context.state.utility.problemDropdownOpen, false);
+      assert.equal(els.problemFilterMenu.hidden, true);
+      assert.equal(els.problemFilterButton.disabled, false);
+      assert.equal(els.problemFilterButton.getAttribute('aria-label'), 'Period');
+      assert.deepEqual(Array.from(context.state.utility.selectedProblemFilters), []);
+    });
+  }
+}
+
 test('S03 search editing keys inside the filter wrapper keep native input behavior', () => {
   const { context, els } = harness();
   const wrapper = element();

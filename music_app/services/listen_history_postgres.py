@@ -333,18 +333,32 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
     return (
         _bootstrap_context_sql()
         + f"""
-        select
-          integration.listen_history.track_key,
-          count(*)::int as scrobble_count
-        from integration.listen_history
-        join bootstrap_context
-          on bootstrap_context.library_id = integration.listen_history.library_id
-         and bootstrap_context.account_id = integration.listen_history.account_id
-        where integration.listen_history.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}')
-          and integration.listen_history.scrobble_status = 'scrobbled'
-          and integration.listen_history.track_key = any(%(track_refs)s)
-        group by integration.listen_history.track_key
-        order by integration.listen_history.track_key;
+        , track_aliases as (
+          select t.id as track_id, t.track_key as track_ref
+          from library.local_tracks t join bootstrap_context b on b.library_id=t.library_id
+          union
+          select t.id, f.private_path
+          from library.local_tracks t join bootstrap_context b on b.library_id=t.library_id
+          join library.local_track_files f on f.track_id=t.id
+        ), accepted as (
+          select h.id,h.track_id,h.track_key
+          from integration.listen_history h join bootstrap_context b
+            on b.library_id=h.library_id and b.account_id=h.account_id
+          where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', 'rendered_local_listen_session')
+            and h.scrobble_status='scrobbled'
+        )
+        select requested.track_ref as track_key,count(distinct h.id)::int as scrobble_count
+        from unnest(%(track_refs)s::text[]) as requested(track_ref)
+        join accepted h on h.track_key=requested.track_ref or exists (
+          select 1 from track_aliases requested_alias
+          where requested_alias.track_ref=requested.track_ref
+            and (requested_alias.track_id=h.track_id or exists (
+              select 1 from track_aliases historical_alias
+              where historical_alias.track_id=requested_alias.track_id
+                and historical_alias.track_ref=h.track_key
+            ))
+        )
+        group by requested.track_ref order by requested.track_ref;
     """
     )
 

@@ -1,0 +1,1293 @@
+{
+  "branch": "2026-09-08-settings-refactor",
+  "base": "c0821b605f7465af851e5957d1f24fb34c2d03f7",
+  "prepared": "2026-09-10T11:22:51.443Z",
+  "candidates": [
+    {
+      "path": ".github/workflows/pr-gates.yml",
+      "sha256": "77930e2ae7e704ab630b13cb7b7720da0474030c5e9fd66e807dca1d81aa1b6e"
+    },
+    {
+      "path": "config.py",
+      "sha256": "5bc70b78c95ab628d9bc0d1f016c0027110eaefdf99e04acf1cc7f4a4de600af"
+    },
+    {
+      "path": "docs/future-feature-plans/foobar-reference-assets/how-to-modal-copy.md",
+      "sha256": "589ccd7a4133f207cba6c9be329f8c720af6b1ba3ba07f9dc02a34b4133a2c34"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-later-intake.md",
+      "sha256": "1c45329b65c89c57b9e3228d7027a90053bba03fd85721dba613eddb807538d1"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task5-validation.md",
+      "sha256": "2dc832753ae7c2310daf2e8a489ec43647b795bfdf656b9b2d6bf10995c559ce"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task6-validation.md",
+      "sha256": "bc6bd83ca72507df2afae8a1e7ab0aadc70bc1fc20935015310961f22c95d6de"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task7-validation.md",
+      "sha256": "0a126773095bffe36e2bf019e06a38e799559a5cf542c4b42d55cdf0708a2b56"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task8-validation.md",
+      "sha256": "b22a59e16c128d413c4af9d6c0426b207524b85d231ec48538750c8d27fd4e78"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task9-validation.md",
+      "sha256": "ddc98dcdedbc832cbfe94f9431473496be998c3ad3884d11a1f6ed776c2c7d97"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor.md",
+      "sha256": "34834f28032fd5b8f942cef323ed5aede33f3b8a59d5ad530848ad08cd10e610"
+    },
+    {
+      "path": "migrations/postgres/0063_scoped_saved_loop_orders.sql",
+      "sha256": "d695f8396915c3cdbe65ed206fdd03384659031d2e68b0399ca99aed88639c9e"
+    },
+    {
+      "path": "migrations/postgres/0064_scoped_operational_log_versions.sql",
+      "sha256": "98fd0d8a7912908fb454ed3b8560648c01d3565378b86dea9c02d8212d4f8c04"
+    },
+    {
+      "path": "migrations/postgres/0065_appearance_loop_control_style.sql",
+      "sha256": "5e881cd776fbee018cc4ff3c61eae9b1fe95f6eb02a0c898007a5dd22ab2bf11"
+    },
+    {
+      "path": "migrations/postgres/0066_allow_harbor_mint_appearance_palette.sql",
+      "sha256": "60a0d9989d0f111744805dbdd3dab211de57d7982281461acc795eeb943d55ff"
+    },
+    {
+      "path": "migrations/postgres/0067_measured_local_listen_sessions.sql",
+      "sha256": "d81bb6ec86944cdaa7788690ee217c65c7050fef9deaefb15e0778d48b34c3af"
+    },
+    {
+      "path": "music_app/__init__.py",
+      "sha256": "90db021baf1dbdba7d90006ee07237e5f247043f1d0fd733c06cb330b11d3373"
+    },
+    {
+      "path": "music_app/routes/admin_asgi.py",
+      "sha256": "ef7a404a36d107f6d5270a4d4709374c4301100bf88bfa5ce0e1dd2767aa81b3"
+    },
+    {
+      "path": "music_app/routes/api_loop_helpers.py",
+      "sha256": "7b1ffa4be17730f88c3c9546c7196b8eee5574a72a00ef4948c41ac07b079943"
+    },
+    {
+      "path": "music_app/routes/api_read_asgi_routes.py",
+      "sha256": "4c1d7e75edfe86a805945afbdf35bc6a47278f34e386a71e01c69b76fcb85cde"
+    },
+    {
+      "path": "music_app/routes/api_wave_a_asgi_routes.py",
+      "sha256": "958915d70e79678a3270766f5170fd3311d60f1554906fde20a1d498a3a597fb"
+    },
+    {
+      "path": "music_app/routes/api_wave_b_asgi_routes.py",
+      "sha256": "ae57c884b457b13d35a3d1a5c4327d7c26e34db374c17cd26e41ee7cb48e3592"
+    },
+    {
+      "path": "music_app/routes/api_wave_d_asgi_routes.py",
+      "sha256": "b1178e93e09c18531036e6e362a8fc83a8346156f510094f515020d27d58d312"
+    },
+    {
+      "path": "music_app/routes/appearance_asgi.py",
+      "sha256": "a6bf52a991024c0f3ee2df0328191a22408fc09124650c6d5c85834a97de806a"
+    },
+    {
+      "path": "music_app/routes/playback_stream_asgi.py",
+      "sha256": "5962c9ffeecc265d1b44002590561bf6fc562ece1907af18c46f8c847671f356"
+    },
+    {
+      "path": "music_app/routes/web_asgi.py",
+      "sha256": "47e0b100d0cba4ed889ff7d61e6a67846e756e137cbdc91d8321b42e056cb499"
+    },
+    {
+      "path": "music_app/services/admin_account_creation.py",
+      "sha256": "6f7b4a243dcd372e00ecbaaf8fb6582250693b7077b23a212e92f5b6a3dde1d8"
+    },
+    {
+      "path": "music_app/services/app_logging.py",
+      "sha256": "ee6a7d24d504b12f57927b39a568f6e66977d77c59152b44674d825b5570e398"
+    },
+    {
+      "path": "music_app/services/appearance_preferences_postgres.py",
+      "sha256": "a87baa8d0c6b6353a9c3836c04aae732f9139cae69dfddc7468c5a0b24b728a5"
+    },
+    {
+      "path": "music_app/services/lastfm.py",
+      "sha256": "5e454b1cbe20561aaf5ad73ca6c0cae2dbcca2e68cf9b7efc7463d8d15c9c3f7"
+    },
+    {
+      "path": "music_app/services/lastfm_account_settings.py",
+      "sha256": "69aab381b6d9271073a4d68299f79ec8b748f9ef01ef955df35898adb6025ff7"
+    },
+    {
+      "path": "music_app/services/lastfm_postgres.py",
+      "sha256": "b117c4f79563b24bab7e5c4a8962e635b80d67bd6c225e81c4e6356c5f6ad6e2"
+    },
+    {
+      "path": "music_app/services/lastfm_retry.py",
+      "sha256": "eec8c4d8267451db49d0025e047d6ba07ea8ec1c1002e0abda59eed77d6fb56a"
+    },
+    {
+      "path": "music_app/services/lastfm_sync_bridge.py",
+      "sha256": "f37589f2e18e99174d5519770b465e0b560f2b9c21a4c3464f8fde8034736683"
+    },
+    {
+      "path": "music_app/services/library_roots.py",
+      "sha256": "4218be2653fedb9c38aea29b655ae60f3b8be16ce9862c502739d625056a3374"
+    },
+    {
+      "path": "music_app/services/library_settings.py",
+      "sha256": "1ebdcdecc20ce54cf798e6999c69bf56c9fb9ecae3d569de0b98c1482097e259"
+    },
+    {
+      "path": "music_app/services/listen_history.py",
+      "sha256": "4190ec5a89c5091a253afd5c6ec2f8c78f965b76fa6ebbf1b8a07c4ce315355f"
+    },
+    {
+      "path": "music_app/services/listen_history_postgres.py",
+      "sha256": "b31df84fda093a28e5719675d652bf74ae86b4cbc42a005cb3958e7616859845"
+    },
+    {
+      "path": "music_app/services/log_history.py",
+      "sha256": "bcc503ae247dc2a741b7397009bd43af27d2d5a26ef33bb0f645f5ba2d9ab3cc"
+    },
+    {
+      "path": "music_app/services/log_history_postgres.py",
+      "sha256": "d6294da312587fa51394138664c4da8ce14e43d0e4ccbe1abbc32d7385bb0e47"
+    },
+    {
+      "path": "music_app/services/loop_request_scope.py",
+      "sha256": "3b1fdd44a2a451a4d04bc4ee0a3cb7b026a0f08984516331375985fc7d5ea4a0"
+    },
+    {
+      "path": "music_app/services/loops.py",
+      "sha256": "2fa1aa88d86fe36c2dc6688f6cae64841a37d63c33cdb835c9706bbbe9480dbc"
+    },
+    {
+      "path": "music_app/services/measured_listen_history.py",
+      "sha256": "3603bd8c06f487d15c3945157b0cb0b33ed0a0391593b523fcc34b85f76c04c9"
+    },
+    {
+      "path": "music_app/services/media_host_roots.py",
+      "sha256": "dbb66ca0ff61a3f64316838a931523057f850fb31194539f96e5ae2a6c3168ff"
+    },
+    {
+      "path": "music_app/services/private_route_boundary.py",
+      "sha256": "b1704037ee96bc0419b7799e3f79afaacef6340e8d7f15fec059fd976889f2b1"
+    },
+    {
+      "path": "music_app/services/saved_loops_postgres.py",
+      "sha256": "71e50551bbb0bf413ae81281ba340e31522c0c068edf302ddfba154c2772f170"
+    },
+    {
+      "path": "music_app/services/scan_state.py",
+      "sha256": "30eff8e2baf7c1d4dd38a4bdb3615477f35f69dccd8cc500b0f33242959a85b1"
+    },
+    {
+      "path": "music_app/services/scoped_library_roots.py",
+      "sha256": "cd705abb7c6838cb50caf4fd88bb69244f7a9a6a5d6116eea687436817e33030"
+    },
+    {
+      "path": "music_app/services/state.py",
+      "sha256": "f5ae9846f1c2e8682fc6b2a418f866413dce229380d970c93a51731c29f5c9e1"
+    },
+    {
+      "path": "music_app/static/css/navigation-tree.css",
+      "sha256": "e6d0502d381de615e9f91ce16a5f97d864b27b8d6d1d9a55987c50b118ff8478"
+    },
+    {
+      "path": "music_app/static/css/runtime/non-album-and-player.css",
+      "sha256": "46a78d72a535880e15b7441ba8798470c05c47ea80634f9e7141968c947b8934"
+    },
+    {
+      "path": "music_app/static/css/runtime/utilities.css",
+      "sha256": "90673ccaf4a57b5e6a51b47da695ad56977b86c7e2dd2a88d53b663b6fa2198a"
+    },
+    {
+      "path": "music_app/static/js/appearance-backgrounds.js",
+      "sha256": "f2b29c36d357d57a4188f5c288f3905c931a75045b781a2649c32f6d73372598"
+    },
+    {
+      "path": "music_app/static/js/appearance-palettes.js",
+      "sha256": "2dbc4e45755939b47709f0337b88643ff89bc4576630d34d6d5e657d576c2350"
+    },
+    {
+      "path": "music_app/static/js/audio-worklets/gapless-playback-processor.js",
+      "sha256": "32e5b7cf163258c99e9bc7ea7c4a7b03df504ce15518c8b9acab686e1f5b6e8c"
+    },
+    {
+      "path": "music_app/static/js/button-component.js",
+      "sha256": "3c36606eae7cdba69f00c1e44a571b09a0742786e2e57205b07ba5a4cc614967"
+    },
+    {
+      "path": "music_app/static/js/navigation-tree.js",
+      "sha256": "25512a255bfa805453381b9af9eb085fa634026fe4bc5b9ed93e7f320385590a"
+    },
+    {
+      "path": "music_app/static/js/runtime-bundle.js",
+      "sha256": "712f5c83e3007c837dd807c8753b31c416a9e7f016732c67386b94e9447b06f6"
+    },
+    {
+      "path": "music_app/static/js/runtime/album-artbox.js",
+      "sha256": "9d3768043fe0973b8c50ebc27ed5eb3931b3c2ba9d7591e26d46fcfb00bd1671"
+    },
+    {
+      "path": "music_app/static/js/runtime/album-track-table.js",
+      "sha256": "1ce3414ed0ca54b845e95181922bf13cadfbaa01c5e335bdaf29be2c877bef7a"
+    },
+    {
+      "path": "music_app/static/js/runtime/appearance-backgrounds-bridge.js",
+      "sha256": "276ec22134cef5ad792eec986185af4bbb7bc35f5a1f3ba19de973999ab870e8"
+    },
+    {
+      "path": "music_app/static/js/runtime/bootstrap-utility-event-handlers.js",
+      "sha256": "de62a9e6587804f20726bc7e067fffd7f09ddbcb3eec4ca21c9a03df3287e5d0"
+    },
+    {
+      "path": "music_app/static/js/runtime/browser-dialog-helpers.js",
+      "sha256": "d78d3c90ba9e8b22e69ac12bbc34d968c68f994d05cb4a446149cfdc9c00a7c4"
+    },
+    {
+      "path": "music_app/static/js/runtime/core-state-and-helpers.js",
+      "sha256": "32a816ff9af14d9d507e583026e2ffd571caaf8db5c9ff602cb10e91f46b8fc5"
+    },
+    {
+      "path": "music_app/static/js/runtime/gallery-refresh-and-status.js",
+      "sha256": "6c152931c88c15c939780aeea5993be9bc00e18e943fd144e00ff660138ead52"
+    },
+    {
+      "path": "music_app/static/js/runtime/library-settings.js",
+      "sha256": "73e773e9b310eace2c6da8d35ec0968e271063bf721a7c3c963e7f2cc9dcdc08"
+    },
+    {
+      "path": "music_app/static/js/runtime/playback-control-cluster.js",
+      "sha256": "6ef9d3df25919dc1ee341a5e60b2c094529f2e2be2ac68a14de1043e9f7df761"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-and-waveform.js",
+      "sha256": "cb38229e4d2ace64e29f427e3ff205dade731ac068332f71d1b7b900f447765a"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-listen-session-helpers.js",
+      "sha256": "74af1e5cd4cff0d89dd340608c6439e6320da06d284f37879e54fe661b33995e"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-loop-playback.js",
+      "sha256": "9b00c49e32e77b7dc9648651b85a290fd9c991b29df91b0b1991810a10aed032"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-streaming-engine.js",
+      "sha256": "a45317f8687f831e8550396ab6d562ccbd8ee00b0a176e297f935ba8266f3090"
+    },
+    {
+      "path": "music_app/static/js/runtime/tag-editor-and-optimistic-updates.js",
+      "sha256": "c22a8abdca84f1063bf647b0c6744ff009c8eb49e02e6756a4d1257b88ebade9"
+    },
+    {
+      "path": "music_app/static/js/runtime/track-modal-and-gallery.js",
+      "sha256": "e726585fdb3ea234b3d04d4f040634d3e2e5bad7c0652aafcb20fc575107b67d"
+    },
+    {
+      "path": "music_app/static/js/runtime/trigger-anchor.js",
+      "sha256": "4a090d66c21cfe85f1e83a84d267edda3bd8b68368fb7f5c6dbdcbe026e16be3"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-list-builders.js",
+      "sha256": "1f0fcd7e49539dc351efc9408243b6ec8db776d657d9d17865aefeedff111bc5"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+      "sha256": "d108e76105d300a362b751cdced8c3d7bf7626bfcce8f840552823fb3a94a60c"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-log-history-query.js",
+      "sha256": "4d0c11c45ff918e439bf1e2daeee60adcde3881ae2494cb226207d964d209d77"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-log-history-ui.js",
+      "sha256": "982ed37eeb6981fe4897c3e3643f83e235815ca5730e0e079a96df8417c5b7fe"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loop-playback.js",
+      "sha256": "3e65b770e9b92c44849c487405dfc5cabab3b9fcd56756c5bc5bcfae8bf2a396"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-renderers-and-actions.js",
+      "sha256": "38e5288e0a86cfb3e2a8c46f310dd8ae0911aa90f7aeb98cb8502a48c67c5101"
+    },
+    {
+      "path": "music_app/static/js/runtime/virtual-artist-grid.js",
+      "sha256": "3540ab53ea50141c8e58ecd2b62d9677034c6dece5edb5d3bc8fd21a04ca8044"
+    },
+    {
+      "path": "music_app/templates/partials/appearance-bootstrap.html",
+      "sha256": "6f11f0291dd91095e9e2c55dd817c6cda5d66c3fc887702744665fac60a72ac7"
+    },
+    {
+      "path": "music_app/templates/partials/confirm-modals.html",
+      "sha256": "7853111ff074210a4db1f3b88b507a7940bfe340244a908b8f2b0f9d456ace40"
+    },
+    {
+      "path": "music_app/templates/partials/navigation-tree-assets.html",
+      "sha256": "5b706b2b5f2572c16262fcfddd90b6797eb0196a1abfd3509316982338748469"
+    },
+    {
+      "path": "scripts/build-runtime-bundle.cjs",
+      "sha256": "fb2f39ca24eba1fb02f25510a3b7bea0de8b00f92efb009d887272c57ac10b8a"
+    },
+    {
+      "path": "scripts/ci/validate-foundation-gates.cjs",
+      "sha256": "49aed0e9065e9f8a58eae33054417831b6851ce37fd3ae09f358bf73a06a5807"
+    },
+    {
+      "path": "scripts/ci/validate-functional-shards.cjs",
+      "sha256": "890d154b7b390b6c2fdf7e9674fb0b7ef2b1439b7bcca3426b29110eb2236091"
+    },
+    {
+      "path": "tests/ci/functional-shards.json",
+      "sha256": "559fbb4734226fc7d9a89c3adf5a7aae184c2e46c0dca20bd98c68bdc28fac48"
+    },
+    {
+      "path": "tests/ci/test-data-matrix.json",
+      "sha256": "aacd3b03a4cf7810f846cb99bafa652b149ad478eae83ba36234a455c1e21bfe"
+    },
+    {
+      "path": "tests/components/albumTrackTable.spec.js",
+      "sha256": "28cc127f1e1d011ccdf03af7b6ea8f6d020a98360c95e2ce5ff74bd1c5b7afb5"
+    },
+    {
+      "path": "tests/components/buttonInteractionOutline.spec.js",
+      "sha256": "23376e8320b0e1f35fbf1da9f18c14a0af5e71eea0de76181336569023b653d8"
+    },
+    {
+      "path": "tests/components/playerViews.spec.js",
+      "sha256": "ea213cc0cc1a2ec80153309f648f412c6ba4bfa0b6531af9a00479149c0a396d"
+    },
+    {
+      "path": "tests/components/playerViews.spec.js-snapshots/docked-compact-player-win32.png",
+      "sha256": "5a35559549c9df080cce697f77e16c719805c2871ecbc99227832eddafc09d59"
+    },
+    {
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png",
+      "sha256": "e1bfdd808a6472bad13f5d8053d43943b8a75329d23d305c915b0fd4acc2a579"
+    },
+    {
+      "path": "tests/components/playerViews.spec.js-snapshots/expanded-waveform-player-win32.png",
+      "sha256": "67c6f643ca7fd007699b413ef0cbc4d75ddbf7eb6ca6174427b06f4f4dc1af37"
+    },
+    {
+      "path": "tests/components/playerViews.spec.js-snapshots/floating-compact-player-win32.png",
+      "sha256": "f1cef9ef8f93e1d95b0d752c7bc5ad8186fa53b409626b8e5ea39570016fcfdf"
+    },
+    {
+      "path": "tests/e2e/actions/artistPageSettingsActions.js",
+      "sha256": "56d602fcecdac988b9ca7287a743bbb4151a71d1e2e846b04da62bbc233766d8"
+    },
+    {
+      "path": "tests/e2e/actions/galleryActions.js",
+      "sha256": "ac7c827cd86f03c83920f2d0e107c08f26838a295fd72b93e206f2d5b8aa993e"
+    },
+    {
+      "path": "tests/e2e/actions/globalPlayerActions.js",
+      "sha256": "c7ddc9d661ada8097a545fcee7ec9a494e8200d68f5e743774b59b9c7851ff36"
+    },
+    {
+      "path": "tests/e2e/actions/settingsModalAppBarActions.js",
+      "sha256": "f67238eb1c17d50b49e293be72b18a1c4e4b41cc4ee0c509a0e83e357941d8a3"
+    },
+    {
+      "path": "tests/e2e/actions/trackModalActions.js",
+      "sha256": "75915eb4a0e07d5a300c8e18c50979791d89adefa67ff4bca31506532a8ad8ea"
+    },
+    {
+      "path": "tests/e2e/actions/utilityIntegrationsActions.js",
+      "sha256": "33fa4b0df71be9122bb7e5178a2880536dca5fa0aaab8333c3d642ed00d0b985"
+    },
+    {
+      "path": "tests/e2e/actions/utilityLogHistoryActions.js",
+      "sha256": "9ecd447c02ee45b9e9b07faece8cb2146dc84fc9c9047e8018920a6b7977c2df"
+    },
+    {
+      "path": "tests/e2e/actions/utilityLoopsActions.js",
+      "sha256": "eaba737f6b50d717bdd0929fb2e1588ee854eee19daf492285a19955a20a0829"
+    },
+    {
+      "path": "tests/e2e/actions/utilityProblematicFilesActions.js",
+      "sha256": "0a3168623482d8c157c654f87615189862abeaf5d94fdfeec714aebc49548152"
+    },
+    {
+      "path": "tests/e2e/actions/utilityRulesActions.js",
+      "sha256": "edcc3df5e53a0d65f2bcc5e399d6b8249d9baf264f92033ca4b8cadba9825211"
+    },
+    {
+      "path": "tests/e2e/helpers/appearancePreferenceIsolation.js",
+      "sha256": "61c7f0b5993cc2cb5589ffa8def29695e991d7671fcf6dbfd88713612e254aaa"
+    },
+    {
+      "path": "tests/e2e/helpers/authenticatedPageRequest.js",
+      "sha256": "c68f028b50b596b29922578471bfb04a2384f71fbb623586938ed45221d6f575"
+    },
+    {
+      "path": "tests/e2e/helpers/ownedUnavailableRoot.js",
+      "sha256": "c385fb05847a556824be5b525e7fd382c444d89cb61fc5798baa5ddeb226270c"
+    },
+    {
+      "path": "tests/e2e/helpers/responsiveGalleryHelpers.js",
+      "sha256": "e5ec7d09b4d1e1e2a6bb310137cc76ec704b29ceddbb8b63bac4dd550960cbb6"
+    },
+    {
+      "path": "tests/e2e/performance/gaplessPlayback.spec.js",
+      "sha256": "74011845f9cf9e9644dece39f15df23d32f6f0b7fc720216342b40d3acf02f13"
+    },
+    {
+      "path": "tests/e2e/performance/playbackStart.spec.js",
+      "sha256": "2a1389985ce93b60ee4a310acb981949359e07963b7ad0ac9ac94648ad53c919"
+    },
+    {
+      "path": "tests/e2e/phase7/admin-management/adminManagement.spec.js",
+      "sha256": "d595a88535e61cdff17363967bffb698de4362e0e38e874d5c46ea59349da3a3"
+    },
+    {
+      "path": "tests/e2e/phase7/poms/settingsShell.js",
+      "sha256": "ba7a9ff0de08684a35e61e89d937ba84289c2321caa5efc3bab84306ec0aa6b6"
+    },
+    {
+      "path": "tests/e2e/poms/albumCard.js",
+      "sha256": "70b74e17213bcb7bf0c622a2c8002e11de44a958787e3b5cf40ce51885c79035"
+    },
+    {
+      "path": "tests/e2e/poms/artistPageSettings.js",
+      "sha256": "34f6b8b8163e657c1965a0598e71abf1eadc926129f469734c1ec0341b9727c9"
+    },
+    {
+      "path": "tests/e2e/poms/basePage.js",
+      "sha256": "eca9dc086493ebd986e1e40b538651ca949173924f5a0ff5a174ac502efbe239"
+    },
+    {
+      "path": "tests/e2e/poms/galleryPage.js",
+      "sha256": "32c062550ba12d34238a995417e0986f1c6ff61f2fa17e59cc1d2707a7f9670e"
+    },
+    {
+      "path": "tests/e2e/poms/globalPlayer.js",
+      "sha256": "9a7623b59037bbf6d5dd07134e76954284081b88dfbe4ca1d80ae8f1494adb38"
+    },
+    {
+      "path": "tests/e2e/poms/searchToolbar.js",
+      "sha256": "3ec5fd6e6b2771a0d24ffaddfdb6deb0085245bb0c0799685a7d6e0abdc17fc3"
+    },
+    {
+      "path": "tests/e2e/poms/settingsIntegrations.js",
+      "sha256": "81afa1a4f1e58d746296125964119ef46eeecaf1eed6695614445ce0190e191b"
+    },
+    {
+      "path": "tests/e2e/poms/settingsModalAppBar.js",
+      "sha256": "37a5b28f2bd5927895121d3389da97e0580f8853f35e264189995d66efda307d"
+    },
+    {
+      "path": "tests/e2e/poms/settingsRefactorShell.js",
+      "sha256": "b0cf7b81d3d5595c4d3496dc470a5434226bf4e4fe067b1303c0072517d57a2f"
+    },
+    {
+      "path": "tests/e2e/poms/trackModal.js",
+      "sha256": "04049616e6ccbfd3eb26b54ba3ac2e3e167dddf999f6ff69afd8c8133fd3b6fb"
+    },
+    {
+      "path": "tests/e2e/poms/utilityAppearanceTab.js",
+      "sha256": "908ac216a9d06757859bed0934c7d8f87f2446e280a73d2af7eec80631d7984e"
+    },
+    {
+      "path": "tests/e2e/poms/utilityIntegrationsTab.js",
+      "sha256": "54bebb3ff8bee16b3d70c632c76c2b4d9a6bf21a087d3a29293025c1d7348d99"
+    },
+    {
+      "path": "tests/e2e/poms/utilityLogHistoryTab.js",
+      "sha256": "57536da82d7240ef407ce1bfb2d6f7da6f825ae427f05403fe2a3c3f33c66ef8"
+    },
+    {
+      "path": "tests/e2e/poms/utilityLoopEntryCard.js",
+      "sha256": "5693b13594917da71df7fbb592511cf013d7d439d6f05853eb75e075c9b11ed5"
+    },
+    {
+      "path": "tests/e2e/poms/utilityLoopTree.js",
+      "sha256": "dc7f8bdfb2b573c3903b43bb2a35924d28ae73585a4fcfacbfaab06c3be984f9"
+    },
+    {
+      "path": "tests/e2e/poms/utilityLoopsTab.js",
+      "sha256": "110e34ac087f81f251d9c540a52bb8d338b82762ed274ac87f56f33700d7d561"
+    },
+    {
+      "path": "tests/e2e/poms/utilityRulesTab.js",
+      "sha256": "e955ab6c66da6babc9b9613af820dafcfdf11fca617a3c68fd1d5ab71020e111"
+    },
+    {
+      "path": "tests/e2e/poms/utilitySidebarSection.js",
+      "sha256": "ef3d897257c29a06080b825cac7273f862a87f072b31729bd4bc165a2cc73f84"
+    },
+    {
+      "path": "tests/e2e/scanPerformance/scanPerformance.spec.js",
+      "sha256": "25348433e599c01d3826fffa0ac3a7dfd95d581a408157113518eabedd769cfa"
+    },
+    {
+      "path": "tests/e2e/specs/albumDetailsComponents.functional.spec.js",
+      "sha256": "0d97968e04148013f11f9f1355ff22e6700cc0b7ebbc590bb6e39bec2399006f"
+    },
+    {
+      "path": "tests/e2e/specs/albumTrackCredits.spec.js",
+      "sha256": "8eef2ca710bdcfeacd15f50425febdfc8ee9736b59a2156b787148b53b5402c5"
+    },
+    {
+      "path": "tests/e2e/specs/appearanceControls.spec.js",
+      "sha256": "07fa43ae7e470b47b3d07cd37ddb2cc59f63123b1f9c033443eba2ae9af13557"
+    },
+    {
+      "path": "tests/e2e/specs/lastfmProductionPath.spec.js",
+      "sha256": "90b42110c4436cd598c5cb6cf927f697f97b4465ea9bf98811b4e1366536c5b5"
+    },
+    {
+      "path": "tests/e2e/specs/loops.functional.spec.js",
+      "sha256": "8a6ae1b0451f5a3abb76c109d8f17ee8718f2dd1387a61ed2249b1d2b6775c9d"
+    },
+    {
+      "path": "tests/e2e/specs/nonAlbumRarity.spec.js",
+      "sha256": "65162e2aa1e236740a59dfd080fe2d3ba64242bca993ea35b8f7941d8ec3d228"
+    },
+    {
+      "path": "tests/e2e/specs/problematicFileNavigation.spec.js",
+      "sha256": "010392b1248a722f148a90050c5f5e67b35219120a81ced429fcc99561644f7f"
+    },
+    {
+      "path": "tests/e2e/specs/settingsIntegrations.functional.spec.js",
+      "sha256": "e66f98005f9646a6089d4bf66cd75b764e8fb727c395de75e12495bd06c93d90"
+    },
+    {
+      "path": "tests/e2e/specs/settingsRefactorShell.spec.js",
+      "sha256": "9fb2a717cdee65be08311b28ed585edab9b755aeb377e32cf036246085b16a86"
+    },
+    {
+      "path": "tests/e2e/support/baseFixtures.js",
+      "sha256": "8fa6d4240fd2bb6f7ee3f946a90ca773b94c68e6d6658b2ba8beacbb55bf146f"
+    },
+    {
+      "path": "tests/e2e/support/isolatedLibraryApp.py",
+      "sha256": "c4539a921fc7d69472d8a1a1db2211d8d79f7ab94b1b246f7fabc5c6a9905521"
+    },
+    {
+      "path": "tests/e2e/support/isolatedPostgres.py",
+      "sha256": "591e256b47b5ff510834e24ff0497ebcb343e33dc90684a04b765140f0963058"
+    },
+    {
+      "path": "tests/e2e/support/scanPerformanceApp.py",
+      "sha256": "e96630e992654ad72c03be27cac609fc13fa6d3dac0869ad9dd4d39a468a302a"
+    },
+    {
+      "path": "tests/e2e/syntheticLargeLibrary/utilitiesResponsiveness.spec.js",
+      "sha256": "5b45bede4853c65a813988326bf756c204a6da616b47e92b07fb80b700b8530a"
+    },
+    {
+      "path": "tests/js/album-card-metadata.test.js",
+      "sha256": "9ca9f453053b338eada530ccb4a09c4d816c943ebe328494909ae1bc4977b880"
+    },
+    {
+      "path": "tests/js/appearance-preference-isolation.test.js",
+      "sha256": "a8de8bb48955b1553545e3788f48be6659c4ce35409e81d1fca04358ee0eb8b5"
+    },
+    {
+      "path": "tests/js/artist-alias-parity-e2e.test.js",
+      "sha256": "875c517e9dde8dc2c2554a08e9451ff99f5d53470cb57632c70b5276a7eaf664"
+    },
+    {
+      "path": "tests/js/base-page-bootstrap-multiple-assignments.test.js",
+      "sha256": "0c328cf0af4b4650601e21bf7f79591b69618f589de0f0257cc1645262b30170"
+    },
+    {
+      "path": "tests/js/ci-fixture-data-contracts.test.js",
+      "sha256": "8f3955cf17925a3f73ea5c01f76e5b4ad483c47e494d79a476f69d3f3edb20ee"
+    },
+    {
+      "path": "tests/js/cloud-test-report.test.js",
+      "sha256": "c53850ce5d98a1e495f8e3d448e0ff1fd196d4cb921d00f0f6a6401311a4305d"
+    },
+    {
+      "path": "tests/js/e2e-action-production-paths.test.js",
+      "sha256": "b38f8402c6fc87eefb06685e760d209041a73a0017f457573efcdc4b46347163"
+    },
+    {
+      "path": "tests/js/non-album-rarity-e2e.test.js",
+      "sha256": "349e66a6e8329ae8e93a6189f1de441776f6b45fb5819f6b55400a47b57e9e50"
+    },
+    {
+      "path": "tests/js/owned-unavailable-root.test.js",
+      "sha256": "26ab5729f453a1facd1494de2094e0261b27dd871a658fe4a6f051f90da4fdf5"
+    },
+    {
+      "path": "tests/js/phase7-account-admin-presentation.test.js",
+      "sha256": "a373fb99f5409560c6ecf14043ae25e8991a21b07d3e924880cda4fec34f42c7"
+    },
+    {
+      "path": "tests/js/python-ci-db-isolation.test.js",
+      "sha256": "cdef7992f7768864b2cdb0eee1b0e97ea49d4390b066fb106bf8e226a09d89a3"
+    },
+    {
+      "path": "tests/js/python-ci-postgres.test.js",
+      "sha256": "05a6a89aa4478327b4327c219efd1642e8029b2cad2dfcdaaa42f21e75c427ff"
+    },
+    {
+      "path": "tests/js/runtime/album-artbox.test.js",
+      "sha256": "3230c7430729c3898e9d80a31dc1c30fc8ed6e27d041c243fde82fe193c3cec2"
+    },
+    {
+      "path": "tests/js/runtime/album-track-table.test.js",
+      "sha256": "b4e10de15c8e736956e71e52aeff3a16704817ba23001f32795f2b3c054261a4"
+    },
+    {
+      "path": "tests/js/runtime/app-form-dialog.test.js",
+      "sha256": "f1a492cfeb92b9efcb11030d43d473ee69f5abbbf838dc1ea4f8de100f565b7a"
+    },
+    {
+      "path": "tests/js/runtime/app-loader-bundle.test.js",
+      "sha256": "f065076dd3abd73ec543cb7687c6ea995f61dbcdc9284b12580b3218c663ee0e"
+    },
+    {
+      "path": "tests/js/runtime/appearance-backgrounds.test.js",
+      "sha256": "5d3a1231de41432017a6255bd6970e24338fd2c541dd0e9ce758e22d0775f802"
+    },
+    {
+      "path": "tests/js/runtime/appearance-editor-theme.test.js",
+      "sha256": "4002896479c2533b9b2f1670b2d30399fa02abd69484831f0f45dc049ada14a2"
+    },
+    {
+      "path": "tests/js/runtime/appearance-palettes.test.js",
+      "sha256": "52ae95573b2eaad9f784934ca74efe6c55f3df8e2d587baa18800983524cddca"
+    },
+    {
+      "path": "tests/js/runtime/appearance-v009-player-isolation.test.js",
+      "sha256": "9af9f4f0ee3c891398a659f3832dec51471667942ea4ccc7ee968c6d507374d9"
+    },
+    {
+      "path": "tests/js/runtime/appearance-waveform-integration.test.js",
+      "sha256": "c588fd8a99968ab93faa8de579cc5c8559763a7e9cda9548f191fe2fe98a9f4e"
+    },
+    {
+      "path": "tests/js/runtime/appearance-waveform-recents.test.js",
+      "sha256": "0262cd932d0076fc14477f70e807583cc4dbdb04953589236d4f967075bf7b87"
+    },
+    {
+      "path": "tests/js/runtime/appearance-workspace.test.js",
+      "sha256": "37af692f12ebbb03da64235b08944b086d36e21c0763c7db63ad074cfb763b28"
+    },
+    {
+      "path": "tests/js/runtime/bootstrap-utility-event-handlers.test.js",
+      "sha256": "67a0cd9448d14bff8a2f33d6aadd3db3c5053e17cd0ee4bc36f3b687bd0ba944"
+    },
+    {
+      "path": "tests/js/runtime/gallery-refresh-and-status.test.js",
+      "sha256": "09efc514a973d821e3556db29a718a6f8005138f52cab20382dcfb869b0edeb6"
+    },
+    {
+      "path": "tests/js/runtime/gallery-tree-selection-performance.test.js",
+      "sha256": "9b4b98211deec6f9df1b29d7e44af37ee74bec823c89fe3ba80e9bb71f26b551"
+    },
+    {
+      "path": "tests/js/runtime/gapless-playback-processor.test.js",
+      "sha256": "9203eeac74cd3bdb70bb64ec5888e85ca30c9744f62827f8b1c20d141f2ff7d4"
+    },
+    {
+      "path": "tests/js/runtime/library-settings.test.js",
+      "sha256": "ab00822858547aa888f209da966c4d30446be0a0b06bc3c688c76118a773dfa9"
+    },
+    {
+      "path": "tests/js/runtime/navigation-tree.test.js",
+      "sha256": "8213747aebec431645e1522217e090d28281b5b28a8e3ecd8ebc68611e62959a"
+    },
+    {
+      "path": "tests/js/runtime/player-and-waveform.test.js",
+      "sha256": "cdd54231528e6df0fe1d302e68459f457a4fd29410a9bc66d33e05e431a9dc49"
+    },
+    {
+      "path": "tests/js/runtime/player-listen-session-helpers.test.js",
+      "sha256": "f0f521aa498881dbb005401559c2ccce251a19e20a96e389f7664dace7e1143c"
+    },
+    {
+      "path": "tests/js/runtime/player-streaming-engine.test.js",
+      "sha256": "f7d5cc17efbc051e863e5537f325d7984e9c49bf741bf0b28118463f3b40e1af"
+    },
+    {
+      "path": "tests/js/runtime/response-state-helpers.test.js",
+      "sha256": "f13fffe24055440f81a9ee0491feb0a0fba668a24afea98a8af1dd757286a2c3"
+    },
+    {
+      "path": "tests/js/runtime/settings-appearance-search.test.js",
+      "sha256": "a3249d16d8f107adfd63ac9c2314092b61fd6cc6779755834fd7160b92e0500c"
+    },
+    {
+      "path": "tests/js/runtime/settings-lifecycle-regressions.test.js",
+      "sha256": "b604dfdc309d11eb2f435def59ecffee442830cc9b2df01691e45a130e5aab80"
+    },
+    {
+      "path": "tests/js/runtime/settings-loop-style-live.test.js",
+      "sha256": "a40a6fdbaf8b1df35416b61d97ef08723990efd3f3231b8dbcdde438300e0800"
+    },
+    {
+      "path": "tests/js/runtime/settings-loop-style-preferences.test.js",
+      "sha256": "4473476192980f96897cb9f388d2389303e72c25da8e3b2a2bb9b4051723a06e"
+    },
+    {
+      "path": "tests/js/runtime/settings-measured-listening.test.js",
+      "sha256": "6596b87e3ef8551b83aacc0027e18b7596e95616631b846576026fd2aff7e438"
+    },
+    {
+      "path": "tests/js/runtime/shell-persistent-player-layout.test.js",
+      "sha256": "74353643cb986475e4aff51580a1df33e6431470d7b1a5056c3a7779089d7f71"
+    },
+    {
+      "path": "tests/js/runtime/tag-editor-and-optimistic-updates.test.js",
+      "sha256": "198b4ea4c20d48d3e0bd2ae300c141c0d13da352d841dcec984edb0b9492180d"
+    },
+    {
+      "path": "tests/js/runtime/trigger-anchor.test.js",
+      "sha256": "cfecc9aaf8524558ca638053d74bc2c650b6f413ea0c5584e2b7fdbea68811f3"
+    },
+    {
+      "path": "tests/js/runtime/utility-integration-settings.test.js",
+      "sha256": "eb32a20e42c14117f924e47a9700fc6caa38a5fb8aeb8f98e594047635c9bc89"
+    },
+    {
+      "path": "tests/js/runtime/utility-list-builders-foobar.test.js",
+      "sha256": "18edb1c2f24980eb2a319cafc75064a9163af25c08881d96aafdcedd5aaa78c3"
+    },
+    {
+      "path": "tests/js/runtime/utility-list-builders-local-playlist-import.test.js",
+      "sha256": "95faeb6d298045f57b6f3382249254a6f45878c8b863dc0cace48bb5fc6e8fe3"
+    },
+    {
+      "path": "tests/js/runtime/utility-list-builders.test.js",
+      "sha256": "3d46861a61106b496f437f26c090ef2c9ab49ec77ec80e36487a812d6abb8bdb"
+    },
+    {
+      "path": "tests/js/runtime/utility-loaders-local-playlist-import.test.js",
+      "sha256": "3ff592819b4d3db42e4e7702839ab77a39c7ca5b9fb71ebde5a93f1517169c1b"
+    },
+    {
+      "path": "tests/js/runtime/utility-log-history-live.test.js",
+      "sha256": "62f823b867b115cf0a1c85a965fa8987c1e1a710ed07a5ce01d19e8cb5f57bcd"
+    },
+    {
+      "path": "tests/js/runtime/utility-log-history-query.test.js",
+      "sha256": "d33542fcb987e5dbf11d99b5127d2fe5c263e29db02995c444c6ffed556d2c6c"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-load-generation.test.js",
+      "sha256": "985afc329c354df6c6ff639fbc6519f7d8507a2a522294eea77d6e040dcfc641"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-playback.test.js",
+      "sha256": "50ae16555af29258b2be6e79b63942826d10e0300ef891d234eb38d4ee48f11c"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-reorder.test.js",
+      "sha256": "53df3be008d2b1e971512c6be141ce04b5f3052bd519abfa4d04a69a6ef73ecd"
+    },
+    {
+      "path": "tests/js/runtime/utility-problematic-focused-track-render.test.js",
+      "sha256": "12d9647de095fcaf4ee522422abf1a4d07a33e7f443cb58adc56f32f84ceafb0"
+    },
+    {
+      "path": "tests/js/runtime/utility-rules-search.test.js",
+      "sha256": "a5d84ff53956ebf9c55e3e63513b341c79158f924bfac005e1ae356169a6df8d"
+    },
+    {
+      "path": "tests/js/runtime/virtual-artist-grid.test.js",
+      "sha256": "dd6e5aa2ca777640ea58733e00ae724277f27dd99b0e94a554bafec5b104123b"
+    },
+    {
+      "path": "tests/js/search-toolbar-query-state.test.js",
+      "sha256": "5dda85d8b881e30b1a65ecdac501f343748879b52c1426abaeeafc35facca676"
+    },
+    {
+      "path": "tests/js/settings-menu-theme-measurement.test.js",
+      "sha256": "9c4817bfbf1bee7acb73ff29263b1472b3d445cb33c1cc0d54dfa71160956be9"
+    },
+    {
+      "path": "tests/js/validate-foundation-gates.test.js",
+      "sha256": "9779c6abeaee9254598018d3d3ed4804aeae54bf88786b18c0063d9566c25241"
+    },
+    {
+      "path": "tests/js/validate-functional-shards.test.js",
+      "sha256": "658bef8970270c4dd1c4746a82504300d54f90cd7f28ab892d22eb05a3512bae"
+    },
+    {
+      "path": "tests/py/asgi_testing.py",
+      "sha256": "00415b9e67062f27f0eb5c5fbb06f19f6d38635941a75fecf5aa674cf4ef9a39"
+    },
+    {
+      "path": "tests/py/runtime_testing.py",
+      "sha256": "c47c801f5c02558f7c55ced9c817ec2e3a4b297493ead82954b66f3f707505d8"
+    },
+    {
+      "path": "tests/py/test_account_appearance_asgi.py",
+      "sha256": "45ca1b72360ae244b0ccdf926d6523731f19b98e0ecbe34b3dcbe7505ba1315e"
+    },
+    {
+      "path": "tests/py/test_admin_members_asgi.py",
+      "sha256": "d6e7f9f0b4ceab761eaf39d5c6af25956fbe34dd4721dfb1780fd2240ddb5ad7"
+    },
+    {
+      "path": "tests/py/test_api_wave_b_asgi_routes.py",
+      "sha256": "fb6ce36865d3d4f0cb1ce4f9ff69ea82dccdf78380cd59083b20a1a5ea6d6b1d"
+    },
+    {
+      "path": "tests/py/test_api_wave_d_asgi_routes.py",
+      "sha256": "8403e643d96caaf3fd76f01768fe618056cdf7580df14d1f500580f9d4af773d"
+    },
+    {
+      "path": "tests/py/test_app_factory.py",
+      "sha256": "6f57a0412784c48df9279866fad0c68f20f4321e48ca6b09ade47abdd8f4ec65"
+    },
+    {
+      "path": "tests/py/test_app_logging.py",
+      "sha256": "20177efa978cd5f68fd02e916cf822e75fa493b99ab01bc1d8a98c87f0d6f892"
+    },
+    {
+      "path": "tests/py/test_appearance_palettes.py",
+      "sha256": "2e091743e9adc97b17b78cbbd55ebb94b630c5ec2ee68cf68c5c32593a32a0a1"
+    },
+    {
+      "path": "tests/py/test_appearance_preferences_postgres.py",
+      "sha256": "46577c8bf6f448dff821d9cff28d675bd53e297f87f3e97d8a7ccb1e25fc2dff"
+    },
+    {
+      "path": "tests/py/test_appearance_waveform_history.py",
+      "sha256": "1696946e957262eb3c163ffa362d3ef96ee805828ea7b0c0220a641192e635cb"
+    },
+    {
+      "path": "tests/py/test_compact_player_appearance.py",
+      "sha256": "f2fd5dee95bb7704c2b978d46c7065e7e821ac5ef1928501cd9d38a329cf6811"
+    },
+    {
+      "path": "tests/py/test_isolated_postgres_live.py",
+      "sha256": "9f0a9ac0f8a20a51a626ba7fddc39109aa979e651f684df085b4e10e5a6e9e9f"
+    },
+    {
+      "path": "tests/py/test_isolated_postgres_migration_ledger.py",
+      "sha256": "93d0843bb74fba683fe5ba22f581cf6c97573912b58108f07ae1f057d7644179"
+    },
+    {
+      "path": "tests/py/test_lastfm_pytest_safety.py",
+      "sha256": "42ac5c03f09ed0a345f5cfbf25daa3e5ba371ee6feb7af1c2c7a8e1b872e58de"
+    },
+    {
+      "path": "tests/py/test_lastfm_retry.py",
+      "sha256": "b0f3ff3087b82b9d80175632ec9dcc1b68ca594bec304b65a023bebc18e57b13"
+    },
+    {
+      "path": "tests/py/test_lastfm_settings.py",
+      "sha256": "d4bc4f1d534898aeec49dab8ffdd395af0403ec42283282029791154ad08fb99"
+    },
+    {
+      "path": "tests/py/test_listen_history.py",
+      "sha256": "0f813fed47a54b3631f1d7ce2a160d10a243b500f0734ee3760d7f33693e59ee"
+    },
+    {
+      "path": "tests/py/test_log_history_background_provenance.py",
+      "sha256": "fc093c08d8549728ba9ee8151268263ca62fb6b122cb3f75114583ca383e9e8a"
+    },
+    {
+      "path": "tests/py/test_log_history_export_grant.py",
+      "sha256": "6d0bce60aff89fb9230e9f29aafc7c3d2f003d122557657c651fdb0190c2534a"
+    },
+    {
+      "path": "tests/py/test_log_history_finalizer_scope.py",
+      "sha256": "e4e812fdc170f5f77d8989589017cdee510e7180ae4c4f8298ae3b656f977a59"
+    },
+    {
+      "path": "tests/py/test_log_history_postgres.py",
+      "sha256": "ac5960df7d18765c6c76616b855e15bcf9ff4bd148be6fe31dc565537a33ab71"
+    },
+    {
+      "path": "tests/py/test_log_history_query_bounds.py",
+      "sha256": "84fbc43b7d90288440991ed81167e73772121012c2521f8354b4394d6ab8376b"
+    },
+    {
+      "path": "tests/py/test_log_history_read_consistency.py",
+      "sha256": "bebdf5e82e3221af14b3fdc1cbcea1c7f26c129fbe700a3850167f7ca3e0266a"
+    },
+    {
+      "path": "tests/py/test_log_history_retry_persistence.py",
+      "sha256": "dbd4815f49ab144ce58eee0278f59304606a036ccf65a4b9a0b4fb37b1952604"
+    },
+    {
+      "path": "tests/py/test_log_history_route_availability.py",
+      "sha256": "b9148def16d936859052f27e787fea7999c19880fad1908cb26f06bb7a7cb6e9"
+    },
+    {
+      "path": "tests/py/test_log_history_route_scope.py",
+      "sha256": "a616495e04de9b3c31a7583f3da3fdf8cfa70d1e2f779fdd0f719240dcb0c110"
+    },
+    {
+      "path": "tests/py/test_log_history_scoped_queries.py",
+      "sha256": "1923bbdb83099323ed93ee271c665477eb13f069edb230a95fbc7ae5e99c1aaf"
+    },
+    {
+      "path": "tests/py/test_log_history_transient_store.py",
+      "sha256": "122e4cbd2b65163851e83343984bdcd98356e0066e7f6a9ce8228af549edb704"
+    },
+    {
+      "path": "tests/py/test_loop_error_projection.py",
+      "sha256": "1d62600070a524698d8164b37bb663dae431b4e1d6d917782731abd902256ce5"
+    },
+    {
+      "path": "tests/py/test_loop_public_projection.py",
+      "sha256": "03e196e0fe3faae2066c95ff5cd9631e70e7fe7369806b1e4389956732572d1f"
+    },
+    {
+      "path": "tests/py/test_loop_reorder.py",
+      "sha256": "0c5d7724f47d89f3c85285acf77df4a3fabe09788b99d538908bb97d69debdd9"
+    },
+    {
+      "path": "tests/py/test_loop_review_boundaries.py",
+      "sha256": "dcb6299559f738be62c8b800cfc8b47a09bbda8bd92c28b8e4543edf9cf1300d"
+    },
+    {
+      "path": "tests/py/test_loop_scope_boundaries.py",
+      "sha256": "c24fb8983b1f985675ed5b5c2b8e38ed751f871cbbb54c4847caad501ed849a2"
+    },
+    {
+      "path": "tests/py/test_loop_source_duration_authority.py",
+      "sha256": "4eb0035b4656b1cfc0848a71813b202217ea97efcc4cd24245e356a10a362583"
+    },
+    {
+      "path": "tests/py/test_loop_source_year.py",
+      "sha256": "2784884e6b0e21d920021558b62998980ef43762f316008178d5e35a68c7c3da"
+    },
+    {
+      "path": "tests/py/test_playback_capability_projection.py",
+      "sha256": "13d23c71105270e1f9b58f1db9ae1d0c40036bafca4516f0eea403511478c48e"
+    },
+    {
+      "path": "tests/py/test_playback_stream_asgi.py",
+      "sha256": "1c4ec451725ee533bd6f16e24699eda4495d93bec2d8c75505a7834ad4139883"
+    },
+    {
+      "path": "tests/py/test_postgres_migrations.py",
+      "sha256": "c5591fc1ed628527c7fb2a034befe70ad131fc155b0b7b4ca44c8f7bc591c282"
+    },
+    {
+      "path": "tests/py/test_postgres_structural_tag_edit.py",
+      "sha256": "2429e3536aa4236c0bc3068b7764833ba4f934ade028d0310656bc9f31e85de3"
+    },
+    {
+      "path": "tests/py/test_repair_previews.py",
+      "sha256": "423167b7c35c6c84d2109da01fe44981a470e1b215d14a73d6fe0be66f8b9b0c"
+    },
+    {
+      "path": "tests/py/test_runtime_shutdown.py",
+      "sha256": "8d1f10f6ad2ca5f02ab3aa69c75368c6f30b310f472563b146b00f9143979239"
+    },
+    {
+      "path": "tests/py/test_settings_browse_environment.py",
+      "sha256": "4a99ec90df3dc025fc764e9e427a5a7a245b2d3d2cd4d673559a09bf59bbdf71"
+    },
+    {
+      "path": "tests/py/test_settings_host_root_authority.py",
+      "sha256": "cf729d368df794daa194133100a7c2ee05d5a64b6e3c681a5800d7664ac9bc80"
+    },
+    {
+      "path": "tests/py/test_settings_lastfm_account_credentials.py",
+      "sha256": "18da981511739b709caa119aba7f16327b2b5d01e68df1593df4b40c237f79e6"
+    },
+    {
+      "path": "tests/py/test_settings_lastfm_request_account.py",
+      "sha256": "ea8b66126b9370804426e9db95b873ba2edabf28c3eaad153258d52f05e14da0"
+    },
+    {
+      "path": "tests/py/test_settings_loop_style_postgres.py",
+      "sha256": "a6c3257b6b50e4d17d8a8f090aa158c77a2451b0d96aa388a0f5da74ac0f3be0"
+    },
+    {
+      "path": "tests/py/test_settings_loop_style_preferences.py",
+      "sha256": "dbb704fe1890627b6804b5f25b3f7e2263532e4be8cff08f6bc709c1d0e77768"
+    },
+    {
+      "path": "tests/py/test_settings_loop_style_routes.py",
+      "sha256": "4c658511e91c31feb9e05d71b95276bb93a869730e6544dffadd97ccea0a2b60"
+    },
+    {
+      "path": "tests/py/test_settings_measured_completion_scope.py",
+      "sha256": "e096b17a4c99be93c0c7c2840d09fa583e353ce8e7a247bdcc58e6edd6cf6dfb"
+    },
+    {
+      "path": "tests/py/test_settings_measured_credential_boundary.py",
+      "sha256": "65014c3b8ab7298d0698a7d1d66f2a4db65a1f8f841dffdbd3851e195f3ab866"
+    },
+    {
+      "path": "tests/py/test_settings_measured_listen_ledger.py",
+      "sha256": "c738bbd82921ee0b39dd8a45dbd75ad922229109e24059c545df0e4aaede1c05"
+    },
+    {
+      "path": "tests/py/test_settings_measured_provider_receipts.py",
+      "sha256": "4812df2de51e8eeb16d70c91e8258cc58ee893967069177e46fe807c045ce7cf"
+    },
+    {
+      "path": "tests/py/test_settings_measured_retry_account.py",
+      "sha256": "f029c5f420157ae70b9921710049b86e2ad5e52540975a4119c04636bae4cad7"
+    },
+    {
+      "path": "tests/py/test_settings_measured_statistics.py",
+      "sha256": "37daf9cd6cb99dcd45bd377ed6de0059177f1b188e4a529d7b1cd4a658b52a13"
+    },
+    {
+      "path": "tests/py/test_settings_navigation_assets.py",
+      "sha256": "b45297a05db16956d5ce8179714cdf33cef1f6232a71a7a09304aecbf9659e21"
+    },
+    {
+      "path": "tests/py/test_settings_scoped_root_persistence.py",
+      "sha256": "9467c231b0cb7c36e1c6dda39e17c5646297ad068c88b1ecaa7defeae0d69b29"
+    },
+    {
+      "path": "tests/py/test_settings_scrobble_status_counts.py",
+      "sha256": "43780c625aa1d380891ba6b90e2cd77f66b1b2436769a0656f1b8b6583723d0b"
+    },
+    {
+      "path": "tests/py/test_shared_app_bar_templates.py",
+      "sha256": "c288450a5c01b43280626716c1b8ee895e23a6c9e7ab8e20096dacdf74644c1c"
+    },
+    {
+      "path": "tests/py/test_web_account_menu.py",
+      "sha256": "464239d90745ece11f1db5156a2ccf2fea0a7f616f8e87a2fb95dc38f3107142"
+    },
+    {
+      "path": "tests/py/test_web_asgi_routes.py",
+      "sha256": "b3718d07820bcc91b4ce07aa24b270faba0d1f62d834608142f7a00b9ae01fd3"
+    },
+    {
+      "path": "tests/py/test_web_bootstrap.py",
+      "sha256": "fbbe83d7d0e4df83134820f66e2abd89761105811bad81699f2c2ee34d853983"
+    }
+  ],
+  "excludedTracked": [
+    "music_app/static/css/gallery-main.css"
+  ],
+  "excludedUntracked": [
+    ".codex-restart/fix_task5_loop_loader.py",
+    ".codex-restart/fix_task5_membership_generation.py",
+    ".codex-restart/fix_task6_asgi_harness.py",
+    ".codex-restart/fix_task6_retry_scope_fixture.py",
+    ".codex-restart/gallery-pr-body.md",
+    ".codex-restart/restart-5001.py",
+    ".codex-restart/settings-apply-loop-migration.py",
+    ".codex-restart/settings-apply-pending-migrations.py",
+    ".codex-restart/settings-validation-restart.ps1",
+    ".codex-restart/settings-validation-session.json",
+    ".codex-restart/settings-validation-start.ps1",
+    ".codex-restart/settingsRefactorShell.pom-draft.js",
+    ".codex-restart/task4-commit-manifest.json",
+    ".codex-restart/task4-css-tests-overlay-snippet.txt",
+    ".codex-restart/task4-css-tests-snippet.txt",
+    ".codex-restart/task5-backend-focused.py",
+    ".codex-restart/task5-cleanup-failed-fixtures.py",
+    ".codex-restart/task5-commit-manifest.json",
+    ".codex-restart/task5-database-session.json",
+    ".codex-restart/task5-database-start.ps1",
+    ".codex-restart/task5-frozen-files/docs/superpowers/plans/2026-09-09-settings-refactor-checkpoint.md",
+    ".codex-restart/task5-frozen-files/docs/superpowers/plans/2026-09-09-settings-refactor-later-intake.md",
+    ".codex-restart/task5-frozen-files/docs/superpowers/plans/2026-09-09-settings-refactor-task5-validation.md",
+    ".codex-restart/task5-frozen-files/docs/superpowers/plans/2026-09-09-settings-refactor.md",
+    ".codex-restart/task5-frozen-files/manifest.json",
+    ".codex-restart/task5-frozen-files/migrations/postgres/0063_scoped_saved_loop_orders.sql",
+    ".codex-restart/task5-frozen-files/music_app/routes/api_loop_helpers.py",
+    ".codex-restart/task5-frozen-files/music_app/routes/api_read_asgi_routes.py",
+    ".codex-restart/task5-frozen-files/music_app/routes/api_wave_b_asgi_routes.py",
+    ".codex-restart/task5-frozen-files/music_app/routes/playback_stream_asgi.py",
+    ".codex-restart/task5-frozen-files/music_app/routes/web_asgi.py",
+    ".codex-restart/task5-frozen-files/music_app/services/loop_request_scope.py",
+    ".codex-restart/task5-frozen-files/music_app/services/loops.py",
+    ".codex-restart/task5-frozen-files/music_app/services/saved_loops_postgres.py",
+    ".codex-restart/task5-frozen-files/music_app/static/css/runtime/non-album-and-player.css",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime-bundle.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/album-artbox.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/core-state-and-helpers.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/player-and-waveform.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/player-loop-playback.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/track-modal-and-gallery.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/utility-list-builders.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/utility-loop-playback.js",
+    ".codex-restart/task5-frozen-files/music_app/static/js/runtime/utility-renderers-and-actions.js",
+    ".codex-restart/task5-frozen-files/tests/js/runtime/album-artbox.test.js",
+    ".codex-restart/task5-frozen-files/tests/js/runtime/utility-loop-load-generation.test.js",
+    ".codex-restart/task5-frozen-files/tests/js/runtime/utility-loop-playback.test.js",
+    ".codex-restart/task5-frozen-files/tests/js/runtime/utility-loop-reorder.test.js",
+    ".codex-restart/task5-frozen-files/tests/py/test_api_wave_b_asgi_routes.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_error_projection.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_public_projection.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_reorder.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_review_boundaries.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_scope_boundaries.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_loop_source_duration_authority.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_playback_stream_asgi.py",
+    ".codex-restart/task5-frozen-files/tests/py/test_web_asgi_routes.py",
+    ".codex-restart/task6-backend-focused.py",
+    ".codex-restart/task7-backend-focused.py",
+    ".codex-restart/task7-neighbor-inventory.py",
+    ".codex-restart/task8-focused.py",
+    ".codex-restart/task8-harbor-focused.py",
+    ".codex-restart/task9-browser-repair-evidence.md",
+    ".codex-restart/task9-collect-component-inventory.cjs",
+    ".codex-restart/task9-collect-functional-inventory.cjs",
+    ".codex-restart/task9-component-cleanup.json",
+    ".codex-restart/task9-component-inventory.json",
+    ".codex-restart/task9-component-repair3-active.json",
+    ".codex-restart/task9-component-triage.md",
+    ".codex-restart/task9-final-verification-queue.md",
+    ".codex-restart/task9-functional-all-cleanup.json",
+    ".codex-restart/task9-functional-all-result.json",
+    ".codex-restart/task9-functional-component-result.json",
+    ".codex-restart/task9-functional-contract-map.md",
+    ".codex-restart/task9-functional-export-result.json",
+    ".codex-restart/task9-functional-integration-help-result.json",
+    ".codex-restart/task9-functional-integration-roots-result.json",
+    ".codex-restart/task9-functional-inventory.json",
+    ".codex-restart/task9-functional-monitor.ps1",
+    ".codex-restart/task9-functional-native-result.json",
+    ".codex-restart/task9-js-eight-fixes-active.json",
+    ".codex-restart/task9-js-failure-triage.md",
+    ".codex-restart/task9-js-repair-full-active.json",
+    ".codex-restart/task9-js-repair-full-result.json",
+    ".codex-restart/task9-normalize-performance.py",
+    ".codex-restart/task9-performance-active.json",
+    ".codex-restart/task9-performance-cleanup.json",
+    ".codex-restart/task9-performance-finishing-child.json",
+    ".codex-restart/task9-performance-inventory.json",
+    ".codex-restart/task9-performance-inventory.ps1",
+    ".codex-restart/task9-performance-results.json",
+    ".codex-restart/task9-phase7-active.json",
+    ".codex-restart/task9-phase7-admin-cleanup.json",
+    ".codex-restart/task9-phase7-admin.log.stderr",
+    ".codex-restart/task9-phase7-admin.log.stdout",
+    ".codex-restart/task9-phase7-auth-cleanup.json",
+    ".codex-restart/task9-phase7-auth.log.stderr",
+    ".codex-restart/task9-phase7-auth.log.stdout",
+    ".codex-restart/task9-phase7-final-cleanup.json",
+    ".codex-restart/task9-phase7-inventory.json",
+    ".codex-restart/task9-phase7-inventory.ps1",
+    ".codex-restart/task9-phase7-results.json",
+    ".codex-restart/task9-pinned-foundation-preflight.json",
+    ".codex-restart/task9-prepare-commit-manifest.cjs",
+    ".codex-restart/task9-provision-repair-databases.ps1",
+    ".codex-restart/task9-python-failure-triage.md",
+    ".codex-restart/task9-python-skips-and-ci-isolation.md",
+    ".codex-restart/task9-register-cases.cjs",
+    ".codex-restart/task9-repair-databases.json",
+    ".codex-restart/task9-repair-ownership.md",
+    ".codex-restart/task9-repair-pytest-active.json",
+    ".codex-restart/task9-repair-pytest.py",
+    ".codex-restart/task9-root-repair-preparation.md",
+    ".codex-restart/task9-scan-focused-active.json",
+    ".codex-restart/task9-scan-focused-cleanup.json",
+    ".codex-restart/task9-scan-focused-processes.json",
+    ".codex-restart/task9-scan-focused-result.json",
+    ".codex-restart/task9-scan-focused.ps1",
+    ".codex-restart/task9-scan-metadata-repair-active.json",
+    ".codex-restart/task9-scan-metadata-repair-cleanup.json",
+    ".codex-restart/task9-scan-metadata-repair-result.json",
+    ".codex-restart/task9-scan-metadata-repair.ps1",
+    ".codex-restart/task9-ui-review.md",
+    ".codex-restart/task9-unit-active.json",
+    ".codex-restart/task9-unit-audit.json",
+    ".codex-restart/task9-unit-inventory.py",
+    ".codex-restart/task9-unit-results.json",
+    ".codex-restart/update_task5_legacy_fixtures.py",
+    ".superpowers/brainstorm/.last-port",
+    ".superpowers/brainstorm/.last-token",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-approved.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-artist-info-candidate.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-family-total-candidate.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-hybrid-candidate-2.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-hybrid-candidate.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-refined-2.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-refined-3.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-refined-4.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-refined-5.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-refined.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001-sources-appbar-candidate.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallery-main-v001.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-context-live-comparison.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-scroll-context-options.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-variant-a.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-variant-b.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-variant-c.html",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-variant-loader.js",
+    ".superpowers/brainstorm/1905-1788663804/content/gallerybar-variants-launcher.html",
+    ".superpowers/brainstorm/1905-1788663804/content/mockup-path.html",
+    ".superpowers/brainstorm/1905-1788663804/state/server-instance-id",
+    ".superpowers/brainstorm/1905-1788663804/state/server-stopped",
+    ".superpowers/brainstorm/1905-1788663804/state/server.pid",
+    ".superpowers/brainstorm/1918-1788673854/content/all-unimplemented-component-mockups-v2.html",
+    ".superpowers/brainstorm/1918-1788673854/content/all-unimplemented-component-mockups.html",
+    ".superpowers/brainstorm/1918-1788673854/content/component-details-v3.html",
+    ".superpowers/brainstorm/1918-1788673854/content/final-control-details-v4.html",
+    ".superpowers/brainstorm/1918-1788673854/content/play-loop-hover-v8.html",
+    ".superpowers/brainstorm/1918-1788673854/content/play-loop-overlap-v6.html",
+    ".superpowers/brainstorm/1918-1788673854/content/saved-loop-centerline-v7.html",
+    ".superpowers/brainstorm/1918-1788673854/content/saved-loop-heading-v5.html",
+    ".superpowers/brainstorm/1918-1788673854/content/saved-loop-ribbon-centerline-v10.html",
+    ".superpowers/brainstorm/1918-1788673854/content/saved-loop-true-centerline-v9.html",
+    ".superpowers/brainstorm/1918-1788673854/state/server-instance-id",
+    ".superpowers/brainstorm/1918-1788673854/state/server-stopped",
+    ".superpowers/brainstorm/1918-1788673854/state/server.pid",
+    "docs/design-mockups/components/harbor-mint/v001/notes.md",
+    "docs/design-mockups/components/harbor-mint/v001/owner-reference.png",
+    "docs/design-mockups/screens/utilities-refactor/v001/.gitignore",
+    "docs/design-mockups/screens/utilities-refactor/v001/index.html",
+    "docs/design-mockups/screens/utilities-refactor/v001/notes.md",
+    "docs/design-mockups/screens/utilities-refactor/v001/prompt.md",
+    "docs/design-mockups/screens/utilities-refactor/v001/references/stored-admin-desktop.jpg",
+    "docs/design-mockups/screens/utilities-refactor/v001/references/stored-library-desktop.jpg",
+    "docs/design-mockups/screens/utilities-refactor/v001/review.json",
+    "docs/design-mockups/screens/utilities-refactor/v001/source/owner-handoff.txt",
+    "docs/design-mockups/screens/utilities-refactor/v002/.gitignore",
+    "docs/design-mockups/screens/utilities-refactor/v002/appearance-0.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/appearance-1.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/appearance-2.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/appearance-3.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/appearance-4.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/approved-artifacts.json",
+    "docs/design-mockups/screens/utilities-refactor/v002/capsule-hover-delay.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/companion-refinement.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/album-artbox.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/album-artbox.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/album-details-components.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/appearance-backgrounds.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/button-component.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/compact-data-table.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/loop-cancel-mask.png",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/loop-range-controls.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/loop-scissors-mask.png",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/navigation-tree.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/non-album-and-player.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/search-input.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/trigger-anchor.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/components/trigger-anchor.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/foobar-guide.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/index.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/loops-capsule.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/loops-capsule.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/navigation-v003-notes.md",
+    "docs/design-mockups/screens/utilities-refactor/v002/navigation-v003.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/navigation.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/notes.md",
+    "docs/design-mockups/screens/utilities-refactor/v002/play-loop-options.html",
+    "docs/design-mockups/screens/utilities-refactor/v002/play-loop-refinement.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/prompt.md",
+    "docs/design-mockups/screens/utilities-refactor/v002/references/foobar-setup-guide.md",
+    "docs/design-mockups/screens/utilities-refactor/v002/references/revised-loops.png",
+    "docs/design-mockups/screens/utilities-refactor/v002/review.json",
+    "docs/design-mockups/screens/utilities-refactor/v002/revision-v003.js",
+    "docs/design-mockups/screens/utilities-refactor/v002/revision.css",
+    "docs/design-mockups/screens/utilities-refactor/v002/revision.js"
+  ]
+}

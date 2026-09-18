@@ -22,6 +22,11 @@ replace('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
   const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
   const bonusLength = formatAlbumDuration(bonusSeconds);
   if (els.duplicateWarning && els.duplicateTabs) {""")
+replace('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
+"""    mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',
+    bonusLength: hasBonusDisc ? formatTrackDuration(durationForGroups(true)) : '',""",
+"""    mainLength: hasBonusDisc ? formatAlbumDuration(durationForGroups(false)) : '',
+    bonusLength: hasBonusDisc ? formatAlbumDuration(durationForGroups(true)) : '',""")
 replace('music_app/static/js/runtime/utility-list-builders.js',
 """    const countSuffix = selected.length ? ` (${selected.length})` : '';
     els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);""",

@@ -38,8 +38,18 @@ jobs:
           python - <<'PY'
           import base64, gzip, hashlib, os
           from pathlib import Path
-          encoded = Path('.chat-editor/python-batch.patch.gz.b64').read_text()
-          patch = gzip.decompress(base64.b64decode(''.join(encoded.split()), validate=True))
+          encoded = ''.join(Path('.chat-editor/python-batch.patch.gz.b64').read_text().split())
+          # Repair three transport-copy defects, then verify the independently
+          # computed digest of the complete locally validated unified patch.
+          corrections = [
+              (8351, 'e', ''),
+              (4343, 'u', ''),
+              (3939, '', '6X0v/W++HpwK63sbfofGYSe6HT8jaIANgoa3Rk/eWflT2wiFbD8n5qgSRgUtUVmRr9oHGAlmK+ylkiZKi2mGTCTsZDoUIyO9ewNGG9H7IkrgtgOdJsOsg7HsnuYVW36Rb1Hz0EXnjvRMS8+GL3ggZJ/YF971EUaQmnfvZvaDfMe2UlNZa1F4+rGm0CDDS4W3TCD9BX/TKZEDfE05MRprX5EM'),
+          ]
+          for offset, old, new in corrections:
+              assert encoded[offset:offset + len(old)] == old, 'Transport correction mismatch'
+              encoded = encoded[:offset] + new + encoded[offset + len(old):]
+          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(patch).hexdigest() == os.environ['PATCH_SHA256'], 'Patch digest mismatch'
           Path(os.environ['RUNNER_TEMP'], 'python-batch.patch').write_bytes(patch)
           print('Verified complete eight-file patch, bytes:', len(patch))

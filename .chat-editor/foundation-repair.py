@@ -36,6 +36,7 @@ for path in ('tests/py/test_api_read_asgi_routes.py','tests/py/test_api_wave_a_a
     if old in s: s=s.replace(old,new,1)
     p.write_text(s,encoding='utf-8',newline='\n')
 replace('tests/py/test_api_read_asgi_routes.py','        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace())','        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace(), cookies={})')
+replace('tests/py/test_api_read_asgi_routes.py','        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace(), cookies={})','        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace(), cookies={}, headers={}, client=SimpleNamespace(host="testclient"))')
 replace('tests/py/test_api_read_asgi_routes.py','''        "load_loops",
         lambda config: [{"id": "loop-1", "name": "Intro loop"}],''','''        "load_loops",
         lambda config, **_scope: [{"id": "loop-1", "name": "Intro loop"}],''')
@@ -44,9 +45,22 @@ replace('tests/py/test_api_read_asgi_routes.py','''        "load_log_history_sna
         lambda config, **_scope: {''')
 replace('tests/py/test_api_read_asgi_routes.py','    def fake_load_loops(config):','    def fake_load_loops(config, **_scope):')
 replace('tests/py/test_api_read_asgi_routes.py','    def fake_load_log_history_snapshot(config):','    def fake_load_log_history_snapshot(config, **_scope):')
+replace('tests/py/test_api_read_asgi_routes.py','''        lambda _config: {"items": [], "revision": "test-process:0"},''','''        lambda _config, **_scope: {"items": [], "revision": "test-process:0"},''')
 replace('tests/py/test_api_read_asgi_routes.py','''    revision_epoch, revision_counter = payload["log_history_revision"].rsplit(":", 1)
     assert revision_epoch
     assert revision_counter == "0"''','''    assert payload["log_history_revision"] == ""''')
+old_loop='''    assert _decode_json(loops_body) == {"ok": True, "loops": [{"id": "loop-1", "name": "Intro loop"}]}'''
+new_loop='''    assert _decode_json(loops_body) == {
+        "ok": True,
+        "loops": [{"id": "loop-1", "name": "Intro loop", "cover_url": ""}],
+        "allowed_actions": {
+            "library.loops.read": True,
+            "library.loops.create": True,
+            "library.loops.delete": True,
+            "library.loops.reorder": True,
+        },
+    }'''
+replace('tests/py/test_api_read_asgi_routes.py',old_loop,new_loop,2)
 replace('tests/py/test_log_history_route_scope.py','from tests.py.asgi_testing import run_asgi_request','from tests.py.asgi_testing import configure_test_bootstrap_actor, run_asgi_request')
 replace('tests/py/test_log_history_route_scope.py','''    calls=[]; app=FastAPI()
     async def forbidden_handler():''','''    calls=[]; app=FastAPI(); configure_test_bootstrap_actor(app)

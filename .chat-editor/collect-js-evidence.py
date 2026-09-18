@@ -8,6 +8,12 @@ from pathlib import Path
 import re
 import subprocess
 import urllib.request
+import urllib.error
+from urllib.parse import urlparse
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 SHA = '3e34e1f57716bdfcd2dcea7959bc1213af7e13c6'
 JOBS = {'portable': 105717713614, 'components': 105717713542, 'windows': 105717713502}
@@ -21,7 +27,15 @@ for name, job_id in JOBS.items():
         job = json.load(response)
     assert job['head_sha'] == SHA and job['status'] == 'completed', job
     request = urllib.request.Request(url + '/logs', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
-    with urllib.request.urlopen(request) as response:
+    try:
+        response = urllib.request.build_opener(NoRedirect()).open(request)
+    except urllib.error.HTTPError as error:
+        if error.code != 302:
+            raise
+        location = error.headers['Location']
+        assert urlparse(location).scheme == 'https' and urlparse(location).hostname.endswith('.blob.core.windows.net')
+        response = urllib.request.urlopen(location)
+    with response:
         raw = response.read().decode('utf-8')
     lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s?', '', re.sub(r'\x1b\[[0-9;]*m', '', line)) for line in raw.splitlines()]
     wanted = set()
@@ -44,7 +58,6 @@ for name, job_id in JOBS.items():
     sections.append(f'## {name} job {job_id}; status={job["conclusion"]}; head={SHA}; run={job["run_id"]}\n')
     sections.extend(f'{i + 1:05d}: {lines[i]}\n' for i in sorted(wanted))
 root.joinpath('js-evidence.txt').write_text(''.join(sections), encoding='utf-8')
-# Only already tracked repository sources, never runner credentials or local data.
 tracked = subprocess.check_output(['git', 'ls-tree', '-r', '--name-only', SHA], text=True).splitlines()
 extensions = {'.js', '.cjs', '.mjs', '.json', '.css', '.html', '.py', '.sql', '.ps1', '.sh', '.yml', '.yaml', '.toml', '.ini', '.md', '.txt', '.svg'}
 selected = [p for p in tracked if Path(p).suffix in extensions and not p.startswith(('docs/design-mockups/', 'docs/history/'))]

@@ -912,6 +912,7 @@ def test_asgi_ignore_album_version_uses_asgi_dependencies_without_flask_context(
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
 
     class FailingAppContext:
         def __enter__(self):
@@ -981,7 +982,8 @@ def test_asgi_ignore_album_version_uses_asgi_dependencies_without_flask_context(
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Version exception created",
-            "kwargs": {"level": "info", "album_key": "album-new"},
+            "kwargs": {"level": "info", "album_key": "album-new",
+                       "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request")},
         }
     ]
 
@@ -1053,6 +1055,7 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
     from music_app.services import state as state_service
 
     class FailingAppContext:
@@ -1132,7 +1135,8 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Manual version link created",
-            "kwargs": {"level": "info", "album_key": "child", "parent_album_key": "parent"},
+            "kwargs": {
+                "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request"),"level": "info", "album_key": "child", "parent_album_key": "parent"},
         }
     ]
 
@@ -1239,6 +1243,7 @@ def test_asgi_unmark_album_version_uses_asgi_config_and_logging_without_flask_co
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
 
     class FailingAppContext:
         def __enter__(self):
@@ -1299,7 +1304,8 @@ def test_asgi_unmark_album_version_uses_asgi_config_and_logging_without_flask_co
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Manual version link removed",
-            "kwargs": {"level": "info", "album_key": "child"},
+            "kwargs": {
+                "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request"),"level": "info", "album_key": "child"},
         }
     ]
 

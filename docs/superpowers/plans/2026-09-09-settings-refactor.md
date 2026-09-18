@@ -290,6 +290,36 @@ Create: `tests/py/test_log_history_period.py`; extend `tests/js/runtime/browser-
 - [x] Reuse ConsoleLog, scroll and modal components, preserving colored lines and copy behavior.
 - [ ] Run focused JS then Python checks, build, manually compare individual/period/export results, commit.
 
+### Python CI repair checkpoint — September 18, 2026 (H01–H03, I02–I03)
+
+The owner authorized one batched repair of the 28 Python failures on PR #3,
+followed by native Python CI iteration; this supersedes the historical no-push
+instruction for these repairs only. No merge or release is authorized. The
+baseline Python job `105648723733` in run `35359910906` reported 28 failures,
+5,673 passes and four allowed skips. No task checkbox changes are made here;
+the plan has no numeric checkbox counter to update.
+
+The repair preserves existing permission and persistence contracts: bootstrap
+route fixtures configure their initial media host without resetting deliberate
+scope changes, route expectations include approved capability/cover metadata,
+version mutations assert request-owned history scope, and snapshot tests retain
+their single-transaction checks with the nullable album parameter. Last.fm unit
+seams assert account/library arguments; history and measured completion use
+uniquely owned real PostgreSQL rows. Pytest owns mock teardown so an earlier
+failed assertion cannot replace the counters used by a later integration test.
+
+H01/H03 regression acceptance: a rejected Last.fm connection retains its safe
+integration, status, failure stage, error kind/code, retryability and track
+number through normalization and persisted readback. Passwords, session keys,
+provider responses and raw private paths remain excluded or redacted. I03
+regression acceptance: a repeated rendered-PCM completion retains one scoped
+ledger row and one provider submission, with measured seconds and UTC times;
+no legacy JSON settings file or nominal-duration substitute is introduced.
+
+Ten narrow bootstrap/metadata checks passed before publication. Full API and
+PostgreSQL verification remains pending the native Python CI result; the
+complete PR and the existing final manual-acceptance gate are not yet green.
+
 ### Task 7 — Integration sections (I01–I08)
 
 Modify: `music_app/static/js/runtime/library-settings.js`, `music_app/static/js/runtime/utility-list-builders.js`, `music_app/static/js/runtime/utility-loaders-and-cover-lookup.js`, `music_app/services/library_settings.py`, `library_roots.py`, `library_roots_postgres.py`, `listen_history.py`, `listen_history_postgres.py`, `foobar_integrations.py` in the same services directory.

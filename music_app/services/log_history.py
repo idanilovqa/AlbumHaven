@@ -86,8 +86,13 @@ def _sanitize_text(value):
     text = re.sub('(?i)\\b(?:token|password|secret|authorization|api[_-]?key)\\s*[:=]\\s*[^\\s,;]+', '[redacted]', text)
     text = re.sub('[A-Za-z]:[\\\\/][^\\s,;]+|\\\\\\\\[^\\s,;]+|(?<![\\w:])/(?:[^\\s/]+/)*[^\\s,;]+', '[path]', text)
     return text[:8192]
-_TEXT_FIELDS = frozenset(('id', 'action', 'source', 'source_label', 'level', 'message', 'error', 'artist', 'album', 'title', 'event_type'))
-_NUMBER_FIELDS = frozenset(('count', 'file_count', 'processed', 'downloaded', 'not_touched', 'not_found', 'failed', 'skipped', 'updated', 'created', 'deleted', 'retry_count', 'elapsed_seconds'))
+_TEXT_FIELDS = frozenset((
+    'id', 'action', 'source', 'source_label', 'level', 'message', 'error',
+    'artist', 'album', 'title', 'event_type', 'track_number', 'integration',
+    'status', 'failure_stage', 'error_kind',
+))
+_NUMBER_FIELDS = frozenset(('count', 'file_count', 'processed', 'downloaded', 'not_touched', 'not_found', 'failed', 'skipped', 'updated', 'created', 'deleted', 'retry_count', 'elapsed_seconds', 'error_code'))
+_BOOLEAN_FIELDS = frozenset(('retryable',))
 
 
 def _normalize_log_history_item(entry):
@@ -99,6 +104,9 @@ def _normalize_log_history_item(entry):
         value = entry.get(key)
         if type(value) in (int, float) and math.isfinite(value):
             result[key] = value
+    for key in _BOOLEAN_FIELDS:
+        if type(entry.get(key)) is bool:
+            result[key] = entry[key]
     result['id'] = result.get('id') or uuid.uuid4().hex
     value = entry.get('timestamp')
     try:

@@ -33,8 +33,11 @@ def configure_test_bootstrap_actor(asgi_app) -> None:
 
     if not hasattr(asgi_app.state, "current_actor_resolver"):
         asgi_app.state.current_actor_resolver = _BootstrapOwnerResolver()
-    if not hasattr(asgi_app.state, "media_host_library_id"):
-        asgi_app.state.media_host_library_id = 1
+        # The fixture's default owner also owns its media host. Configure this
+        # only when installing the default resolver, not on every request: tests
+        # may deliberately clear the host or supply another actor afterward.
+        if getattr(asgi_app.state, "media_host_library_id", None) is None:
+            asgi_app.state.media_host_library_id = 1
     if not hasattr(asgi_app.state, "auth_policy_config"):
         asgi_app.state.auth_policy_config = {
             "hmac": {

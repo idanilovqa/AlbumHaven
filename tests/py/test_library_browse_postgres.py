@@ -1252,7 +1252,7 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     ]
     assert len(connection.commands) == 2
     assert _is_missing_album_query(connection.commands[1][0])
-    assert connection.commands[1][1] == {}
+    assert connection.commands[1][1] == {"album_key": None}
     assert connection.rollback_count == 1
     assert connection.close_count == 1
     assert payload["artists_sidebar"] == [

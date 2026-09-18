@@ -27,7 +27,7 @@ def test_retry_pending_lastfm_scrobbles_marks_successful_entries(monkeypatch):
     calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(lastfm_retry, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="owned") if account_id == 7 else None)
-    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)])
+    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit, *, eligible: list(filter(eligible, [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)]))[:limit])
     monkeypatch.setattr(
         lastfm_retry,
         "update_listen_history_entry",
@@ -81,7 +81,7 @@ def test_retry_pending_lastfm_scrobbles_keeps_failed_entries_queued(monkeypatch)
         raise LastfmError("Temporary failure", retryable=True)
 
     monkeypatch.setattr(lastfm_retry, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="owned") if account_id == 7 else None)
-    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit: [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)])
+    monkeypatch.setattr(lastfm_retry, "load_pending_scrobble_entries", lambda config, limit, *, eligible: list(filter(eligible, [PendingListenEntry(entry, account_id=7, library_id=9, row_id=11)]))[:limit])
     monkeypatch.setattr(
         lastfm_retry,
         "update_listen_history_entry",

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 import uuid
 import math
 
-from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
+from music_app.services.listen_history_postgres import PendingListenEntry, PostgresListenHistoryAdapter
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
 _MIN_RECORDED_LISTEN_SECONDS = 10.0
@@ -124,8 +125,13 @@ def update_listen_history_entry(config: dict, entry_id: str, updates: dict[str, 
     return None
 
 
-def load_pending_scrobble_entries(config: dict, *, limit: int = 25):
-    return _listen_history_adapter(config).load_pending_entries(limit=limit)
+def load_pending_scrobble_entries(
+    config: dict,
+    *,
+    limit: int = 25,
+    eligible: Callable[[PendingListenEntry], bool] | None = None,
+):
+    return _listen_history_adapter(config).load_pending_entries(limit=limit, eligible=eligible)
 
 
 def build_measured_playback_statistics(config, *, account_id, library_id):

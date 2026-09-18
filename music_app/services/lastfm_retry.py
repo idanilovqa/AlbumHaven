@@ -45,9 +45,20 @@ def retry_pending_lastfm_scrobbles(
         return summary
 
     with _RETRY_LOCK:
-        pending_entries = load_pending_scrobble_entries(config, limit=limit)
-        if account_id is not None:
-            pending_entries = [item for item in pending_entries if isinstance(item, PendingListenEntry) and item.account_id == account_id]
+        eligible_sessions = {}
+
+        def retry_eligible(pending: PendingListenEntry) -> bool:
+            if account_id is not None and pending.account_id != account_id:
+                return False
+            if pending.account_id not in eligible_sessions:
+                eligible_sessions[pending.account_id] = get_saved_lastfm_session(
+                    config, account_id=pending.account_id,
+                )
+            return eligible_sessions[pending.account_id] is not None
+
+        pending_entries = load_pending_scrobble_entries(
+            config, limit=limit, eligible=retry_eligible,
+        )
         summary["pending_before"] = len(pending_entries)
         if not pending_entries:
             return summary
@@ -57,9 +68,7 @@ def retry_pending_lastfm_scrobbles(
                 continue
             entry = pending.entry
             if entry.get("measurement_version") == "rendered-pcm-v1":
-                session = get_saved_lastfm_session(config, account_id=pending.account_id)
-                if session is None:
-                    continue
+                session = eligible_sessions[pending.account_id]
                 payload = {**entry, **dict(entry.get("canonical_match") or {})}
                 body, _status = record_playback_session_complete(
                     config, payload,
@@ -87,7 +96,7 @@ def retry_pending_lastfm_scrobbles(
                 update_listen_history_entry=lambda config, entry_id, updates, owner=pending: update_listen_history_entry(
                     config, entry_id, updates, account_id=owner.account_id, library_id=owner.library_id, row_id=owner.row_id),
                 scrobble_track=lambda cfg, payload, owner=pending: scrobble_track(
-                    cfg, payload, session=get_saved_lastfm_session(cfg, account_id=owner.account_id)),
+                    cfg, payload, session=eligible_sessions[owner.account_id]),
                 log_lastfm_scrobble_event=lambda action, *, level, payload, error="", retry_count=0, history_scope=scope: log_app_event(
                     config,
                     logging.getLogger("music_app"),

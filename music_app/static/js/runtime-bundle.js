@@ -34884,7 +34884,7 @@ function handleUtilityBootstrapKeyDown(event) {
   }
   const filterTarget = event.target?.closest?.('#utility-problem-filter-button, #utility-problem-filter-menu');
   const filterInput = event.target?.matches?.('input, textarea, [contenteditable="true"]');
-  if (filterTarget && !filterInput) {
+  if (state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput) {
     const els = getUtilityModalElements();
     if (event.key === 'Escape' && state.utility.problemDropdownOpen) {
       event.preventDefault();
@@ -35049,7 +35049,7 @@ function toggleUtilityLoopGroupCollapse(groupKey) {
     const scroll = els.list?.scrollTop;
     const focusedToggle = document.activeElement?.closest?.('[data-utility-loop-collapse]');
     const restoreFocus = focusedToggle?.getAttribute('data-utility-loop-collapse') === normalizedGroupKey;
-    renderUtilityLoopList(els, state.utility.loops || []);
+    renderUtilityLoopList(els, getFilteredUtilityLoops());
     if (restoreFocus) {
       const replacement = Array.from(els.list?.querySelectorAll?.('[data-utility-loop-collapse]') || [])
         .find(toggle => toggle.getAttribute('data-utility-loop-collapse') === normalizedGroupKey);

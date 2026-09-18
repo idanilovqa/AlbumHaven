@@ -107,7 +107,12 @@ class PostgresListenHistoryAdapter:
                         ),
                     )
 
-    def load_pending_entries(self, *, limit=25):
+    def load_pending_entries(
+        self,
+        *,
+        limit=25,
+        eligible: Callable[[PendingListenEntry], bool] | None = None,
+    ):
         # This preserves the existing configured legacy retry family while
         # carrying its actual row provenance into delayed callbacks.
         from music_app.services.listen_history import is_pending_scrobble_entry
@@ -125,7 +130,10 @@ class PostgresListenHistoryAdapter:
             item = _listen_history_item_from_row(row)
             if (row['account_id'] and row['library_id'] and is_pending_scrobble_entry(item)
                     and item.get('scrobble_submission_state') not in ('attempting', 'sent', 'uncertain', 'accepted')):
-                result.append(PendingListenEntry(item, row['account_id'], row['library_id'], row['id']))
+                pending = PendingListenEntry(item, row['account_id'], row['library_id'], row['id'])
+                if eligible is not None and not eligible(pending):
+                    continue
+                result.append(pending)
                 if len(result) >= max(1, int(limit)):
                     break
         return result

@@ -2,7 +2,9 @@ name: Chat Editor Foundation Repair
 on:
   push:
     branches: [2026-09-08-settings-refactor]
-    paths: [.github/workflows/chat-editor-foundation-repair.yml]
+    paths:
+      - .github/workflows/chat-editor-foundation-repair.yml
+      - .chat-editor/foundation-repair.py
 permissions:
   contents: write
 jobs:

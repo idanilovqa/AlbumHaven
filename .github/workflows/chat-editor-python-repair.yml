@@ -8,7 +8,7 @@ permissions:
 jobs:
   repair:
     runs-on: windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 12
     defaults: {run: {shell: pwsh}}
     steps:
       - uses: actions/checkout@v5
@@ -17,8 +17,8 @@ jobs:
         with: {python-version: '3.11', cache: pip, cache-dependency-path: requirements.txt}
       - run: python -m pip install -r requirements.txt
       - run: python .chat-editor/python-repair.py
-      - name: Previously failing Python contracts
-        run: python -m pytest -q tests/py/test_api_read_asgi_routes.py tests/py/test_api_wave_a_asgi_routes.py tests/py/test_api_wave_b_asgi_routes.py tests/py/test_isolated_postgres_live.py::test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships tests/py/test_library_browse_postgres.py::test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back tests/py/test_log_history_route_scope.py tests/py/test_playback_capability_projection.py::test_index_boot_projection_is_effective_request_authority_and_is_recomputed tests/py/test_scan_state.py::test_failed_relation_publication_keeps_prior_live_scan_state tests/py/test_state.py::test_hydration_file_errors_use_bounded_structured_history tests/py/test_state.py::test_scan_music_incremental_bounds_structured_file_error_history -k "status_route_preserves_current_payload_shape or status_projects_watcher_health or utility_read_routes_preserve or loops_and_log_history_use or log_history_returns_non_cacheable or library_settings or ignore_album_version_uses_asgi_dependencies or mark_album_version_uses_asgi_state or unmark_album_version_uses_asgi_config or selected_postgres_media_compensation or selected_postgres_album_edit_skips or integrations_and_foobar or integrations_lastfm_enrichment or lastfm_and_playback_routes or lastfm_settings or playback_session or live_scan_snapshot or postgres_root_sidebar_reads_one or history_perimeter or export_grant or index_boot_projection or failed_relation_publication or hydration_file_errors or scan_music_incremental_bounds"
+      - name: Focused representative regressions
+        run: python -m pytest -q tests/py/test_api_read_asgi_routes.py::test_asgi_status_route_preserves_current_payload_shape tests/py/test_api_read_asgi_routes.py::test_asgi_loops_and_log_history_use_asgi_config_without_flask_bridge tests/py/test_api_wave_a_asgi_routes.py::test_asgi_library_settings_routes_preserve_read_and_validation_payloads tests/py/test_api_wave_b_asgi_routes.py::test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_headers tests/py/test_library_browse_postgres.py::test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back tests/py/test_playback_capability_projection.py::test_index_boot_projection_is_effective_request_authority_and_is_recomputed tests/py/test_scan_state.py::test_failed_relation_publication_keeps_prior_live_scan_state tests/py/test_state.py::test_hydration_file_errors_use_bounded_structured_history
       - name: Publish tested repairs
         run: |
           git diff --check

@@ -38,10 +38,15 @@ class _FatalFlaskContextAccess:
 
 @pytest.fixture(autouse=True)
 def _stub_relation_projection_startup(monkeypatch):
-    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+    from music_app.services import (
+        exception_overrides,
+        library_roots,
+        scan_cache_persistence,
+        state,
+    )
 
-    stub_targeted_reconciliation_repository(monkeypatch)
-    from music_app.services import state
+    class _TargetedRepositoryStub:
+        backend = "postgres"
 
     def ensure_ready(runtime):
         runtime.library_state["relation_projection_ready"] = True

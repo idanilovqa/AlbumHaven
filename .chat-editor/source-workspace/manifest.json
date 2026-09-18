@@ -1,0 +1,44 @@
+{
+  "revision": "c2687083a71c8cef743e2ddf446929720095748d",
+  "file_count": 1313,
+  "zip_bytes": 4937733,
+  "sha256": "2669856879f642ae36c6d7d25197af1cf37cf25c380fd8e72047c8876467a84c",
+  "chunks": [
+    {
+      "path": ".chat-editor/source-workspace/part-01.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-02.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-03.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-04.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-05.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-06.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-07.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-08.txt",
+      "characters": 800000
+    },
+    {
+      "path": ".chat-editor/source-workspace/part-09.txt",
+      "characters": 183644
+    }
+  ]
+}

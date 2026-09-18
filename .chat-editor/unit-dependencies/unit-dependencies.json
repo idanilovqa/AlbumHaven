@@ -1,0 +1,8 @@
+{
+  "sha256": "aad799c1149b38239a2671e85bf2557a3282688b1eada1c24953e64a22561557",
+  "zip_bytes": 603290,
+  "parts": [
+    ".chat-editor/unit-dependencies/unit-deps-01.txt",
+    ".chat-editor/unit-dependencies/unit-deps-02.txt"
+  ]
+}

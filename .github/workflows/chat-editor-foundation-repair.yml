@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/chat-editor-foundation-repair.yml
       - .chat-editor/foundation-repair.py
+      - .chat-editor/foundation-repair-2.py
 permissions:
   contents: write
 jobs:
@@ -22,7 +23,9 @@ jobs:
       - run: |
           npm ci
           python -m pip install -r requirements.txt
-      - run: python .chat-editor/foundation-repair.py
+      - run: |
+          python .chat-editor/foundation-repair.py
+          python .chat-editor/foundation-repair-2.py
       - name: Focused JavaScript
         run: node --test --test-concurrency=1 tests/js/search-toolbar-anchor-geometry.test.js tests/js/track-modal-actions.test.js
       - name: Focused Python
@@ -40,7 +43,7 @@ jobs:
         run: |
           git diff --check
           git add tests/e2e/poms/searchToolbar.js tests/e2e/actions/trackModalActions.js music_app/services/listen_history.py tests/py/test_api_read_asgi_routes.py tests/py/test_api_wave_a_asgi_routes.py tests/py/test_api_wave_b_asgi_routes.py tests/py/test_log_history_route_scope.py
-          git rm .chat-editor/foundation-repair.py .github/workflows/chat-editor-foundation-repair.yml
+          git rm .chat-editor/foundation-repair.py .chat-editor/foundation-repair-2.py .github/workflows/chat-editor-foundation-repair.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix: align scoped foundation contracts'

@@ -1,0 +1,48 @@
+name: Prepare PR 3 diagnostic dependencies
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-e2e-environment.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Package public dependencies only
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-17 postgresql-client-17
+          dest="$RUNNER_TEMP/offline-e2e"
+          mkdir -p "$dest/pg/usr/lib/postgresql" "$dest/pg/usr/share/postgresql" "$dest/libs" "$dest/wheels"
+          cp -a /usr/lib/postgresql/17 "$dest/pg/usr/lib/postgresql/"
+          cp -a /usr/share/postgresql/17 "$dest/pg/usr/share/postgresql/"
+          for bin in /usr/lib/postgresql/17/bin/* /usr/lib/postgresql/17/lib/*.so; do
+            ldd "$bin" 2>/dev/null | awk '/=> \/[a-z]/ {print $3}' >> "$RUNNER_TEMP/pg-libs.txt" || true
+          done
+          sort -u "$RUNNER_TEMP/pg-libs.txt" | while read -r lib; do
+            case "$lib" in */libc.so.*|*/libm.so.*|*/libpthread.so.*|*/libdl.so.*|*/librt.so.*) continue ;; esac
+            cp -L "$lib" "$dest/libs/"
+          done
+          python -m pip download --only-binary=:all: --dest "$dest/wheels" 'psycopg[binary]' ytmusicapi zstandard aiosmtplib 'watchdog>=4.0,<7'
+          mkdir -p .chat-editor/offline-e2e
+          tar -czf .chat-editor/offline-e2e/dependencies.tar.gz -C "$dest" .
+          sha256sum .chat-editor/offline-e2e/dependencies.tar.gz > .chat-editor/offline-e2e/SHA256SUMS
+          du -h .chat-editor/offline-e2e/dependencies.tar.gz
+      - name: Retain the dependency package on the diagnostic branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f -- .chat-editor/offline-e2e
+          git commit -m 'ci: retain public offline diagnostic dependencies'
+          git pull --rebase origin 2026-09-18-pr3-e2e-batch
+          git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

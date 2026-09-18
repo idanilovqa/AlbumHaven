@@ -131,7 +131,10 @@ def load_pending_scrobble_entries(
     limit: int = 25,
     eligible: Callable[[PendingListenEntry], bool] | None = None,
 ):
-    return _listen_history_adapter(config).load_pending_entries(limit=limit, eligible=eligible)
+    adapter = _listen_history_adapter(config)
+    if eligible is None:
+        return adapter.load_pending_entries(limit=limit)
+    return adapter.load_pending_entries(limit=limit, eligible=eligible)
 
 
 def build_measured_playback_statistics(config, *, account_id, library_id):

@@ -202,8 +202,10 @@ export class TrackModalActions {
       && image.getBoundingClientRect().width > 0
       && image.getBoundingClientRect().height > 0
     )));
-    const coverPlaceholderVisible = await this.trackModal.coverPlaceholder.isVisible()
-      && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty';
+    const coverPlaceholderVisible = (
+      await this.trackModal.coverPlaceholder.isVisible()
+      && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty'
+    ) || await this.trackModal.missingArtbox.isVisible();
     return {
       title: String(await this.trackModal.title.textContent() || '').trim(),
       subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),

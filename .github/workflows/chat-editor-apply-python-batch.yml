@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      EXPECTED_HEAD: ea651706305f755b84574bb2c3b079497b7752ae
+      EXPECTED_HEAD: 3af8d1ce8c7c42fea6a783ad667ece9587b43f80
       TARGET_BRANCH: 2026-09-08-settings-refactor
-      PATCH_SHA256: 3a4f3e1deccf7f69681944fd19008de6bfce34780354e8501815c24031afb3a2
+      PATCH_SHA256: 393f698070a1c7aee533882ee6ac6553053f1543a91bc903f0d924cf8dfa8bf8
     steps:
       - uses: actions/checkout@v5
         with:
@@ -41,7 +41,7 @@ jobs:
           patch = Path('.chat-editor/python-followup.patch').read_bytes()
           assert hashlib.sha256(patch).hexdigest() == os.environ['PATCH_SHA256'], 'Patch digest mismatch'
           Path(os.environ['RUNNER_TEMP'], 'python-followup.patch').write_bytes(patch)
-          print('Verified complete library-settings repair patch, bytes:', len(patch))
+          print('Verified complete request-app identity patch, bytes:', len(patch))
           PY
           git switch --detach "$EXPECTED_HEAD"
           git apply --check --whitespace=error-all "$RUNNER_TEMP/python-followup.patch"
@@ -60,15 +60,14 @@ jobs:
           subprocess.run(['git', 'add', '--', *files], check=True)
           staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
           assert staged == files, staged
-          print('Syntax and exact staged-file inventory verified.')
           PY
-      - name: Publish all five remaining repairs in one non-force commit
+      - name: Publish the verified correction
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'test: repair scoped library-settings contracts and verify PostgreSQL persistence'
+          git commit -m 'test: assert library-settings configuration against the request app'
           head=$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)
           test "$head" = "$EXPECTED_HEAD"
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"

@@ -33,6 +33,8 @@ def configure_test_bootstrap_actor(asgi_app) -> None:
 
     if not hasattr(asgi_app.state, "current_actor_resolver"):
         asgi_app.state.current_actor_resolver = _BootstrapOwnerResolver()
+    if not hasattr(asgi_app.state, "media_host_library_id"):
+        asgi_app.state.media_host_library_id = 1
     if not hasattr(asgi_app.state, "auth_policy_config"):
         asgi_app.state.auth_policy_config = {
             "hmac": {
@@ -50,6 +52,7 @@ def create_test_asgi_app(tmp_path: Path, monkeypatch):
     asgi_app = create_asgi_app()
     asgi_app.state.config["TESTING"] = True
     configure_test_bootstrap_actor(asgi_app)
+    asgi_app.state.media_host_library_id = 1
     return asgi_app
 
 

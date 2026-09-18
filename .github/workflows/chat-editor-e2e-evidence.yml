@@ -1,0 +1,35 @@
+name: Collect PR 3 E2E failure evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths:
+      - .chat-editor/collect-e2e-evidence.py
+      - .github/workflows/chat-editor-e2e-evidence.yml
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: pr3-e2e-evidence
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Collect complete job logs and exact source delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .chat-editor/collect-e2e-evidence.py
+      - name: Preserve evidence on the diagnostic branch only
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- .chat-editor/e2e-run189
+          if ! git diff --cached --quiet; then
+            git commit -m 'ci: preserve all nine completed E2E job logs and source identity'
+            git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
+          fi

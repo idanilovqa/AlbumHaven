@@ -1,0 +1,28 @@
+name: Collect PR 3 JavaScript repair evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-js-batch]
+    paths: [.github/workflows/chat-editor-js-evidence.yml, .chat-editor/collect-js-evidence.py]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Extract complete failures and exact tested sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .chat-editor/collect-js-evidence.py
+      - name: Store inspection material only on the helper branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .chat-editor/js-evidence.txt .chat-editor/js-source-manifest.json .chat-editor/js-source-*.b64
+          git diff --cached --stat
+          git commit -m 'ci: retain exact three-job failure inventory and source snapshot'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-js-batch

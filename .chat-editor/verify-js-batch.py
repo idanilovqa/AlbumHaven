@@ -24,6 +24,9 @@ if mode == 'apply':
     assert git('rev-parse', 'HEAD') == manifest['expected_head']
     require_head()
     encoded = ''.join((transport / 'js-batch.patch.gz.b64').read_text().split())
+    # Correct the one identified transcription byte; the unchanged decoded
+    # SHA256 below still verifies every source edit against the local patch.
+    encoded = encoded.replace('F1LHailIVhe+VKAG', 'F1LHailIVhf+VKAG')
     patch = gzip.decompress(base64.b64decode(encoded, validate=True))
     assert hashlib.sha256(patch).hexdigest() == manifest['patch_sha256'], 'Patch transport digest mismatch'
     subprocess.run(['git', 'config', 'core.autocrlf', 'false'], check=True)

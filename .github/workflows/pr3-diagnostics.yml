@@ -1,0 +1,22 @@
+name: PR 3 Read-only Failure Diagnostics
+on:
+  push:
+    branches: [2026-09-18-pr3-ci-diagnostics]
+    paths:
+      - .github/workflows/pr3-diagnostics.yml
+      - .chat-editor/diagnostics.py
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Print compact failure evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .chat-editor/diagnostics.py

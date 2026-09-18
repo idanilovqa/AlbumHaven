@@ -28,7 +28,7 @@ async function expectFilterInside(shell) {
   }).toBe(true);
 }
 
-test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing', async ({
+test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
@@ -60,7 +60,7 @@ test('FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit 
   await expect(shell.dialog).toBeHidden();
 });
 
-test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard anchor focus', async ({
+test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard anchor focus', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
@@ -98,7 +98,7 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
   await expect(shell.activeRow()).toHaveAttribute('data-problematic-album-key', key);
 });
 
-test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll and focused row', async ({
+test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll and focused row', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
@@ -125,7 +125,7 @@ test('FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll a
   } finally { await retained.dispose(); }
 });
 
-test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection through the real lightbox lifecycle', async ({
+test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection through the real lightbox lifecycle', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   const shell = await openProblems({ page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions });
@@ -154,7 +154,7 @@ test('FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection thr
   await expect(shell.lightbox).toBeHidden();
 });
 
-test('FTC-SETTINGS-S05 an open Filters surface remains inside Settings after narrow resize and reopen', async ({
+test('FTC-SETTINGS-S05 an open Filters surface remains inside Settings after narrow resize and reopen', { tag: '@area:settings' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityProblematicFilesActions,
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });

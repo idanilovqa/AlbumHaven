@@ -66,7 +66,7 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
   }
 });
 
-test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot', async ({
+test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot', { tag: '@area:log-history' }, async ({
   galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
   trackModalActions, utilityLogHistoryActions, utilityLoopsActions, utilityTabBarActions,
 }, testInfo) => {
@@ -119,7 +119,7 @@ test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot
   expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
 });
 
-test('FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range', async ({
+test('FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range', { tag: '@area:loops' }, async ({
   galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
   trackModalActions, utilityLoopsActions, utilityTabBarActions,
 }, testInfo) => {

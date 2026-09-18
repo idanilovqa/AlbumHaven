@@ -2,7 +2,7 @@ import { expect, test } from '../support/baseFixtures.js';
 import { SettingsIntegrations } from '../poms/settingsIntegrations.js';
 import { withUnavailableOwnedPickerRoot } from '../helpers/ownedUnavailableRoot.js';
 
-test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership', async ({
+test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership', { tag: '@area:integrations' }, async ({
   page, galleryActions, appBarActions, settingsModalAppBarActions, utilityTabBarActions, utilityIntegrationsActions,
 }) => {
   await galleryActions.goto();
@@ -66,7 +66,7 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
   }
 });
 
-test('FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import', async ({
+test('FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import', { tag: '@area:integrations' }, async ({
   page, galleryActions, settingsModalAppBarActions, utilityTabBarActions, utilityIntegrationsActions,
 }) => {
   await galleryActions.goto();

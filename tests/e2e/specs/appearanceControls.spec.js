@@ -21,7 +21,7 @@ const CASE_ID = 'FTC-APPEARANCE-001';
 test.describe(() => {
 test.use({ hasTouch: true });
 
-test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hydrates it before Settings opens', async ({
+test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hydrates it before Settings opens', { tag: '@area:settings' }, async ({
   appearancePreferenceIsolation, galleryActions, globalPlayerActions, page, playbackEvidence, settingsModalAppBarActions, trackModalActions, utilityAppearanceActions, utilityTabBarActions,
 }) => {
   const appearance = utilityAppearanceActions.utilityAppearanceTab;

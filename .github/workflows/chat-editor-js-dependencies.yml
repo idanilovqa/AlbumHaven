@@ -1,0 +1,40 @@
+name: Prepare pinned JavaScript verification dependencies
+on:
+  push:
+    branches: [2026-09-18-pr3-js-batch]
+    paths: [.github/workflows/chat-editor-js-dependencies.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - name: Package only the installed lockfile dependencies
+        run: |
+          python - <<'PY'
+          import base64, hashlib, io, json, tarfile
+          from pathlib import Path
+          output = io.BytesIO()
+          with tarfile.open(fileobj=output, mode='w:gz') as archive:
+              archive.add('node_modules')
+          data = output.getvalue()
+          encoded = base64.b64encode(data).decode('ascii')
+          parts = []
+          for i, offset in enumerate(range(0, len(encoded), 750000)):
+              path = Path(f'.chat-editor/js-deps-{i:03d}.b64')
+              path.write_text(encoded[offset:offset+750000] + '\n', encoding='ascii')
+              parts.append(str(path))
+          Path('.chat-editor/js-deps-manifest.json').write_text(json.dumps({'parts': parts, 'sha256': hashlib.sha256(data).hexdigest(), 'bytes': len(data)}, indent=2) + '\n')
+          print('Packaged', len(data), 'bytes in', len(parts), 'parts')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .chat-editor/js-deps-*.b64 .chat-editor/js-deps-manifest.json
+          git commit -m 'ci: retain pinned dependency package for isolated verification'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-js-batch

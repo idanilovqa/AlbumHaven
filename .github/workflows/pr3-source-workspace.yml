@@ -1,0 +1,52 @@
+name: PR 3 Pinned Source Workspace
+on:
+  push:
+    branches: [2026-09-18-pr3-ci-diagnostics]
+    paths: [.github/workflows/pr3-source-workspace.yml]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Prepare source-only workspace from the pinned PR head
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, hashlib, io, json, pathlib, subprocess, zipfile
+          revision = 'c2687083a71c8cef743e2ddf446929720095748d'
+          paths = subprocess.check_output(['git','ls-tree','-r','--name-only',revision], text=True).splitlines()
+          roots = {'music_app','tests','scripts','migrations','.github'}
+          extensions = {'.py','.js','.cjs','.mjs','.json','.css','.html','.md','.ps1','.yml','.yaml','.sql','.txt','.toml','.svg','.ini'}
+          selected = [p for p in paths if (p.split('/')[0] in roots or '/' not in p or p.startswith('docs/superpowers/plans/')) and pathlib.PurePosixPath(p).suffix in extensions and not any(part in {'.codex-restart','.env','node_modules','test-results','__pycache__'} for part in pathlib.PurePosixPath(p).parts)]
+          out = io.BytesIO()
+          with zipfile.ZipFile(out,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
+              for path in selected:
+                  archive.writestr(path, subprocess.check_output(['git','show',f'{revision}:{path}']))
+          payload = out.getvalue()
+          encoded = base64.b64encode(payload).decode('ascii')
+          destination = pathlib.Path('.chat-editor/source-workspace')
+          destination.mkdir(parents=True, exist_ok=True)
+          chunks = []
+          for index, offset in enumerate(range(0,len(encoded),800000),1):
+              name = f'part-{index:02}.txt'
+              content = encoded[offset:offset+800000]
+              (destination/name).write_text(content,encoding='ascii')
+              chunks.append({'path':str(destination/name),'characters':len(content)})
+          manifest = {'revision':revision,'file_count':len(selected),'zip_bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest(),'chunks':chunks}
+          (destination/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest,indent=2))
+          PY
+      - name: Store temporary workspace on diagnostics branch only
+        shell: bash
+        run: |
+          test "$GITHUB_REF" = refs/heads/2026-09-18-pr3-ci-diagnostics
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .chat-editor/source-workspace
+          git commit -m 'ci: retain pinned source-only repair workspace'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-ci-diagnostics

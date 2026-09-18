@@ -8,16 +8,17 @@ RUN = 35301542166
 
 
 def clean(text):
-    text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+    text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
     text = re.sub(r'^\d{4}-\d\d-\d\dT\S+\s?', '', text, flags=re.M)
     text = text.replace('%0A', '\n').replace('%0D', '')
     text = re.sub(r'postgres(?:ql)?://[^\s\"<>]+', '[database URL]', text)
     text = re.sub(r'(?i)((?:session_key|api_key|api_secret|password|token)\s*[=:]\s*)[^\s,}]+', r'\1[redacted]', text)
-    return text
+    return ''.join(c for c in text if c in '\n\r\t' or ord(c) >= 32)
 
 
 def api(path):
-    result = subprocess.run(['gh', 'api', f'repos/{REPO}/{path}'],
+    result = subprocess.run(['gh', 'api', '--allow-escape-sequences', f'repos/{REPO}/{path}'],
                             capture_output=True, text=True)
     if result.returncode:
         print('EVIDENCE READ ERROR:', clean(result.stderr)[:800], flush=True)

@@ -190,7 +190,7 @@ def test_asgi_library_settings_routes_preserve_read_and_validation_payloads(app,
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
 
     def load_root_settings(config, *, library_id, media_host_library_id):
-        assert config is app.config
+        assert config is asgi_app.state.config
         assert (library_id, media_host_library_id) == (1, 1)
         return {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],

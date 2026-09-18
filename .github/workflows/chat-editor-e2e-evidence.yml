@@ -28,7 +28,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -- .chat-editor/e2e-run189
+          git add -f -- .chat-editor/e2e-run189
           if ! git diff --cached --quiet; then
             git commit -m 'ci: preserve all nine completed E2E job logs and source identity'
             git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

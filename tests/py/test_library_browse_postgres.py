@@ -1162,7 +1162,9 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
     }
 
 
-def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(monkeypatch):
+def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
+    monkeypatch, default_empty_missing_album_projection,
+):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     connections = []
@@ -1198,6 +1200,11 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=connect,
         album_ratings_service=SnapshotAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_missing_album_rows",
+        lambda **kwargs: default_empty_missing_album_projection(repository, **kwargs),
     )
 
     def relation_alias_maps(*, connection):

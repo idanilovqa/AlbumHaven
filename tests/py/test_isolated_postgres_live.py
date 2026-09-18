@@ -5202,7 +5202,7 @@ def test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
                 _missing_albums_sql,
             )
             missing_albums = _missing_album_projection_payloads(
-                list(connection.execute(_missing_albums_sql()).fetchall())
+                list(connection.execute(_missing_albums_sql(), {"album_key": None}).fetchall())
             )
 
         assert relation_rows

@@ -23,7 +23,7 @@ def projection(monkeypatch):
             state=ActorState.ACTIVE, account_id=1, session_id=1, current_library_id=1,
             library_relationships=(LibraryRelationship(1, 'owner', True),),
         )),
-        app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={}, cold_scan_handoff_lock=Lock(), auth_policy_config=None)),
+        app=SimpleNamespace(state=SimpleNamespace(config={}, library_state={}, cold_scan_handoff_lock=Lock(), auth_policy_config=None, runtime_asset_version='test-assets')),
         cookies={},
     )
 

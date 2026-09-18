@@ -2,7 +2,7 @@
 import asyncio
 import copy
 from types import SimpleNamespace
-from tests.py.asgi_testing import run_asgi_request
+from tests.py.asgi_testing import configure_test_bootstrap_actor, run_asgi_request
 import pytest
 from fastapi import FastAPI, HTTPException
 from starlette.datastructures import QueryParams
@@ -30,7 +30,7 @@ def scoped(monkeypatch):
 
 @pytest.mark.parametrize('method,path,action',[('GET','/utilities/log-history','library.logs.read'),('POST','/utilities/log-history/export','library.logs.export')])
 def test_history_perimeter_requires_its_exact_capability_before_handler(monkeypatch,method,path,action):
-    calls=[]; app=FastAPI()
+    calls=[]; app=FastAPI(); configure_test_bootstrap_actor(app)
     async def forbidden_handler(): pytest.fail('denied history request reached operational store')
     app.add_api_route(path,forbidden_handler,methods=[method])
     def require(requested,**_kwargs):
@@ -89,7 +89,7 @@ def test_status_revision_uses_current_scope_outside_scan_lock_and_never_mutates_
     assert calls==[9,10] and shared['log_history_revision']=='cached-wrong-library' and config==before
 
 def test_export_grant_without_read_grant_cannot_read_or_download_history(monkeypatch):
-    app=FastAPI();app.include_router(routes.router);requested=[]
+    app=FastAPI(); configure_test_bootstrap_actor(app); app.include_router(routes.router);requested=[]
     def require(action,**_kwargs):
         async def check(_request):
             requested.append(action)

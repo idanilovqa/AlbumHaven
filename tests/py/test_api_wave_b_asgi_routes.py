@@ -27,6 +27,7 @@ def test_missing_statistics_migration_does_not_hide_integrations(monkeypatch):
     assert result['playback_statistics'] is None
 
 from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
@@ -70,7 +71,9 @@ def _track_ref(app, filename: str = "01 Track.flac") -> str:
 def _make_asgi_app():
     from music_app import create_asgi_app
 
-    return create_asgi_app()
+    asgi_app = create_asgi_app()
+    configure_test_bootstrap_actor(asgi_app)
+    return asgi_app
 
 
 class _NoFlaskBridge:
@@ -82,7 +85,7 @@ class _NoFlaskBridge:
 def local_log_history_items(app):
     from music_app.services.log_history import load_log_history
 
-    return lambda: load_log_history(app.config)
+    return lambda: load_log_history(app.config, scope=SimpleNamespace(account_id=1, library_id=1))
 
 
 @pytest.fixture()
@@ -226,7 +229,7 @@ def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_hea
     monkeypatch.setattr(
         asgi_routes,
         "build_lastfm_status",
-        lambda _config: {
+        lambda _config, **_scope: {
             "key": "lastfm",
             "title": "Last.fm",
             "api_configured": False,
@@ -239,7 +242,7 @@ def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_hea
     monkeypatch.setattr(
         asgi_routes,
         "build_listen_history_status_counts",
-        lambda _config: {"listen_history_count": 0, "pending_scrobble_count": 0},
+        lambda _config, **_scope: {"listen_history_count": 0, "pending_scrobble_count": 0},
     )
     monkeypatch.setattr(
         asgi_routes,
@@ -326,9 +329,9 @@ def test_asgi_integrations_lastfm_enrichment_uses_route_sources(app, monkeypatch
     threadpool_calls: list[tuple[object, tuple[object, ...]]] = []
     history_count_calls: list[object] = []
 
-    async def fake_run_in_threadpool(function, *args):
+    async def fake_run_in_threadpool(function, *args, **kwargs):
         threadpool_calls.append((function, args))
-        return function(*args)
+        return function(*args, **kwargs)
 
     def fail_if_retried(_config):
         raise AssertionError("GET /utilities/integrations must not retry pending scrobbles")
@@ -913,7 +916,7 @@ def test_asgi_lastfm_settings_saves_and_validates_timezone(app, monkeypatch):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmError
 
-    def fake_save_lastfm_user_timezone(_config, timezone_name):
+    def fake_save_lastfm_user_timezone(_config, timezone_name, **_scope):
         if timezone_name == "Mars/Olympus_Mons":
             raise LastfmError("Unsupported timezone: Mars/Olympus_Mons")
         return {

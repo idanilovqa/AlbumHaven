@@ -1938,6 +1938,7 @@ def test_failed_relation_publication_keeps_prior_live_scan_state(
         "scan_generation": 1,
         "scan_phase": "finalizing",
         "scan_outcome": "failed",
+        "history_scope": None,
     }]
     assert library_state["scan_in_progress"] is False
     assert "active_scan_preview_state" not in library_state

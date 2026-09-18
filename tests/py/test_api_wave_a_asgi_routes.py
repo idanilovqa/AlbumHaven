@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import run_asgi_request_async as _run_asgi_request_async
@@ -64,7 +65,9 @@ def app(tmp_path, monkeypatch):
 def _make_asgi_app():
     from music_app import create_asgi_app
 
-    return create_asgi_app()
+    asgi_app = create_asgi_app()
+    configure_test_bootstrap_actor(asgi_app)
+    return asgi_app
 
 
 @pytest.mark.parametrize('scenario', ['foreign', 'stale', 'forged-values', 'revoked-proposal'])
@@ -3967,7 +3970,7 @@ def test_postgres_exception_edit_state_hydrates_requested_paths_without_replacin
     )
 
     state = asgi_routes._postgres_exception_only_edit_state(
-        SimpleNamespace(app=asgi_app),
+        SimpleNamespace(app=asgi_app, state=SimpleNamespace()),
         {"updates": {selected_path: {"exception_type": ""}}},
     )
 
@@ -4521,7 +4524,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
 
     callback = (
         asgi_routes._asgi_selected_postgres_media_write_queue_finalize_save_task_builder(
-            SimpleNamespace(app=asgi_app)
+            SimpleNamespace(app=asgi_app, state=SimpleNamespace())
         )
     )
     callback(config=asgi_app.state.config)
@@ -4599,7 +4602,7 @@ def test_selected_postgres_album_edit_skips_unrelated_relation_projection_rebuil
 
     callback = (
         asgi_routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            SimpleNamespace(app=asgi_app)
+            SimpleNamespace(app=asgi_app, state=SimpleNamespace())
         )
     )
     callback(config=asgi_app.state.config)

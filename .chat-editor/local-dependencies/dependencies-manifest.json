@@ -1,0 +1,95 @@
+{
+  "source_revision": "c2687083a71c8cef743e2ddf446929720095748d",
+  "zip_bytes": 15238061,
+  "sha256": "acd117f1a401bf0fb9a521dd918269251ba74a92c456fd331374292fdbebcb69",
+  "chunks": [
+    {
+      "path": ".chat-editor/local-dependencies/deps-01.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-02.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-03.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-04.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-05.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-06.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-07.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-08.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-09.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-10.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-11.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-12.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-13.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-14.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-15.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-16.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-17.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-18.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-19.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-20.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-21.txt",
+      "characters": 950000
+    },
+    {
+      "path": ".chat-editor/local-dependencies/deps-22.txt",
+      "characters": 367416
+    }
+  ]
+}

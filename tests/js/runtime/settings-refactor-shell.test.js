@@ -37,7 +37,7 @@ function harness() {
     },
     getUtilityModalElements: () => els,
     escapeHtml: (value) => String(value ?? '').replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;'),
-    renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},
+    renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLibrarySettings() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},
     getAvailableAlbumMoveActions: () => [],
     buildAlbumDisplayCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}` : '',
     buildAlbumLightboxCoverUrl: (album) => album.cover_path ? `/cover?path=${encodeURIComponent(album.cover_path)}&size=original` : (album.remote_cover_url || album.remote_cover_thumbnail_url || ''),

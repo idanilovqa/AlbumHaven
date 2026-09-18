@@ -2554,6 +2554,7 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
+    els.problemFilterButton.textContent = `Filters${countSuffix}`;
     els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
     els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));

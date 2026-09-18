@@ -26,7 +26,7 @@ jobs:
           sha256sum --check postgresql-17.6.tar.bz2.sha256
           tar -xjf postgresql-17.6.tar.bz2
           cd postgresql-17.6
-          ./configure --prefix=/mnt/data/offline-pg --without-icu --without-readline --without-zlib --without-lz4 --without-zstd --without-ssl --without-gssapi --disable-nls
+          ./configure --prefix=/mnt/data/offline-pg --without-icu --without-readline --without-zlib --without-lz4 --without-zstd --without-gssapi --disable-nls
           make -j4 > "$RUNNER_TEMP/pg-build.log" 2>&1
           make DESTDIR="$dest" install > "$RUNNER_TEMP/pg-install.log" 2>&1
           make -C contrib/pg_trgm -j4 >> "$RUNNER_TEMP/pg-build.log" 2>&1

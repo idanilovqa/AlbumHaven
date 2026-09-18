@@ -4,7 +4,7 @@ on:
   push:
     branches: [2026-09-18-pr3-python-batch]
     paths:
-      - .chat-editor/python-batch.patch.gz.b64
+      - .chat-editor/python-followup.patch
       - .github/workflows/chat-editor-apply-python-batch.yml
 
 permissions:
@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      EXPECTED_HEAD: 0df241949abd06eb5e2b25450efe97e1e52fd1dd
+      EXPECTED_HEAD: ea651706305f755b84574bb2c3b079497b7752ae
       TARGET_BRANCH: 2026-09-08-settings-refactor
-      PATCH_SHA256: 01c6469983543fffa430138dce92224fceb762e64b3de68763e8a4ef8b756e52
+      PATCH_SHA256: 3a4f3e1deccf7f69681944fd19008de6bfce34780354e8501815c24031afb3a2
     steps:
       - uses: actions/checkout@v5
         with:
@@ -36,62 +36,41 @@ jobs:
           head=$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)
           test "$head" = "$EXPECTED_HEAD"
           python - <<'PY'
-          import base64, gzip, hashlib, os
+          import hashlib, os
           from pathlib import Path
-          encoded = ''.join(Path('.chat-editor/python-batch.patch.gz.b64').read_text().split())
-          # Repair three transport-copy defects, then verify the independently
-          # computed digest of the complete locally validated unified patch.
-          corrections = [
-              (8351, 'e', ''),
-              (4343, 'u', ''),
-              (3939, '', '6X0v/W++HpwK63sbfofGYSe6HT8jaIANgoa3Rk/eWflT2wiFbD8n5qgSRgUtUVmRr9oHGAlmK+ylkiZKi2mGTCTsZDoUIyO9ewNGG9H7IkrgtgOdJsOsg7HsnuYVW36Rb1Hz0EXnjvRMS8+GL3ggZJ/YF971EUaQmnfvZvaDfMe2UlNZa1F4+rGm0CDDS4W3TCD9BX/TKZEDfE05MRprX5EM'),
-          ]
-          for offset, old, new in corrections:
-              assert encoded[offset:offset + len(old)] == old, 'Transport correction mismatch'
-              encoded = encoded[:offset] + new + encoded[offset + len(old):]
-          patch = gzip.decompress(base64.b64decode(encoded, validate=True))
+          patch = Path('.chat-editor/python-followup.patch').read_bytes()
           assert hashlib.sha256(patch).hexdigest() == os.environ['PATCH_SHA256'], 'Patch digest mismatch'
-          Path(os.environ['RUNNER_TEMP'], 'python-batch.patch').write_bytes(patch)
-          print('Verified complete eight-file patch, bytes:', len(patch))
+          Path(os.environ['RUNNER_TEMP'], 'python-followup.patch').write_bytes(patch)
+          print('Verified complete library-settings repair patch, bytes:', len(patch))
           PY
           git switch --detach "$EXPECTED_HEAD"
-          git apply --check --whitespace=error-all "$RUNNER_TEMP/python-batch.patch"
-          git apply --whitespace=error-all "$RUNNER_TEMP/python-batch.patch"
-      - name: Validate and stage only the completed repair files
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/python-followup.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/python-followup.patch"
+      - name: Validate and stage only the completed repair
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           import ast, subprocess
           from pathlib import Path
-          files = [
-              'docs/superpowers/plans/2026-09-09-settings-refactor.md',
-              'music_app/services/log_history.py',
-              'tests/py/asgi_testing.py',
-              'tests/py/test_api_read_asgi_routes.py',
-              'tests/py/test_api_wave_a_asgi_routes.py',
-              'tests/py/test_api_wave_b_asgi_routes.py',
-              'tests/py/test_library_browse_postgres.py',
-              'tests/py/test_settings_python_contract_regressions.py',
-          ]
+          files = ['tests/py/test_api_wave_a_asgi_routes.py']
           for name in files:
-              if name.endswith('.py'):
-                  ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
+              ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
           subprocess.run(['git', 'diff', '--check'], check=True)
           subprocess.run(['git', 'add', '--', *files], check=True)
           staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
-          assert sorted(staged) == sorted(files), staged
+          assert staged == files, staged
           print('Syntax and exact staged-file inventory verified.')
           PY
-      - name: Publish the entire batch in one non-force commit
+      - name: Publish all five remaining repairs in one non-force commit
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix: repair scoped Python contracts and preserve safe log metadata'
+          git commit -m 'test: repair scoped library-settings contracts and verify PostgreSQL persistence'
           head=$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)
           test "$head" = "$EXPECTED_HEAD"
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           echo "Repair commit: $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo 'This job publishes a prebuilt patch only. Authoritative native PR Python CI is still required.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Authoritative native PR Python CI is still required.' >> "$GITHUB_STEP_SUMMARY"

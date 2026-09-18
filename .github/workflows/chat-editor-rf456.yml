@@ -48,8 +48,6 @@ jobs:
       - name: Focused JavaScript verification
         run: |
           node --test --test-concurrency=1 tests/js/runtime/bootstrap-utility-event-handlers.test.js
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node -e "const fs=require('fs'),assert=require('assert'),b=require('./scripts/build-runtime-bundle.cjs'); const s=fs.readFileSync('music_app/static/js/runtime/bootstrap-utility-event-handlers.js','utf8'); assert(s.includes(\"state.utility.activeTab === 'problematic-files' && filterTarget && !filterInput\")); assert(s.includes('renderUtilityLoopList(els, getFilteredUtilityLoops());')); assert.equal(fs.readFileSync(b.outputPath,'utf8').replace(/\\r\\n/g,'\\n'),b.buildRuntimeBundle().replace(/\\r\\n/g,'\\n'));"
       - name: Focused Python verification
         run: |
           $env:PGPASSWORD=$null

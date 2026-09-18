@@ -1,0 +1,572 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index ba41f39..a839301 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -350,6 +350,45 @@ Tests: `tests/js/runtime/appearance-backgrounds.test.js`, `tests/py/test_appeara
+ - [x] Run the complete initial required suite inventory before fixes. JavaScript, Python, functional, component, performance, authentication and administration results are retained in Task 9 validation artifacts. JS/Python and heavyweight browser waves ran sequentially, with scoped cleanup. Final clean-state reruns remain required below.
+ - [ ] Complete review/full native CI and manual acceptance without weakening tests or thresholds. No publication merely because visuals were approved.
+ 
++### JavaScript and component CI repair checkpoint — September 18, 2026
++
++The owner authorized a batched repair of Portable JavaScript, Windows JavaScript,
++and pinned-Chrome component failures on PR #3, followed by native CI iteration
++without waiting for E2E. This overrides historical no-push instructions for this
++repair only; no merge or release is authorized. Baseline run `35381201822`, head
++`3e34e1f57716bdfcd2dcea7959bc1213af7e13c6`: both Node jobs reported the same 19
++failures; component tests reported 14 failures. The Python job passed on that head.
++
++Runtime regression acceptance for S03/A01/B03: anchored forms remain inside the
++Settings boundary, including search anchors near either edge; default-account
++editor controls and shared footer resolve native catalog tokens without applying
++unsaved colors to the app; explicit saved navigation colors win over neutral
++hover defaults; changing seekbar mode replaces unavailable controls while keeping
++invalid drafts, blocked Save, focus and a correction route; both real capsule
++and companion action surfaces remain opaque when the player surface is native.
++
++Harness repairs retain assertions while restoring the actual metadata-helper
++import, unique gallery helper declarations, Appearance-isolation fixture, complete
++71-module loader inventory, DOM accessors and compact-cover data hook. Numeric
++artist names with explicit separate fields and year-only legacy metadata remain
++independent. The import-ratings action remains covered through its existing hook.
++
++Older cosmetic expectations are reconciled with the owner-directed September 13
++rebase follow-up, not used to revert it: inset 1px hover feedback and separate
++keyboard focus remain; automatic outlines use the theme accent and explicit
++player outlines use the control border. The B03 downward-extension padding adds
++8px to expanded player height (76px regular, 100px waveform); existing 39px/57px
++centerlines, waveform size, alignment tolerances and audio behavior are unchanged.
++Only the two expanded-player Windows snapshots are refreshed for this geometry;
++compact snapshots and all functional/performance E2E contracts remain unchanged.
++
++Focused verification: all 19 Node failures reproduced before repair; the final
++21-file local run passes 326 tests without skips. Memory-only browser diagnostics
++pass, but local browser navigation is policy-blocked before the HTTP fixtures run.
++Pinned Windows Chrome verification therefore precedes publication, followed by the
++three full native jobs. A focused result is not a complete PR or release pass.
++No existing task checkbox changed; the plan has no numeric checkbox counter.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/music_app/static/app.js b/music_app/static/app.js
+index 7b953e4..3acc3df 100644
+--- a/music_app/static/app.js
++++ b/music_app/static/app.js
+@@ -368,7 +368,7 @@
+       const script = document.createElement('script');
+       script.text = `\n//# sourceURL=${scriptUrl}\n${source}\n`;
+       document.head.appendChild(script);
+-      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 68 });
++      pushStartupMark('runtime_bundle_ready', { scriptCount: 1, bundledScriptCount: 71 });
+     } catch (error) {
+       console.error('[AlbumHaven] Failed to load runtime bundle.', error);
+       pushStartupMark('runtime_bundle_failed');
+diff --git a/music_app/static/css/appearance-backgrounds.css b/music_app/static/css/appearance-backgrounds.css
+index 537059b..bbe5678 100644
+--- a/music_app/static/css/appearance-backgrounds.css
++++ b/music_app/static/css/appearance-backgrounds.css
+@@ -26,7 +26,18 @@ html .non-album-modal-dialog {
+ html .cover-lookup-drawer {
+   background: linear-gradient(180deg, rgba(var(--appearance-panel-background-rgb, 8, 15, 27), 0.98), rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98));
+ }
+-/* Each editor follows its own draft; document surfaces keep the saved theme. */
++/* Default-account controls resolve catalog tokens locally. Saved palettes still
++   inherit from the app; unsaved colors remain confined to the preview. */
++:root:not([data-appearance-palette]) :where(.appearance-background-editor, .editor-footer) {
++  --appearance-ink: #EDF0F4;
++  --appearance-muted: #ABB6C5;
++  --appearance-card: #202938;
++  --appearance-control: #202938;
++  --appearance-line: #526173;
++  --appearance-primary-button: #202938;
++  --appearance-primary-button-ink: #EDF0F4;
++}
++/* Each preview follows its own draft; editor controls keep the saved theme. */
+ .appearance-background-editor {
+   --text: var(--appearance-ink); --muted: var(--appearance-muted);
+   --panel: var(--appearance-card); --panel-2: var(--appearance-control);
+@@ -488,7 +499,7 @@ html .cover-lookup-drawer {
+ /* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */
+ /* Custom controls still need opaque pod/idle surfaces when the player surface
+    inherits native CSS. Keep these fallbacks local, without theming the player. */
+-:root[data-appearance-native-surface] .global-player :is(.loop-edit-actions, .player-timeline-wrap.is-idle) {
++:root[data-appearance-native-surface] .global-player :is(.loop-play-control-cluster, .loop-edit-actions, .player-timeline-wrap.is-idle) {
+   --appearance-player: #071827;
+   --appearance-player-ink: #dcebe3;
+ }
+diff --git a/music_app/static/css/navigation-tree.css b/music_app/static/css/navigation-tree.css
+index 1d4d3b7..22fb679 100644
+--- a/music_app/static/css/navigation-tree.css
++++ b/music_app/static/css/navigation-tree.css
+@@ -6,6 +6,9 @@
+   border-color: transparent !important;
+   background: color-mix(in srgb, var(--text, #eee) 7%, var(--panel, #171717)) !important;
+ }
++:root[data-appearance-item-hover] .navigation-tree-item:not(.is-selected):hover:not(:disabled):not([aria-disabled="true"]) {
++  background: var(--appearance-item-hover) !important;
++}
+ :root .navigation-tree-item:hover:not(:focus-visible) { outline: none !important; }
+ :root .navigation-tree-item.is-selected:hover {
+   background: var(--selection-body-background) !important;
+diff --git a/music_app/static/js/appearance-backgrounds.js b/music_app/static/js/appearance-backgrounds.js
+index 68d424c..bd55519 100644
+--- a/music_app/static/js/appearance-backgrounds.js
++++ b/music_app/static/js/appearance-backgrounds.js
+@@ -738,10 +738,10 @@
+         <div class="player-preview-cover" data-player-preview-cover aria-hidden="true">♫</div>
+         <div class="player-preview-transport" aria-hidden="true"><span>▶</span><small>✂</small></div>
+         <div class="player-preview-main"><div class="player-preview-meta"><span><strong data-player-preview-title>Still Water</strong><span data-player-preview-album> / Coastal Lines</span></span><time data-player-preview-time>1:42 / 4:12</time></div>
+-          <svg class="player-preview-waveform" viewBox="0 0 600 42" preserveAspectRatio="none" role="img" aria-label="Stereo waveform using the selected colors">
++          ${waveformSelected ? `<svg class="player-preview-waveform" viewBox="0 0 600 42" preserveAspectRatio="none" role="img" aria-label="Stereo waveform using the selected colors">
+             <g class="player-preview-unplayed"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g>
+             <g class="player-preview-played"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g><line class="player-preview-playhead" x1="246" x2="246" y1="0" y2="42"/><circle class="player-preview-playhead-dot" cx="246" cy="21" r="2.5"/><g class="player-preview-loop-handles" aria-hidden="true"><line x1="145" x2="145" y1="0" y2="42"/><line x1="475" x2="475" y1="0" y2="42"/></g>
+-          </svg><div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>
++          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
+         </div>
+       </div>
+       </div>
+@@ -1081,6 +1081,13 @@
+       find('.background-status').hidden = true;
+       const sync = state => {
+         if (mounted !== editor) return;
++        if ((state.seekbarMode === 'waveform') !== waveformSelected) {
++          const restoreModeFocus = editor.contains?.(document.activeElement)
++            && document.activeElement?.hasAttribute?.('data-appearance-seekbar-mode');
++          mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode });
++          if (restoreModeFocus) mounted.querySelector(`[data-appearance-seekbar-mode="${state.seekbarMode}"]`)?.focus();
++          return;
++        }
+         const disabled = state.loading || state.saving || state.loadFailed, custom = Boolean(state.draft.player_style_override || state.draft.player_override);
+         editor.querySelectorAll('[data-appearance-seekbar-mode]').forEach(radio => { radio.checked = radio.value === state.seekbarMode; });
+         editor.setAttribute('aria-busy', String(state.loading || state.saving));
+diff --git a/music_app/static/js/runtime-bundle.js b/music_app/static/js/runtime-bundle.js
+index 4151f6c..1150f77 100644
+--- a/music_app/static/js/runtime-bundle.js
++++ b/music_app/static/js/runtime-bundle.js
+@@ -2259,13 +2259,13 @@ function showAppFormDialog(options = {}) {
+       const searchRect = searchField?.getBoundingClientRect();
+       const joinedTop = searchRect ? searchRect.bottom - 1 : rect.bottom + 4;
+       const boundary = boundaryElement?.getBoundingClientRect();
+-      const left = Math.max(16, Math.min(window.innerWidth - 24, Number(boundary?.left || 0) + 16));
++      const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
+       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
+       const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+       const width = Math.min(440, right - left);
+       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
+       const panelLeft = searchRect
+-        ? Math.max(8, Math.min(searchRect.left, window.innerWidth - width - 8))
++        ? Math.max(left, Math.min(searchRect.left, right - width))
+         : Math.max(left, Math.min(rect.right - width, right - width));
+       anchoredPanel.style.position = 'fixed'; anchoredPanel.style.left = `${panelLeft}px`; anchoredPanel.style.top = `${top}px`;
+       anchoredPanel.style.width = `${width}px`; anchoredPanel.style.maxHeight = `${bottom - top}px`;
+diff --git a/music_app/static/js/runtime/browser-dialog-helpers.js b/music_app/static/js/runtime/browser-dialog-helpers.js
+index 21eda4d..75c642f 100644
+--- a/music_app/static/js/runtime/browser-dialog-helpers.js
++++ b/music_app/static/js/runtime/browser-dialog-helpers.js
+@@ -59,13 +59,13 @@ function showAppFormDialog(options = {}) {
+       const searchRect = searchField?.getBoundingClientRect();
+       const joinedTop = searchRect ? searchRect.bottom - 1 : rect.bottom + 4;
+       const boundary = boundaryElement?.getBoundingClientRect();
+-      const left = Math.max(16, Math.min(window.innerWidth - 24, Number(boundary?.left || 0) + 16));
++      const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
+       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
+       const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
+       const width = Math.min(440, right - left);
+       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
+       const panelLeft = searchRect
+-        ? Math.max(8, Math.min(searchRect.left, window.innerWidth - width - 8))
++        ? Math.max(left, Math.min(searchRect.left, right - width))
+         : Math.max(left, Math.min(rect.right - width, right - width));
+       anchoredPanel.style.position = 'fixed'; anchoredPanel.style.left = `${panelLeft}px`; anchoredPanel.style.top = `${top}px`;
+       anchoredPanel.style.width = `${width}px`; anchoredPanel.style.maxHeight = `${bottom - top}px`;
+diff --git a/tests/components/appearanceWorkspace.spec.js b/tests/components/appearanceWorkspace.spec.js
+index ff0f963..e47212c 100644
+--- a/tests/components/appearanceWorkspace.spec.js
++++ b/tests/components/appearanceWorkspace.spec.js
+@@ -85,14 +85,23 @@ test('native player survives a handle-only save and reload without repainting ot
+ 
+ test('custom controls keep opaque action pods while the player surface remains native', async ({ page }) => {
+   await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: null, player_style_override: null, player_override: null } });
++  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/playback-control-cluster.js') });
+   const paint = await page.evaluate(() => {
+     const api = window.AlbumHavenAppearance;
+     const player = document.querySelector('.global-player');
+-    player.insertAdjacentHTML('beforeend', '<div class="loop-edit-actions"><div class="loop-edit-action-pod"></div><button class="loop-edit-action-enter">Edit</button></div><button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
++    for (const loopControlStyle of ['capsule', 'companion']) {
++      player.insertAdjacentHTML('beforeend', window.renderPlaybackControlCluster({ variant: 'expanded-player', loopControlStyle }));
++    }
++    player.querySelectorAll('[data-playback-control-cluster]').forEach(node => {
++      node.setAttribute('data-loop-action-engaged', 'true');
++      node.setAttribute('data-loop-action-state', 'editing');
++    });
++    player.insertAdjacentHTML('beforeend', '<button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
+     const surface = getComputedStyle(player).backgroundImage;
+     api.instance.controller.setPlayerStyleColor('controls.fill', '#123456');
+     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
+-    const pod = document.querySelector('.loop-edit-action-pod');
++    const pod = document.querySelector('[data-loop-control-style="capsule"]');
++    const companion = document.querySelector('[data-loop-control-style="companion"]');
+     const idle = document.querySelector('.player-timeline-wrap');
+     const idleBackground = getComputedStyle(idle, '::before').backgroundColor;
+     const style = structuredClone(api.instance.controller.getState().draft.player_style_override);
+@@ -101,7 +110,7 @@ test('custom controls keep opaque action pods while the player surface remains n
+     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
+     const loop = getComputedStyle(document.querySelector('.player-loop-button'));
+     return { surface, after: getComputedStyle(player).backgroundImage, outline: [loop.outlineStyle, loop.outlineWidth, loop.outlineColor],
+-      pod: getComputedStyle(pod).backgroundColor, tail: getComputedStyle(pod, '::after').backgroundColor,
++      pod: getComputedStyle(pod, '::before').backgroundColor, tail: getComputedStyle(companion, '::before').backgroundColor,
+       idle: idleBackground };
+   });
+   expect(paint.after).toBe(paint.surface);
+diff --git a/tests/components/buttonInteractionOutline.spec.js b/tests/components/buttonInteractionOutline.spec.js
+index 5e5b91b..4bc32e1 100644
+--- a/tests/components/buttonInteractionOutline.spec.js
++++ b/tests/components/buttonInteractionOutline.spec.js
+@@ -115,7 +115,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
+   await reset.hover();
+   await expect(reset).toHaveCSS('outline-style', 'solid');
+   await expect(reset).toHaveCSS('outline-width', '1px');
+-  await expect(reset).toHaveCSS('outline-offset', '1px');
++  await expect(reset).toHaveCSS('outline-offset', '-1px');
+   await expect(reset).toHaveCSS('outline-color', outlineColor);
+   await expect(reset).toHaveCSS('border-color', outlineColor);
+ 
+@@ -187,7 +187,9 @@ test('round destructive ActionButton centers its SVG and keeps error-family inte
+ 
+   await action.hover();
+   await expect(action).toHaveCSS('border-color', 'rgb(239, 83, 80)');
+-  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
++  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
++  await expect(action).toHaveCSS('outline-offset', '-1px');
+   await action.focus();
+-  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
++  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
++  await expect(action).toHaveCSS('outline-offset', '-1px');
+ });
+diff --git a/tests/components/playerViews.spec.js b/tests/components/playerViews.spec.js
+index b7e486d..2bb6fce 100644
+--- a/tests/components/playerViews.spec.js
++++ b/tests/components/playerViews.spec.js
+@@ -34,7 +34,7 @@ const expandedControls = (loopControlStyle = 'capsule') => `
+ const compactControls = `
+   <div class="compact-player-shell" aria-label="Compact player">
+     ${renderButton({ variant: 'icon', size: 'small', className: 'compact-player-expand', ariaLabel: 'Expand player', label: '›' })}
+-    <button class="compact-player-cover" type="button" aria-label="Open album details"></button>
++    <button class="compact-player-cover" data-compact-player-cover type="button" aria-label="Open album details"></button>
+     ${renderPlaybackControlCluster({ variant: 'compact-player' })}
+   </div>`;
+ 
+@@ -140,7 +140,7 @@ test('expanded waveform player uses the approved centerline and player-edge meta
+   expect(Number.parseFloat(await player.evaluate((element) => getComputedStyle(element).paddingLeft))).toBe(28);
+   const expectedCenterline = playerBox.y + 57;
+ 
+-  expect(playerBox.height).toBe(92);
++  expect(playerBox.height).toBe(100);
+   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['waveform', waveformBox]]) {
+     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
+   }
+@@ -166,14 +166,14 @@ test('expanded regular player uses the approved centerline and seekbar-edge text
+   ]);
+   const expectedCenterline = playerBox.y + 39;
+ 
+-  expect(playerBox.height).toBe(68);
++  expect(playerBox.height).toBe(76);
+   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['timeline', timelineBox]]) {
+     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
+   }
+   expect(Math.abs(metadataBox.x - timelineBox.x)).toBeLessThanOrEqual(1);
+   expect(Math.abs(metadataBox.y - (playerBox.y + 10))).toBeLessThanOrEqual(1);
+   expect(Math.abs(timestampBox.y - (playerBox.y + 11))).toBeLessThanOrEqual(1);
+-  expect(Math.abs((playerBox.y + playerBox.height) - (timelineBox.y + timelineBox.height) - 5)).toBeLessThanOrEqual(1);
++  expect(Math.abs((playerBox.y + playerBox.height) - (timelineBox.y + timelineBox.height) - 13)).toBeLessThanOrEqual(1);
+   await expect(player).toHaveScreenshot('expanded-regular-player.png', { animations: 'disabled' });
+ });
+ 
+diff --git a/tests/e2e/helpers/visibleAlbumMetadata.js b/tests/e2e/helpers/visibleAlbumMetadata.js
+index 85f63c1..1014c1b 100644
+--- a/tests/e2e/helpers/visibleAlbumMetadata.js
++++ b/tests/e2e/helpers/visibleAlbumMetadata.js
+@@ -4,6 +4,7 @@ export const VISIBLE_ALBUM_YEAR_PATTERN = '^.* · (\\d{1,4})$';
+ export function parseVisibleAlbumMetadata(subtitle, separateYear = null) {
+   const text = String(subtitle || '').trim();
+   if (separateYear !== null) return { artist: text, year: String(separateYear || '').trim() };
++  if (/^\d{1,4}$/.test(text)) return { artist: '', year: text };
+   const match = text.match(new RegExp(VISIBLE_ALBUM_YEAR_PATTERN));
+   return match
+     ? { artist: text.slice(0, text.length - match[1].length - 3), year: match[1].trim() }
+diff --git a/tests/js/album-card-metadata.test.js b/tests/js/album-card-metadata.test.js
+index 46c7b4e..ef4b739 100644
+--- a/tests/js/album-card-metadata.test.js
++++ b/tests/js/album-card-metadata.test.js
+@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
+ const path = require('node:path');
+ const test = require('node:test');
+ const { pathToFileURL } = require('node:url');
+-const moduleUrl = pathToFileURL(path.resolve(__dirname, '../e2e/poms/albumCard.js')).href;
++const moduleUrl = pathToFileURL(path.resolve(__dirname, '../e2e/helpers/visibleAlbumMetadata.js')).href;
+ 
+ test('visible card metadata retains exact credited artist and year independently', async () => {
+   const { parseVisibleAlbumMetadata } = await import(moduleUrl);
+@@ -20,3 +20,10 @@ test('visible card metadata retains an absent artist separately from a known yea
+   assert.deepEqual(parseVisibleAlbumMetadata('1966'), { artist: '', year: '1966' });
+   assert.deepEqual(parseVisibleAlbumMetadata(''), { artist: '', year: '' });
+ });
++
++
++test('separate metadata fields preserve numeric artist names and unknown years', async () => {
++  const { parseVisibleAlbumMetadata } = await import(moduleUrl);
++  assert.deepEqual(parseVisibleAlbumMetadata('1966', ''), { artist: '1966', year: '' });
++  assert.deepEqual(parseVisibleAlbumMetadata('311', '1997'), { artist: '311', year: '1997' });
++});
+diff --git a/tests/js/appearance-fixture.test.js b/tests/js/appearance-fixture.test.js
+index 0e21e5f..b1b7c71 100644
+--- a/tests/js/appearance-fixture.test.js
++++ b/tests/js/appearance-fixture.test.js
+@@ -139,6 +139,7 @@ test('AlbumDetails playback establishes animation through Appearance before asse
+   const calls = [], reachedScenario = new Error('the original playback scenario begins');
+   const media = [];
+   await assert.rejects(callback({
++    appearancePreferenceIsolation: { async capture() { calls.push(['capture']); } },
+     page: { async emulateMedia(options) { media.push({ ...options }); } },
+     galleryActions: { async goto() {}, async waitForGalleryReady() {} },
+     settingsModalAppBarActions: { async openSettings() {}, async closeSettings() {} },
+@@ -154,7 +155,7 @@ test('AlbumDetails playback establishes animation through Appearance before asse
+       else throw reachedScenario;
+     } },
+   }), error => error === reachedScenario);
+-  assert.deepEqual(calls, [['animation', true], ['save']]);
++  assert.deepEqual(calls, [['capture'], ['animation', true], ['save']]);
+   assert.deepEqual(media, [{ reducedMotion: 'no-preference' }]);
+ });
+ 
+diff --git a/tests/js/runtime/alert-components.test.js b/tests/js/runtime/alert-components.test.js
+index db22df6..95aaa4c 100644
+--- a/tests/js/runtime/alert-components.test.js
++++ b/tests/js/runtime/alert-components.test.js
+@@ -107,8 +107,9 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
+ 
+   assert.match(css, /\.small-alert,\s*\.alert-label,\s*\.on-page-alert\s*\{[^}]*--alert-edge:[^}]*--alert-tint:[^}]*--alert-ink:/s);
+   assert.match(css, /\.alert-label\s*\{[^}]*border:[^;]*var\(--alert-edge\)[^}]*background:\s*var\(--alert-tint\)[^}]*color:\s*var\(--alert-ink\)/s);
+-  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*2px solid color-mix\(in srgb, var\(--alert-edge\)/s);
++  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*1px solid color-mix\(in srgb, var\(--alert-edge\)/s);
+   assert.match(css, /button\.alert-label:is\(\.is-active,\s*\[aria-pressed="true"\]\)/s);
++  assert.match(css, /button\.alert-label:is\(:hover,[^}]*outline-offset:\s*-1px/s);
+   const labelRules = css.match(/[^{}]*\.alert-label[^{}]*\{[^}]*\}/g)?.join('\n') || '';
+   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
+ });
+diff --git a/tests/js/runtime/app-form-dialog.test.js b/tests/js/runtime/app-form-dialog.test.js
+index 71884b4..69e2496 100644
+--- a/tests/js/runtime/app-form-dialog.test.js
++++ b/tests/js/runtime/app-form-dialog.test.js
+@@ -63,7 +63,7 @@ test('anchored form fits the containing Settings panel and available height with
+   modal.querySelector=()=>panel;modal.classList={add(){},remove(){}};
+   h.context.window.innerWidth=1920;h.context.window.innerHeight=927;
+   h.context.syncTriggerAnchor=()=>{};h.context.clearTriggerAnchor=()=>{};
+-  const anchor={getBoundingClientRect:()=>({left:649,right:717,bottom:128}),closest:()=>({getBoundingClientRect:()=>({left:410,right:1510,bottom:825})})};
++  const anchor={getBoundingClientRect:()=>({left:649,right:717,bottom:128}),closest:selector=>selector==='.utility-modal-dialog'?{getBoundingClientRect:()=>({left:410,right:1510,bottom:825})}:null};
+   const pending=h.context.showAppFormDialog({anchor});
+   assert.ok(parseFloat(panel.style.left)>=418,'the popup must not extend under the Settings clipping boundary');
+   assert.ok(parseFloat(panel.style.top)+parseFloat(panel.style.maxHeight)<=817,'footer must fit above the Settings bottom');
+@@ -99,7 +99,7 @@ test('active anchored form repositions on viewport and Settings resize and relea
+  const panel={style:{},setAttribute(){},removeAttribute(name){if(name==='style')this.style={};}};
+  const modal=h.nodes.get('app-form-modal');modal.querySelector=()=>panel;modal.classList={add(){},remove(){}};
+  let bounds={left:410,right:1510,bottom:825};let trigger={left:649,right:717,bottom:128};
+- const boundary={getBoundingClientRect:()=>bounds};const anchor={getBoundingClientRect:()=>trigger,closest:()=>boundary};
++ const boundary={getBoundingClientRect:()=>bounds};const anchor={getBoundingClientRect:()=>trigger,closest:selector=>selector==='.utility-modal-dialog'?boundary:null};
+  h.context.syncTriggerAnchor=()=>{};h.context.clearTriggerAnchor=()=>{};
+  const pending=h.context.showAppFormDialog({anchor});assert.equal(parseFloat(panel.style.left),418);
+  h.context.window.innerWidth=390;h.context.window.innerHeight=640;bounds={left:8,right:382,bottom:632};trigger={left:298,right:366,bottom:112};
+@@ -113,3 +113,29 @@ test('active anchored form repositions on viewport and Settings resize and relea
+  assert.equal(events.size,0);assert.equal(observer.disconnected,true);
+  late();assert.deepEqual(panel.style,{},'queued observer callback cannot revive a closed form');
+ });
++
++for (const searchLeft of [390, 1480]) {
++  test(`search-attached form clamps both edges inside Settings from x=${searchLeft}`, async () => {
++    const h = setup();
++    const panel = { style: {}, setAttribute() {}, removeAttribute() {} };
++    const modal = h.nodes.get('app-form-modal');
++    modal.querySelector = () => panel;
++    modal.classList = { add() {}, remove() {} };
++    Object.assign(h.context.window, { innerWidth: 1920, innerHeight: 927 });
++    h.context.syncTriggerAnchor = () => {};
++    h.context.clearTriggerAnchor = () => {};
++    const boundary = { getBoundingClientRect: () => ({ left: 410, right: 1510, bottom: 825 }) };
++    const search = { getBoundingClientRect: () => ({ left: searchLeft, bottom: 180 }) };
++    const anchor = {
++      getBoundingClientRect: () => ({ left: 649, right: 717, bottom: 178 }),
++      closest: selector => selector === '.utility-modal-dialog' ? boundary
++        : selector === '.search-field-control' ? search : null,
++    };
++    const pending = h.context.showAppFormDialog({ anchor });
++    assert.ok(parseFloat(panel.style.left) >= 418);
++    assert.ok(parseFloat(panel.style.left) + parseFloat(panel.style.width) <= 1502);
++    assert.equal(parseFloat(panel.style.top), 179, 'the form stays joined to the search input');
++    h.fire('app-form-cancel', 'click');
++    await pending;
++  });
++}
+diff --git a/tests/js/runtime/app-loader-bundle.test.js b/tests/js/runtime/app-loader-bundle.test.js
+index 34ea647..977d3c5 100644
+--- a/tests/js/runtime/app-loader-bundle.test.js
++++ b/tests/js/runtime/app-loader-bundle.test.js
+@@ -81,6 +81,7 @@ const expectedRuntimeOrder = [
+   'problematic-album-helpers.js',
+   'browser-log-history-store.js',
+   'utility-log-history-query.js',
++  'date-range-picker.js',
+   'utility-log-history-ui.js',
+   'compact-data-table.js',
+   'album-track-table.js',
+diff --git a/tests/js/runtime/appearance-palettes.test.js b/tests/js/runtime/appearance-palettes.test.js
+index 90157f7..b1d424a 100644
+--- a/tests/js/runtime/appearance-palettes.test.js
++++ b/tests/js/runtime/appearance-palettes.test.js
+@@ -283,12 +283,12 @@ test('automatic, theme, player, and custom outline sources resolve against the e
+     ...base,
+     interaction_overrides: interactions('automatic'),
+     player_style_override: null,
+-  }, themeEffective), themeEffective.tokens.play);
++  }, themeEffective), themeEffective.tokens.accent);
+   assert.equal(api.resolveInteractionOutline({
+     ...base,
+     interaction_overrides: interactions('automatic'),
+     player_style_override: customPlayer,
+-  }, playerEffective), playerEffective.tokens.play);
++  }, playerEffective), playerEffective.tokens['player-control-border']);
+   assert.equal(api.resolveInteractionOutline({
+     ...base,
+     interaction_overrides: interactions('theme'),
+@@ -298,7 +298,7 @@ test('automatic, theme, player, and custom outline sources resolve against the e
+     ...base,
+     interaction_overrides: interactions('player'),
+     player_style_override: customPlayer,
+-  }, playerEffective), playerEffective.tokens.play);
++  }, playerEffective), playerEffective.tokens['player-control-border']);
+   assert.equal(api.resolveInteractionOutline({
+     ...base,
+     interaction_overrides: interactions('custom'),
+@@ -328,7 +328,7 @@ test('saved theme application publishes the resolved player-aware interaction ou
+ 
+   assert.equal(properties.get('--appearance-interaction-outline'), runtime().resolveAppearance({
+     ...defaults(), palette_id: 'steelblue', player_override: customPlayer,
+-  }).tokens.play);
++  }).tokens['player-control-border']);
+ });
+ 
+ test('Harbor Mint resolves the approved surfaces, mint controls and player for every companion', () => {
+diff --git a/tests/js/runtime/appearance-v009-player-isolation.test.js b/tests/js/runtime/appearance-v009-player-isolation.test.js
+index af94d21..4325aea 100644
+--- a/tests/js/runtime/appearance-v009-player-isolation.test.js
++++ b/tests/js/runtime/appearance-v009-player-isolation.test.js
+@@ -273,7 +273,7 @@ test('NavigationTree, editor tabs, and Save use non-player Appearance tokens', (
+     );
+   }
+ 
+-  const saveRule = relevantRules.find(([_, selector]) => /background-save|editor-footer/.test(selector))?.[2] || '';
++  const saveRule = relevantRules.find(([_, selector]) => /\.editor-footer \.background-save\s*$/.test(selector))?.[2] || '';
+   assert.match(
+     saveRule,
+     /var\(--appearance-(?:primary-button|button-background)\)/,
+diff --git a/tests/js/runtime/appearance-waveform-recents.test.js b/tests/js/runtime/appearance-waveform-recents.test.js
+index 9fa82f9..b3061a8 100644
+--- a/tests/js/runtime/appearance-waveform-recents.test.js
++++ b/tests/js/runtime/appearance-waveform-recents.test.js
+@@ -278,7 +278,7 @@ test('direct waveform edits pair control shades and update player-linked outline
+   assert.equal(state.draft.player_style_override.waveform.edge,'#AFD8C2');
+   assert.equal(state.draft.player_style_override.controls.border,'#86EFAC');
+   assert.equal(state.draft.player_style_override.handles.color,'#AFD8C2');
+-  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#24B86B');
++  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#86EFAC');
+ });
+ 
+ test('permanent player themes stay outside the five recent saved sets',()=>{
+diff --git a/tests/js/runtime/button-component.test.js b/tests/js/runtime/button-component.test.js
+index 521a331..1071a86 100644
+--- a/tests/js/runtime/button-component.test.js
++++ b/tests/js/runtime/button-component.test.js
+@@ -50,7 +50,7 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
+   const bootstrap = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'appearance-bootstrap.html'), 'utf8');
+   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
+   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
+-  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
++  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
+   assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
+   assert.match(css, /\.ui-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
+diff --git a/tests/js/runtime/gallery-tree-selection-performance.test.js b/tests/js/runtime/gallery-tree-selection-performance.test.js
+index 533fe30..e0a4965 100644
+--- a/tests/js/runtime/gallery-tree-selection-performance.test.js
++++ b/tests/js/runtime/gallery-tree-selection-performance.test.js
+@@ -10,7 +10,6 @@ const galleryCardComponentPath = path.join(__dirname, '..', '..', '..', 'music_a
+ const galleryMainStatePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
+ const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
+ const galleryMainComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-components.js');
+-const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
+ const virtualGridHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
+ const helperSources = [
+   { path: responseStateHelperPath, source: fs.readFileSync(responseStateHelperPath, 'utf8') },
+@@ -20,7 +19,6 @@ const helperSources = [
+   { path: galleryMainStatePath, source: fs.readFileSync(galleryMainStatePath, 'utf8') },
+   { path: galleryMainInteractionsPath, source: fs.readFileSync(galleryMainInteractionsPath, 'utf8') },
+   { path: galleryMainComponentsPath, source: fs.readFileSync(galleryMainComponentsPath, 'utf8') },
+-  { path: galleryMainInteractionsPath, source: fs.readFileSync(galleryMainInteractionsPath, 'utf8') },
+   { path: virtualGridHelperPath, source: fs.readFileSync(virtualGridHelperPath, 'utf8') },
+ ];
+ 
+diff --git a/tests/js/runtime/library-settings.test.js b/tests/js/runtime/library-settings.test.js
+index 5beb524..aec4c8d 100644
+--- a/tests/js/runtime/library-settings.test.js
++++ b/tests/js/runtime/library-settings.test.js
+@@ -418,7 +418,7 @@ test('buildUtilityLibrarySettingsDetail exposes the explicit album-rating import
+   const markup = context.buildUtilityLibrarySettingsDetail();
+ 
+   assert.match(markup, /data-import-album-ratings="1"/);
+-  assert.match(markup, />Import ratings from file tags<\/button>/);
++  assert.match(markup, /<button\b[^>]*data-import-album-ratings="1"[^>]*>Import ratings<\/button>/);
+   assert.doesNotMatch(markup, /data-album-rating-import-result="1"/);
+ });
+ 
+diff --git a/tests/js/runtime/player-and-waveform.test.js b/tests/js/runtime/player-and-waveform.test.js
+index 28dc80e..e680505 100644
+--- a/tests/js/runtime/player-and-waveform.test.js
++++ b/tests/js/runtime/player-and-waveform.test.js
+@@ -53,6 +53,8 @@ test('waveform peak shaping preserves silence and separates hits from quieter ma
+ test('updateWaveformAppearance publishes the effective seekbar presentation', async () => {
+   const player = {
+     attributes: {},
++    getAttribute(name) { return this.attributes[name] ?? null; },
++    querySelectorAll() { return []; },
+     setAttribute(name, value) {
+       this.attributes[name] = value;
+     },
+@@ -550,6 +552,9 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
+   assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
+   assert.match(playerRule, /--player-regular-centerline:\s*39px/);
+   assert.match(playerRule, /--player-controls-size:\s*48px/);
++  assert.match(playerRule, /--player-waveform-height:\s*56px/);
++  const dimension = name => Number(playerRule.match(new RegExp(`--${name}:\\s*(\\d+)px`))?.[1]);
++  assert.equal(dimension('player-waveform-centerline') - dimension('player-waveform-height') / 2, 29);
+   assert.doesNotMatch(playerRule, /--player-leading-width:/);
+   assert.match(css, /\.player-main\s*\{[^}]*grid-column:\s*1\s*\/\s*-1[^}]*grid-template-columns:\s*subgrid/s);
+   assert.match(
+@@ -562,7 +567,7 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
+   );
+   assert.match(
+     css,
+-    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*29px[^}]*height:\s*56px/s,
++    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*calc\(var\(--player-waveform-centerline\)\s*-\s*var\(--player-waveform-height\)\s*\/\s*2\)[^}]*height:\s*var\(--player-waveform-height\)/s,
+   );
+   assert.match(
+     css,
+@@ -608,8 +613,8 @@ test('persistent player restores the compact unclipped player and stereo wavefor
+   )?.[1] || '';
+   const waveformHeight = Number(waveformRule.match(/height:\s*(\d+)px/)?.[1] || 0);
+ 
+-  assert.equal(playerHeight, 68, 'regular mode uses the approved compact expanded-player height');
+-  assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*92px/s);
++  assert.equal(playerHeight, 76, 'regular mode retains the eight-pixel bottom clearance for joined loop controls');
++  assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*100px/s);
+   assert.match(css, /:root\.has-compact-player\s*\{[^}]*--player-height:\s*0px/s);
+   assert.equal(waveformHeight, 56, 'the stereo canvas is slightly smaller than the foobar reference');
+   assert.match(rangeSurfaceRule, /height:\s*56px/);

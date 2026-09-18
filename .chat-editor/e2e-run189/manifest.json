@@ -1,0 +1,2589 @@
+{
+  "run_id": 35389965541,
+  "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+  "jobs": [
+    {
+      "id": 105745899541,
+      "name": "E2E: Phase 7 Admin Management",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:40Z",
+      "completed_at": "2026-09-18T20:13:58Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899541",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:41Z",
+          "completed_at": "2026-09-18T20:10:43Z"
+        },
+        {
+          "name": "Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:43Z",
+          "completed_at": "2026-09-18T20:10:51Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:51Z",
+          "completed_at": "2026-09-18T20:10:58Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:58Z",
+          "completed_at": "2026-09-18T20:11:04Z"
+        },
+        {
+          "name": "Install dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:04Z",
+          "completed_at": "2026-09-18T20:11:31Z"
+        },
+        {
+          "name": "Set up pinned Chrome",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:31Z",
+          "completed_at": "2026-09-18T20:11:39Z"
+        },
+        {
+          "name": "Provision isolated PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:39Z",
+          "completed_at": "2026-09-18T20:11:58Z"
+        },
+        {
+          "name": "Run Phase 7 admin-management suite",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:58Z",
+          "completed_at": "2026-09-18T20:13:50Z"
+        },
+        {
+          "name": "Teardown isolated PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:13:50Z",
+          "completed_at": "2026-09-18T20:13:52Z"
+        },
+        {
+          "name": "Upload Phase 7 admin diagnostics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:13:52Z",
+          "completed_at": "2026-09-18T20:13:54Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 18,
+          "started_at": "2026-09-18T20:13:54Z",
+          "completed_at": "2026-09-18T20:13:54Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 19,
+          "started_at": "2026-09-18T20:13:54Z",
+          "completed_at": "2026-09-18T20:13:54Z"
+        },
+        {
+          "name": "Post Checkout",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-09-18T20:13:54Z",
+          "completed_at": "2026-09-18T20:13:56Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-09-18T20:13:56Z",
+          "completed_at": "2026-09-18T20:13:56Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899541.log",
+      "sha256": "272e34c049aca6bf0ee97402bbbf8ae15cee4a3c21b097abfb22a7d6f415af1d",
+      "lines": 1293
+    },
+    {
+      "id": 105745899779,
+      "name": "E2E: gallery-search-visual",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:39Z",
+      "completed_at": "2026-09-18T20:42:42Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899779",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:40Z",
+          "completed_at": "2026-09-18T20:10:41Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:41Z",
+          "completed_at": "2026-09-18T20:10:51Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:51Z",
+          "completed_at": "2026-09-18T20:10:57Z"
+        },
+        {
+          "name": "Fetch functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:57Z",
+          "completed_at": "2026-09-18T20:11:01Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:01Z",
+          "completed_at": "2026-09-18T20:11:17Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:17Z",
+          "completed_at": "2026-09-18T20:11:24Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:24Z",
+          "completed_at": "2026-09-18T20:11:29Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:29Z",
+          "completed_at": "2026-09-18T20:11:54Z"
+        },
+        {
+          "name": "Resolve functional shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:54Z",
+          "completed_at": "2026-09-18T20:11:54Z"
+        },
+        {
+          "name": "Set up pinned functional Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:54Z",
+          "completed_at": "2026-09-18T20:12:01Z"
+        },
+        {
+          "name": "Prepare writable functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:12:01Z",
+          "completed_at": "2026-09-18T20:12:03Z"
+        },
+        {
+          "name": "Provision functional PostgreSQL and load fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:12:03Z",
+          "completed_at": "2026-09-18T20:12:30Z"
+        },
+        {
+          "name": "Write functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:30Z",
+          "completed_at": "2026-09-18T20:12:31Z"
+        },
+        {
+          "name": "Validate functional shard ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:31Z",
+          "completed_at": "2026-09-18T20:12:38Z"
+        },
+        {
+          "name": "Run functional shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 15,
+          "started_at": "2026-09-18T20:12:38Z",
+          "completed_at": "2026-09-18T20:42:23Z"
+        },
+        {
+          "name": "Teardown functional PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:42:23Z",
+          "completed_at": "2026-09-18T20:42:25Z"
+        },
+        {
+          "name": "Upload functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:42:25Z",
+          "completed_at": "2026-09-18T20:42:25Z"
+        },
+        {
+          "name": "Upload functional blob",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:42:25Z",
+          "completed_at": "2026-09-18T20:42:31Z"
+        },
+        {
+          "name": "Upload functional debug",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:42:31Z",
+          "completed_at": "2026-09-18T20:42:36Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:42:36Z",
+          "completed_at": "2026-09-18T20:42:36Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:42:36Z",
+          "completed_at": "2026-09-18T20:42:36Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 37,
+          "started_at": "2026-09-18T20:42:36Z",
+          "completed_at": "2026-09-18T20:42:38Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 38,
+          "started_at": "2026-09-18T20:42:38Z",
+          "completed_at": "2026-09-18T20:42:40Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 39,
+          "started_at": "2026-09-18T20:42:40Z",
+          "completed_at": "2026-09-18T20:42:40Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899779.log",
+      "sha256": "a20c38972b3c18d588342c18aa4a30f1a17585766583cf7486c1b726abe05401",
+      "lines": 3633
+    },
+    {
+      "id": 105745899651,
+      "name": "E2E: cover-providers",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:41Z",
+      "completed_at": "2026-09-18T20:37:59Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899651",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:42Z",
+          "completed_at": "2026-09-18T20:10:44Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:44Z",
+          "completed_at": "2026-09-18T20:10:53Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:53Z",
+          "completed_at": "2026-09-18T20:10:59Z"
+        },
+        {
+          "name": "Fetch functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:59Z",
+          "completed_at": "2026-09-18T20:11:05Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:05Z",
+          "completed_at": "2026-09-18T20:11:28Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:28Z",
+          "completed_at": "2026-09-18T20:11:35Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:35Z",
+          "completed_at": "2026-09-18T20:11:39Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:39Z",
+          "completed_at": "2026-09-18T20:11:59Z"
+        },
+        {
+          "name": "Resolve functional shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:59Z",
+          "completed_at": "2026-09-18T20:12:00Z"
+        },
+        {
+          "name": "Set up pinned functional Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:12:00Z",
+          "completed_at": "2026-09-18T20:12:08Z"
+        },
+        {
+          "name": "Prepare writable functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:12:08Z",
+          "completed_at": "2026-09-18T20:12:10Z"
+        },
+        {
+          "name": "Provision functional PostgreSQL and load fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:12:10Z",
+          "completed_at": "2026-09-18T20:12:37Z"
+        },
+        {
+          "name": "Write functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:37Z",
+          "completed_at": "2026-09-18T20:12:38Z"
+        },
+        {
+          "name": "Validate functional shard ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:38Z",
+          "completed_at": "2026-09-18T20:12:46Z"
+        },
+        {
+          "name": "Run functional shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 15,
+          "started_at": "2026-09-18T20:12:46Z",
+          "completed_at": "2026-09-18T20:37:30Z"
+        },
+        {
+          "name": "Teardown functional PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:37:30Z",
+          "completed_at": "2026-09-18T20:37:32Z"
+        },
+        {
+          "name": "Upload functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:37:32Z",
+          "completed_at": "2026-09-18T20:37:33Z"
+        },
+        {
+          "name": "Upload functional blob",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:37:33Z",
+          "completed_at": "2026-09-18T20:37:42Z"
+        },
+        {
+          "name": "Upload functional debug",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:37:42Z",
+          "completed_at": "2026-09-18T20:37:52Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:37:52Z",
+          "completed_at": "2026-09-18T20:37:52Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:37:52Z",
+          "completed_at": "2026-09-18T20:37:52Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 37,
+          "started_at": "2026-09-18T20:37:52Z",
+          "completed_at": "2026-09-18T20:37:54Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 38,
+          "started_at": "2026-09-18T20:37:54Z",
+          "completed_at": "2026-09-18T20:37:56Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 39,
+          "started_at": "2026-09-18T20:37:56Z",
+          "completed_at": "2026-09-18T20:37:57Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899651.log",
+      "sha256": "02e90ce0d49589551a731b0e6ac3a762d1341dd4fd713b84738168bc0205fbae",
+      "lines": 3245
+    },
+    {
+      "id": 105745899686,
+      "name": "E2E: metadata-mutations",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:40Z",
+      "completed_at": "2026-09-18T20:27:34Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899686",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:41Z",
+          "completed_at": "2026-09-18T20:10:42Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:42Z",
+          "completed_at": "2026-09-18T20:10:55Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:55Z",
+          "completed_at": "2026-09-18T20:11:00Z"
+        },
+        {
+          "name": "Fetch functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:11:00Z",
+          "completed_at": "2026-09-18T20:11:05Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:05Z",
+          "completed_at": "2026-09-18T20:11:18Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:18Z",
+          "completed_at": "2026-09-18T20:11:28Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:28Z",
+          "completed_at": "2026-09-18T20:11:36Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:36Z",
+          "completed_at": "2026-09-18T20:12:08Z"
+        },
+        {
+          "name": "Resolve functional shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:12:08Z",
+          "completed_at": "2026-09-18T20:12:08Z"
+        },
+        {
+          "name": "Set up pinned functional Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:12:08Z",
+          "completed_at": "2026-09-18T20:12:22Z"
+        },
+        {
+          "name": "Prepare writable functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:12:22Z",
+          "completed_at": "2026-09-18T20:12:23Z"
+        },
+        {
+          "name": "Provision functional PostgreSQL and load fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:12:23Z",
+          "completed_at": "2026-09-18T20:12:52Z"
+        },
+        {
+          "name": "Write functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:52Z",
+          "completed_at": "2026-09-18T20:12:53Z"
+        },
+        {
+          "name": "Validate functional shard ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:53Z",
+          "completed_at": "2026-09-18T20:12:59Z"
+        },
+        {
+          "name": "Run functional shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 15,
+          "started_at": "2026-09-18T20:12:59Z",
+          "completed_at": "2026-09-18T20:27:18Z"
+        },
+        {
+          "name": "Teardown functional PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:27:18Z",
+          "completed_at": "2026-09-18T20:27:19Z"
+        },
+        {
+          "name": "Upload functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:27:19Z",
+          "completed_at": "2026-09-18T20:27:20Z"
+        },
+        {
+          "name": "Upload functional blob",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:27:20Z",
+          "completed_at": "2026-09-18T20:27:24Z"
+        },
+        {
+          "name": "Upload functional debug",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:27:24Z",
+          "completed_at": "2026-09-18T20:27:28Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:27:28Z",
+          "completed_at": "2026-09-18T20:27:28Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:27:28Z",
+          "completed_at": "2026-09-18T20:27:28Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 37,
+          "started_at": "2026-09-18T20:27:28Z",
+          "completed_at": "2026-09-18T20:27:30Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 38,
+          "started_at": "2026-09-18T20:27:30Z",
+          "completed_at": "2026-09-18T20:27:32Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 39,
+          "started_at": "2026-09-18T20:27:32Z",
+          "completed_at": "2026-09-18T20:27:32Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899686.log",
+      "sha256": "01ba351b12b7a2fc9c3090b9c50032e5fc94868210dcfb5b72078cc4dada93ad",
+      "lines": 2801
+    },
+    {
+      "id": 105745899673,
+      "name": "E2E: playback-utilities",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:39Z",
+      "completed_at": "2026-09-18T21:12:23Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899673",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:40Z",
+          "completed_at": "2026-09-18T20:10:42Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:42Z",
+          "completed_at": "2026-09-18T20:10:50Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:50Z",
+          "completed_at": "2026-09-18T20:10:56Z"
+        },
+        {
+          "name": "Fetch functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:56Z",
+          "completed_at": "2026-09-18T20:11:01Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:01Z",
+          "completed_at": "2026-09-18T20:11:18Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:18Z",
+          "completed_at": "2026-09-18T20:11:22Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:22Z",
+          "completed_at": "2026-09-18T20:11:27Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:27Z",
+          "completed_at": "2026-09-18T20:11:47Z"
+        },
+        {
+          "name": "Resolve functional shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:47Z",
+          "completed_at": "2026-09-18T20:11:47Z"
+        },
+        {
+          "name": "Set up pinned functional Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:47Z",
+          "completed_at": "2026-09-18T20:11:54Z"
+        },
+        {
+          "name": "Prepare writable functional fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:11:54Z",
+          "completed_at": "2026-09-18T20:11:56Z"
+        },
+        {
+          "name": "Provision functional PostgreSQL and load fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:11:56Z",
+          "completed_at": "2026-09-18T20:12:20Z"
+        },
+        {
+          "name": "Write functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:20Z",
+          "completed_at": "2026-09-18T20:12:22Z"
+        },
+        {
+          "name": "Validate functional shard ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:22Z",
+          "completed_at": "2026-09-18T20:12:31Z"
+        },
+        {
+          "name": "Run functional shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 15,
+          "started_at": "2026-09-18T20:12:31Z",
+          "completed_at": "2026-09-18T21:11:48Z"
+        },
+        {
+          "name": "Teardown functional PostgreSQL",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T21:11:48Z",
+          "completed_at": "2026-09-18T21:11:49Z"
+        },
+        {
+          "name": "Upload functional foundation version manifest",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T21:11:49Z",
+          "completed_at": "2026-09-18T21:11:50Z"
+        },
+        {
+          "name": "Upload functional blob",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T21:11:50Z",
+          "completed_at": "2026-09-18T21:12:04Z"
+        },
+        {
+          "name": "Upload functional debug",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T21:12:04Z",
+          "completed_at": "2026-09-18T21:12:18Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T21:12:18Z",
+          "completed_at": "2026-09-18T21:12:18Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T21:12:18Z",
+          "completed_at": "2026-09-18T21:12:18Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 37,
+          "started_at": "2026-09-18T21:12:18Z",
+          "completed_at": "2026-09-18T21:12:20Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 38,
+          "started_at": "2026-09-18T21:12:20Z",
+          "completed_at": "2026-09-18T21:12:22Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 39,
+          "started_at": "2026-09-18T21:12:22Z",
+          "completed_at": "2026-09-18T21:12:22Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899673.log",
+      "sha256": "68870e3109cc1db57437af5c9f3811e2c8748a88040f21f15dc5c9cdab09daf5",
+      "lines": 5023
+    },
+    {
+      "id": 105745899766,
+      "name": "E2E Performance: synthetic-large-library",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:41Z",
+      "completed_at": "2026-09-18T20:25:05Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899766",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:42Z",
+          "completed_at": "2026-09-18T20:10:43Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:43Z",
+          "completed_at": "2026-09-18T20:10:55Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:55Z",
+          "completed_at": "2026-09-18T20:10:59Z"
+        },
+        {
+          "name": "Fetch immutable performance fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:59Z",
+          "completed_at": "2026-09-18T20:11:04Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:04Z",
+          "completed_at": "2026-09-18T20:11:17Z"
+        },
+        {
+          "name": "Resolve performance shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:17Z",
+          "completed_at": "2026-09-18T20:11:17Z"
+        },
+        {
+          "name": "Initialize performance shard result evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:17Z",
+          "completed_at": "2026-09-18T20:11:18Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:18Z",
+          "completed_at": "2026-09-18T20:11:26Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:26Z",
+          "completed_at": "2026-09-18T20:11:32Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:32Z",
+          "completed_at": "2026-09-18T20:12:24Z"
+        },
+        {
+          "name": "Set up pinned performance Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:12:24Z",
+          "completed_at": "2026-09-18T20:12:35Z"
+        },
+        {
+          "name": "Validate performance matrix ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:12:35Z",
+          "completed_at": "2026-09-18T20:12:41Z"
+        },
+        {
+          "name": "Prepare generated performance profile",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:41Z",
+          "completed_at": "2026-09-18T20:12:41Z"
+        },
+        {
+          "name": "Run sequential isolated performance shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:41Z",
+          "completed_at": "2026-09-18T20:24:20Z"
+        },
+        {
+          "name": "Upload performance foundation 1 foundation-versions-performance-idle-memory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-09-18T20:24:20Z",
+          "completed_at": "2026-09-18T20:24:21Z"
+        },
+        {
+          "name": "Upload performance result 1 performance-result-idle-memory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:24:21Z",
+          "completed_at": "2026-09-18T20:24:22Z"
+        },
+        {
+          "name": "Upload performance diagnostics 1 performance-diagnostics-idle-memory",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:24:22Z",
+          "completed_at": "2026-09-18T20:24:23Z"
+        },
+        {
+          "name": "Upload performance foundation 2 foundation-versions-performance-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:24:23Z",
+          "completed_at": "2026-09-18T20:24:24Z"
+        },
+        {
+          "name": "Upload performance result 2 performance-result-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:24:24Z",
+          "completed_at": "2026-09-18T20:24:26Z"
+        },
+        {
+          "name": "Upload performance diagnostics 2 performance-diagnostics-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-09-18T20:24:26Z",
+          "completed_at": "2026-09-18T20:24:28Z"
+        },
+        {
+          "name": "Upload performance foundation 3 foundation-versions-performance-artist-family",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-09-18T20:24:28Z",
+          "completed_at": "2026-09-18T20:24:29Z"
+        },
+        {
+          "name": "Upload performance result 3 performance-result-artist-family",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-09-18T20:24:29Z",
+          "completed_at": "2026-09-18T20:24:30Z"
+        },
+        {
+          "name": "Upload performance diagnostics 3 performance-diagnostics-artist-family",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-09-18T20:24:30Z",
+          "completed_at": "2026-09-18T20:24:32Z"
+        },
+        {
+          "name": "Upload performance foundation 4 foundation-versions-performance-search-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-09-18T20:24:32Z",
+          "completed_at": "2026-09-18T20:24:33Z"
+        },
+        {
+          "name": "Upload performance result 4 performance-result-search-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-09-18T20:24:33Z",
+          "completed_at": "2026-09-18T20:24:35Z"
+        },
+        {
+          "name": "Upload performance diagnostics 4 performance-diagnostics-search-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26,
+          "started_at": "2026-09-18T20:24:35Z",
+          "completed_at": "2026-09-18T20:24:36Z"
+        },
+        {
+          "name": "Upload performance foundation 5 foundation-versions-performance-utility-rules",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27,
+          "started_at": "2026-09-18T20:24:36Z",
+          "completed_at": "2026-09-18T20:24:37Z"
+        },
+        {
+          "name": "Upload performance result 5 performance-result-utility-rules",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28,
+          "started_at": "2026-09-18T20:24:37Z",
+          "completed_at": "2026-09-18T20:24:39Z"
+        },
+        {
+          "name": "Upload performance diagnostics 5 performance-diagnostics-utility-rules",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29,
+          "started_at": "2026-09-18T20:24:39Z",
+          "completed_at": "2026-09-18T20:24:40Z"
+        },
+        {
+          "name": "Upload performance foundation 6 foundation-versions-performance-selected-artist",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 30,
+          "started_at": "2026-09-18T20:24:40Z",
+          "completed_at": "2026-09-18T20:24:41Z"
+        },
+        {
+          "name": "Upload performance result 6 performance-result-selected-artist",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 31,
+          "started_at": "2026-09-18T20:24:41Z",
+          "completed_at": "2026-09-18T20:24:43Z"
+        },
+        {
+          "name": "Upload performance diagnostics 6 performance-diagnostics-selected-artist",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 32,
+          "started_at": "2026-09-18T20:24:43Z",
+          "completed_at": "2026-09-18T20:24:45Z"
+        },
+        {
+          "name": "Upload performance foundation 7 foundation-versions-performance-search-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 33,
+          "started_at": "2026-09-18T20:24:45Z",
+          "completed_at": "2026-09-18T20:24:46Z"
+        },
+        {
+          "name": "Upload performance result 7 performance-result-search-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 34,
+          "started_at": "2026-09-18T20:24:46Z",
+          "completed_at": "2026-09-18T20:24:47Z"
+        },
+        {
+          "name": "Upload performance diagnostics 7 performance-diagnostics-search-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 35,
+          "started_at": "2026-09-18T20:24:47Z",
+          "completed_at": "2026-09-18T20:24:48Z"
+        },
+        {
+          "name": "Upload performance foundation 8 foundation-versions-performance-***-album-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 36,
+          "started_at": "2026-09-18T20:24:48Z",
+          "completed_at": "2026-09-18T20:24:49Z"
+        },
+        {
+          "name": "Upload performance result 8 performance-result-***-album-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 37,
+          "started_at": "2026-09-18T20:24:49Z",
+          "completed_at": "2026-09-18T20:24:50Z"
+        },
+        {
+          "name": "Upload performance diagnostics 8 performance-diagnostics-***-album-browse",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 38,
+          "started_at": "2026-09-18T20:24:50Z",
+          "completed_at": "2026-09-18T20:24:52Z"
+        },
+        {
+          "name": "Upload performance foundation 9 foundation-versions-performance-app-open-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 39,
+          "started_at": "2026-09-18T20:24:52Z",
+          "completed_at": "2026-09-18T20:24:53Z"
+        },
+        {
+          "name": "Upload performance result 9 performance-result-app-open-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 40,
+          "started_at": "2026-09-18T20:24:53Z",
+          "completed_at": "2026-09-18T20:24:54Z"
+        },
+        {
+          "name": "Upload performance diagnostics 9 performance-diagnostics-app-open-all-artists",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 41,
+          "started_at": "2026-09-18T20:24:54Z",
+          "completed_at": "2026-09-18T20:24:55Z"
+        },
+        {
+          "name": "Upload performance foundation 10 foundation-versions-performance-rules-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 42,
+          "started_at": "2026-09-18T20:24:55Z",
+          "completed_at": "2026-09-18T20:24:56Z"
+        },
+        {
+          "name": "Upload performance result 10 performance-result-rules-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 43,
+          "started_at": "2026-09-18T20:24:56Z",
+          "completed_at": "2026-09-18T20:24:58Z"
+        },
+        {
+          "name": "Upload performance diagnostics 10 performance-diagnostics-rules-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 44,
+          "started_at": "2026-09-18T20:24:58Z",
+          "completed_at": "2026-09-18T20:24:59Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 85,
+          "started_at": "2026-09-18T20:24:59Z",
+          "completed_at": "2026-09-18T20:24:59Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 86,
+          "started_at": "2026-09-18T20:24:59Z",
+          "completed_at": "2026-09-18T20:24:59Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 87,
+          "started_at": "2026-09-18T20:24:59Z",
+          "completed_at": "2026-09-18T20:25:01Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 88,
+          "started_at": "2026-09-18T20:25:01Z",
+          "completed_at": "2026-09-18T20:25:03Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 89,
+          "started_at": "2026-09-18T20:25:03Z",
+          "completed_at": "2026-09-18T20:25:03Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899766.log",
+      "sha256": "afc6a1b442d47e5cf3b5bf382037bfbef78a1a6cb70626bfd966ad6d635aeb0a",
+      "lines": 3551
+    },
+    {
+      "id": 105745899798,
+      "name": "E2E Performance: utility-problematic-files",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:40Z",
+      "completed_at": "2026-09-18T20:21:49Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899798",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:41Z",
+          "completed_at": "2026-09-18T20:10:43Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:43Z",
+          "completed_at": "2026-09-18T20:10:52Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:52Z",
+          "completed_at": "2026-09-18T20:10:57Z"
+        },
+        {
+          "name": "Fetch immutable performance fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:10:57Z",
+          "completed_at": "2026-09-18T20:11:00Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:00Z",
+          "completed_at": "2026-09-18T20:11:07Z"
+        },
+        {
+          "name": "Resolve performance shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:07Z",
+          "completed_at": "2026-09-18T20:11:07Z"
+        },
+        {
+          "name": "Initialize performance shard result evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:07Z",
+          "completed_at": "2026-09-18T20:11:08Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:08Z",
+          "completed_at": "2026-09-18T20:11:12Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:12Z",
+          "completed_at": "2026-09-18T20:11:17Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:17Z",
+          "completed_at": "2026-09-18T20:11:53Z"
+        },
+        {
+          "name": "Set up pinned performance Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:11:53Z",
+          "completed_at": "2026-09-18T20:12:00Z"
+        },
+        {
+          "name": "Validate performance matrix ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:12:00Z",
+          "completed_at": "2026-09-18T20:12:07Z"
+        },
+        {
+          "name": "Prepare generated performance profile",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:07Z",
+          "completed_at": "2026-09-18T20:12:07Z"
+        },
+        {
+          "name": "Run sequential isolated performance shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:07Z",
+          "completed_at": "2026-09-18T20:21:39Z"
+        },
+        {
+          "name": "Upload performance foundation 1 foundation-versions-performance-utility-problematic-files",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-09-18T20:21:39Z",
+          "completed_at": "2026-09-18T20:21:40Z"
+        },
+        {
+          "name": "Upload performance result 1 performance-result-utility-problematic-files",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:21:40Z",
+          "completed_at": "2026-09-18T20:21:40Z"
+        },
+        {
+          "name": "Upload performance diagnostics 1 performance-diagnostics-utility-problematic-files",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:21:40Z",
+          "completed_at": "2026-09-18T20:21:41Z"
+        },
+        {
+          "name": "Upload performance foundation 2 foundation-versions-performance-problematic-files-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:21:41Z",
+          "completed_at": "2026-09-18T20:21:42Z"
+        },
+        {
+          "name": "Upload performance result 2 performance-result-problematic-files-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:21:42Z",
+          "completed_at": "2026-09-18T20:21:43Z"
+        },
+        {
+          "name": "Upload performance diagnostics 2 performance-diagnostics-problematic-files-focused",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-09-18T20:21:43Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 3 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 21,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 3 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 3 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 4 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 4 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 25,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 4 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 26,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 5 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 27,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 5 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 28,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 5 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 29,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 6 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 30,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 6 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 31,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 6 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 32,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 7 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 7 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 34,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 7 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 8 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 8 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 37,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 8 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 38,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 9 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 39,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 9 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 40,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 9 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 41,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance foundation 10 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 42,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance result 10 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 43,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 10 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 44,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 85,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 86,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:44Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 87,
+          "started_at": "2026-09-18T20:21:44Z",
+          "completed_at": "2026-09-18T20:21:46Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 88,
+          "started_at": "2026-09-18T20:21:46Z",
+          "completed_at": "2026-09-18T20:21:48Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 89,
+          "started_at": "2026-09-18T20:21:48Z",
+          "completed_at": "2026-09-18T20:21:48Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899798.log",
+      "sha256": "9db12c95e6a48d62bb1aab2427f55c0b4132d9b5cb6ff51cdb2254b76de252dd",
+      "lines": 1728
+    },
+    {
+      "id": 105745899841,
+      "name": "E2E Performance: playback-media",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:41Z",
+      "completed_at": "2026-09-18T20:15:53Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899841",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:42Z",
+          "completed_at": "2026-09-18T20:10:44Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:44Z",
+          "completed_at": "2026-09-18T20:10:53Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:53Z",
+          "completed_at": "2026-09-18T20:11:00Z"
+        },
+        {
+          "name": "Fetch immutable performance fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:11:00Z",
+          "completed_at": "2026-09-18T20:11:03Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:03Z",
+          "completed_at": "2026-09-18T20:11:10Z"
+        },
+        {
+          "name": "Resolve performance shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:10Z",
+          "completed_at": "2026-09-18T20:11:11Z"
+        },
+        {
+          "name": "Initialize performance shard result evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:11Z",
+          "completed_at": "2026-09-18T20:11:11Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:11Z",
+          "completed_at": "2026-09-18T20:11:25Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:25Z",
+          "completed_at": "2026-09-18T20:11:29Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:29Z",
+          "completed_at": "2026-09-18T20:11:49Z"
+        },
+        {
+          "name": "Set up pinned performance Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:11:49Z",
+          "completed_at": "2026-09-18T20:11:58Z"
+        },
+        {
+          "name": "Validate performance matrix ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:11:58Z",
+          "completed_at": "2026-09-18T20:12:05Z"
+        },
+        {
+          "name": "Prepare generated performance profile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:12:05Z",
+          "completed_at": "2026-09-18T20:12:06Z"
+        },
+        {
+          "name": "Run sequential isolated performance shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 14,
+          "started_at": "2026-09-18T20:12:06Z",
+          "completed_at": "2026-09-18T20:15:36Z"
+        },
+        {
+          "name": "Upload performance foundation 1 foundation-versions-performance-playback-start",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-09-18T20:15:36Z",
+          "completed_at": "2026-09-18T20:15:37Z"
+        },
+        {
+          "name": "Upload performance result 1 performance-result-playback-start",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:15:37Z",
+          "completed_at": "2026-09-18T20:15:39Z"
+        },
+        {
+          "name": "Upload performance diagnostics 1 performance-diagnostics-playback-start",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:15:39Z",
+          "completed_at": "2026-09-18T20:15:41Z"
+        },
+        {
+          "name": "Upload performance foundation 2 foundation-versions-performance-gapless-playback",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:15:41Z",
+          "completed_at": "2026-09-18T20:15:42Z"
+        },
+        {
+          "name": "Upload performance result 2 performance-result-gapless-playback",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:15:42Z",
+          "completed_at": "2026-09-18T20:15:44Z"
+        },
+        {
+          "name": "Upload performance diagnostics 2 performance-diagnostics-gapless-playback",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-09-18T20:15:44Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 3 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 21,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 3 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 22,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 3 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 23,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 4 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 24,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 4 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 25,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 4 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 26,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 5 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 27,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 5 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 28,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 5 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 29,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 6 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 30,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 6 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 31,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 6 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 32,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 7 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 7 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 34,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 7 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 8 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 8 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 37,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 8 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 38,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 9 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 39,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 9 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 40,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 9 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 41,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance foundation 10 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 42,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance result 10 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 43,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Upload performance diagnostics 10 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 44,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 85,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 86,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:46Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 87,
+          "started_at": "2026-09-18T20:15:46Z",
+          "completed_at": "2026-09-18T20:15:48Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 88,
+          "started_at": "2026-09-18T20:15:48Z",
+          "completed_at": "2026-09-18T20:15:50Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 89,
+          "started_at": "2026-09-18T20:15:50Z",
+          "completed_at": "2026-09-18T20:15:51Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899841.log",
+      "sha256": "8bf50b4ab825b295a84f44a6d982b782284911245ffb322582d39f5fcb8e7d93",
+      "lines": 1789
+    },
+    {
+      "id": 105745899853,
+      "name": "E2E Performance: scan-library",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ea256e48e5b72e1617f01c9954beec3b432e7da2",
+      "started_at": "2026-09-18T20:10:41Z",
+      "completed_at": "2026-09-18T20:22:33Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35389965541/job/105745899853",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-09-18T20:10:43Z",
+          "completed_at": "2026-09-18T20:10:48Z"
+        },
+        {
+          "name": "Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-09-18T20:10:48Z",
+          "completed_at": "2026-09-18T20:10:58Z"
+        },
+        {
+          "name": "Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-09-18T20:10:58Z",
+          "completed_at": "2026-09-18T20:11:04Z"
+        },
+        {
+          "name": "Fetch immutable performance fixture",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-09-18T20:11:04Z",
+          "completed_at": "2026-09-18T20:11:07Z"
+        },
+        {
+          "name": "Set up Node.js",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-09-18T20:11:07Z",
+          "completed_at": "2026-09-18T20:11:13Z"
+        },
+        {
+          "name": "Resolve performance shard configuration",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-09-18T20:11:13Z",
+          "completed_at": "2026-09-18T20:11:13Z"
+        },
+        {
+          "name": "Initialize performance shard result evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-09-18T20:11:13Z",
+          "completed_at": "2026-09-18T20:11:14Z"
+        },
+        {
+          "name": "Set up Python",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 8,
+          "started_at": "2026-09-18T20:11:14Z",
+          "completed_at": "2026-09-18T20:11:19Z"
+        },
+        {
+          "name": "Install Node dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 9,
+          "started_at": "2026-09-18T20:11:19Z",
+          "completed_at": "2026-09-18T20:11:23Z"
+        },
+        {
+          "name": "Install Python dependencies",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 10,
+          "started_at": "2026-09-18T20:11:23Z",
+          "completed_at": "2026-09-18T20:11:44Z"
+        },
+        {
+          "name": "Set up pinned performance Chrome for Testing",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 11,
+          "started_at": "2026-09-18T20:11:44Z",
+          "completed_at": "2026-09-18T20:11:51Z"
+        },
+        {
+          "name": "Validate performance matrix ownership",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 12,
+          "started_at": "2026-09-18T20:11:51Z",
+          "completed_at": "2026-09-18T20:11:58Z"
+        },
+        {
+          "name": "Prepare generated performance profile",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 13,
+          "started_at": "2026-09-18T20:11:58Z",
+          "completed_at": "2026-09-18T20:11:59Z"
+        },
+        {
+          "name": "Run sequential isolated performance shard",
+          "status": "completed",
+          "conclusion": "failure",
+          "number": 14,
+          "started_at": "2026-09-18T20:11:59Z",
+          "completed_at": "2026-09-18T20:22:11Z"
+        },
+        {
+          "name": "Upload performance foundation 1 foundation-versions-performance-scan-cold",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-09-18T20:22:11Z",
+          "completed_at": "2026-09-18T20:22:12Z"
+        },
+        {
+          "name": "Upload performance result 1 performance-result-scan-cold",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 16,
+          "started_at": "2026-09-18T20:22:12Z",
+          "completed_at": "2026-09-18T20:22:13Z"
+        },
+        {
+          "name": "Upload performance diagnostics 1 performance-diagnostics-scan-cold",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 17,
+          "started_at": "2026-09-18T20:22:13Z",
+          "completed_at": "2026-09-18T20:22:15Z"
+        },
+        {
+          "name": "Upload performance foundation 2 foundation-versions-performance-scan-cached",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 18,
+          "started_at": "2026-09-18T20:22:15Z",
+          "completed_at": "2026-09-18T20:22:16Z"
+        },
+        {
+          "name": "Upload performance result 2 performance-result-scan-cached",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 19,
+          "started_at": "2026-09-18T20:22:16Z",
+          "completed_at": "2026-09-18T20:22:17Z"
+        },
+        {
+          "name": "Upload performance diagnostics 2 performance-diagnostics-scan-cached",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 20,
+          "started_at": "2026-09-18T20:22:17Z",
+          "completed_at": "2026-09-18T20:22:18Z"
+        },
+        {
+          "name": "Upload performance foundation 3 foundation-versions-performance-scan-add-album",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 21,
+          "started_at": "2026-09-18T20:22:18Z",
+          "completed_at": "2026-09-18T20:22:19Z"
+        },
+        {
+          "name": "Upload performance result 3 performance-result-scan-add-album",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 22,
+          "started_at": "2026-09-18T20:22:19Z",
+          "completed_at": "2026-09-18T20:22:20Z"
+        },
+        {
+          "name": "Upload performance diagnostics 3 performance-diagnostics-scan-add-album",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 23,
+          "started_at": "2026-09-18T20:22:20Z",
+          "completed_at": "2026-09-18T20:22:21Z"
+        },
+        {
+          "name": "Upload performance foundation 4 foundation-versions-performance-scan-metadata",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 24,
+          "started_at": "2026-09-18T20:22:21Z",
+          "completed_at": "2026-09-18T20:22:21Z"
+        },
+        {
+          "name": "Upload performance result 4 performance-result-scan-metadata",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 25,
+          "started_at": "2026-09-18T20:22:21Z",
+          "completed_at": "2026-09-18T20:22:23Z"
+        },
+        {
+          "name": "Upload performance diagnostics 4 performance-diagnostics-scan-metadata",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 26,
+          "started_at": "2026-09-18T20:22:23Z",
+          "completed_at": "2026-09-18T20:22:24Z"
+        },
+        {
+          "name": "Upload performance foundation 5 foundation-versions-performance-scan-page",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 27,
+          "started_at": "2026-09-18T20:22:24Z",
+          "completed_at": "2026-09-18T20:22:25Z"
+        },
+        {
+          "name": "Upload performance result 5 performance-result-scan-page",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 28,
+          "started_at": "2026-09-18T20:22:25Z",
+          "completed_at": "2026-09-18T20:22:26Z"
+        },
+        {
+          "name": "Upload performance diagnostics 5 performance-diagnostics-scan-page",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 29,
+          "started_at": "2026-09-18T20:22:26Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance foundation 6 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 30,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance result 6 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 31,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance diagnostics 6 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 32,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance foundation 7 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 33,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance result 7 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 34,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance diagnostics 7 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 35,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance foundation 8 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 36,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance result 8 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 37,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance diagnostics 8 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 38,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance foundation 9 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 39,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance result 9 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 40,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance diagnostics 9 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 41,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance foundation 10 foundation-versions-performance-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 42,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance result 10 performance-result-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 43,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Upload performance diagnostics 10 performance-diagnostics-none",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 44,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Post Set up Python",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 85,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Post Set up Node.js",
+          "status": "completed",
+          "conclusion": "skipped",
+          "number": 86,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:27Z"
+        },
+        {
+          "name": "Post Checkout trusted fixture downloader",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 87,
+          "started_at": "2026-09-18T20:22:27Z",
+          "completed_at": "2026-09-18T20:22:29Z"
+        },
+        {
+          "name": "Post Checkout pull request",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 88,
+          "started_at": "2026-09-18T20:22:29Z",
+          "completed_at": "2026-09-18T20:22:31Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 89,
+          "started_at": "2026-09-18T20:22:31Z",
+          "completed_at": "2026-09-18T20:22:32Z"
+        }
+      ],
+      "log_file": ".chat-editor/e2e-run189/105745899853.log",
+      "sha256": "ae4cc0c5b922d6d2fb04fb54a5ea444841c947232a247a5f60a8f09a5d36d092",
+      "lines": 2995
+    }
+  ]
+}

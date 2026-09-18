@@ -1,0 +1,114 @@
+name: PR 3 Focused Repair Verification
+on:
+  push:
+    branches: [2026-09-18-pr3-ci-diagnostics]
+    paths: [.github/workflows/pr3-focused-repairs.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Apply the integrity-checked patch to the pinned PR source
+        run: |
+          @'
+          import base64, gzip, hashlib, os, pathlib, subprocess
+          encoded=''.join(pathlib.Path(f'.chat-editor/patch-{i:02}.txt').read_text().strip() for i in range(1,5))
+          raw=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert hashlib.sha256(raw).hexdigest()=='9efc1eb5b8f01a52d60b21d6909731984f9d1eccde1140068dde32c4a92a663a', 'Patch checksum mismatch'
+          patch=pathlib.Path(os.environ['RUNNER_TEMP'])/'pr3-repair.patch'; patch.write_bytes(raw)
+          subprocess.run(['git','switch','--detach','c2687083a71c8cef743e2ddf446929720095748d'],check=True)
+          subprocess.run(['git','apply','--check',str(patch)],check=True)
+          subprocess.run(['git','apply',str(patch)],check=True)
+          subprocess.run(['node','scripts/build-runtime-bundle.cjs'],check=True)
+          subprocess.run(['git','diff','--check'],check=True)
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Patch or bundle build failed' }
+      - name: Install focused verification dependencies
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw 'Node dependencies failed' }
+          python -m pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed' }
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '151.0.7922.138'
+      - name: Focused JavaScript contracts
+        id: javascript
+        continue-on-error: true
+        run: |
+          node --test --test-concurrency=1 tests/js/album-card-metadata.test.js tests/js/track-modal-wiring.test.js tests/js/appearance-fixture.test.js tests/js/runtime/gallery-tree-selection-performance.test.js tests/js/runtime/app-form-dialog.test.js tests/js/runtime/app-loader-bundle.test.js tests/js/runtime/appearance-palettes.test.js tests/js/runtime/appearance-v009-player-isolation.test.js tests/js/runtime/appearance-waveform-recents.test.js tests/js/runtime/button-component.test.js tests/js/runtime/alert-components.test.js tests/js/runtime/library-settings.test.js tests/js/runtime/player-and-waveform.test.js 2>&1 | Tee-Object -FilePath "${{ runner.temp }}\pr3-javascript.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused JavaScript failed' }
+      - name: Existing browser component contracts
+        id: components
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          npx playwright test --config=playwright.component.config.js tests/components/appearanceWorkspace.spec.js tests/components/buttonInteractionOutline.spec.js tests/components/playerViews.spec.js 2>&1 | Tee-Object -FilePath "${{ runner.temp }}\pr3-components.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused component contracts failed' }
+      - name: Provision isolated contract PostgreSQL
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 -Mode Provision -ExpectedMajorVersion 17 -Pgbin $env:PGBIN -HostName 127.0.0.1 -DatabaseSuffix "rep_${{ github.run_id }}_${{ github.run_attempt }}" -StatePath "${{ runner.temp }}\pr3-repair-db.json" -AppPrivilegeMode Inherited -SkipFixtureLoad
+      - name: Export the contract database for the next process
+        run: |
+          "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Focused Python scope and persistence contracts
+        id: python
+        continue-on-error: true
+        run: |
+          $env:PGPASSWORD=$null
+          python -m pytest -q tests/py/test_api_wave_a_asgi_routes.py tests/py/test_api_read_asgi_routes.py tests/py/test_api_wave_b_asgi_routes.py tests/py/test_playback_capability_projection.py tests/py/test_log_history_route_scope.py tests/py/test_log_history_transient_store.py tests/py/test_scan_state.py tests/py/test_state.py tests/py/test_library_browse_postgres.py::test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back tests/py/test_isolated_postgres_live.py::test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships tests/py/test_settings_lastfm_account_credentials.py tests/py/test_settings_lastfm_request_account.py tests/py/test_settings_measured_completion_scope.py tests/py/test_settings_measured_credential_boundary.py tests/py/test_settings_measured_listen_ledger.py tests/py/test_settings_measured_provider_receipts.py tests/py/test_settings_measured_retry_account.py tests/py/test_settings_measured_statistics.py tests/py/test_settings_scrobble_status_counts.py --junitxml="${{ runner.temp }}\pr3-python.xml" 2>&1 | Tee-Object -FilePath "${{ runner.temp }}\pr3-python.log"
+          if ($LASTEXITCODE -ne 0) { throw 'Focused Python failed' }
+          [xml]$report=Get-Content "${{ runner.temp }}\pr3-python.xml"
+          if ($report.SelectNodes('//testcase/skipped').Count -ne 0) { throw 'A required focused test was skipped' }
+      - name: Teardown the owned database
+        if: always()
+        run: |
+          if (Test-Path "${{ runner.temp }}\pr3-repair-db.json") {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 -Mode Teardown -ExpectedMajorVersion 17 -Pgbin $env:PGBIN -HostName 127.0.0.1 -DatabaseSuffix "rep_${{ github.run_id }}_${{ github.run_attempt }}" -StatePath "${{ runner.temp }}\pr3-repair-db.json"
+          }
+      - name: Retain every focused result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr3-focused-repair-evidence
+          path: |
+            ${{ runner.temp }}/pr3-javascript.log
+            ${{ runner.temp }}/pr3-components.log
+            ${{ runner.temp }}/pr3-python.log
+            ${{ runner.temp }}/pr3-python.xml
+            test-results/playwright-artifacts/components
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Require all focused validations to pass
+        if: always()
+        env:
+          JAVASCRIPT: ${{ steps.javascript.outcome }}
+          COMPONENTS: ${{ steps.components.outcome }}
+          PYTHON: ${{ steps.python.outcome }}
+        run: |
+          foreach ($name in @('JAVASCRIPT','COMPONENTS','PYTHON')) {
+            $value=[Environment]::GetEnvironmentVariable($name)
+            Write-Host "$name=$value"
+            if ($value -ne 'success') { throw "$name did not pass; no repair is published" }
+          }

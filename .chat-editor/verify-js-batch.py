@@ -19,13 +19,19 @@ def require_head():
     actual = git('ls-remote', '--exit-code', 'origin', 'refs/heads/' + manifest['target_branch']).split()[0]
     assert actual == manifest['expected_head'], 'PR head changed; reconcile instead of overwriting'
 
+def require_files(expected, cached=False):
+    args = ['diff', '--name-only'] + (['--cached'] if cached else [])
+    actual = set(git(*args).splitlines())
+    expected = set(expected)
+    assert actual == expected, {'unexpected': sorted(actual - expected), 'missing': sorted(expected - actual)}
+
 mode = sys.argv[1]
 if mode == 'apply':
     assert git('rev-parse', 'HEAD') == manifest['expected_head']
     require_head()
     encoded = ''.join((transport / 'js-batch.patch.gz.b64').read_text().split())
-    # Correct the one identified transcription byte; the unchanged decoded
-    # SHA256 below still verifies every source edit against the local patch.
+    # Correct the identified transcription byte; the unchanged decoded SHA256
+    # still verifies every source edit against the locally tested patch.
     encoded = encoded.replace('F1LHailIVhe+VKAG', 'F1LHailIVhf+VKAG')
     patch = gzip.decompress(base64.b64decode(encoded, validate=True))
     assert hashlib.sha256(patch).hexdigest() == manifest['patch_sha256'], 'Patch transport digest mismatch'
@@ -37,7 +43,10 @@ if mode == 'apply':
     patch_path.write_bytes(patch)
     subprocess.run(['git', 'apply', '--check', '--unidiff-zero', '--whitespace=error-all', str(patch_path)], check=True)
     subprocess.run(['git', 'apply', '--unidiff-zero', '--whitespace=error-all', str(patch_path)], check=True)
-    assert git('diff', '--name-only').splitlines() == sorted(manifest['files'])
+    # Untouched Windows checkout files remain CRLF; use the original clean
+    # conversion for diff and staging rather than treating all of them as edits.
+    subprocess.run(['git', 'config', 'core.autocrlf', 'true'], check=True)
+    require_files(manifest['files'])
     subprocess.run(['git', 'diff', '--check'], check=True)
     for name in manifest['files']:
         if name.endswith('.js'):
@@ -47,14 +56,14 @@ elif mode == 'node':
     subprocess.run(['node', '--test', '--test-concurrency=1', '--test-reporter=spec', *manifest['node_tests']], check=True)
 elif mode == 'publish':
     expected = sorted(manifest['files'] + manifest['snapshots'])
-    assert git('diff', '--name-only').splitlines() == expected, 'Unexpected changed file or missing snapshot'
+    require_files(expected)
     for name, height in zip(manifest['snapshots'], [76, 100]):
         data = Path(name).read_bytes()
         assert data[:8] == b'\x89PNG\r\n\x1a\n'
         assert struct.unpack('>II', data[16:24]) == (1280, height), 'Unexpected snapshot geometry'
     subprocess.run(['git', 'diff', '--check'], check=True)
     subprocess.run(['git', 'add', '--', *expected], check=True)
-    assert git('diff', '--cached', '--name-only').splitlines() == expected
+    require_files(expected, cached=True)
     require_head()
     subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
     subprocess.run(['git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com'], check=True)

@@ -26,7 +26,18 @@ html .non-album-modal-dialog {
 html .cover-lookup-drawer {
   background: linear-gradient(180deg, rgba(var(--appearance-panel-background-rgb, 8, 15, 27), 0.98), rgba(var(--appearance-panel-background-rgb, 17, 24, 39), 0.98));
 }
-/* Each editor follows its own draft; document surfaces keep the saved theme. */
+/* Default-account controls resolve catalog tokens locally. Saved palettes still
+   inherit from the app; unsaved colors remain confined to the preview. */
+:root:not([data-appearance-palette]) :where(.appearance-background-editor, .editor-footer) {
+  --appearance-ink: #EDF0F4;
+  --appearance-muted: #ABB6C5;
+  --appearance-card: #202938;
+  --appearance-control: #202938;
+  --appearance-line: #526173;
+  --appearance-primary-button: #202938;
+  --appearance-primary-button-ink: #EDF0F4;
+}
+/* Each preview follows its own draft; editor controls keep the saved theme. */
 .appearance-background-editor {
   --text: var(--appearance-ink); --muted: var(--appearance-muted);
   --panel: var(--appearance-card); --panel-2: var(--appearance-control);
@@ -488,7 +499,7 @@ html .cover-lookup-drawer {
 /* Shared account draft: backgrounds own the player surface; Seekbar owns its waveform. */
 /* Custom controls still need opaque pod/idle surfaces when the player surface
    inherits native CSS. Keep these fallbacks local, without theming the player. */
-:root[data-appearance-native-surface] .global-player :is(.loop-edit-actions, .player-timeline-wrap.is-idle) {
+:root[data-appearance-native-surface] .global-player :is(.loop-play-control-cluster, .loop-edit-actions, .player-timeline-wrap.is-idle) {
   --appearance-player: #071827;
   --appearance-player-ink: #dcebe3;
 }

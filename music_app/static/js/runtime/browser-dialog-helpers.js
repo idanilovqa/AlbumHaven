@@ -59,13 +59,13 @@ function showAppFormDialog(options = {}) {
       const searchRect = searchField?.getBoundingClientRect();
       const joinedTop = searchRect ? searchRect.bottom - 1 : rect.bottom + 4;
       const boundary = boundaryElement?.getBoundingClientRect();
-      const left = Math.max(16, Math.min(window.innerWidth - 24, Number(boundary?.left || 0) + 16));
+      const left = Math.max(8, Math.min(window.innerWidth - 16, Number(boundary?.left || 0) + 8));
       const right = Math.max(left + 1, Math.min(window.innerWidth - 8, Number(boundary?.right || window.innerWidth) - 8));
       const bottom = Math.max(9, Math.min(window.innerHeight - 8, Number(boundary?.bottom || window.innerHeight) - 8));
       const width = Math.min(440, right - left);
       const top = Math.max(8, Math.min(joinedTop, Math.max(8, bottom - 240)));
       const panelLeft = searchRect
-        ? Math.max(8, Math.min(searchRect.left, window.innerWidth - width - 8))
+        ? Math.max(left, Math.min(searchRect.left, right - width))
         : Math.max(left, Math.min(rect.right - width, right - width));
       anchoredPanel.style.position = 'fixed'; anchoredPanel.style.left = `${panelLeft}px`; anchoredPanel.style.top = `${top}px`;
       anchoredPanel.style.width = `${width}px`; anchoredPanel.style.maxHeight = `${bottom - top}px`;

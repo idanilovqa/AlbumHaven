@@ -418,7 +418,7 @@ test('buildUtilityLibrarySettingsDetail exposes the explicit album-rating import
   const markup = context.buildUtilityLibrarySettingsDetail();
 
   assert.match(markup, /data-import-album-ratings="1"/);
-  assert.match(markup, />Import ratings from file tags<\/button>/);
+  assert.match(markup, /<button\b[^>]*data-import-album-ratings="1"[^>]*>Import ratings<\/button>/);
   assert.doesNotMatch(markup, /data-album-rating-import-result="1"/);
 });
 

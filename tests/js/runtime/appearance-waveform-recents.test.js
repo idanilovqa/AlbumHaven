@@ -278,7 +278,7 @@ test('direct waveform edits pair control shades and update player-linked outline
   assert.equal(state.draft.player_style_override.waveform.edge,'#AFD8C2');
   assert.equal(state.draft.player_style_override.controls.border,'#86EFAC');
   assert.equal(state.draft.player_style_override.handles.color,'#AFD8C2');
-  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#24B86B');
+  assert.equal(api.resolveInteractionOutline(state.draft,state.effective),'#86EFAC');
 });
 
 test('permanent player themes stay outside the five recent saved sets',()=>{

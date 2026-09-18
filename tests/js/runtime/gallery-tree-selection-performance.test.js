@@ -10,7 +10,6 @@ const galleryCardComponentPath = path.join(__dirname, '..', '..', '..', 'music_a
 const galleryMainStatePath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-state.js');
 const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
 const galleryMainComponentsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-components.js');
-const galleryMainInteractionsPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'gallery-main-interactions.js');
 const virtualGridHelperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'virtual-artist-grid.js');
 const helperSources = [
   { path: responseStateHelperPath, source: fs.readFileSync(responseStateHelperPath, 'utf8') },
@@ -20,7 +19,6 @@ const helperSources = [
   { path: galleryMainStatePath, source: fs.readFileSync(galleryMainStatePath, 'utf8') },
   { path: galleryMainInteractionsPath, source: fs.readFileSync(galleryMainInteractionsPath, 'utf8') },
   { path: galleryMainComponentsPath, source: fs.readFileSync(galleryMainComponentsPath, 'utf8') },
-  { path: galleryMainInteractionsPath, source: fs.readFileSync(galleryMainInteractionsPath, 'utf8') },
   { path: virtualGridHelperPath, source: fs.readFileSync(virtualGridHelperPath, 'utf8') },
 ];
 

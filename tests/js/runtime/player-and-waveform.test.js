@@ -53,6 +53,8 @@ test('waveform peak shaping preserves silence and separates hits from quieter ma
 test('updateWaveformAppearance publishes the effective seekbar presentation', async () => {
   const player = {
     attributes: {},
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    querySelectorAll() { return []; },
     setAttribute(name, value) {
       this.attributes[name] = value;
     },
@@ -550,6 +552,9 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   assert.match(playerRule, /--player-waveform-centerline:\s*57px/);
   assert.match(playerRule, /--player-regular-centerline:\s*39px/);
   assert.match(playerRule, /--player-controls-size:\s*48px/);
+  assert.match(playerRule, /--player-waveform-height:\s*56px/);
+  const dimension = name => Number(playerRule.match(new RegExp(`--${name}:\\s*(\\d+)px`))?.[1]);
+  assert.equal(dimension('player-waveform-centerline') - dimension('player-waveform-height') / 2, 29);
   assert.doesNotMatch(playerRule, /--player-leading-width:/);
   assert.match(css, /\.player-main\s*\{[^}]*grid-column:\s*1\s*\/\s*-1[^}]*grid-template-columns:\s*subgrid/s);
   assert.match(
@@ -562,7 +567,7 @@ test('persistent-player controls and timelines use mode-specific centerlines', (
   );
   assert.match(
     css,
-    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*29px[^}]*height:\s*56px/s,
+    /\.global-player\[data-player-seekbar-presentation="waveform"\]\s+\.player-timeline-wrap\s*\{[^}]*top:\s*calc\(var\(--player-waveform-centerline\)\s*-\s*var\(--player-waveform-height\)\s*\/\s*2\)[^}]*height:\s*var\(--player-waveform-height\)/s,
   );
   assert.match(
     css,
@@ -608,8 +613,8 @@ test('persistent player restores the compact unclipped player and stereo wavefor
   )?.[1] || '';
   const waveformHeight = Number(waveformRule.match(/height:\s*(\d+)px/)?.[1] || 0);
 
-  assert.equal(playerHeight, 68, 'regular mode uses the approved compact expanded-player height');
-  assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*92px/s);
+  assert.equal(playerHeight, 76, 'regular mode retains the eight-pixel bottom clearance for joined loop controls');
+  assert.match(css, /:root\.has-waveform-player\s*\{[^}]*--player-height:\s*100px/s);
   assert.match(css, /:root\.has-compact-player\s*\{[^}]*--player-height:\s*0px/s);
   assert.equal(waveformHeight, 56, 'the stereo canvas is slightly smaller than the foobar reference');
   assert.match(rangeSurfaceRule, /height:\s*56px/);

@@ -6,6 +6,9 @@
   border-color: transparent !important;
   background: color-mix(in srgb, var(--text, #eee) 7%, var(--panel, #171717)) !important;
 }
+:root[data-appearance-item-hover] .navigation-tree-item:not(.is-selected):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--appearance-item-hover) !important;
+}
 :root .navigation-tree-item:hover:not(:focus-visible) { outline: none !important; }
 :root .navigation-tree-item.is-selected:hover {
   background: var(--selection-body-background) !important;

@@ -350,6 +350,45 @@ Tests: `tests/js/runtime/appearance-backgrounds.test.js`, `tests/py/test_appeara
 - [x] Run the complete initial required suite inventory before fixes. JavaScript, Python, functional, component, performance, authentication and administration results are retained in Task 9 validation artifacts. JS/Python and heavyweight browser waves ran sequentially, with scoped cleanup. Final clean-state reruns remain required below.
 - [ ] Complete review/full native CI and manual acceptance without weakening tests or thresholds. No publication merely because visuals were approved.
 
+### JavaScript and component CI repair checkpoint — September 18, 2026
+
+The owner authorized a batched repair of Portable JavaScript, Windows JavaScript,
+and pinned-Chrome component failures on PR #3, followed by native CI iteration
+without waiting for E2E. This overrides historical no-push instructions for this
+repair only; no merge or release is authorized. Baseline run `35381201822`, head
+`3e34e1f57716bdfcd2dcea7959bc1213af7e13c6`: both Node jobs reported the same 19
+failures; component tests reported 14 failures. The Python job passed on that head.
+
+Runtime regression acceptance for S03/A01/B03: anchored forms remain inside the
+Settings boundary, including search anchors near either edge; default-account
+editor controls and shared footer resolve native catalog tokens without applying
+unsaved colors to the app; explicit saved navigation colors win over neutral
+hover defaults; changing seekbar mode replaces unavailable controls while keeping
+invalid drafts, blocked Save, focus and a correction route; both real capsule
+and companion action surfaces remain opaque when the player surface is native.
+
+Harness repairs retain assertions while restoring the actual metadata-helper
+import, unique gallery helper declarations, Appearance-isolation fixture, complete
+71-module loader inventory, DOM accessors and compact-cover data hook. Numeric
+artist names with explicit separate fields and year-only legacy metadata remain
+independent. The import-ratings action remains covered through its existing hook.
+
+Older cosmetic expectations are reconciled with the owner-directed September 13
+rebase follow-up, not used to revert it: inset 1px hover feedback and separate
+keyboard focus remain; automatic outlines use the theme accent and explicit
+player outlines use the control border. The B03 downward-extension padding adds
+8px to expanded player height (76px regular, 100px waveform); existing 39px/57px
+centerlines, waveform size, alignment tolerances and audio behavior are unchanged.
+Only the two expanded-player Windows snapshots are refreshed for this geometry;
+compact snapshots and all functional/performance E2E contracts remain unchanged.
+
+Focused verification: all 19 Node failures reproduced before repair; the final
+21-file local run passes 326 tests without skips. Memory-only browser diagnostics
+pass, but local browser navigation is policy-blocked before the HTTP fixtures run.
+Pinned Windows Chrome verification therefore precedes publication, followed by the
+three full native jobs. A focused result is not a complete PR or release pass.
+No existing task checkbox changed; the plan has no numeric checkbox counter.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

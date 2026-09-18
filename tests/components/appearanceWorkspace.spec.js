@@ -85,14 +85,23 @@ test('native player survives a handle-only save and reload without repainting ot
 
 test('custom controls keep opaque action pods while the player surface remains native', async ({ page }) => {
   await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: null, player_style_override: null, player_override: null } });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/playback-control-cluster.js') });
   const paint = await page.evaluate(() => {
     const api = window.AlbumHavenAppearance;
     const player = document.querySelector('.global-player');
-    player.insertAdjacentHTML('beforeend', '<div class="loop-edit-actions"><div class="loop-edit-action-pod"></div><button class="loop-edit-action-enter">Edit</button></div><button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
+    for (const loopControlStyle of ['capsule', 'companion']) {
+      player.insertAdjacentHTML('beforeend', window.renderPlaybackControlCluster({ variant: 'expanded-player', loopControlStyle }));
+    }
+    player.querySelectorAll('[data-playback-control-cluster]').forEach(node => {
+      node.setAttribute('data-loop-action-engaged', 'true');
+      node.setAttribute('data-loop-action-state', 'editing');
+    });
+    player.insertAdjacentHTML('beforeend', '<button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
     const surface = getComputedStyle(player).backgroundImage;
     api.instance.controller.setPlayerStyleColor('controls.fill', '#123456');
     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
-    const pod = document.querySelector('.loop-edit-action-pod');
+    const pod = document.querySelector('[data-loop-control-style="capsule"]');
+    const companion = document.querySelector('[data-loop-control-style="companion"]');
     const idle = document.querySelector('.player-timeline-wrap');
     const idleBackground = getComputedStyle(idle, '::before').backgroundColor;
     const style = structuredClone(api.instance.controller.getState().draft.player_style_override);
@@ -101,7 +110,7 @@ test('custom controls keep opaque action pods while the player surface remains n
     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
     const loop = getComputedStyle(document.querySelector('.player-loop-button'));
     return { surface, after: getComputedStyle(player).backgroundImage, outline: [loop.outlineStyle, loop.outlineWidth, loop.outlineColor],
-      pod: getComputedStyle(pod).backgroundColor, tail: getComputedStyle(pod, '::after').backgroundColor,
+      pod: getComputedStyle(pod, '::before').backgroundColor, tail: getComputedStyle(companion, '::before').backgroundColor,
       idle: idleBackground };
   });
   expect(paint.after).toBe(paint.surface);

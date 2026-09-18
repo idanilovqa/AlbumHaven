@@ -81,6 +81,7 @@ const expectedRuntimeOrder = [
   'problematic-album-helpers.js',
   'browser-log-history-store.js',
   'utility-log-history-query.js',
+  'date-range-picker.js',
   'utility-log-history-ui.js',
   'compact-data-table.js',
   'album-track-table.js',

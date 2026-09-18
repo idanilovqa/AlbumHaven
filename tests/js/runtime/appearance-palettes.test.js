@@ -283,12 +283,12 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('automatic'),
     player_style_override: null,
-  }, themeEffective), themeEffective.tokens.play);
+  }, themeEffective), themeEffective.tokens.accent);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('automatic'),
     player_style_override: customPlayer,
-  }, playerEffective), playerEffective.tokens.play);
+  }, playerEffective), playerEffective.tokens['player-control-border']);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('theme'),
@@ -298,7 +298,7 @@ test('automatic, theme, player, and custom outline sources resolve against the e
     ...base,
     interaction_overrides: interactions('player'),
     player_style_override: customPlayer,
-  }, playerEffective), playerEffective.tokens.play);
+  }, playerEffective), playerEffective.tokens['player-control-border']);
   assert.equal(api.resolveInteractionOutline({
     ...base,
     interaction_overrides: interactions('custom'),
@@ -328,7 +328,7 @@ test('saved theme application publishes the resolved player-aware interaction ou
 
   assert.equal(properties.get('--appearance-interaction-outline'), runtime().resolveAppearance({
     ...defaults(), palette_id: 'steelblue', player_override: customPlayer,
-  }).tokens.play);
+  }).tokens['player-control-border']);
 });
 
 test('Harbor Mint resolves the approved surfaces, mint controls and player for every companion', () => {

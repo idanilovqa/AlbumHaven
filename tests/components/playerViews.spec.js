@@ -34,7 +34,7 @@ const expandedControls = (loopControlStyle = 'capsule') => `
 const compactControls = `
   <div class="compact-player-shell" aria-label="Compact player">
     ${renderButton({ variant: 'icon', size: 'small', className: 'compact-player-expand', ariaLabel: 'Expand player', label: '›' })}
-    <button class="compact-player-cover" type="button" aria-label="Open album details"></button>
+    <button class="compact-player-cover" data-compact-player-cover type="button" aria-label="Open album details"></button>
     ${renderPlaybackControlCluster({ variant: 'compact-player' })}
   </div>`;
 
@@ -140,7 +140,7 @@ test('expanded waveform player uses the approved centerline and player-edge meta
   expect(Number.parseFloat(await player.evaluate((element) => getComputedStyle(element).paddingLeft))).toBe(28);
   const expectedCenterline = playerBox.y + 57;
 
-  expect(playerBox.height).toBe(92);
+  expect(playerBox.height).toBe(100);
   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['waveform', waveformBox]]) {
     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
   }
@@ -166,14 +166,14 @@ test('expanded regular player uses the approved centerline and seekbar-edge text
   ]);
   const expectedCenterline = playerBox.y + 39;
 
-  expect(playerBox.height).toBe(68);
+  expect(playerBox.height).toBe(76);
   for (const [name, box] of [['collapse', collapseBox], ['cover', coverBox], ['play', playBox], ['timeline', timelineBox]]) {
     expect.soft(Math.abs(centerY(box) - expectedCenterline), `${name} centerline offset`).toBeLessThanOrEqual(1);
   }
   expect(Math.abs(metadataBox.x - timelineBox.x)).toBeLessThanOrEqual(1);
   expect(Math.abs(metadataBox.y - (playerBox.y + 10))).toBeLessThanOrEqual(1);
   expect(Math.abs(timestampBox.y - (playerBox.y + 11))).toBeLessThanOrEqual(1);
-  expect(Math.abs((playerBox.y + playerBox.height) - (timelineBox.y + timelineBox.height) - 5)).toBeLessThanOrEqual(1);
+  expect(Math.abs((playerBox.y + playerBox.height) - (timelineBox.y + timelineBox.height) - 13)).toBeLessThanOrEqual(1);
   await expect(player).toHaveScreenshot('expanded-regular-player.png', { animations: 'disabled' });
 });
 

@@ -63,7 +63,7 @@ test('anchored form fits the containing Settings panel and available height with
   modal.querySelector=()=>panel;modal.classList={add(){},remove(){}};
   h.context.window.innerWidth=1920;h.context.window.innerHeight=927;
   h.context.syncTriggerAnchor=()=>{};h.context.clearTriggerAnchor=()=>{};
-  const anchor={getBoundingClientRect:()=>({left:649,right:717,bottom:128}),closest:()=>({getBoundingClientRect:()=>({left:410,right:1510,bottom:825})})};
+  const anchor={getBoundingClientRect:()=>({left:649,right:717,bottom:128}),closest:selector=>selector==='.utility-modal-dialog'?{getBoundingClientRect:()=>({left:410,right:1510,bottom:825})}:null};
   const pending=h.context.showAppFormDialog({anchor});
   assert.ok(parseFloat(panel.style.left)>=418,'the popup must not extend under the Settings clipping boundary');
   assert.ok(parseFloat(panel.style.top)+parseFloat(panel.style.maxHeight)<=817,'footer must fit above the Settings bottom');
@@ -99,7 +99,7 @@ test('active anchored form repositions on viewport and Settings resize and relea
  const panel={style:{},setAttribute(){},removeAttribute(name){if(name==='style')this.style={};}};
  const modal=h.nodes.get('app-form-modal');modal.querySelector=()=>panel;modal.classList={add(){},remove(){}};
  let bounds={left:410,right:1510,bottom:825};let trigger={left:649,right:717,bottom:128};
- const boundary={getBoundingClientRect:()=>bounds};const anchor={getBoundingClientRect:()=>trigger,closest:()=>boundary};
+ const boundary={getBoundingClientRect:()=>bounds};const anchor={getBoundingClientRect:()=>trigger,closest:selector=>selector==='.utility-modal-dialog'?boundary:null};
  h.context.syncTriggerAnchor=()=>{};h.context.clearTriggerAnchor=()=>{};
  const pending=h.context.showAppFormDialog({anchor});assert.equal(parseFloat(panel.style.left),418);
  h.context.window.innerWidth=390;h.context.window.innerHeight=640;bounds={left:8,right:382,bottom:632};trigger={left:298,right:366,bottom:112};
@@ -113,3 +113,29 @@ test('active anchored form repositions on viewport and Settings resize and relea
  assert.equal(events.size,0);assert.equal(observer.disconnected,true);
  late();assert.deepEqual(panel.style,{},'queued observer callback cannot revive a closed form');
 });
+
+for (const searchLeft of [390, 1480]) {
+  test(`search-attached form clamps both edges inside Settings from x=${searchLeft}`, async () => {
+    const h = setup();
+    const panel = { style: {}, setAttribute() {}, removeAttribute() {} };
+    const modal = h.nodes.get('app-form-modal');
+    modal.querySelector = () => panel;
+    modal.classList = { add() {}, remove() {} };
+    Object.assign(h.context.window, { innerWidth: 1920, innerHeight: 927 });
+    h.context.syncTriggerAnchor = () => {};
+    h.context.clearTriggerAnchor = () => {};
+    const boundary = { getBoundingClientRect: () => ({ left: 410, right: 1510, bottom: 825 }) };
+    const search = { getBoundingClientRect: () => ({ left: searchLeft, bottom: 180 }) };
+    const anchor = {
+      getBoundingClientRect: () => ({ left: 649, right: 717, bottom: 178 }),
+      closest: selector => selector === '.utility-modal-dialog' ? boundary
+        : selector === '.search-field-control' ? search : null,
+    };
+    const pending = h.context.showAppFormDialog({ anchor });
+    assert.ok(parseFloat(panel.style.left) >= 418);
+    assert.ok(parseFloat(panel.style.left) + parseFloat(panel.style.width) <= 1502);
+    assert.equal(parseFloat(panel.style.top), 179, 'the form stays joined to the search input');
+    h.fire('app-form-cancel', 'click');
+    await pending;
+  });
+}

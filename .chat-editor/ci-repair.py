@@ -7,7 +7,7 @@ def replace(path, old, new):
 
 replace('tests/e2e/poms/searchToolbar.js',
 "    this.control = this.form.locator('.search-field-control');",
-"    this.control = page.locator(\`\${this.formSelector} .search-field-control\`);")
+"    this.control = page.locator(this.formSelector + ' .search-field-control');")
 replace('tests/e2e/actions/trackModalActions.js',
 """    const coverPlaceholderVisible = await this.trackModal.coverPlaceholder.isVisible()
       && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty';""",

@@ -1,0 +1,13 @@
+{
+  "parts": [
+    ".chat-editor/js-deps-000.b64",
+    ".chat-editor/js-deps-001.b64",
+    ".chat-editor/js-deps-002.b64",
+    ".chat-editor/js-deps-003.b64",
+    ".chat-editor/js-deps-004.b64",
+    ".chat-editor/js-deps-005.b64",
+    ".chat-editor/js-deps-006.b64"
+  ],
+  "sha256": "713aaaab9040e9f1e484a56771f6a5c0b6b1fe9ef794d544dc1d364e701bcc71",
+  "bytes": 3749282
+}

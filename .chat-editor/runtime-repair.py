@@ -19,14 +19,14 @@ replace('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatTrackDuration(mainSeconds) || formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds);
+  const mainLength = mainSeconds > 0 ? (formatTrackDuration(mainSeconds) || formatAlbumDuration(mainSeconds)) : '';
+  const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {""")
 replace('music_app/static/js/runtime/tag-editor-and-optimistic-updates.js',
 """    mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',
     bonusLength: hasBonusDisc ? formatTrackDuration(durationForGroups(true)) : '',""",
-"""    mainLength: hasBonusDisc ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
-    bonusLength: hasBonusDisc ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',""")
+"""    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',""")
 replace('music_app/static/js/runtime/utility-list-builders.js',
 """    const countSuffix = selected.length ? ` (${selected.length})` : '';
     els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);""",

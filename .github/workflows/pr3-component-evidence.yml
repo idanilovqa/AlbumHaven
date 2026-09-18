@@ -1,0 +1,47 @@
+name: PR 3 Component Evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-ci-diagnostics]
+    paths: [.github/workflows/pr3-component-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch existing focused artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 35312218333 --repo idanilovqa/AlbumHaven --name pr3-focused-repair-evidence --dir "$RUNNER_TEMP/component-evidence"
+      - name: Preserve generated component screenshots and their tracked expectations
+        run: |
+          python - <<'PY'
+          import base64, json, os, pathlib, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'component-evidence'
+          target=pathlib.Path('.chat-editor/component-evidence'); target.mkdir(parents=True,exist_ok=True)
+          images={}
+          for p in root.rglob('*.png'):
+              if p.name.startswith('expanded-'):
+                  images[p.name]=base64.b64encode(p.read_bytes()).decode('ascii')
+          for mode in ('regular','waveform'):
+              name=f'expanded-{mode}-player-win32.png'
+              data=subprocess.check_output(['git','show',f'c2687083a71c8cef743e2ddf446929720095748d:tests/components/playerViews.spec.js-snapshots/{name}'])
+              images[name]=base64.b64encode(data).decode('ascii')
+          (target/'component-images.json').write_text(json.dumps(images),encoding='utf-8')
+          print('Preserved images:',list(images))
+          log=next(root.rglob('pr3-components.log')).read_text(encoding='utf-8-sig',errors='replace').splitlines()
+          for i,line in enumerate(log):
+              if any(text in line for text in ('  1) ', '  2) ', '  3) ', '  4) ')):
+                  print('\n'.join(log[i:i+24]))
+          PY
+      - name: Store image evidence on the diagnostics branch only
+        run: |
+          test "$GITHUB_REF" = refs/heads/2026-09-18-pr3-ci-diagnostics
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .chat-editor/component-evidence
+          git commit -m 'ci: retain generated component comparison evidence'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-ci-diagnostics

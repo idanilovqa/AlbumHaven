@@ -51,7 +51,7 @@ jobs:
         continue-on-error: true
         env:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
-        run: npx playwright test --config=playwright.component.config.js tests/components/playerViews.spec.js --grep '^expanded (waveform|regular) player uses' --update-snapshots
+        run: npx playwright test --config=playwright.component.config.js tests/components/playerViews.spec.js --grep 'expanded (waveform|regular) player uses' --update-snapshots
       - name: Verify all three affected component owners normally
         id: components
         continue-on-error: true

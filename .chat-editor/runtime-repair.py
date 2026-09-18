@@ -29,8 +29,5 @@ replace('music_app/static/js/runtime/utility-list-builders.js',
     els.problemFilterButton.textContent = `Filters${countSuffix}`;
     els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);""")
 replace('tests/js/runtime/settings-refactor-shell.test.js',
-"""    loadProblematicFiles: async () => {},
-    loadUtilityLoops: async () => {},""",
-"""    loadProblematicFiles: async () => {},
-    loadUtilityLibrarySettings: async () => {},
-    loadUtilityLoops: async () => {},""")
+"""    renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},""",
+"""    renderUtilityModalContent() {}, loadProblematicFiles() {}, loadUtilityRules() {}, loadUtilityLibrarySettings() {}, loadUtilityLoops() {}, loadUtilityLogHistory() {}, loadUtilityIntegrations() {},""")

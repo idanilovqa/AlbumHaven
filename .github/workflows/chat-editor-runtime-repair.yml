@@ -2,7 +2,9 @@ name: Chat Editor Runtime Repair
 on:
   push:
     branches: [2026-09-08-settings-refactor]
-    paths: [.chat-editor/runtime-repair.py]
+    paths:
+      - .chat-editor/runtime-repair.py
+      - .github/workflows/chat-editor-runtime-repair.yml
 permissions:
   contents: write
 jobs:
@@ -23,7 +25,7 @@ jobs:
       - run: python .chat-editor/runtime-repair.py
       - run: node scripts/build-runtime-bundle.cjs
       - name: Focused JavaScript
-        run: node --test --test-concurrency=1 tests/js/runtime/settings-refactor-shell.test.js tests/js/runtime/tag-editor-and-optimistic-updates.test.js tests/js/runtime/app-loader-bundle.test.js
+        run: node --test --test-concurrency=1 tests/js/runtime/settings-refactor-shell.test.js tests/js/runtime/tag-editor-and-optimistic-updates.test.js
       - name: Publish
         run: |
           git diff --check

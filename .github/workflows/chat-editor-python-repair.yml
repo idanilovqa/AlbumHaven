@@ -1,0 +1,30 @@
+name: Chat Editor Python Repair
+on:
+  push:
+    branches: [2026-09-08-settings-refactor]
+    paths:
+      - .chat-editor/python-repair.py
+permissions:
+  contents: write
+jobs:
+  repair:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults: {run: {shell: pwsh}}
+    steps:
+      - uses: actions/checkout@v5
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11', cache: pip, cache-dependency-path: requirements.txt}
+      - run: python -m pip install -r requirements.txt
+      - run: python .chat-editor/python-repair.py
+      - name: Focused Python contracts
+        run: python -m pytest -q tests/py/test_api_read_asgi_routes.py tests/py/test_api_wave_a_asgi_routes.py tests/py/test_api_wave_b_asgi_routes.py tests/py/test_log_history_route_scope.py tests/py/test_library_browse_postgres.py tests/py/test_playback_capability_projection.py tests/py/test_scan_state.py tests/py/test_state.py
+      - name: Publish tested repairs
+        run: |
+          git diff --check
+          git add tests/py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: align Python tests with scoped runtime contracts'
+          git push origin HEAD:2026-09-08-settings-refactor

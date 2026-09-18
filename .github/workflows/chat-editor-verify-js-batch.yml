@@ -1,0 +1,82 @@
+name: Verify and publish PR 3 JavaScript repair
+on:
+  push:
+    branches: [2026-09-18-pr3-js-batch]
+    paths:
+      - .chat-editor/js-batch.patch.gz.b64
+      - .chat-editor/js-batch-manifest.json
+      - .chat-editor/verify-js-batch.py
+      - .github/workflows/chat-editor-verify-js-batch.yml
+permissions:
+  contents: write
+concurrency:
+  group: pr3-js-batch-publication
+  cancel-in-progress: false
+jobs:
+  verify_publish:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: work
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: transport
+      - uses: actions/checkout@v5
+        with:
+          path: work
+          ref: 3e34e1f57716bdfcd2dcea7959bc1213af7e13c6
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify patch and unchanged PR head
+        run: python ../transport/.chat-editor/verify-js-batch.py apply
+      - run: npm ci
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '151.0.7922.138'
+      - name: Run all focused Node regressions and neighbors
+        id: node
+        continue-on-error: true
+        run: python ../transport/.chat-editor/verify-js-batch.py node
+      - name: Refresh only approved B03 expanded-player snapshots
+        id: snapshots
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: npx playwright test --config=playwright.component.config.js tests/components/playerViews.spec.js --grep '^expanded (waveform|regular) player uses' --update-snapshots
+      - name: Verify all three affected component owners normally
+        id: components
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: npx playwright test --config=playwright.component.config.js tests/components/appearanceWorkspace.spec.js tests/components/buttonInteractionOutline.spec.js tests/components/playerViews.spec.js
+      - name: Require every verification step
+        env:
+          NODE_RESULT: ${{ steps.node.outcome }}
+          SNAPSHOT_RESULT: ${{ steps.snapshots.outcome }}
+          COMPONENT_RESULT: ${{ steps.components.outcome }}
+        run: |
+          if ($env:NODE_RESULT -ne 'success' -or $env:SNAPSHOT_RESULT -ne 'success' -or $env:COMPONENT_RESULT -ne 'success') {
+            throw 'Repair verification failed; all failure evidence is retained and nothing is published.'
+          }
+      - name: Push the entire verified batch in one non-force commit
+        run: python ../transport/.chat-editor/verify-js-batch.py publish
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr3-js-batch-verification-${{ github.run_id }}
+          path: |
+            work/test-results/playwright-artifacts/components/
+            work/tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png
+            work/tests/components/playerViews.spec.js-snapshots/expanded-waveform-player-win32.png
+          retention-days: 14
+          if-no-files-found: warn

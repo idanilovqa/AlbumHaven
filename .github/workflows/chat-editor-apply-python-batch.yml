@@ -1,0 +1,87 @@
+name: Publish completed PR 3 Python repair
+
+on:
+  push:
+    branches: [2026-09-18-pr3-python-batch]
+    paths:
+      - .chat-editor/python-batch.patch.gz.b64
+      - .github/workflows/chat-editor-apply-python-batch.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr3-python-batch-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: 0df241949abd06eb5e2b25450efe97e1e52fd1dd
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+      PATCH_SHA256: 01c6469983543fffa430138dce92224fceb762e64b3de68763e8a4ef8b756e52
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify completed patch and unchanged PR head
+        shell: bash
+        run: |
+          set -euo pipefail
+          head=$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$head" = "$EXPECTED_HEAD"
+          python - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          encoded = Path('.chat-editor/python-batch.patch.gz.b64').read_text()
+          patch = gzip.decompress(base64.b64decode(''.join(encoded.split()), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == os.environ['PATCH_SHA256'], 'Patch digest mismatch'
+          Path(os.environ['RUNNER_TEMP'], 'python-batch.patch').write_bytes(patch)
+          print('Verified complete eight-file patch, bytes:', len(patch))
+          PY
+          git switch --detach "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/python-batch.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/python-batch.patch"
+      - name: Validate and stage only the completed repair files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast, subprocess
+          from pathlib import Path
+          files = [
+              'docs/superpowers/plans/2026-09-09-settings-refactor.md',
+              'music_app/services/log_history.py',
+              'tests/py/asgi_testing.py',
+              'tests/py/test_api_read_asgi_routes.py',
+              'tests/py/test_api_wave_a_asgi_routes.py',
+              'tests/py/test_api_wave_b_asgi_routes.py',
+              'tests/py/test_library_browse_postgres.py',
+              'tests/py/test_settings_python_contract_regressions.py',
+          ]
+          for name in files:
+              if name.endswith('.py'):
+                  ast.parse(Path(name).read_text(encoding='utf-8'), filename=name)
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'add', '--', *files], check=True)
+          staged = subprocess.check_output(['git', 'diff', '--cached', '--name-only'], text=True).splitlines()
+          assert sorted(staged) == sorted(files), staged
+          print('Syntax and exact staged-file inventory verified.')
+          PY
+      - name: Publish the entire batch in one non-force commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: repair scoped Python contracts and preserve safe log metadata'
+          head=$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)
+          test "$head" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Repair commit: $(git rev-parse HEAD)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo 'This job publishes a prebuilt patch only. Authoritative native PR Python CI is still required.' >> "$GITHUB_STEP_SUMMARY"

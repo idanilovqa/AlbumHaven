@@ -259,6 +259,15 @@ def pytest_configure(config: pytest.Config) -> None:
         )
     config._album_haven_generated_basetemp = not explicit_basetemp
     config._album_haven_generated_basetemp_token = generated_token
+    if not explicit_basetemp:
+        # Config cleanup is LIFO: later resource owners close their handles first.
+        # Capture our identity now; pytest can remove _tmp_path_factory before
+        # this final callback runs. The removal helper still revalidates ownership.
+        generated_root = Path(config.option.basetemp).resolve()
+        owner_identity = (os.getpid(), generated_token)
+        config.add_cleanup(lambda: _remove_owned_generated_pytest_root(
+            generated_root, expected_owner=owner_identity,
+        ))
     config._album_haven_test_appdata = _activate_pytest_app_paths(
         Path(config.option.basetemp).resolve()
     )
@@ -283,27 +292,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     _activate_pytest_session_temp(config)
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    config = session.config
+def _cleanup_generated_pytest_root(config: pytest.Config) -> None:
     if not getattr(config, "_album_haven_generated_basetemp", False):
         return
-    base_temp = config._tmp_path_factory._basetemp
+    factory = getattr(config, "_tmp_path_factory", None)
+    base_temp = getattr(factory, "_basetemp", None)
     token = getattr(config, "_album_haven_generated_basetemp_token", None)
     if base_temp is None or not isinstance(token, str):
         return
     _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _cleanup_generated_pytest_root(session.config)
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: pytest.Config) -> None:
-    if not getattr(config, "_album_haven_generated_basetemp", False):
-        return
-    base_temp = config._tmp_path_factory._basetemp
-    token = getattr(config, "_album_haven_generated_basetemp_token", None)
-    if base_temp is None or not isinstance(token, str):
-        return
-    _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+    _cleanup_generated_pytest_root(config)
 
 
 def _request_url(value: object) -> str:

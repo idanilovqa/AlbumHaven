@@ -67,7 +67,7 @@ async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
               <div class="player-meta"><div class="player-title">Transatlantic - We All Need Some Light</div><button class="player-album-link" type="button">/ SMPTe</button></div>
               <div class="player-time">3:13 / 5:46</div>
               <div class="player-timeline-wrap${isWaveform ? ' is-waveform' : ''}">
-                <canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"${isWaveform ? '' : ' hidden'}></canvas>
+                <canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"></canvas>
                 <input class="player-timeline" type="range" min="0" max="346" value="193" aria-label="Seek">
               </div>
             </div>
@@ -286,3 +286,23 @@ for (const style of ['capsule', 'companion']) {
     });
   }
 }
+
+
+test('regular and waveform presentations retain one canvas and gate its paint rather than removing it', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  await mountPlayer(page, 'regular');
+  const canvas = page.locator('.player-waveform-canvas');
+  await expect(canvas).toHaveCount(1);
+  await expect(canvas).not.toHaveAttribute('hidden');
+  await expect(canvas).toHaveCSS('opacity', '0');
+  await expect(canvas).toHaveCSS('pointer-events', 'none');
+  const identity = await canvas.elementHandle();
+  // Component-only presentation changes use the same classes as updateWaveformAppearance.
+  await page.locator('.player-timeline-wrap').evaluate(element => element.classList.add('is-waveform'));
+  await expect(canvas).toHaveCSS('opacity', '1');
+  expect(await canvas.evaluate((element, retained) => element === retained, identity)).toBe(true);
+  await page.locator('.player-timeline-wrap').evaluate(element => element.classList.remove('is-waveform'));
+  await expect(canvas).toHaveCSS('opacity', '0');
+  expect(await canvas.evaluate((element, retained) => element === retained, identity)).toBe(true);
+  await identity.dispose();
+});

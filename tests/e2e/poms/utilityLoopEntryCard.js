@@ -359,7 +359,7 @@ export class UtilityLoopEntryCard extends BasePage {
   }
 
   async readCompactLayoutSnapshot(entry) {
-    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds] = await Promise.all([
+    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds, headingBounds, shellBounds] = await Promise.all([
       entry.boundingBox(),
       this.playButtonForEntry(entry).boundingBox(),
       this.loopActionForEntry(entry).boundingBox(),
@@ -371,12 +371,26 @@ export class UtilityLoopEntryCard extends BasePage {
       this.repeatButtonForEntry(entry).boundingBox(),
       this.speedControlForEntry(entry).boundingBox(),
       this.detailHeader.boundingBox(),
+      entry.locator('.utility-loop-heading').boundingBox(),
+      entry.locator('.utility-loop-shell').boundingBox(),
     ]);
-    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds) {
+    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds || !headingBounds || !shellBounds) {
       throw new Error('Expected rendered compact saved-loop controls and top row.');
     }
+    // parity-check: allow-read-only-measurement-evaluate -- read approved L03/L04 card insets independently of painted control bounds
+    const cardInsets = await entry.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        top: Number.parseFloat(style.paddingTop), right: Number.parseFloat(style.paddingRight),
+        bottom: Number.parseFloat(style.paddingBottom), left: Number.parseFloat(style.paddingLeft),
+        rowGap: Number.parseFloat(style.rowGap), border: Number.parseFloat(style.borderTopWidth),
+      };
+    });
     return {
       entryBounds,
+      headingBounds,
+      shellBounds,
+      cardInsets,
       playBounds,
       scissorsBounds: actionBounds,
       mainBounds,

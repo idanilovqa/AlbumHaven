@@ -547,6 +547,111 @@ its ownership marker between attempts. Each failed before the correction and now
 passes: every attempt revalidates both the original directory identity and exact
 owner marker before removal. Retry counts and delays are unchanged.
 
+### Native run 204 remaining metadata contract — September 19, 2026
+
+The complete Metadata Mutations log from run `35420739453` on `ff81ffd4`
+records two failures, FTC-TAGS-011 and FTC-TAGS-022, at the same disabled Apply
+opacity assertion. It does not record an Album Details title timeout as their
+cause. The earlier run-192 helper change incorrectly applied Appearance's primary
+footer theme to an ordinary Tag Editor Button consumer. The shared Button v001
+record preserves ordinary consumer colors, and `docs/gallery-local-review.md`
+explicitly records approved enabled red / disabled grey Apply styling with a
+successful FTC-TAGS-022 browser check. Retain that product styling.
+
+The helper now checks the disabled grey surface, ink, border, 0.55 opacity and
+not-allowed cursor, while preserving native disabled state, shared action
+attributes and all per-track pending markers. Enabled Apply still checks its
+native enabled state, pointer cursor and full opacity. The unused Appearance-
+primary-theme probe is removed. A deterministic disabled-state regression failed
+before correction; both enabled/disabled regressions and all 219 affected Node
+checks pass after it. No product CSS, tag-save behavior, fixture population,
+numbering assertion, deadline, retry, or benchmark threshold changes.
+
+The other three functional shards are still running at this checkpoint. Their
+final failure inventory and a complete native run on the eventual repair commit
+remain mandatory; the focused result is not an E2E pass or merge authorization.
+
+### Complete run 202/204 remaining E2E batch — September 18, 2026
+
+The owner asked to finish the remaining native CI jobs rather than stop at a
+checkpoint or pipeline trigger. The source for this batch is `ff81ffd4`; prior
+repairs and the green Python, JavaScript, component, Admin, Auth and performance
+contracts remain in force. The completed run 204 evidence contains two metadata,
+three Gallery and three playback/Utilities failures before its cancellation;
+run 202 attempt 2 must supply the final uncancelled inventory before publication.
+
+The exclusion reload failure is an application defect, not obsolete coverage.
+Selecting an album problem highlights its matching file pills; serialization
+persisted all those redundant file rules as well as the album rule. Reverting
+only the album rule consequently left its 18 file problems excluded. Canonical
+selection now persists the covering album rule once, without dropping a different
+selected file reason, an unknown identity awaiting server validation, or a file-only
+selection. Optimistic Rules and the request use the same canonical selection.
+The original 18-row reload assertion remains unchanged. The new 18-file unit
+regression failed with 20 persisted selections instead of the two independent
+rules and passes after the correction.
+
+The other corrections follow already-approved consumer contracts. Gallery's two
+disc cases assert the exact shared table totals while separately requiring the
+legacy footer to remain empty. Mutation continuity compares the predecessor's
+artist/year metadata captured before the mutation, alongside its existing key,
+title, row identity and scroll checks. L03/L04/B03 saved-loop layout now verifies
+exact card insets and two-row fit instead of its superseded pre-padding height
+cap; all internal one-pixel waveform/control geometry remains. The persistent
+action root is still measured while editing hides the Enter button. Regular
+player mode retains the animation canvas but must paint it at zero opacity with
+no pointer interception; waveform mode must paint it fully. The component mount
+now follows that production retention behavior and checks the same canvas across
+both modes, without replacing approved snapshots or changing the audio engine.
+
+The combined changed-behavior Node run passes 246 checks, zero failures and zero
+skips. Runtime-bundle regeneration and production-parity verification pass. The
+local component browser attempt was blocked at navigation by administrator policy,
+not counted as a successful browser check; native pinned-Chrome CI remains required.
+No test is disabled, no permission or fixture population is relaxed, and no timeout,
+retry policy or performance budget is changed. Complete native verification is
+still outstanding; this is not a merge, release or final-acceptance claim.
+
+### PR 3 recovery reconciliation — September 19, 2026
+
+The owner explicitly requested review of the saved main, validation-follow-up
+and cleanup patches, their publication to the actual PR branch, and full CI.
+The destination remains `2026-09-08-settings-refactor`; diagnostic branches are
+transport only, not merge candidates. The checked base is
+`ff81ffd4e846fa6606054b9d3b30dadffa4a6e18`. Each edited input and resulting file
+is checked against its canonical Git blob before publication.
+
+The complete, uncancelled PR Gates #202 attempt 2 (`35419743702`) supersedes the
+partial run 204 inventory: one Python cleanup failure; three Gallery failures
+(two disc-total cases and predecessor metadata); two disabled Tag Apply cases;
+and three playback/Utilities failures (redundant exclusions, saved-loop card
+insets, retained canvas). The eight E2E cases map to the recovered batch above.
+The validation follow-up also retains unknown file identities without paths for
+server validation instead of silently dropping them. Existing source-specific
+permissions, fixture populations, persistence checks and the 18-row restoration
+assertion are unchanged.
+
+Review found a missing lifecycle edge in the saved Python candidate: pytest's
+configuration cleanup can remove `_tmp_path_factory` before the final callback.
+Capture the generated root and owner identity when registering cleanup; the
+existing remover still revalidates the directory and ownership marker on every
+attempt. A regression with the factory removed failed on the saved candidate
+and passes after correction. The full focused harness run on Linux/Python 3.13
+passes 16 cases with two existing Windows-only cases unexecuted. Native Windows
+Python 3.11 verification remains required, including the original concurrent
+subprocess case. Retry counts, backoff and explicit-basetemp preservation remain.
+
+The new retained-canvas component case increases the exact component inventory
+from 67 to 68; its validator and regression expectation are updated together.
+No snapshot is refreshed. Focused local exclusion tests pass 20/20; two new
+regressions fail against the original product module. Three selected adapter
+checks pass. The runtime builder (71 modules), production parity and diff checks
+pass. Local dependency downloads fail on DNS resolution, so the remaining
+Playwright-dependent checks and native Windows reproduction use a bounded
+hosted verification job before the full PR pipeline. Focused evidence does not
+replace the full pipeline or manual acceptance. No task checkbox changes; this
+plan has no numeric checkbox counter. No merge or release is authorized.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

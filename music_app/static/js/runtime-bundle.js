@@ -18587,8 +18587,37 @@ function scheduleProblemExclusionRequest(operation, request) {
   return completion;
 }
 
-async function queueProblemExclusionCreate({ album, items }) {
+function effectiveProblemExclusionItems(album, items) {
   const selectedItems = (Array.isArray(items) ? items : []).filter(Boolean);
+  const albumRows = new Map((Array.isArray(album?.album_problem_rows) ? album.album_problem_rows : [])
+    .map(row => [String(row?.row_key || ''), row]));
+  const coveredReasons = new Set();
+  selectedItems.forEach(item => {
+    const row = albumRows.get(String(item.row_key || ''));
+    if (item.scope === 'album' && row
+      && item.album_key === String(row.album_key || album?.key || '')) {
+      const reason = problemExclusionReason(row);
+      if (reason) coveredReasons.add(reason);
+    }
+  });
+  const coveredFiles = new Map();
+  (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).forEach(row => {
+    (Array.isArray(row?.ignorable_reasons) ? row.ignorable_reasons : []).forEach(item => {
+      if (coveredReasons.has(problemExclusionReason(item))) {
+        coveredFiles.set(String(item.row_key || ''), String(row.path || ''));
+      }
+    });
+  });
+  // Album-label selection also highlights matching file pills. Persist the album
+  // rule once: duplicate child rules would survive a later album-rule revert.
+  // Independently selected reasons and unknown identities still reach validation.
+  return selectedItems.filter(item => item.scope !== 'file'
+    || !coveredFiles.has(String(item.row_key || ''))
+    || coveredFiles.get(String(item.row_key || '')) !== item.path);
+}
+
+async function queueProblemExclusionCreate({ album, items }) {
+  const selectedItems = effectiveProblemExclusionItems(album, items);
   const currentRules = state.utility.rules || [];
   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));

@@ -394,6 +394,7 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
     expect(previousSelection).toEqual({
       key: mutationTarget.previousKey,
       title: mutationTarget.previousTitle,
+      meta: mutationTarget.previousMeta,
     });
     expect(await utilityProblematicFilesActions.readVisibleListItems()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ key: mutationTarget.removedKey })]),

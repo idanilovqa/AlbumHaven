@@ -406,3 +406,60 @@ def test_cleanup_revalidates_ownership_after_retry_backoff(tmp_path, monkeypatch
     )
     assert attempts == [owned_root]
     assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"
+
+
+@pytest.mark.parametrize("factory_removed", [False, True])
+def test_generated_root_cleanup_runs_after_late_configuration_resources_close(tmp_path, monkeypatch, factory_removed):
+    """Config cleanups run after unconfigure and may still own Windows handles."""
+    callbacks = []
+    workspace = tmp_path / 'workspace-temp'
+    config = SimpleNamespace(
+        option=SimpleNamespace(basetemp=None),
+        addinivalue_line=lambda *_args: None,
+        add_cleanup=callbacks.append,
+    )
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace.resolve())
+    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda root: root / 'appdata')
+    pytest_harness.pytest_configure(config)
+    root = Path(config.option.basetemp)
+    token = config._album_haven_generated_basetemp_token
+    _write_owner_marker(root, pid=os.getpid(), token=token)
+    config._tmp_path_factory = SimpleNamespace(_basetemp=root)
+    held = [True]
+    callbacks.append(lambda: held.__setitem__(0, False))
+    if factory_removed:
+        # Mirror pytest.tmpdir's registered MonkeyPatch.undo cleanup.
+        callbacks.append(lambda: delattr(config, "_tmp_path_factory"))
+    real_rmtree = shutil.rmtree
+
+    def remove_after_handle_close(path):
+        if held[0]:
+            raise PermissionError('configuration cleanup still owns a Windows handle')
+        real_rmtree(path)
+
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', remove_after_handle_close)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    pytest_harness.pytest_sessionfinish(SimpleNamespace(config=config), 0)
+    pytest_harness.pytest_unconfigure(config)
+    assert root.exists(), 'the resource stays open through unconfigure'
+    for callback in reversed(callbacks):
+        callback()
+    assert held == [False]
+    assert not root.exists(), 'the final config cleanup must remove its own root after resources close'
+
+
+def test_explicit_root_does_not_register_a_final_generated_cleanup(tmp_path, monkeypatch):
+    callbacks = []
+    root = tmp_path / 'explicit-root'
+    root.mkdir()
+    config = SimpleNamespace(
+        option=SimpleNamespace(basetemp=str(root)),
+        addinivalue_line=lambda *_args: None,
+        add_cleanup=callbacks.append,
+    )
+    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda base: base / 'appdata')
+    pytest_harness.pytest_configure(config)
+    for callback in reversed(callbacks):
+        callback()
+    assert callbacks == []
+    assert root.is_dir()

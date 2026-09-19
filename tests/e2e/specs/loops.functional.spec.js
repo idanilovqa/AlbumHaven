@@ -518,7 +518,14 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       endHandle: false,
     });
     const compactLayout = await utilityLoopsActions.readCompactLoopLayoutByName('Warmup Loop');
-    expect(compactLayout.entryBounds.height).toBeLessThan(140);
+    // L03 adds Original timestamps; L04/B03 reserves the approved bottom glow padding.
+    // Keep the card exactly fitted to its two rows instead of the superseded 140px cap.
+    expect(compactLayout.cardInsets).toEqual({ top: 16, right: 18, bottom: 24, left: 18, rowGap: 7, border: 1 });
+    const { entryBounds, headingBounds, shellBounds } = compactLayout;
+    expect(Math.abs(headingBounds.y - entryBounds.y - 17)).toBeLessThanOrEqual(1);
+    expect(Math.abs(shellBounds.y - headingBounds.y - headingBounds.height - 7)).toBeLessThanOrEqual(1);
+    expect(Math.abs(entryBounds.y + entryBounds.height - shellBounds.y - shellBounds.height - 25)).toBeLessThanOrEqual(1);
+    expect(Math.abs(entryBounds.height - headingBounds.height - shellBounds.height - 49)).toBeLessThanOrEqual(1);
     expect(compactLayout.pitchBounds.y).toBeGreaterThanOrEqual(compactLayout.topRowBounds.y);
     expect(compactLayout.pitchBounds.y + compactLayout.pitchBounds.height)
       .toBeLessThanOrEqual(compactLayout.topRowBounds.y + compactLayout.topRowBounds.height + 1);

@@ -753,6 +753,7 @@ export class UtilityProblematicFilesActions {
         removedKey: String(active.getAttribute('data-problematic-album-key') || ''),
         previousKey: String(items[removedIndex - 1].getAttribute('data-problematic-album-key') || ''),
         previousTitle: String(items[removedIndex - 1].querySelector(selectors.titleSelector)?.textContent || '').trim(),
+        previousMeta: String(items[removedIndex - 1].querySelector(selectors.metaSelector)?.textContent || '').trim(),
         order: items.map((item) => String(item.getAttribute('data-problematic-album-key') || '')),
         text: items.map((item) => String(item.textContent || '').trim()),
         nodes: items,
@@ -770,12 +771,14 @@ export class UtilityProblematicFilesActions {
       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
       itemSelector: this.utilityProblematicFilesTab.listItemSelector,
       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
+      metaSelector: this.utilityProblematicFilesTab.listItemMetaSelector,
     });
     // parity-check: allow-read-only-measurement-evaluate -- read the retained MutationObserver snapshot without changing application state
     return this.mutationObservation.evaluate((snapshot) => ({
       removedKey: snapshot.removedKey,
       previousKey: snapshot.previousKey,
       previousTitle: snapshot.previousTitle,
+      previousMeta: snapshot.previousMeta,
       scrollTop: snapshot.scrollTop,
     }));
   }

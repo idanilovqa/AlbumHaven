@@ -106,6 +106,10 @@ export class GlobalPlayerActions {
       ? { height: 100, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
       : { height: 76, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
     await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
+    // Regular mode folds the retained canvas to preserve the mode-transition animation.
+    // Verify its painted/interactive state, not DOM removal or a null bounding box.
+    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('opacity', normalized === 'waveform' ? '1' : '0');
+    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('pointer-events', 'none');
     const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
     const centerY = (bounds) => bounds.y + (bounds.height / 2);
     const expectedCenterY = checkpoint.player.y + expected.centerline;
@@ -133,7 +137,7 @@ export class GlobalPlayerActions {
       expect(Math.abs(checkpoint.metadata.x - (checkpoint.player.x + checkpoint.paddingLeft)))
         .toBeLessThanOrEqual(1);
     } else {
-      expect(checkpoint.waveform).toBeNull();
+      expect(checkpoint.waveform).not.toBeNull();
       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
         - (checkpoint.timeline.y + checkpoint.timeline.height);

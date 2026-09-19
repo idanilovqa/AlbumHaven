@@ -379,10 +379,11 @@ export class TagEditorActions {
     } else {
       await expect(this.tagEditor.applyButton).toBeDisabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
-      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
-      const theme = await this.tagEditor.readApplyTheme();
-      expect(theme.background).toEqual(theme.expectedBackground);
-      expect(theme.ink).toEqual(theme.expectedInk);
+      // Ordinary Button consumers retain their approved disabled surface and ink.
+      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
+      await expect(this.tagEditor.applyButton).toHaveCSS('background-color', 'rgb(55, 65, 81)');
+      await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
+      await expect(this.tagEditor.applyButton).toHaveCSS('border-top-color', 'rgb(75, 85, 99)');
     }
     await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
     await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');

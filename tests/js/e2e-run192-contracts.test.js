@@ -74,22 +74,30 @@ for (const method of ['revertRuleContaining', 'beginRevertRuleContaining']) {
   });
 }
 
-test('disabled tag Apply follows the shared disabled Button cursor without weakening disabled state', async () => {
-  const applyButton = {};
-  const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
-    expect: element => ({
-      async toBeDisabled() { assert.equal(element, applyButton); },
-      async toHaveAttribute(name, value) { assert.equal(element, applyButton); assert.equal(value, 'primary'); assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name)); },
-      async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, name === 'cursor' ? 'not-allowed' : '1'); },
-      toEqual(expected) { assert.deepEqual(element, expected); },
-    }),
+for (const pending of [false, true]) {
+  test(`tag Apply preserves its approved ${pending ? 'enabled' : 'disabled grey'} consumer treatment and native state`, async () => {
+    const applyButton = {};
+    const calls = [];
+    const expectedStyles = pending
+      ? { cursor: 'pointer', opacity: '1' }
+      : { cursor: 'not-allowed', opacity: '0.55', 'background-color': 'rgb(55, 65, 81)',
+        color: 'rgb(148, 163, 184)', 'border-top-color': 'rgb(75, 85, 99)' };
+    const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
+      expect: element => ({
+        async toBeDisabled() { assert.equal(element, applyButton); assert.equal(pending, false); calls.push('disabled'); },
+        async toBeEnabled() { assert.equal(element, applyButton); assert.equal(pending, true); calls.push('enabled'); },
+        async toHaveAttribute(name, value) {
+          assert.equal(element, applyButton); assert.equal(value, 'primary');
+          assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name));
+        },
+        async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, expectedStyles[name]); calls.push(name); },
+      }),
+    });
+    await new Actions({ trackTitles: { allTextContents: async () => [] }, applyButton })
+      .expectPendingChanges(pending ? ['changed.mp3'] : []);
+    assert.deepEqual(calls, [pending ? 'enabled' : 'disabled', ...Object.keys(expectedStyles)]);
   });
-  await new Actions({
-    trackTitles: { allTextContents: async () => [] },
-    applyButton,
-    readApplyTheme: async () => ({ background: 'saved', expectedBackground: 'saved', ink: 'saved ink', expectedInk: 'saved ink' }),
-  }).expectPendingChanges([]);
-});
+}
 
 test('Album Details keeps the legacy modal footer distinct from the shared table totals', async () => {
   const { TrackModal } = await import('../e2e/poms/trackModal.js');

@@ -1,0 +1,69 @@
+name: Verify Windows physical path cleanup repair
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths:
+      - .chat-editor/cleanup-physical-identity.patch.b64
+      - .github/workflows/chat-editor-verify-physical-cleanup.yml
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify exact repair and establish pinned source
+        run: |
+          python - <<'PY'
+          import base64, gzip, hashlib, os
+          from pathlib import Path
+          patch=gzip.decompress(base64.b64decode(Path('.chat-editor/cleanup-physical-identity.patch.b64').read_text(),validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='88780ad2ac11a596dc826d34662ed425361cb4c76a91de0591d736f14070514f'
+          Path(os.environ['RUNNER_TEMP'],'cleanup.patch').write_bytes(patch)
+          PY
+          git -c core.autocrlf=false switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          git apply --check "$RUNNER_TEMP/cleanup.patch"
+          git apply "$RUNNER_TEMP/cleanup.patch"
+          git diff --check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install repository dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify all cleanup contracts without diagnostic instrumentation
+        run: python -m pytest -q --tb=short tests/py/test_pytest_harness_config.py --junitxml="$RUNNER_TEMP/cleanup.xml"
+      - name: Verify concurrent-process regression under repeated scheduling
+        run: |
+          python - <<'PY'
+          import os,subprocess,sys
+          from pathlib import Path
+          evidence=Path(os.environ['RUNNER_TEMP'])/'cleanup-stress.log'
+          command=[sys.executable,'-m','pytest','-q','--tb=short','tests/py/test_pytest_harness_config.py::test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_both']
+          with evidence.open('w',encoding='utf-8') as output:
+              for attempt in range(1,41):
+                  result=subprocess.run(command,capture_output=True,text=True,timeout=120)
+                  output.write(f'Attempt {attempt}: exit {result.returncode}\n'+result.stdout+result.stderr+'\n')
+                  output.flush()
+                  print(f'Attempt {attempt}: exit {result.returncode}',flush=True)
+                  if result.returncode:
+                      print(result.stdout+result.stderr)
+                      raise SystemExit(result.returncode)
+          PY
+      - name: Retain focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: physical-cleanup-verification-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/cleanup.xml
+            ${{ runner.temp }}/cleanup-stress.log
+          if-no-files-found: warn
+          retention-days: 14

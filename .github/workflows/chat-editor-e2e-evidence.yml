@@ -18,6 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: 2026-09-18-pr3-e2e-batch
           fetch-depth: 0
       - name: Collect completed logs and safe computed-color trace evidence
         env:
@@ -30,6 +31,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f -- .chat-editor/e2e-run192
           if ! git diff --cached --quiet; then
-            git commit -m 'ci: preserve run 192 E2E evidence and safe Admin color measurements'
+            git commit -m 'ci: preserve run 192 completed E2E evidence'
             git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
           fi

@@ -56,7 +56,13 @@ jobs:
               assert not Path(path).exists(), path
             else:
               data = subprocess.check_output(['git','show','HEAD:'+path])
-              assert blob(data) == before and Path(path).read_bytes() == data, path
+              assert blob(data) == before, f'Commit blob mismatch: {path}: {blob(data)} != {before}'
+              checkout = Path(path).read_bytes()
+              assert checkout == data or checkout.replace(b'\r\n', b'\n') == data, f'Non-line-ending checkout mismatch: {path}'
+              if checkout != data:
+                print(f'Canonicalizing verified checkout line endings: {path}, {len(checkout)} -> {len(data)} bytes')
+                Path(path).write_bytes(data)
+              assert blob(Path(path).read_bytes()) == before, path
           subprocess.run(['git','apply','--check','--whitespace=error-all',str(root/'pr207-repair.patch')],check=True)
           subprocess.run(['git','apply','--whitespace=error-all',str(root/'pr207-repair.patch')],check=True)
           for path,(_,after) in files.items(): assert blob(Path(path).read_bytes()) == after, path

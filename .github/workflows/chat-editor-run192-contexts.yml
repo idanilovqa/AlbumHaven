@@ -1,0 +1,57 @@
+name: Extract bounded run 192 failure evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-run192-contexts.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Extract only failed UI context and Appearance preferences
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import io,json,subprocess,zipfile
+          from pathlib import Path
+          out=Path('.chat-editor/e2e-run192-contexts');out.mkdir(exist_ok=True)
+          data=subprocess.check_output(['gh','api','--allow-escape-sequences','repos/idanilovqa/AlbumHaven/actions/artifacts/10574708871/zip'])
+          z=zipfile.ZipFile(io.BytesIO(data))
+          names=z.namelist(); selected=[n for n in names if ('appearanceControls' in n or 'problematicFileNavigation' in n)]
+          manifest={'run':35408558207,'head':'4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091','artifact':10574708871,'selected_names':selected}
+          for index,name in enumerate(selected):
+              if name.endswith('error-context.md'):
+                  (out/f'context-{index}.md').write_bytes(z.read(name))
+              if name.endswith('trace.zip'):
+                  trace=zipfile.ZipFile(io.BytesIO(z.read(name)));result=[]
+                  for network in [n for n in trace.namelist() if n.endswith('.network')]:
+                      for line in trace.read(network).decode().splitlines():
+                          event=json.loads(line); snapshot=event.get('snapshot',{})
+                          request=snapshot.get('request',{});url=request.get('url','')
+                          if '/account/appearance' not in url: continue
+                          item={'method':request.get('method'),'url_path':'/account/appearance','time':snapshot.get('startedDateTime'),'status':snapshot.get('response',{}).get('status')}
+                          # Never archive authentication headers, cookies or unrelated requests.
+                          post=request.get('postData',{}).get('text')
+                          if post:
+                              try: item['preferences_request']=json.loads(post)
+                              except ValueError: pass
+                          content=snapshot.get('response',{}).get('content',{});sha=content.get('_sha1')
+                          if sha and 'resources/'+sha in trace.namelist():
+                              try: item['preferences_response']=json.loads(trace.read('resources/'+sha))
+                              except ValueError: pass
+                          result.append(item)
+                  (out/f'appearance-network-{index}.json').write_text(json.dumps(result,indent=2)+'\n')
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          PY
+          git add .chat-editor/e2e-run192-contexts
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'checkpoint: preserve bounded Appearance and Problems failure contexts'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

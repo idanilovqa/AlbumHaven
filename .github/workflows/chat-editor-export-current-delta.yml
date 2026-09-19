@@ -1,0 +1,44 @@
+name: Export exact PR3 repair source delta
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-export-current-delta.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-current-source-export
+  cancel-in-progress: false
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Export only the verified source delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin 2026-09-08-settings-refactor
+          test "$(git rev-parse FETCH_HEAD)" = ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          python - <<'PY'
+          import base64, gzip, hashlib, json, subprocess
+          from pathlib import Path
+          base = '3e34e1f57716bdfcd2dcea7959bc1213af7e13c6'
+          head = 'ff81ffd4e846fa6606054b9d3b30dadffa4a6e18'
+          paths = ['music_app', 'tests', 'scripts', 'docs', 'AGENTS.md', 'package.json', 'package-lock.json', 'requirements.txt', 'config.py', '.github/workflows/pr-gates.yml']
+          patch = subprocess.check_output(['git', 'diff', '--binary', base, head, '--', *paths])
+          target = Path('.chat-editor/current-source-delta')
+          target.mkdir(parents=True, exist_ok=True)
+          (target / 'delta.patch.gz.b64').write_text(base64.b64encode(gzip.compress(patch, mtime=0)).decode() + '\n')
+          names = subprocess.check_output(['git', 'diff', '--name-only', base, head, '--', *paths], text=True).splitlines()
+          (target / 'manifest.json').write_text(json.dumps({'base': base, 'head': head, 'patch_sha256': hashlib.sha256(patch).hexdigest(), 'patch_bytes': len(patch), 'files': names}, indent=2) + '\n')
+          print('Exported delta for', len(names), 'files; bytes:', len(patch))
+          PY
+          git add .chat-editor/current-source-delta
+          git diff --cached --quiet && exit 0
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'ci: preserve verified current PR3 source delta'
+          git push origin HEAD:2026-09-18-pr3-e2e-batch

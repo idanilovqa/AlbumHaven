@@ -1,0 +1,139 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index a49353714b2fde2bafa947087771d371fa9dc774..8166d6da1bcd19c269ed4fbbb5c7d4e2ed1b9600 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -547,6 +547,30 @@ its ownership marker between attempts. Each failed before the correction and now
+ passes: every attempt revalidates both the original directory identity and exact
+ owner marker before removal. Retry counts and delays are unchanged.
+ 
++### Native run 204 remaining metadata contract — September 19, 2026
++
++The complete Metadata Mutations log from run `35420739453` on `ff81ffd4`
++records two failures, FTC-TAGS-011 and FTC-TAGS-022, at the same disabled Apply
++opacity assertion. It does not record an Album Details title timeout as their
++cause. The earlier run-192 helper change incorrectly applied Appearance's primary
++footer theme to an ordinary Tag Editor Button consumer. The shared Button v001
++record preserves ordinary consumer colors, and `docs/gallery-local-review.md`
++explicitly records approved enabled red / disabled grey Apply styling with a
++successful FTC-TAGS-022 browser check. Retain that product styling.
++
++The helper now checks the disabled grey surface, ink, border, 0.55 opacity and
++not-allowed cursor, while preserving native disabled state, shared action
++attributes and all per-track pending markers. Enabled Apply still checks its
++native enabled state, pointer cursor and full opacity. The unused Appearance-
++primary-theme probe is removed. A deterministic disabled-state regression failed
++before correction; both enabled/disabled regressions and all 219 affected Node
++checks pass after it. No product CSS, tag-save behavior, fixture population,
++numbering assertion, deadline, retry, or benchmark threshold changes.
++
++The other three functional shards are still running at this checkpoint. Their
++final failure inventory and a complete native run on the eventual repair commit
++remain mandatory; the focused result is not an E2E pass or merge authorization.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/tests/e2e/actions/tagEditorActions.js b/tests/e2e/actions/tagEditorActions.js
+index 17d4a20e3257bc6d2491ac974aa053d9c98f2fec..5b6f01f8dab2c7593e51e7eca973bf59406b4845 100644
+--- a/tests/e2e/actions/tagEditorActions.js
++++ b/tests/e2e/actions/tagEditorActions.js
+@@ -379,10 +379,11 @@ export class TagEditorActions {
+     } else {
+       await expect(this.tagEditor.applyButton).toBeDisabled();
+       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+-      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+-      const theme = await this.tagEditor.readApplyTheme();
+-      expect(theme.background).toEqual(theme.expectedBackground);
+-      expect(theme.ink).toEqual(theme.expectedInk);
++      // Ordinary Button consumers retain their approved disabled surface and ink.
++      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
++      await expect(this.tagEditor.applyButton).toHaveCSS('background-color', 'rgb(55, 65, 81)');
++      await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
++      await expect(this.tagEditor.applyButton).toHaveCSS('border-top-color', 'rgb(75, 85, 99)');
+     }
+     await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
+     await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');
+diff --git a/tests/e2e/poms/tagEditor.js b/tests/e2e/poms/tagEditor.js
+index 85fd51c8def09b636f8c48b35506039f1e12be08..74c9b728fadd1d2c990837e4864375df277d9a9b 100644
+--- a/tests/e2e/poms/tagEditor.js
++++ b/tests/e2e/poms/tagEditor.js
+@@ -1,5 +1,4 @@
+ import { BasePage } from './basePage.js';
+-import { readThemeColorChannels } from './settingsModalAppBar.js';
+ 
+ function exactNormalizedText(value) {
+   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+@@ -7,23 +6,6 @@ function exactNormalizedText(value) {
+ }
+ 
+ export class TagEditor extends BasePage {
+-  async readApplyTheme() {
+-    // parity-check: allow-read-only-measurement-evaluate -- compare the shared primary footer button with its inherited theme tokens
+-    const colors = await this.applyButton.evaluate(async element => {
+-      await Promise.all(element.getAnimations()
+-        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+-        .map(animation => animation.finished));
+-      const style = getComputedStyle(element);
+-      return {
+-        background: style.backgroundColor,
+-        expectedBackground: style.getPropertyValue('--appearance-primary-button').trim(),
+-        ink: style.color,
+-        expectedInk: style.getPropertyValue('--appearance-primary-button-ink').trim(),
+-      };
+-    });
+-    return Object.fromEntries(Object.entries(colors).map(([key, value]) => [key, readThemeColorChannels(value)]));
+-  }
+-
+   constructor(page, testInfo = null) {
+     super(page, testInfo);
+     this.overlay = page.locator('#tag-editor-modal');
+diff --git a/tests/js/e2e-run192-contracts.test.js b/tests/js/e2e-run192-contracts.test.js
+index 2718e2cce5d94f5c608f25e158ddb6643affbaef..be283d971e9b137cfe7cafd371842acdec6f3814 100644
+--- a/tests/js/e2e-run192-contracts.test.js
++++ b/tests/js/e2e-run192-contracts.test.js
+@@ -74,22 +74,30 @@ for (const method of ['revertRuleContaining', 'beginRevertRuleContaining']) {
+   });
+ }
+ 
+-test('disabled tag Apply follows the shared disabled Button cursor without weakening disabled state', async () => {
+-  const applyButton = {};
+-  const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
+-    expect: element => ({
+-      async toBeDisabled() { assert.equal(element, applyButton); },
+-      async toHaveAttribute(name, value) { assert.equal(element, applyButton); assert.equal(value, 'primary'); assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name)); },
+-      async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, name === 'cursor' ? 'not-allowed' : '1'); },
+-      toEqual(expected) { assert.deepEqual(element, expected); },
+-    }),
++for (const pending of [false, true]) {
++  test(`tag Apply preserves its approved ${pending ? 'enabled' : 'disabled grey'} consumer treatment and native state`, async () => {
++    const applyButton = {};
++    const calls = [];
++    const expectedStyles = pending
++      ? { cursor: 'pointer', opacity: '1' }
++      : { cursor: 'not-allowed', opacity: '0.55', 'background-color': 'rgb(55, 65, 81)',
++        color: 'rgb(148, 163, 184)', 'border-top-color': 'rgb(75, 85, 99)' };
++    const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
++      expect: element => ({
++        async toBeDisabled() { assert.equal(element, applyButton); assert.equal(pending, false); calls.push('disabled'); },
++        async toBeEnabled() { assert.equal(element, applyButton); assert.equal(pending, true); calls.push('enabled'); },
++        async toHaveAttribute(name, value) {
++          assert.equal(element, applyButton); assert.equal(value, 'primary');
++          assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name));
++        },
++        async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, expectedStyles[name]); calls.push(name); },
++      }),
++    });
++    await new Actions({ trackTitles: { allTextContents: async () => [] }, applyButton })
++      .expectPendingChanges(pending ? ['changed.mp3'] : []);
++    assert.deepEqual(calls, [pending ? 'enabled' : 'disabled', ...Object.keys(expectedStyles)]);
+   });
+-  await new Actions({
+-    trackTitles: { allTextContents: async () => [] },
+-    applyButton,
+-    readApplyTheme: async () => ({ background: 'saved', expectedBackground: 'saved', ink: 'saved ink', expectedInk: 'saved ink' }),
+-  }).expectPendingChanges([]);
+-});
++}
+ 
+ test('Album Details keeps the legacy modal footer distinct from the shared table totals', async () => {
+   const { TrackModal } = await import('../e2e/poms/trackModal.js');

@@ -39,12 +39,15 @@
     {
       "id": 105803412178,
       "name": "E2E: metadata-mutations",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "failure",
       "head_sha": "4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091",
       "started_at": "2026-09-19T00:13:17Z",
-      "completed_at": null,
-      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412178"
+      "completed_at": "2026-09-19T00:35:40Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412178",
+      "log_file": ".chat-editor/e2e-run192/105803412178.log",
+      "sha256": "23e3ae7e43211a6c5fd09f6e2d2edc2ec2e0c69ca365b665748c775b3e3dc782",
+      "lines": 2584
     },
     {
       "id": 105803412242,
@@ -59,12 +62,15 @@
     {
       "id": 105803412226,
       "name": "E2E Performance: synthetic-large-library",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "success",
       "head_sha": "4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091",
       "started_at": "2026-09-19T00:13:18Z",
-      "completed_at": null,
-      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412226"
+      "completed_at": "2026-09-19T00:28:25Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412226",
+      "log_file": ".chat-editor/e2e-run192/105803412226.log",
+      "sha256": "756e321d5b66e5373d2818e738860c1679468478aaaa27b6e4a56f558564817a",
+      "lines": 2858
     },
     {
       "id": 105803412190,

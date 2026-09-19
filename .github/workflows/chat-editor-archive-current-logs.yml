@@ -1,0 +1,45 @@
+name: Archive completed current CI logs
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-archive-current-logs.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Archive only completed failures for current native attempt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import hashlib,json,subprocess
+          from pathlib import Path
+          root=Path('.chat-editor/current-ff81');root.mkdir(exist_ok=True)
+          run=35419743702
+          jobs=json.loads(subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/runs/{run}/attempts/2/jobs?per_page=100']))['jobs']
+          summary=[];files=[]
+          for job in jobs:
+              if not (job['name'].startswith('E2E') or job['name']=='Python Tests'):
+                  continue
+              entry={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','completed_at')}
+              if job['status']=='completed' and job['conclusion']=='failure':
+                  result=subprocess.run(['gh','api','--allow-escape-sequences',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job["id"]}/logs'],capture_output=True,check=True)
+                  path=root/f'{job["id"]}.log';path.write_bytes(result.stdout);files.append(str(path))
+                  entry['log_sha256']=hashlib.sha256(result.stdout).hexdigest()
+                  entry['log_lines']=len(result.stdout.splitlines())
+              summary.append(entry)
+          path=root/'jobs.json';path.write_text(json.dumps({'run':run,'attempt':2,'jobs':summary},indent=2)+'\n',encoding='utf-8');files.append(str(path))
+          subprocess.run(['git','add','-f','--',*files],check=True)
+          print(json.dumps(summary,indent=2))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff --cached --quiet || git commit -m 'checkpoint: retain completed current CI failure inventory'
+          git push origin HEAD:2026-09-18-pr3-e2e-batch

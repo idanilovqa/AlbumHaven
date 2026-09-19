@@ -1,0 +1,80 @@
+name: Verify and publish pytest cleanup correction
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-publish-cleanup.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-complete-batch-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      EXPECTED_HEAD: 120cd67b7a3ad79638f4b61e1a65744332b8a442
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Verify and apply the locally tested correction
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          python - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          patch=Path('.chat-editor/run199-cleanup.patch').read_text().encode()
+          assert len(patch)==7641
+          assert hashlib.sha256(patch).hexdigest()=='dfd25d452284e2564bd2015524263a900340a0fee9117988b7fceb0bc2c10e80'
+          files={}
+          for block in patch.decode().split('diff --git ')[1:]:
+              lines=block.splitlines();left,right=lines[0].split(' b/',1)
+              assert left=='a/'+right and right.startswith(('tests/py/','docs/'))
+              match=re.fullmatch(r'index ([0-9a-f]{40})\.\.([0-9a-f]{40}) 100644',lines[1])
+              assert match and right not in files
+              files[right]=match.group(2)
+          assert len(files)==3
+          tmp=Path(os.environ['RUNNER_TEMP'])
+          (tmp/'cleanup.patch').write_bytes(patch)
+          (tmp/'cleanup-files.json').write_text(json.dumps(files))
+          PY
+          git switch --detach "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/cleanup.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/cleanup.patch"
+      - name: Install repository dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify focused Windows harness including concurrent real processes
+        run: |
+          set -euo pipefail
+          python -m pytest -q tests/py/test_pytest_harness_config.py --tb=short
+      - name: Publish only exact verified files
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          files=json.loads(Path(os.environ['RUNNER_TEMP'],'cleanup-files.json').read_text())
+          for name,digest in files.items():
+              actual=subprocess.check_output(['git','hash-object','--',name],text=True).strip()
+              assert actual==digest,(name,actual,digest)
+          subprocess.run(['git','diff','--check'],check=True)
+          subprocess.run(['git','add','--',*files],check=True)
+          staged=subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert sorted(staged)==sorted(files)
+          PY
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'test: preserve owned pytest cleanup after partial Windows deletion'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Published $(git rev-parse HEAD); full native PR CI remains required." >> "$GITHUB_STEP_SUMMARY"

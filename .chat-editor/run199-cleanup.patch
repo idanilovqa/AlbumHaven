@@ -1,0 +1,147 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index 513e6665007434fdfaa49d0f0ea608cb59b5541d..e1218079b6913a3385f1a3ba0075d9171131d7f4 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -526,6 +526,21 @@ parity check pass. Native PR E2E verification remains required. No timeout,
+ retry policy, benchmark, fixture population, audio architecture, skip policy,
+ permission, task checkbox, final manual acceptance or merge authority is changed.
+ 
++### Native run 199 Python cleanup correction — September 18, 2026
++
++Run `35418317766` on `2ba1b63c` completed Python with one failure and 5,710
++passes: concurrent probe processes left an owned temporary directory behind.
++The cleanup path can delete its ownership marker before encountering an open
++Windows file, leaving the final teardown unable to recognize the remainder.
++Two deterministic regressions establish marker loss and unsafe retry against a
++replacement directory. The correction preserves the marker after partial removal
++only when the original device/file identity is unchanged; it never overwrites
++another marker, claims an unowned replacement, or increases cleanup attempts.
++The original concurrent-process and no-leaked-directory assertions remain.
++Focused local validation: 11 pass, two existing Windows-only cases await native
++Windows validation. This is harness cleanup, not a change to application data,
++E2E timeouts, benchmark policy, or the permission model. Full PR CI remains required.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/tests/py/conftest.py b/tests/py/conftest.py
+index a266918c88f7ad0e6b9a67bc3789a736ab25e8c2..3efd1f1bbef826ac5ac0fb5a069b9eeea7fb1ec6 100644
+--- a/tests/py/conftest.py
++++ b/tests/py/conftest.py
+@@ -140,6 +140,28 @@ def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
+     return payload
+ 
+ 
++def _preserve_pytest_owner_after_partial_removal(
++    path: Path,
++    owner: dict[str, object],
++    directory_identity: tuple[int, int],
++) -> bool:
++    """Keep a failed deletion recoverable without claiming a replacement root."""
++    try:
++        stat = path.stat()
++        if not stat.st_ino or path.is_symlink() or (stat.st_dev, stat.st_ino) != directory_identity:
++            return False
++        marker = path / _PYTEST_BASETEMP_OWNER_FILE
++        try:
++            with marker.open("x", encoding="utf-8") as stream:
++                json.dump(owner, stream, sort_keys=True)
++        except FileExistsError:
++            # Never replace a marker written by another owner.
++            return _owned_generated_pytest_root(path) == owner
++    except OSError:
++        return False
++    return True
++
++
+ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int, str] | None = None) -> bool:
+     owner = _owned_generated_pytest_root(path)
+     if owner is None:
+@@ -150,10 +172,21 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
+             return False
+     elif _process_is_running(owner_identity[0]):
+         return False
++    try:
++        stat = path.stat()
++    except OSError:
++        return False
++    directory_identity = (stat.st_dev, stat.st_ino)
+     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
+         try:
+             shutil.rmtree(path)
+         except OSError:
++            if not path.exists():
++                return True
++            # rmtree can remove our marker before an open Windows log blocks the
++            # rest. Preserve ownership so final teardown can retry after closure.
++            if not _preserve_pytest_owner_after_partial_removal(path, owner, directory_identity):
++                return False
+             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
+                 return False
+         if not path.exists():
+diff --git a/tests/py/test_pytest_harness_config.py b/tests/py/test_pytest_harness_config.py
+index 216b40b7368d0857f151c412f42012b14d20fc73..68487c0dca237731829ed3277af21e04965093d8 100644
+--- a/tests/py/test_pytest_harness_config.py
++++ b/tests/py/test_pytest_harness_config.py
+@@ -315,3 +315,61 @@ def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
+         (owned_root, (os.getpid(), "acde1234")),
+         (owned_root, (os.getpid(), "acde1234")),
+     ]
++
++
++def test_partial_cleanup_preserves_ownership_for_unconfigure_retry(tmp_path, monkeypatch):
++    workspace_temp = tmp_path / 'workspace-temp'
++    owned_root = workspace_temp / 'pytest-444444-deadbeef'
++    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
++    (owned_root / 'locked.log').write_text('held until logging teardown', encoding='utf-8')
++    real_rmtree = shutil.rmtree
++    attempts = []
++
++    def partially_locked_rmtree(path):
++        attempts.append(Path(path))
++        # Windows may delete early entries before encountering an open log file.
++        (path / '.album-haven-pytest-owner.json').unlink()
++        raise PermissionError('log handler still owns locked.log')
++
++    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
++    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', partially_locked_rmtree)
++    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
++    assert not pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, 'deadbeef'),
++    )
++    assert len(attempts) == pytest_harness._PYTEST_ROOT_REMOVAL_ATTEMPTS
++    assert pytest_harness._owned_generated_pytest_root(owned_root) is not None
++    assert (owned_root / 'locked.log').read_text(encoding='utf-8') == 'held until logging teardown'
++
++    # Once the plugin closes the file, the final hook must still recognize its root.
++    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', real_rmtree)
++    assert pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, 'deadbeef'),
++    )
++    assert not owned_root.exists()
++
++
++def test_partial_cleanup_does_not_claim_a_replacement_directory(tmp_path, monkeypatch):
++    workspace_temp = tmp_path / 'workspace-temp'
++    owned_root = workspace_temp / 'pytest-444444-deadbeef'
++    displaced_root = workspace_temp / 'preserved-original'
++    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
++    attempts = []
++
++    def replaced_rmtree(path):
++        attempts.append(Path(path))
++        path.rename(displaced_root)
++        path.mkdir()
++        (path / 'unowned.txt').write_text('must survive', encoding='utf-8')
++        raise PermissionError('directory was replaced')
++
++    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
++    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', replaced_rmtree)
++    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
++    assert not pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, 'deadbeef'),
++    )
++    assert attempts == [owned_root]
++    assert not (owned_root / '.album-haven-pytest-owner.json').exists()
++    assert (owned_root / 'unowned.txt').read_text(encoding='utf-8') == 'must survive'
++    assert displaced_root.is_dir()

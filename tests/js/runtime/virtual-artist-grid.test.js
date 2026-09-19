@@ -3226,7 +3226,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   virtualGrid.onPointerDown({
     target: {
       closest(selector) {
-        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card');
+        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]');
         return { dataset: { albumKey: 'neal morse::neal morse' } };
       },
     },
@@ -3315,7 +3315,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     pointerId: 41,
     target: {
       closest(selector) {
-        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card');
+        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]');
         return { dataset: { albumKey: 'neal morse::joseph' } };
       },
     },
@@ -4089,4 +4089,46 @@ test('family-only selection renders albums from the same scoped cache as the fam
   assert.match(containerEl.innerHTML, /Casualties of Cool/);
   assert.equal(context.getFilteredGalleryMainModel().totals.albumCount, 1);
   assert.equal(context.getFilteredGalleryMainModel().groups[0].artist, family.artist);
+});
+
+test('family information button survives forced render through pointerup and click', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.push(callback);
+    return frames.length;
+  };
+  const infoButton = { dataset: { artistInfoTrigger: '1', artist: 'Neal Morse' } };
+  let mountedButton = infoButton;
+  let patchCount = 0;
+  virtualGrid.patchRenderedSections = () => {
+    mountedButton = { ...infoButton };
+    patchCount += 1;
+  };
+  virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid.sections = [];
+  virtualGrid.totalHeight = 0;
+  virtualGrid.onPointerDown({
+    pointerId: 73,
+    target: {
+      closest(selector) {
+        return selector.includes('.family-artist-header [data-artist-info-trigger]')
+          ? infoButton : null;
+      },
+    },
+  });
+  virtualGrid.render(true);
+  assert.strictEqual(mountedButton, infoButton, 'forced render must retain the pressed family info button');
+  context.document.dispatchEvent({ type: 'pointerup', pointerId: 73 });
+  assert.strictEqual(mountedButton, infoButton, 'pointerup must retain the original click target');
+  let clickedButton = null;
+  context.document.addEventListener('click', event => { clickedButton = event.target; });
+  context.document.dispatchEvent({ type: 'click', target: mountedButton });
+  assert.strictEqual(clickedButton, infoButton, 'click must reach the original family info button');
+  assert.equal(patchCount, 0);
+  frames.shift()();
+  assert.equal(patchCount, 1, 'deferred render must resume after the click');
+  assert.notStrictEqual(mountedButton, infoButton);
+  virtualGrid.destroy();
 });

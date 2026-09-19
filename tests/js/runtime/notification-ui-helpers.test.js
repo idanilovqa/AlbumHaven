@@ -95,6 +95,99 @@ function createContext(storage = new Map()) {
   return { context, scheduledTimeouts, toasts };
 }
 
+test('floating notification placement preserves a clear preferred corner', () => {
+  const { context } = createContext();
+  const result = context.findClearNotificationPosition({ width: 200, height: 100 }, { left: 784, top: 688 },
+    { left: 0, top: 0, right: 1000, bottom: 800 }, [{ left: 20, top: 20, right: 120, bottom: 60 }]);
+  assert.equal(result.left, 784);
+  assert.equal(result.top, 688);
+});
+
+test('floating notification placement shifts the whole alert clear of Save and another notification', () => {
+  const { context } = createContext();
+  const obstacles = [
+    { left: 800, top: 680, right: 960, bottom: 750 },
+    { left: 784, top: 572, right: 984, bottom: 672 },
+  ];
+  const result = context.findClearNotificationPosition({ width: 200, height: 100 }, { left: 784, top: 688 },
+    { left: 0, top: 0, right: 1000, bottom: 800 }, obstacles);
+  assert.ok(result);
+  for (const rect of obstacles) assert.ok(result.left + 200 <= rect.left - 8 || result.left >= rect.right + 8
+    || result.top + 100 <= rect.top - 8 || result.top >= rect.bottom + 8);
+});
+
+test('floating notification placement respects a panned narrow visual viewport', () => {
+  const { context } = createContext();
+  const result = context.findClearNotificationPosition({ width: 240, height: 110 }, { left: 1000, top: 1000 },
+    { left: 50, top: 100, right: 350, bottom: 500 }, []);
+  assert.equal(result.left, 102);
+  assert.equal(result.top, 382);
+});
+
+test('floating notifications defer when the viewport has no unobstructed rectangle', () => {
+  const { context } = createContext();
+  const viewport = { left: 0, top: 0, right: 300, bottom: 200 };
+  assert.equal(context.findClearNotificationPosition({ width: 240, height: 100 }, { left: 44, top: 88 }, viewport, [viewport]), null);
+  assert.equal(context.findClearNotificationPosition({ width: 301, height: 100 }, { left: 0, top: 0 }, viewport, []), null);
+});
+
+test('notification owner ignores occluded background controls, retries deferred placement, and disposes observers', () => {
+  const { context } = createContext();
+  const callbacks = [], styles = new Map(), attributes = new Set(), listeners = new Set();
+  let mutations, resizes, disconnected = 0, shown = 0, occupied = true, intrinsicWidth = 240;
+  const listen = (_name, callback) => listeners.add(callback);
+  const unlisten = (_name, callback) => listeners.delete(callback);
+  const rect = { left: 0, top: 0, right: 300, bottom: 200, width: 300, height: 200 };
+  const control = { matches: () => false, closest: () => null, contains: node => node === control, getBoundingClientRect: () => rect };
+  const background = { ...control, contains: node => node === background };
+  const node = {
+    isConnected: true, hidden: false, offsetHeight: 100,
+    get offsetWidth() { return Math.min(intrinsicWidth, parseFloat(styles.get('--notification-available-width')) || intrinsicWidth); },
+    getBoundingClientRect: () => ({ ...rect, width: 240, height: 100 }), contains: candidate => candidate === node,
+    classList: { add() {}, remove() {} }, setAttribute: key => attributes.add(key), removeAttribute: key => attributes.delete(key),
+    style: { getPropertyValue: key => styles.get(key), setProperty: (key, value) => styles.set(key, value) },
+  };
+  Object.assign(context.window, { innerWidth: 300, innerHeight: 200, addEventListener: listen, removeEventListener: unlisten });
+  Object.assign(context.document, {
+    body: {}, documentElement: {}, addEventListener: listen, removeEventListener: unlisten,
+    querySelectorAll: selector => {
+      assert.match(selector, /\[data-loop-range-surface\]/u, 'the pointer-driven waveform is an actionable obstacle');
+      assert.match(selector, /\[tabindex\]:not\(\[tabindex="-1"\]\)/u);
+      return occupied ? [control, background] : [background];
+    },
+    elementsFromPoint: () => occupied ? [control] : [context.document.body],
+  });
+  Object.assign(context, {
+    requestAnimationFrame: callback => { callbacks.push(callback); return callbacks.length; }, cancelAnimationFrame() {},
+    getComputedStyle: () => ({ visibility: 'visible', opacity: '1', getPropertyValue: () => '0px' }),
+    MutationObserver: class { constructor(callback) { mutations = callback; } observe() {} disconnect() { disconnected++; } },
+    ResizeObserver: class { constructor(callback) { resizes = callback; } observe() {} unobserve() {} disconnect() { disconnected++; } },
+  });
+  context.registerFloatingNotification(node, { origin: 'bottom-right', onPlaced: () => shown++ });
+  callbacks.shift()();
+  assert.equal(shown, 0, 'a deferred notification must not start its lifetime');
+  assert.equal(attributes.has('data-notification-deferred'), true);
+  occupied = false;
+  mutations([{ target: context.document.body }]);
+  callbacks.shift()();
+  assert.equal(shown, 1, 'occluded background controls must not suppress the notification');
+  assert.equal(attributes.has('data-notification-deferred'), false);
+  resizes();
+  callbacks.shift()();
+  assert.equal(shown, 1, 'layout changes must not restart its lifetime');
+  intrinsicWidth = 358;
+  context.window.visualViewport = { offsetLeft: 50, offsetTop: 0, width: 195, height: 200 };
+  resizes();
+  callbacks.shift()();
+  assert.equal(styles.get('--notification-available-width'), '179px');
+  assert.equal(node.offsetWidth, 179, 'the host must apply the visual width before reading notification geometry');
+  assert.equal(attributes.has('data-notification-deferred'), false);
+  assert.match(baseLayoutSource, /min-width:\s*min\(280px, var\(--notification-available-width\)\)/u);
+  context.unregisterFloatingNotification(node);
+  assert.equal(disconnected, 2);
+  assert.equal(listeners.size, 0);
+});
+
 test('watcher warning uses one shared global alert, survives partial status, and clears on recovery', () => {
   const { context, toasts } = createContext();
   const configurations = [];

@@ -432,7 +432,7 @@ class VirtualArtistGrid {
   onPointerDown(event) {
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
-      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card')
+      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
       : null;
     if (!closest) return;
     if (this._albumCardPointerReleaseRaf) {

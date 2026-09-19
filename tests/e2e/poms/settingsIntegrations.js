@@ -40,6 +40,24 @@ export class SettingsIntegrations {
     await this.dismissWatcherWarning.click();
     await expect(this.watcherWarning).toBeHidden();
   }
+  async readWatcherWarningPlacement() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real alert and Save hit targets without changing application state
+    return this.watcherWarning.evaluate(warning => {
+      const save = document.querySelector('[data-save-library-settings="1"]');
+      const dismiss = warning.querySelector('[data-watcher-dismiss="1"]');
+      const alertBox = warning.getBoundingClientRect(), saveBox = save.getBoundingClientRect();
+      const ownsCenter = node => {
+        const box = node.getBoundingClientRect();
+        return node.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+      };
+      return {
+        separate: alertBox.right <= saveBox.left || alertBox.left >= saveBox.right
+          || alertBox.bottom <= saveBox.top || alertBox.top >= saveBox.bottom,
+        insideViewport: alertBox.left >= 0 && alertBox.top >= 0 && alertBox.right <= innerWidth && alertBox.bottom <= innerHeight,
+        saveOwnsHit: ownsCenter(save), dismissOwnsHit: ownsCenter(dismiss),
+      };
+    });
+  }
   async saveResult() {
     const [response] = await Promise.all([
       this.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/library-settings'),

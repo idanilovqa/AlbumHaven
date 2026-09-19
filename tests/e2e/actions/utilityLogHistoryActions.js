@@ -76,6 +76,33 @@ export class UtilityLogHistoryActions {
     await this.utilityLogHistoryTab.page.reload({ waitUntil: 'domcontentloaded' });
   }
 
+  async selectPeriodDay(date) {
+    const history = this.utilityLogHistoryTab;
+    const [targetYear, targetMonth] = date.split('-').map(Number);
+    const choose = async (field, input) => {
+      const [year, month] = (await input.inputValue()).split('-').map(Number);
+      const monthDelta = (targetYear - year) * 12 + targetMonth - month;
+      await history.periodDateButton(field).click();
+      const calendar = history.periodCalendar(field);
+      await expect(calendar).toBeVisible();
+      const direction = monthDelta < 0 ? 'Previous month' : 'Next month';
+      for (let index = 0; index < Math.abs(monthDelta); index += 1) {
+        await calendar.getByRole('button', { name: direction, exact: true }).click();
+      }
+      await history.periodCalendarDay(field, date).click();
+      await expect(calendar).toBeHidden();
+      await expect(input).toHaveValue(date);
+    };
+    // Move the unconstrained endpoint first so every day remains selectable.
+    if (date < await history.periodFrom.inputValue()) {
+      await choose('from', history.periodFrom);
+      await choose('to', history.periodTo);
+    } else {
+      await choose('to', history.periodTo);
+      await choose('from', history.periodFrom);
+    }
+  }
+
   async exportLogs(options = {}) {
     await this.utilityLogHistoryTab.waitForVisible(this.utilityLogHistoryTab.exportButton, {
       timeout: options.timeout || 10000,

@@ -27,6 +27,18 @@ export class UtilityLogHistoryTab extends BasePage {
     this.clearPeriodButton = page.locator('[data-log-history-action="clear"]');
   }
 
+  periodDateButton(field) {
+    return this.periodDialog.getByRole('button', { name: `Choose ${field} date`, exact: true });
+  }
+
+  periodCalendar(field) {
+    return this.periodDialog.getByRole('dialog', { name: `Choose ${field} date`, exact: true });
+  }
+
+  periodCalendarDay(field, date) {
+    return this.periodCalendar(field).locator(`[data-calendar-date="${date}"]`);
+  }
+
   get listItemSelector() {
     return '[data-utility-log-history-id]';
   }

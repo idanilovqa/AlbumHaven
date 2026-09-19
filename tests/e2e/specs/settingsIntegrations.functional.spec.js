@@ -46,6 +46,10 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
     await withUnavailableOwnedPickerRoot(chosen, async () => {
       expect((await ui.saveResult()).status).toBe(200);
       expect(await ui.readSettings()).toEqual(saved);
+      await expect(ui.watcherWarning).toBeVisible();
+      await expect.poll(() => ui.readWatcherWarningPlacement()).toEqual({
+        separate: true, insideViewport: true, saveOwnsHit: true, dismissOwnsHit: true,
+      });
       // Making the saved root unavailable intentionally raises the persistent warning.
       // Acknowledge it as a user before further Settings actions or reload.
       await ui.acknowledgeUnavailableRootWarning();

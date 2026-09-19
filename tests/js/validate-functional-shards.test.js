@@ -802,6 +802,7 @@ validatorTest('playback restores three wave baselines and isolates conflicting e
     waves[0].invocations.flatMap((invocation) => invocation.cases.map(({ case: name }) => name)),
     [
       'FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import',
+      'FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight',
       'FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded album',
       'FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details',
       'FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload',

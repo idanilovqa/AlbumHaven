@@ -138,8 +138,7 @@ test.describe(() => {
       ['2026-09-06', '2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z'],
     ]) {
       await history.periodButton.click();
-      await history.periodFrom.fill(date);
-      await history.periodTo.fill(date);
+      await utilityLogHistoryActions.selectPeriodDay(date);
       const [response] = await Promise.all([
         page.waitForResponse(value => value.request().method() === 'GET'
           && new URL(value.url()).pathname === '/utilities/log-history'

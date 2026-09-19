@@ -1,0 +1,24 @@
+name: Inspect run 199 metadata runner evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-run199-metadata-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+  checks: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read completed job and runner annotations without executing application tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api repos/idanilovqa/AlbumHaven/actions/jobs/105831225726 --jq '{id,run_id,head_sha,status,conclusion,started_at,completed_at,steps}'
+          gh api repos/idanilovqa/AlbumHaven/check-runs/105831225726 --jq '{id,status,conclusion,output}'
+          gh api repos/idanilovqa/AlbumHaven/check-runs/105831225726/annotations --jq '.[] | {annotation_level,title,message}'
+          gh api repos/idanilovqa/AlbumHaven/actions/runs/35418317766/artifacts --paginate --jq '.artifacts[] | select(.name | contains("metadata-mutations")) | {id,name,size_in_bytes,expired}'

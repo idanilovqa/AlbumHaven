@@ -1,0 +1,89 @@
+name: Verify and publish PR205 follow-up
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-pr205-followup.yml, .chat-editor/pr205-followup.patch]
+permissions:
+  contents: write
+concurrency:
+  group: pr205-followup-publication
+  cancel-in-progress: false
+jobs:
+  verify_publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      EXPECTED_HEAD: a145d344e45248422aabff652e891df468baa2ac
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact source identities and apply only the reviewed follow-up
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          patch = Path('.chat-editor/pr205-followup.patch').read_bytes()
+          assert hashlib.sha256(patch).hexdigest() == '8614d7686ebe32c6c98897356dd5018c95eb61a0f0cf916d2908f361ea9c9878', 'Patch transport mismatch'
+          root = Path(os.environ['RUNNER_TEMP'])
+          (root / 'pr205-followup.patch').write_bytes(patch)
+          files = {
+            'tests/e2e/actions/utilityLoopsActions.js': ['a397fe6e8d5c51e0d915dfc004ca6c2a2c85496b','3a601dad9982a5dd74329042eb0f9189911da406'],
+            'tests/e2e/actions/utilityProblematicFilesActions.js': ['3af22b1924556d04f3c6a7cab7e499eaad053fb5','8ed93eed5e655a4009d12e95a0489ac4c4d51484'],
+            'tests/e2e/poms/utilityLoopsTab.js': ['dd602fc9937a65c303a77a996ddeec7bed60a6eb','8d27b096c1719b1fad22e9d4607b08dc296a2e55'],
+            'tests/js/ci-fixture-data-contracts.test.js': ['fcffc7509056e08315466d756e62c6d07f20a119','096fcc50340c2683319801fd8a4ae41475490905'],
+            'tests/js/e2e-action-production-paths.test.js': ['3e7c62f5b08b75cd99d001013530dd92ff189c58','51d433f109e71c7457e0317ed7ac61c78b94c79f'],
+            'tests/js/e2e-pr205-followup-contracts.test.js': [None,'e603ecaeac2f07a3c76938044a4a309f57e870fd'],
+          }
+          subprocess.run(['git','switch','--detach',os.environ['EXPECTED_HEAD']],check=True)
+          for path, (before, after) in files.items():
+            if before is None:
+              assert not Path(path).exists(), path
+            else:
+              data = subprocess.check_output(['git','show','HEAD:'+path])
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == before, path
+              assert Path(path).read_bytes() == data, path
+          subprocess.run(['git','apply','--check','--whitespace=error-all',str(root/'pr205-followup.patch')],check=True)
+          subprocess.run(['git','apply','--whitespace=error-all',str(root/'pr205-followup.patch')],check=True)
+          for path, (_, after) in files.items():
+            data = Path(path).read_bytes()
+            assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == after, path
+          (root/'pr205-files.json').write_text(json.dumps(files))
+          print('All six source/output identities and patch bytes verified.')
+          PY
+      - run: npm ci
+      - name: Verify affected helpers and production-path guards
+        run: node --test --test-concurrency=1 tests/js/e2e-pr205-followup-contracts.test.js tests/js/e2e-run192-contracts.test.js tests/js/e2e-settings-contracts.test.js tests/js/e2e-action-production-paths.test.js
+      - name: Verify complete discovery totals with the new retained-canvas component case
+        run: node --test --test-name-pattern='read-only inventory command' tests/js/ci-fixture-data-contracts.test.js
+      - name: Verify production parity
+        run: node scripts/check-e2e-production-parity.cjs
+      - name: Publish the six reviewed files to the actual PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          files = json.loads((Path(os.environ['RUNNER_TEMP'])/'pr205-files.json').read_text())
+          for path, (_, expected) in files.items():
+            data = Path(path).read_bytes()
+            assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == expected, path
+          subprocess.run(['git','add','--',*sorted(files)],check=True)
+          staged = subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert sorted(staged) == sorted(files), staged
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'test: reconcile canonical exclusions neutral Space and complete CI inventory'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "PUBLISHED_PR_HEAD=$(git rev-parse HEAD)"

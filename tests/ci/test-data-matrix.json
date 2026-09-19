@@ -4279,5 +4279,21 @@
       "settings-footer-layout"
     ],
     "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.component.config.js",
+    "project": "",
+    "test": "tests/components/playerViews.spec.js",
+    "case": "regular and waveform presentations retain one canvas and gate its paint rather than removing it",
+    "profile": null,
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "databaseScenarios": [],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "persistent-waveform-canvas-identity",
+      "presentation-gated-paint-and-no-pointer-interception"
+    ],
+    "ownerApproval": "approved"
   }
 ]

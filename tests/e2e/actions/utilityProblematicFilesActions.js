@@ -642,8 +642,12 @@ export class UtilityProblematicFilesActions {
     const fileRows = (album.track_problem_rows || []).flatMap(row => (row.ignorable_reasons || [])
       .filter(item => chosenKeys.has(item.row_key) || albumReasons.has(item.reason))
       .map(item => ({ ...item, path: row.path, filename: row.filename })));
+    // The confirmation still names every highlighted label. Persistence stores a
+    // covering album rule once, retaining file rules for independent reasons.
+    const coveredReasons = new Set(albumRows.map(item => item.reason));
+    const requestFileRows = fileRows.filter(item => !coveredReasons.has(item.reason));
     this.expectedExclusionItems = [...albumRows.map(item => ({ row_key: item.row_key, scope: 'album', album_key: item.album_key || albumKey })),
-      ...fileRows.map(item => ({ row_key: item.row_key, scope: 'file', path: item.path }))];
+      ...requestFileRows.map(item => ({ row_key: item.row_key, scope: 'file', path: item.path }))];
     assert.ok(this.expectedExclusionItems.length > 0);
     const targets = [...albumRows.map(item => `${album.name || 'Album'} — ${item.display_reason || item.reason}`),
       ...fileRows.map(item => `${item.filename || item.path.split(/[\\/]/).pop()} — ${item.reason}`)];

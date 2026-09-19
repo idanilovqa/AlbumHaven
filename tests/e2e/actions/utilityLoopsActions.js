@@ -147,7 +147,11 @@ export class UtilityLoopsActions {
   }
 
   async pressSpaceBeforeLoopOwnership(groupTitle, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -167,7 +171,11 @@ export class UtilityLoopsActions {
   }
 
   async pressNeutralSpaceForOwnedLoop(groupTitle, loopId, expected, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -177,7 +185,11 @@ export class UtilityLoopsActions {
   }
 
   async pressNeutralSpaceAfterGlobalReclaim(groupTitle, loopId, expectedLoop, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');
@@ -188,7 +200,11 @@ export class UtilityLoopsActions {
   }
 
   async pressSpaceAfterLoopOwnershipReset(groupTitle, options = {}) {
-    const neutralControl = this.utilityLoopsTab.loopTree.groupButtonByTitle(groupTitle);
+    await expect(this.utilityLoopsTab.loopEntryCard.detailTitle).toHaveText(groupTitle);
+    // A NavigationTree button owns native Space activation. Click noninteractive
+    // heading text, then use the body shortcut without claiming a saved loop.
+    await this.utilityLoopsTab.loopEntryCard.detailTitle.click();
+    const neutralControl = this.utilityLoopsTab.neutralKeyboardTarget;
     await neutralControl.focus();
     await expect(neutralControl).toBeFocused();
     await neutralControl.press('Space');

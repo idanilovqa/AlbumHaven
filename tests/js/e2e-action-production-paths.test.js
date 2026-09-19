@@ -4639,6 +4639,9 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(actions, /return \{ requested, restored, progressed \}/);
   assert.match(actions, /readRepeatPressedByName\(name\)/);
   assert.match(actions, /readLoopContinuity\(previousHandle, loopId\)/);
+  const loopsTab = read('tests/e2e/poms/utilityLoopsTab.js');
+  assert.match(loopsTab, /this\.neutralKeyboardTarget = page\.locator\('body'\)/);
+  assert.match(actions, /detailTitle\.click\(\)[\s\S]*neutralControl = this\.utilityLoopsTab\.neutralKeyboardTarget/);
   assert.match(actions, /pressSpaceBeforeLoopOwnership\(groupTitle[\s\S]*neutralControl\.focus\(\)[\s\S]*neutralControl\.press\('Space'\)/);
   assert.match(actions, /pressSpaceForOwnedLoopByName\(name, expected[\s\S]*playButton\.focus\(\)[\s\S]*playButton\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);
   assert.match(actions, /pressNeutralSpaceForOwnedLoop\(groupTitle, loopId, expected[\s\S]*neutralControl\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);

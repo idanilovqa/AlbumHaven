@@ -1,0 +1,294 @@
+{
+  "run_id": 35420739453,
+  "jobs": [
+    {
+      "id": 105837891531,
+      "name": "E2E: Production Parity",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:15:04Z"
+    },
+    {
+      "id": 105837891549,
+      "name": "E2E: Phase 7 Admin Management",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:17:20Z"
+    },
+    {
+      "id": 105837891558,
+      "name": "E2E: metadata-mutations",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:35:43Z",
+      "log_sha256": "e020d7f182724dc99a4be28f944c27fb028a33131e09952e96a130d2bfbf8ba8"
+    },
+    {
+      "id": 105837891559,
+      "name": "E2E: Phase 7 Auth Lifecycle",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:17:14Z"
+    },
+    {
+      "id": 105837891568,
+      "name": "E2E: cover-providers",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    },
+    {
+      "id": 105837891595,
+      "name": "E2E: gallery-search-visual",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    },
+    {
+      "id": 105837891711,
+      "name": "E2E: playback-utilities",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    }
+  ],
+  "artifacts": [
+    {
+      "id": 10577872275,
+      "name": "performance-result-gapless-playback-1",
+      "size_in_bytes": 56353
+    },
+    {
+      "id": 10577857331,
+      "name": "foundation-versions-performance-playback-start-1",
+      "size_in_bytes": 539
+    },
+    {
+      "id": 10577837124,
+      "name": "foundation-versions-component-1",
+      "size_in_bytes": 340
+    },
+    {
+      "id": 10577727533,
+      "name": "foundation-versions-performance-gapless-playback-1",
+      "size_in_bytes": 543
+    },
+    {
+      "id": 10577703231,
+      "name": "foundation-versions-python-windows-1",
+      "size_in_bytes": 213399
+    },
+    {
+      "id": 10577662581,
+      "name": "performance-result-problematic-files-focused-1",
+      "size_in_bytes": 48763
+    },
+    {
+      "id": 10577557625,
+      "name": "performance-result-playback-start-1",
+      "size_in_bytes": 183811
+    },
+    {
+      "id": 10577542325,
+      "name": "pr1-review-waiver-35420739453-1",
+      "size_in_bytes": 339
+    },
+    {
+      "id": 10577482688,
+      "name": "foundation-versions-performance-problematic-files-focused-1",
+      "size_in_bytes": 561
+    },
+    {
+      "id": 10577392799,
+      "name": "performance-result-utility-problematic-files-1",
+      "size_in_bytes": 63903
+    },
+    {
+      "id": 10577242833,
+      "name": "foundation-versions-portable-1",
+      "size_in_bytes": 326
+    },
+    {
+      "id": 10577152936,
+      "name": "performance-result-scan-page-1",
+      "size_in_bytes": 1209930
+    },
+    {
+      "id": 10577148494,
+      "name": "foundation-versions-performance-search-browse-1",
+      "size_in_bytes": 537
+    },
+    {
+      "id": 10577143322,
+      "name": "foundation-versions-performance-utility-rules-1",
+      "size_in_bytes": 537
+    },
+    {
+      "id": 10577142931,
+      "name": "foundation-versions-performance-scan-add-album-1",
+      "size_in_bytes": 539
+    },
+    {
+      "id": 10577142839,
+      "name": "foundation-versions-node-windows-1",
+      "size_in_bytes": 511
+    },
+    {
+      "id": 10577133031,
+      "name": "foundation-versions-performance-scan-metadata-1",
+      "size_in_bytes": 537
+    },
+    {
+      "id": 10577107955,
+      "name": "performance-result-scan-add-album-1",
+      "size_in_bytes": 51313
+    },
+    {
+      "id": 10577083425,
+      "name": "foundation-versions-performance-all-artists-1",
+      "size_in_bytes": 533
+    },
+    {
+      "id": 10577068428,
+      "name": "performance-result-idle-memory-1",
+      "size_in_bytes": 48942
+    },
+    {
+      "id": 10577048543,
+      "name": "foundation-versions-performance-idle-memory-1",
+      "size_in_bytes": 533
+    },
+    {
+      "id": 10577023075,
+      "name": "performance-result-scan-metadata-1",
+      "size_in_bytes": 54548
+    },
+    {
+      "id": 10577018534,
+      "name": "performance-result-root-album-browse-1",
+      "size_in_bytes": 47167
+    },
+    {
+      "id": 10577018149,
+      "name": "foundation-versions-performance-scan-page-1",
+      "size_in_bytes": 529
+    },
+    {
+      "id": 10576983138,
+      "name": "foundation-versions-performance-scan-cold-1",
+      "size_in_bytes": 529
+    },
+    {
+      "id": 10576968444,
+      "name": "performance-result-all-artists-1",
+      "size_in_bytes": 77156
+    },
+    {
+      "id": 10576958216,
+      "name": "foundation-versions-performance-scan-cached-1",
+      "size_in_bytes": 533
+    },
+    {
+      "id": 10576943625,
+      "name": "foundation-versions-performance-selected-artist-1",
+      "size_in_bytes": 541
+    },
+    {
+      "id": 10576908704,
+      "name": "foundation-versions-performance-root-album-browse-1",
+      "size_in_bytes": 545
+    },
+    {
+      "id": 10576894595,
+      "name": "foundation-versions-performance-utility-problematic-files-1",
+      "size_in_bytes": 561
+    },
+    {
+      "id": 10576878257,
+      "name": "performance-result-scan-cold-1",
+      "size_in_bytes": 73173
+    },
+    {
+      "id": 10576858760,
+      "name": "performance-result-artist-family-1",
+      "size_in_bytes": 75768
+    },
+    {
+      "id": 10576853638,
+      "name": "foundation-versions-performance-artist-family-1",
+      "size_in_bytes": 537
+    },
+    {
+      "id": 10576838751,
+      "name": "foundation-versions-performance-search-all-artists-1",
+      "size_in_bytes": 547
+    },
+    {
+      "id": 10576809016,
+      "name": "functional-blob-metadata-mutations-1",
+      "size_in_bytes": 26698138
+    },
+    {
+      "id": 10576793730,
+      "name": "performance-result-rules-focused-1",
+      "size_in_bytes": 49687
+    },
+    {
+      "id": 10576793726,
+      "name": "performance-result-app-open-all-artists-1",
+      "size_in_bytes": 55953
+    },
+    {
+      "id": 10576778792,
+      "name": "foundation-versions-performance-rules-focused-1",
+      "size_in_bytes": 537
+    },
+    {
+      "id": 10576773928,
+      "name": "functional-debug-metadata-mutations-1",
+      "size_in_bytes": 28578573
+    },
+    {
+      "id": 10576768268,
+      "name": "performance-result-scan-cached-1",
+      "size_in_bytes": 48369
+    },
+    {
+      "id": 10576753782,
+      "name": "foundation-versions-performance-app-open-all-artists-1",
+      "size_in_bytes": 551
+    },
+    {
+      "id": 10576748993,
+      "name": "foundation-versions-functional-metadata-mutations-1",
+      "size_in_bytes": 545
+    },
+    {
+      "id": 10576738723,
+      "name": "performance-result-selected-artist-1",
+      "size_in_bytes": 48927
+    },
+    {
+      "id": 10576733811,
+      "name": "performance-result-utility-rules-1",
+      "size_in_bytes": 56754
+    },
+    {
+      "id": 10576718876,
+      "name": "performance-result-search-browse-1",
+      "size_in_bytes": 47332
+    },
+    {
+      "id": 10576703822,
+      "name": "performance-result-search-all-artists-1",
+      "size_in_bytes": 63701
+    }
+  ]
+}

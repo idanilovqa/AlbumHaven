@@ -24,6 +24,7 @@ jobs:
           root=Path('.chat-editor/current-ff81')
           root.mkdir(exist_ok=True)
           raw=Path('.chat-editor/current-ff81ffd4-source.tar.gz').read_bytes()
+          assert hashlib.sha256(raw).hexdigest()=='be17998011e0a4e27772fa84c57b6776cdc113be6abb6f157c0113f0d6ed6ccd'
           encoded=base64.b64encode(raw).decode()
           parts=[]
           for index,start in enumerate(range(0,len(encoded),800000)):
@@ -39,9 +40,13 @@ jobs:
                   continue
               entry={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','completed_at')}
               if job['status']=='completed' and job['conclusion']=='failure':
-                  log=subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job["id"]}/logs'])
-                  (root/f'{job["id"]}.log').write_bytes(log)
-                  entry['log_sha256']=hashlib.sha256(log).hexdigest()
+                  # Store raw bytes in an evidence file, never execute terminal escapes.
+                  result=subprocess.run(['gh','api','--allow-escape-sequences',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job["id"]}/logs'],capture_output=True)
+                  if result.returncode==0:
+                      (root/f'{job["id"]}.log').write_bytes(result.stdout)
+                      entry['log_sha256']=hashlib.sha256(result.stdout).hexdigest()
+                  else:
+                      entry['log_download_error']=result.stderr.decode(errors='replace')
               summary.append(entry)
           (root/'jobs.json').write_text(json.dumps({'run':run,'attempt':2,'jobs':summary},indent=2)+'\n',encoding='utf-8')
           print(json.dumps(summary,indent=2))

@@ -1,0 +1,78 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index e1218079b6913a3385f1a3ba0075d9171131d7f4..a49353714b2fde2bafa947087771d371fa9dc774 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -541,6 +541,12 @@ Focused local validation: 11 pass, two existing Windows-only cases await native
+ Windows validation. This is harness cleanup, not a change to application data,
+ E2E timeouts, benchmark policy, or the permission model. Full PR CI remains required.
+ 
++The separately preserved cleanup candidate also identified replacement during
++retry backoff. Two additional deterministic cases replace the directory or remove
++its ownership marker between attempts. Each failed before the correction and now
++passes: every attempt revalidates both the original directory identity and exact
++owner marker before removal. Retry counts and delays are unchanged.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/tests/py/conftest.py b/tests/py/conftest.py
+index 3efd1f1bbef826ac5ac0fb5a069b9eeea7fb1ec6..bd556fe4c275688bdbdb2ba109b209f323ed90d1 100644
+--- a/tests/py/conftest.py
++++ b/tests/py/conftest.py
+@@ -178,6 +178,15 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
+         return False
+     directory_identity = (stat.st_dev, stat.st_ino)
+     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
++        try:
++            current = path.stat(follow_symlinks=False)
++        except FileNotFoundError:
++            return True
++        except OSError:
++            return False
++        if (path.is_symlink() or (current.st_dev, current.st_ino) != directory_identity
++                or _owned_generated_pytest_root(path) != owner):
++            return False
+         try:
+             shutil.rmtree(path)
+         except OSError:
+diff --git a/tests/py/test_pytest_harness_config.py b/tests/py/test_pytest_harness_config.py
+index 68487c0dca237731829ed3277af21e04965093d8..90f0c9b157b36f6874deb075bc2628587edcaca3 100644
+--- a/tests/py/test_pytest_harness_config.py
++++ b/tests/py/test_pytest_harness_config.py
+@@ -373,3 +373,36 @@ def test_partial_cleanup_does_not_claim_a_replacement_directory(tmp_path, monkey
+     assert not (owned_root / '.album-haven-pytest-owner.json').exists()
+     assert (owned_root / 'unowned.txt').read_text(encoding='utf-8') == 'must survive'
+     assert displaced_root.is_dir()
++
++
++@pytest.mark.parametrize("replacement", ["directory", "marker"])
++def test_cleanup_revalidates_ownership_after_retry_backoff(tmp_path, monkeypatch, replacement):
++    workspace_temp = tmp_path / "workspace-temp"
++    owned_root = workspace_temp / "pytest-444444-deadbeef"
++    displaced_root = workspace_temp / "preserved-original"
++    _write_owner_marker(owned_root, pid=444444, token="deadbeef")
++    real_rmtree = shutil.rmtree
++    attempts = []
++
++    def locked_once(path):
++        attempts.append(Path(path))
++        if len(attempts) == 1:
++            raise PermissionError("temporary lock")
++        real_rmtree(path)
++
++    def replace_during_backoff(_seconds):
++        if replacement == "directory":
++            owned_root.rename(displaced_root)
++            owned_root.mkdir()
++        else:
++            (owned_root / ".album-haven-pytest-owner.json").unlink()
++        (owned_root / "unowned.txt").write_text("must survive", encoding="utf-8")
++
++    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: workspace_temp.resolve())
++    monkeypatch.setattr(pytest_harness.shutil, "rmtree", locked_once)
++    monkeypatch.setattr(pytest_harness.time, "sleep", replace_during_backoff)
++    assert not pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, "deadbeef"),
++    )
++    assert attempts == [owned_root]
++    assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"

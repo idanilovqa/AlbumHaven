@@ -16,7 +16,7 @@ jobs:
       run:
         shell: bash
     env:
-      EXPECTED_HEAD: 120cd67b7a3ad79638f4b61e1a65744332b8a442
+      EXPECTED_HEAD: 454b6b6645789014c197d4b4e53b6d14b64258c3
       TARGET_BRANCH: 2026-09-08-settings-refactor
     steps:
       - uses: actions/checkout@v5
@@ -33,9 +33,9 @@ jobs:
           python - <<'PY'
           import hashlib,json,os,re
           from pathlib import Path
-          patch=Path('.chat-editor/run199-cleanup.patch').read_text(encoding='utf-8').encode('utf-8')
-          assert len(patch)==7641
-          assert hashlib.sha256(patch).hexdigest()=='dfd25d452284e2564bd2015524263a900340a0fee9117988b7fceb0bc2c10e80'
+          patch=Path('.chat-editor/run199-backoff.patch').read_text(encoding='utf-8').encode('utf-8')
+          assert len(patch)==4269
+          assert hashlib.sha256(patch).hexdigest()=='4086bfc659b571273c3e719f175326df9c374bf7031943a82be0ee386d847d9d'
           files={}
           for block in patch.decode('utf-8').split('diff --git ')[1:]:
               lines=block.splitlines();left,right=lines[0].split(' b/',1)
@@ -74,7 +74,7 @@ jobs:
           PY
           git config user.name 'idanilovqa'
           git config user.email '39825960+idanilovqa@users.noreply.github.com'
-          git commit -m 'test: preserve owned pytest cleanup after partial Windows deletion'
+          git commit -m 'test: revalidate temporary-root ownership before every cleanup attempt'
           test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
           git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           echo "Published $(git rev-parse HEAD); full native PR CI remains required." >> "$GITHUB_STEP_SUMMARY"

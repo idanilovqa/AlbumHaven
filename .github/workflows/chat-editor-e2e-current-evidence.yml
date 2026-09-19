@@ -1,0 +1,56 @@
+name: Preserve current E2E repair evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-e2e-current-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Capture source delta and completed job logs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, hashlib, io, json, subprocess, tarfile
+          from pathlib import Path
+          base = '3e34e1f57716bdfcd2dcea7959bc1213af7e13c6'
+          head = '18ea588e352c53c6ed6c705d5ccb1678023695f6'
+          out = Path('.chat-editor/e2e-current'); out.mkdir(parents=True, exist_ok=True)
+          changes = subprocess.check_output(['git','diff','--name-status',base,head],text=True).splitlines()
+          source = io.BytesIO(); files=[]; deleted=[]
+          with tarfile.open(fileobj=source,mode='w:gz') as archive:
+              for line in changes:
+                  status, name = line.split('\t',1)
+                  if status == 'D': deleted.append(name); continue
+                  assert status in ('A','M'), (status,name)
+                  data=subprocess.check_output(['git','show',f'{head}:{name}'])
+                  info=tarfile.TarInfo(name); info.size=len(data); info.mode=0o644
+                  archive.addfile(info,io.BytesIO(data)); files.append(name)
+          raw=source.getvalue(); encoded=base64.b64encode(raw).decode(); parts=[]
+          for index,start in enumerate(range(0,len(encoded),700000)):
+              name=f'source-update-{index}.b64'; (out/name).write_text(encoded[start:start+700000]); parts.append(name)
+          manifest={'base':base,'head':head,'files':files,'deleted':deleted,'parts':parts,'sha256':hashlib.sha256(raw).hexdigest()}
+          jobs=[105803412142,105803412178,105803412190,105803412242,105803412244,105803412324]
+          manifest['logs']=[]
+          for job in jobs:
+              data=subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
+              (out/f'{job}.log').write_bytes(data)
+              manifest['logs'].append({'job_id':job,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'lines':len(data.splitlines())})
+          (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps(manifest,indent=2))
+          PY
+          git add .chat-editor/e2e-current
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'checkpoint: preserve complete six-job evidence and current source delta'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

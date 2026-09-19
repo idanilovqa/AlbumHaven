@@ -40,7 +40,7 @@ jobs:
           for job in [105865221141, 105865221126, 105865221206]:
             metadata = json.loads(subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}']))
             assert metadata['status'] == 'completed'
-            raw = subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
+            raw = subprocess.check_output(['gh','api','--allow-escape-sequences',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
             lines = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw.decode('utf-8', 'replace')).splitlines()
             selected = set()
             for index,line in enumerate(lines):

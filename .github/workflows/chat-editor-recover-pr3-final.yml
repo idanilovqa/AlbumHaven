@@ -1,0 +1,94 @@
+name: Recover and verify complete PR3 repair
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths:
+      - .chat-editor/pr3-recovery-final/**
+      - .github/workflows/chat-editor-recover-pr3-final.yml
+permissions:
+  contents: write
+concurrency:
+  group: pr3-recovery-ff81-publication
+  cancel-in-progress: false
+jobs:
+  verify_publish:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: work
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: transport
+          fetch-depth: 0
+      - uses: actions/checkout@v5
+        with:
+          path: work
+          ref: ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify pinned sources and apply the reconciled batch
+        run: python ../transport/.chat-editor/pr3-recovery-final/recover.py apply
+      - name: Install verification dependencies
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -r requirements.txt
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '151.0.7922.138'
+      - name: Run focused Node regressions and neighbors
+        id: node
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: python ../transport/.chat-editor/pr3-recovery-final/recover.py node
+      - name: Verify native Windows cleanup and ownership regressions
+        id: python
+        continue-on-error: true
+        run: python -m pytest -q tests/py/test_pytest_harness_config.py --junitxml="${{ runner.temp }}/pr3-recovery-evidence/pytest-harness.xml"
+      - name: Verify player components without updating snapshots
+        id: components
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: node node_modules/@playwright/test/cli.js test --config=playwright.component.config.js tests/components/playerViews.spec.js
+      - name: Verify exact component and foundation inventories
+        id: inventory
+        continue-on-error: true
+        run: node scripts/ci/validate-foundation-gates.cjs --list
+      - name: Verify generated runtime and production parity
+        id: build
+        continue-on-error: true
+        run: |
+          node scripts/build-runtime-bundle.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-e2e-production-parity.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+      - name: Publish only the complete verified batch to the actual PR branch
+        env:
+          NODE_RESULT: ${{ steps.node.outcome }}
+          PYTHON_RESULT: ${{ steps.python.outcome }}
+          COMPONENT_RESULT: ${{ steps.components.outcome }}
+          INVENTORY_RESULT: ${{ steps.inventory.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+        run: python ../transport/.chat-editor/pr3-recovery-final/recover.py publish
+      - name: Retain verification and failure evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr3-recovery-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pr3-recovery-evidence/
+            work/test-results/playwright-artifacts/components/
+          retention-days: 14
+          if-no-files-found: warn

@@ -1,0 +1,123 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index 7bdffca02703841e44504ca803c4115460287720..59c4d396109891c108f4a1f66cae4710088f8889 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -612,6 +612,46 @@
+ retry policy or performance budget is changed. Complete native verification is
+ still outstanding; this is not a merge, release or final-acceptance claim.
+ 
++### PR 3 recovery reconciliation — September 19, 2026
++
++The owner explicitly requested review of the saved main, validation-follow-up
++and cleanup patches, their publication to the actual PR branch, and full CI.
++The destination remains `2026-09-08-settings-refactor`; diagnostic branches are
++transport only, not merge candidates. The checked base is
++`ff81ffd4e846fa6606054b9d3b30dadffa4a6e18`. Each edited input and resulting file
++is checked against its canonical Git blob before publication.
++
++The complete, uncancelled PR Gates #202 attempt 2 (`35419743702`) supersedes the
++partial run 204 inventory: one Python cleanup failure; three Gallery failures
++(two disc-total cases and predecessor metadata); two disabled Tag Apply cases;
++and three playback/Utilities failures (redundant exclusions, saved-loop card
++insets, retained canvas). The eight E2E cases map to the recovered batch above.
++The validation follow-up also retains unknown file identities without paths for
++server validation instead of silently dropping them. Existing source-specific
++permissions, fixture populations, persistence checks and the 18-row restoration
++assertion are unchanged.
++
++Review found a missing lifecycle edge in the saved Python candidate: pytest's
++configuration cleanup can remove `_tmp_path_factory` before the final callback.
++Capture the generated root and owner identity when registering cleanup; the
++existing remover still revalidates the directory and ownership marker on every
++attempt. A regression with the factory removed failed on the saved candidate
++and passes after correction. The full focused harness run on Linux/Python 3.13
++passes 16 cases with two existing Windows-only cases unexecuted. Native Windows
++Python 3.11 verification remains required, including the original concurrent
++subprocess case. Retry counts, backoff and explicit-basetemp preservation remain.
++
++The new retained-canvas component case increases the exact component inventory
++from 67 to 68; its validator and regression expectation are updated together.
++No snapshot is refreshed. Focused local exclusion tests pass 20/20; two new
++regressions fail against the original product module. Three selected adapter
++checks pass. The runtime builder (71 modules), production parity and diff checks
++pass. Local dependency downloads fail on DNS resolution, so the remaining
++Playwright-dependent checks and native Windows reproduction use a bounded
++hosted verification job before the full PR pipeline. Focused evidence does not
++replace the full pipeline or manual acceptance. No task checkbox changes; this
++plan has no numeric checkbox counter. No merge or release is authorized.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/scripts/ci/validate-foundation-gates.cjs b/scripts/ci/validate-foundation-gates.cjs
+index 20d34a28bf640009fd688a99e565239517cef407..23f9c80274a3588425830db8e38459330fa20df5 100644
+--- a/scripts/ci/validate-foundation-gates.cjs
++++ b/scripts/ci/validate-foundation-gates.cjs
+@@ -4,7 +4,7 @@
+ 
+ const MINIMUM_PYTEST_CASES = 3037;
+ const MINIMUM_PYTEST_MODULES = 147;
+-const EXPECTED_COMPONENT_CASES = 67;
++const EXPECTED_COMPONENT_CASES = 68;
+ 
+ function jobSource(workflow, jobName, nextJobName) {
+   const start = workflow.indexOf(`  ${jobName}:`);
+diff --git a/tests/js/validate-foundation-gates.test.js b/tests/js/validate-foundation-gates.test.js
+index c2de3e359ef06ecb4e591bc8ab8dde7e488b9d93..5e97b5a3a553db7d179122506ac1db33fa41b047 100644
+--- a/tests/js/validate-foundation-gates.test.js
++++ b/tests/js/validate-foundation-gates.test.js
+@@ -118,7 +118,7 @@
+     '  [chromium] › loopRangeControls.spec.js:68:1 › second component case',
+     'Total: 2 tests in 2 files',
+   ].join('\n')).length, 2);
+-  assert.equal(validator.discoverComponentCases(repoRoot).length, 67);
++  assert.equal(validator.discoverComponentCases(repoRoot).length, 68);
+ 
+   assert.deepEqual(
+     validator.validatePytestCollection(
+diff --git a/tests/py/conftest.py b/tests/py/conftest.py
+index d08a5bb4187b8f84960eac9d610ecbc2827946a8..dc2b1dc58d08ab4d99df4af7d760067e9ab52e04 100644
+--- a/tests/py/conftest.py
++++ b/tests/py/conftest.py
+@@ -260,9 +260,14 @@
+     config._album_haven_generated_basetemp = not explicit_basetemp
+     config._album_haven_generated_basetemp_token = generated_token
+     if not explicit_basetemp:
+-        # Resources registered later are released first (Config cleanup is LIFO).
+-        # A Windows handle can otherwise keep this root alive through unconfigure.
+-        config.add_cleanup(lambda: _cleanup_generated_pytest_root(config))
++        # Config cleanup is LIFO: later resource owners close their handles first.
++        # Capture our identity now; pytest can remove _tmp_path_factory before
++        # this final callback runs. The removal helper still revalidates ownership.
++        generated_root = Path(config.option.basetemp).resolve()
++        owner_identity = (os.getpid(), generated_token)
++        config.add_cleanup(lambda: _remove_owned_generated_pytest_root(
++            generated_root, expected_owner=owner_identity,
++        ))
+     config._album_haven_test_appdata = _activate_pytest_app_paths(
+         Path(config.option.basetemp).resolve()
+     )
+diff --git a/tests/py/test_pytest_harness_config.py b/tests/py/test_pytest_harness_config.py
+index 1b1fc8b3c432f4369665cb1f1669f92eff385e6b..b88c1a952096bccfaed03137d8478b1d246d398b 100644
+--- a/tests/py/test_pytest_harness_config.py
++++ b/tests/py/test_pytest_harness_config.py
+@@ -408,7 +408,8 @@
+     assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"
+ 
+ 
+-def test_generated_root_cleanup_runs_after_late_configuration_resources_close(tmp_path, monkeypatch):
++@pytest.mark.parametrize("factory_removed", [False, True])
++def test_generated_root_cleanup_runs_after_late_configuration_resources_close(tmp_path, monkeypatch, factory_removed):
+     """Config cleanups run after unconfigure and may still own Windows handles."""
+     callbacks = []
+     workspace = tmp_path / 'workspace-temp'
+@@ -426,6 +427,9 @@
+     config._tmp_path_factory = SimpleNamespace(_basetemp=root)
+     held = [True]
+     callbacks.append(lambda: held.__setitem__(0, False))
++    if factory_removed:
++        # Mirror pytest.tmpdir's registered MonkeyPatch.undo cleanup.
++        callbacks.append(lambda: delattr(config, "_tmp_path_factory"))
+     real_rmtree = shutil.rmtree
+ 
+     def remove_after_handle_close(path):

@@ -1,0 +1,101 @@
+{
+  "base_head": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+  "source_helper_head": "cd2779d9bf51fc84a76c8cbb34ae6eec64040841",
+  "target_branch": "2026-09-08-settings-refactor",
+  "patches": [
+    {
+      "path": ".chat-editor/run202-repair/verified.patch",
+      "sha256": "7dccfe66a7ce56739abbdcf960bc144f79877c4139f3a57ca6f526f911a155ad"
+    },
+    {
+      "path": ".chat-editor/run202-repair/validation-followup.patch",
+      "sha256": "895da28ad9d983012d21201a73ede2894fdb9f30f7e727a3bc33278715a05fe1"
+    },
+    {
+      "path": ".chat-editor/run202-repair/cleanup-lifecycle.patch",
+      "sha256": "f06569a5d0b5a8d553f313924855e645324f0bd910d1300a3595a3b225d924ee"
+    },
+    {
+      "path": ".chat-editor/pr3-recovery-final/reconciliation.patch",
+      "sha256": "cafb6be7c74c3f48515963a705841376ac2a65deacb0581e31b6336be3dec9ba"
+    }
+  ],
+  "files": {
+    "docs/superpowers/plans/2026-09-09-settings-refactor.md": {
+      "before": "a49353714b2fde2bafa947087771d371fa9dc774",
+      "after": "59c4d396109891c108f4a1f66cae4710088f8889"
+    },
+    "music_app/static/js/runtime-bundle.js": {
+      "before": "54b4ab39945f1d35c15b7e57fa94821885a691c3",
+      "after": "573231ae4cd499d5208b52e99fc864e740ce37b3"
+    },
+    "music_app/static/js/runtime/problem-exclusion-mutations.js": {
+      "before": "235fb89df9ee9b3f7dd1d9a95687bf3aed6907ca",
+      "after": "b7aea00c636516ecf99a6f0d3e7366efce1854f1"
+    },
+    "scripts/ci/validate-foundation-gates.cjs": {
+      "before": "20d34a28bf640009fd688a99e565239517cef407",
+      "after": "23f9c80274a3588425830db8e38459330fa20df5"
+    },
+    "tests/components/playerViews.spec.js": {
+      "before": "2bb6fce513f31c5130464a0805d6c975d761ab5d",
+      "after": "8a98125457b3fd6f21708c3cfee67bcf300c90b5"
+    },
+    "tests/e2e/actions/globalPlayerActions.js": {
+      "before": "12a5674f0b37678dc47d88a775d08d347450cf95",
+      "after": "ec385bc653b5f4d7ec49480a5e133775d4ad2678"
+    },
+    "tests/e2e/actions/tagEditorActions.js": {
+      "before": "17d4a20e3257bc6d2491ac974aa053d9c98f2fec",
+      "after": "5b6f01f8dab2c7593e51e7eca973bf59406b4845"
+    },
+    "tests/e2e/actions/utilityProblematicFilesActions.js": {
+      "before": "8b7a998c91946b36bc7e99d09693565636d70f08",
+      "after": "3af22b1924556d04f3c6a7cab7e499eaad053fb5"
+    },
+    "tests/e2e/poms/tagEditor.js": {
+      "before": "85fd51c8def09b636f8c48b35506039f1e12be08",
+      "after": "74c9b728fadd1d2c990837e4864375df277d9a9b"
+    },
+    "tests/e2e/poms/utilityLoopEntryCard.js": {
+      "before": "e5c5b12d56e7d7c2a4fa3be0242de6a5820f460b",
+      "after": "59568c881abfd49a5e1b27349c9ced62dd77c303"
+    },
+    "tests/e2e/specs/albumIdentityConsolidation.spec.js": {
+      "before": "13a38f64f933bca208a496620eb1ad7b5dfcba01",
+      "after": "779a6388e5623414901d914046d856c7acab12de"
+    },
+    "tests/e2e/specs/albumTrackCredits.spec.js": {
+      "before": "22e2fd8a71840dabbaf55a67e432e62095b553e4",
+      "after": "c531c886248643a87ce65033f82a8048767861f7"
+    },
+    "tests/e2e/specs/loops.functional.spec.js": {
+      "before": "44f9b334cf9123696b57f56fe9074eda9cf07baa",
+      "after": "c9d4a5f3fbc88ca09b81ffcb5a0d000b44844d42"
+    },
+    "tests/js/e2e-run192-contracts.test.js": {
+      "before": "2718e2cce5d94f5c608f25e158ddb6643affbaef",
+      "after": "be283d971e9b137cfe7cafd371842acdec6f3814"
+    },
+    "tests/js/e2e-run204-contracts.test.js": {
+      "before": null,
+      "after": "a3f0dd1faa3eb057b5172da5bfe4fc80679addc5"
+    },
+    "tests/js/runtime/problem-exclusion-mutations.test.js": {
+      "before": "48612cdc8d964e9b9399a870834733531ecf56b9",
+      "after": "29713bf43e2ece6af6102e0a6bddbf74d913a453"
+    },
+    "tests/js/validate-foundation-gates.test.js": {
+      "before": "c2de3e359ef06ecb4e591bc8ab8dde7e488b9d93",
+      "after": "5e97b5a3a553db7d179122506ac1db33fa41b047"
+    },
+    "tests/py/conftest.py": {
+      "before": "bd556fe4c275688bdbdb2ba109b209f323ed90d1",
+      "after": "dc2b1dc58d08ab4d99df4af7d760067e9ab52e04"
+    },
+    "tests/py/test_pytest_harness_config.py": {
+      "before": "90f0c9b157b36f6874deb075bc2628587edcaca3",
+      "after": "b88c1a952096bccfaed03137d8478b1d246d398b"
+    }
+  }
+}

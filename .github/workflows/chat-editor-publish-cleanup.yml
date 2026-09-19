@@ -33,11 +33,11 @@ jobs:
           python - <<'PY'
           import hashlib,json,os,re
           from pathlib import Path
-          patch=Path('.chat-editor/run199-cleanup.patch').read_text().encode()
+          patch=Path('.chat-editor/run199-cleanup.patch').read_text(encoding='utf-8').encode('utf-8')
           assert len(patch)==7641
           assert hashlib.sha256(patch).hexdigest()=='dfd25d452284e2564bd2015524263a900340a0fee9117988b7fceb0bc2c10e80'
           files={}
-          for block in patch.decode().split('diff --git ')[1:]:
+          for block in patch.decode('utf-8').split('diff --git ')[1:]:
               lines=block.splitlines();left,right=lines[0].split(' b/',1)
               assert left=='a/'+right and right.startswith(('tests/py/','docs/'))
               match=re.fullmatch(r'index ([0-9a-f]{40})\.\.([0-9a-f]{40}) 100644',lines[1])
@@ -46,7 +46,7 @@ jobs:
           assert len(files)==3
           tmp=Path(os.environ['RUNNER_TEMP'])
           (tmp/'cleanup.patch').write_bytes(patch)
-          (tmp/'cleanup-files.json').write_text(json.dumps(files))
+          (tmp/'cleanup-files.json').write_text(json.dumps(files),encoding='utf-8')
           PY
           git switch --detach "$EXPECTED_HEAD"
           git apply --check --whitespace=error-all "$RUNNER_TEMP/cleanup.patch"
@@ -63,7 +63,7 @@ jobs:
           python - <<'PY'
           import json,os,subprocess
           from pathlib import Path
-          files=json.loads(Path(os.environ['RUNNER_TEMP'],'cleanup-files.json').read_text())
+          files=json.loads(Path(os.environ['RUNNER_TEMP'],'cleanup-files.json').read_text(encoding='utf-8'))
           for name,digest in files.items():
               actual=subprocess.check_output(['git','hash-object','--',name],text=True).strip()
               assert actual==digest,(name,actual,digest)

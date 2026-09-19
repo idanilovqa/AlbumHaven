@@ -1,0 +1,510 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index 49a5b14..81721d9 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -452,6 +452,51 @@ player access, paused-state preservation, editable literal Space, and real
+ non-silent advancing PCM evidence remain covered. No playback engine or native
+ keyboard exemption is changed to accommodate the old test.
+ 
++### Complete run 192 E2E repair inventory — September 18, 2026
++
++The owner requested publication of the recovered follow-up and a complete repair
++of the six remaining failed jobs. The recovered follow-up is now on PR #3 as
++`18ea588e`; the following batch is based on all completed results from PR Gates
++#192 (`35408558207`, head `4e4d93df`). All six logs and their digests are retained
++on the diagnostic branch in `.chat-editor/e2e-current/`. The failures map to 20
++test cases; shared causes are repaired together rather than rerunning unchanged
++jobs after each small edit.
++
++- Admin FTC-PERMISSIONS-011, performance Problems FTC009/010 and native-button
++  Space FTC-PLAYER-014 are covered by the recovered follow-up already published.
++- Metadata FTC-TAGS-008 now verifies the freshly opened browser's album, not the
++  old modal; FTC-TAGS-011/022 retain disabled/opacity/theme assertions while using
++  the shared disabled Button cursor. Album Details FTC-ALBUM-DETAILS-005 reads
++  the existing shared AlbumTrackTable total rather than an obsolete empty footer.
++- Problems FTC013/007 wait for the keyed filtered collection after the existing
++  debounce, including Clear. Exclusion FTC001 captures the immutable row key
++  before deletion so its locator cannot retarget a surviving row. Failed revert
++  recovery dismisses the intentionally retained No/Yes dialog through native No
++  before retrying, preserving the real persistence-error and rollback assertions.
++- Exact-track FTC-UTIL-PROBLEMS-011 uses the supported 1280x720 desktop viewport:
++  nine approved shorter rows fit the old 960px height. The same dataset, minimum
++  result count, off-screen-before/in-view-after geometry, scroll and focus checks
++  are retained; no product rows or CSS are manipulated to establish the scenario.
++- FTC-PLAYBACK-LASTFM-013 asserts the actual rendered-PCM ledger acceptance and
++  stable row identity through finalization, alongside unchanged exact provider
++  request counts and persisted statistics, instead of the legacy response field.
++- Saved-loop and player-view FTC021/023/024/026/017/011 and FTC014/019/020/021/022
++  use B03's approved 100px waveform / 76px regular height and extra bottom padding;
++  original centerlines, waveform geometry and timing/PCM evidence remain intact.
++- Non-album FTC011/014 and the combined FTC010/009/008/007/006/TAGS007/005 journey
++  identify the exact album and separate artist/year metadata under S04.
++- Appearance FTC001 verifies restored cleanliness through disabled Save and the
++  saved status. Cancel remains available under the existing shared-footer behavior;
++  the exact saved aggregate, color history and cleared pending event are tested.
++
++Focused verification passes 289 Node checks, including eleven targeted run-192
++regressions, with no failures or skips. Production parity and whitespace checks
++pass. No production runtime source, benchmark budget, retry policy, readiness
++interval or timeout is changed by this batch. Local real-app navigation remains
++policy-blocked; these checks do not claim browser success. Native full PR CI must
++verify the recovered and additional fixes, and all previously green suites remain
++mandatory. No task checkbox, manual acceptance, merge or release is authorized.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/tests/ci/functional-shards.json b/tests/ci/functional-shards.json
+index 138c2b2..8352602 100644
+--- a/tests/ci/functional-shards.json
++++ b/tests/ci/functional-shards.json
+@@ -835,7 +835,7 @@
+               "config": "playwright.config.js",
+               "project": "functional",
+               "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
+-              "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings",
++              "case": "FTC-PLAYER-014 Space preserves native overlay actions and range playback across Album Details, notifications, and Settings",
+               "area": "playback"
+             },
+             {
+diff --git a/tests/ci/test-data-matrix.json b/tests/ci/test-data-matrix.json
+index 1666db3..6673616 100644
+--- a/tests/ci/test-data-matrix.json
++++ b/tests/ci/test-data-matrix.json
+@@ -1580,7 +1580,7 @@
+     "config": "playwright.config.js",
+     "project": "functional",
+     "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
+-    "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings",
++    "case": "FTC-PLAYER-014 Space preserves native overlay actions and range playback across Album Details, notifications, and Settings",
+     "profile": "functional-core",
+     "setupScope": "isolated",
+     "stateMode": "owned-mutation",
+diff --git a/tests/e2e/actions/globalPlayerActions.js b/tests/e2e/actions/globalPlayerActions.js
+index 79d7ba5..12a5674 100644
+--- a/tests/e2e/actions/globalPlayerActions.js
++++ b/tests/e2e/actions/globalPlayerActions.js
+@@ -103,8 +103,8 @@ export class GlobalPlayerActions {
+       normalized,
+     );
+     const expected = normalized === 'waveform'
+-      ? { height: 92, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
+-      : { height: 68, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
++      ? { height: 100, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
++      : { height: 76, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+     await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
+     const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
+     const centerY = (bounds) => bounds.y + (bounds.height / 2);
+@@ -137,7 +137,7 @@ export class GlobalPlayerActions {
+       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
+       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
+         - (checkpoint.timeline.y + checkpoint.timeline.height);
+-      expect(Math.abs(bottomGap - 5)).toBeLessThanOrEqual(1);
++      expect(Math.abs(bottomGap - 13)).toBeLessThanOrEqual(1);
+     }
+     return checkpoint;
+   }
+diff --git a/tests/e2e/actions/tagEditorActions.js b/tests/e2e/actions/tagEditorActions.js
+index ae946f7..17d4a20 100644
+--- a/tests/e2e/actions/tagEditorActions.js
++++ b/tests/e2e/actions/tagEditorActions.js
+@@ -378,7 +378,7 @@ export class TagEditorActions {
+       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+     } else {
+       await expect(this.tagEditor.applyButton).toBeDisabled();
+-      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'default');
++      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+       const theme = await this.tagEditor.readApplyTheme();
+       expect(theme.background).toEqual(theme.expectedBackground);
+diff --git a/tests/e2e/actions/utilityProblematicFilesActions.js b/tests/e2e/actions/utilityProblematicFilesActions.js
+index a8b9022..8b7a998 100644
+--- a/tests/e2e/actions/utilityProblematicFilesActions.js
++++ b/tests/e2e/actions/utilityProblematicFilesActions.js
+@@ -120,8 +120,13 @@ export class UtilityProblematicFilesActions {
+     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
+       if (typeof state === 'undefined') return false;
+       if ((state.utility?.searchQuery || '') !== expected.term) return false;
++      // Input state changes before the debounced render. Observe the whole keyed
++      // projection, not merely the previous tree remaining nonempty.
++      if (typeof getFilteredProblematicAlbums !== 'function') return false;
++      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
+       const items = Array.from(document.querySelectorAll(expected.listItemSelector));
+-      return items.length > 0;
++      return keys.length > 0 && items.length === keys.length
++        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
+     }, {
+       timeout: options.timeout || 60000,
+     }, {
+@@ -132,9 +137,14 @@ export class UtilityProblematicFilesActions {
+ 
+   async clearSearch() {
+     await this.utilityProblematicFilesTab.searchSection.searchInput.fill('');
+-    await this.utilityProblematicFilesTab.waitForPageCondition(() => (
+-      typeof state !== 'undefined' && (state.utility?.searchQuery || '') === ''
+-    ), { timeout: 60000 });
++    await this.utilityProblematicFilesTab.waitForPageCondition((selector) => {
++      if (typeof state === 'undefined' || (state.utility?.searchQuery || '') !== '') return false;
++      if (typeof getFilteredProblematicAlbums !== 'function') return false;
++      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
++      const items = Array.from(document.querySelectorAll(selector));
++      return items.length === keys.length
++        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
++    }, { timeout: 60000 }, this.utilityProblematicFilesTab.listItemSelector);
+   }
+ 
+   async readProblemFilterValues() {
+diff --git a/tests/e2e/actions/utilityRulesActions.js b/tests/e2e/actions/utilityRulesActions.js
+index 8a30add..4cb3b43 100644
+--- a/tests/e2e/actions/utilityRulesActions.js
++++ b/tests/e2e/actions/utilityRulesActions.js
+@@ -48,6 +48,12 @@ export class UtilityRulesActions {
+       .waitFor({ state: 'visible', timeout: 60000 });
+   }
+ 
++  async cancelRevertConfirmation() {
++    await expect(this.utilityRulesTab.revertConfirmation).toBeVisible();
++    await this.utilityRulesTab.revertNo.click();
++    await expect(this.utilityRulesTab.revertConfirmation).toBeHidden();
++  }
++
+   async readProblemExclusionTables() {
+     const readTable = async (table) => {
+       if (!await table.count()) {
+@@ -155,7 +161,10 @@ export class UtilityRulesActions {
+       response.request().method() === 'POST'
+       && new URL(response.url()).pathname === '/utilities/rules/problem-ignores/revert'
+     ));
+-    const row = this.utilityRulesTab.exclusionRowContaining(text);
++    const matchingRow = this.utilityRulesTab.exclusionRowContaining(text);
++    const rowKey = await matchingRow.getAttribute('data-cdt-row-key');
++    if (!rowKey) throw new Error('Problem Exclusion row is missing its durable key.');
++    const row = this.utilityRulesTab.exclusionRowByKey(rowKey);
+     await this.utilityRulesTab.revertButtonForRow(row).click();
+     await this.utilityRulesTab.revertYes.click();
+     await row.waitFor({ state: 'detached', timeout: 60000 });
+@@ -194,7 +203,10 @@ export class UtilityRulesActions {
+       () => { acknowledgementSettled = true; },
+       () => { acknowledgementSettled = true; },
+     );
+-    const row = this.utilityRulesTab.exclusionRowContaining(text);
++    const matchingRow = this.utilityRulesTab.exclusionRowContaining(text);
++    const rowKey = await matchingRow.getAttribute('data-cdt-row-key');
++    if (!rowKey) throw new Error('Problem Exclusion row is missing its durable key.');
++    const row = this.utilityRulesTab.exclusionRowByKey(rowKey);
+     await this.utilityRulesTab.revertButtonForRow(row).click();
+     await this.utilityRulesTab.revertYes.click();
+     await row.waitFor({ state: 'detached', timeout: 60000 });
+diff --git a/tests/e2e/poms/trackModal.js b/tests/e2e/poms/trackModal.js
+index 1633dff..5fcc685 100644
+--- a/tests/e2e/poms/trackModal.js
++++ b/tests/e2e/poms/trackModal.js
+@@ -17,7 +17,7 @@ export class TrackModal extends BasePage {
+     this.closeButton = page.locator(this.closeButtonSelector);
+     this.title = page.locator(this.titleSelector);
+     this.subtitle = page.locator(this.subtitleSelector);
+-    this.footer = page.locator(this.footerSelector);
++    this.footer = this.albumTrackTable.total;
+     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
+     this.discTotals = this.dialog.locator('.album-track-table__disc-total');
+     this.coverImage = page.locator(this.coverImageSelector);
+diff --git a/tests/e2e/specs/albumTagRename.spec.js b/tests/e2e/specs/albumTagRename.spec.js
+index b8df9f8..dd47963 100644
+--- a/tests/e2e/specs/albumTagRename.spec.js
++++ b/tests/e2e/specs/albumTagRename.spec.js
+@@ -143,7 +143,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
+       year: RENAMED_YEAR,
+     });
+     const summary = await freshSession.trackModalActions.waitForInteractiveSummary();
+-    await trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
++    await freshSession.trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
+     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
+   });
+ 
+diff --git a/tests/e2e/specs/appearanceControls.spec.js b/tests/e2e/specs/appearanceControls.spec.js
+index 1f4104b..1cb2299 100644
+--- a/tests/e2e/specs/appearanceControls.spec.js
++++ b/tests/e2e/specs/appearanceControls.spec.js
+@@ -375,7 +375,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
+     await expect(appearance.waveformHex('edge')).toHaveValue(PLAYER_COLORS.waveformEdge);
+     await expect(appearance.playerStyleHex('handles.color')).toHaveValue(PLAYER_COLORS.handle);
+     await expect(appearance.compactStyleButton('floating')).toHaveAttribute('aria-pressed', 'true');
+-    await expect(appearance.editorFooter.secondary.root).toBeDisabled();
++    // Cancel remains available; Save and the shared status own the dirty contract.
++    await expect(appearance.editorFooter.secondary.root).toBeEnabled();
++    await expect(appearance.editorFooter.primary.root).toBeDisabled();
++    await expect(appearance.editorFooter.status).toHaveText('Saved to your account');
+   });
+ 
+   await stepLogger.step('Keep other pending pages while Reset affects only Player and Seekbar', async () => {
+diff --git a/tests/e2e/specs/lastfmProductionPath.spec.js b/tests/e2e/specs/lastfmProductionPath.spec.js
+index 5673843..00e7f83 100644
+--- a/tests/e2e/specs/lastfmProductionPath.spec.js
++++ b/tests/e2e/specs/lastfmProductionPath.spec.js
+@@ -166,7 +166,15 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
+     const evidence = await playbackEvidencePromise;
+     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
+     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
+-    expect(playbackJourney.scrobble.accepted).toBe(1);
++    // Measured scrobbles return the scoped ledger row, not the legacy provider envelope.
++    expect(playbackJourney.scrobble.entry).toMatchObject({
++      measurement_version: 'rendered-pcm-v1',
++      scrobble_submission_state: 'accepted',
++      scrobbled: true,
++      finalized: false,
++    });
++    expect(playbackJourney.completion.entry.id).toBe(playbackJourney.scrobble.entry.id);
++    expect(playbackJourney.completion.entry.finalized).toBe(true);
+     expect(playbackJourney.completion.entry.scrobbled).toBe(true);
+   });
+ 
+diff --git a/tests/e2e/specs/loops.functional.spec.js b/tests/e2e/specs/loops.functional.spec.js
+index 251f97b..6ed2702 100644
+--- a/tests/e2e/specs/loops.functional.spec.js
++++ b/tests/e2e/specs/loops.functional.spec.js
+@@ -276,7 +276,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
+     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
+       .toBeLessThanOrEqual(1);
+     expectApprovedCapsuleSpacing(playingPlayerLayout);
+-    expect(playingPlayerLayout.playerBounds.height).toBe(108);
++    expect(playingPlayerLayout.playerBounds.height).toBe(100);
+     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
+   });
+ 
+diff --git a/tests/e2e/specs/nonAlbumRarity.spec.js b/tests/e2e/specs/nonAlbumRarity.spec.js
+index 99cb563..81b65be 100644
+--- a/tests/e2e/specs/nonAlbumRarity.spec.js
++++ b/tests/e2e/specs/nonAlbumRarity.spec.js
+@@ -460,7 +460,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
+       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+       const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
+       const rarityAlbumIndex = problematicItems.findIndex((item) => (
+-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
++        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
+       ));
+       expect(rarityAlbumIndex).toBeGreaterThanOrEqual(0);
+       await utilityProblematicFilesActions.selectListItemByIndex(rarityAlbumIndex);
+@@ -569,7 +569,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
+       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+       const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
+       const sourceIndex = sourceItems.findIndex((item) => (
+-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
++        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
+       ));
+       expect(sourceIndex).toBeGreaterThanOrEqual(0);
+       await utilityProblematicFilesActions.selectListItemByIndex(sourceIndex);
+@@ -902,7 +902,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
+     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
+     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
+     const looseProblemIndex = problematicItems.findIndex((item) => (
+-      item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
++      item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
+     ));
+     expect(looseProblemIndex).toBeGreaterThanOrEqual(0);
+     await utilityProblematicFilesActions.selectListItemByIndex(looseProblemIndex);
+diff --git a/tests/e2e/specs/problematicFileNavigation.spec.js b/tests/e2e/specs/problematicFileNavigation.spec.js
+index 3a51ae0..888b07b 100644
+--- a/tests/e2e/specs/problematicFileNavigation.spec.js
++++ b/tests/e2e/specs/problematicFileNavigation.spec.js
+@@ -79,6 +79,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded
+ });
+ 
+ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', { tag: '@area:problematic-files' }, async ({
++  page,
+   galleryActions,
+   searchToolbarActions,
+   settingsModalAppBarActions,
+@@ -92,6 +93,9 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
+   let targetTrackPath = '';
+ 
+   await stepLogger.step('Open the persisted album directly without loading Settings first', async () => {
++    // The approved compact rows fit all nine matches at 960px. At the supported
++    // 720px desktop height this unchanged fixture still exercises real scrolling.
++    await page.setViewportSize({ width: 1280, height: 720 });
+     await galleryActions.goto('/?surface=albums');
+     await galleryActions.waitForGalleryReady();
+     await searchToolbarActions.search(ALBUM, { submitWithEnter: true });
+@@ -691,6 +695,9 @@ test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
+         'Failed to revert problem exclusion',
+       )).toContain('Failed to revert problem exclusion');
+       await utilityRulesActions.waitForExclusionAcknowledged(ALBUM);
++      // The failed confirmation stays open for recovery; dismiss it normally
++      // before retrying the restored row once its persistence permission returns.
++      await utilityRulesActions.cancelRevertConfirmation();
+     } finally {
+       await privilegeGuard.restore();
+     }
+diff --git a/tests/js/e2e-run192-contracts.test.js b/tests/js/e2e-run192-contracts.test.js
+new file mode 100644
+index 0000000..9e96bf5
+--- /dev/null
++++ b/tests/js/e2e-run192-contracts.test.js
+@@ -0,0 +1,168 @@
++const test = require('node:test');
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const vm = require('node:vm');
++
++function loadActions(filename, name, supplied = {}) {
++  const context = { assert, ...supplied };
++  vm.createContext(context);
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/actions', filename), 'utf8')
++    .replace(/^import[\s\S]*?;\r?\n/gm, '').replace('export class ', 'class ');
++  vm.runInContext(source + `;globalThis.Actions = ${name};`, context);
++  return { Actions: context.Actions, context };
++}
++
++for (const staleKeys of [['old'], ['other']]) {
++  test(`Problems search readiness rejects a stale rendered tree (${staleKeys})`, async () => {
++    let renderedKeys = staleKeys;
++    const { Actions } = loadActions('utilityProblematicFilesActions.js', 'UtilityProblematicFilesActions', {
++      state: { utility: { searchQuery: 'target' } },
++      getFilteredProblematicAlbums: () => [{ key: 'target' }],
++      document: { querySelectorAll: () => renderedKeys.map(key => ({ getAttribute: () => key })) },
++    });
++    const pom = {
++      listItemSelector: '#utility-problematic-list [data-problematic-album-key]',
++      async waitForPageCondition(predicate, _options, arg) {
++        assert.equal(predicate(arg), false, 'query state updates before the debounced DOM commit');
++        renderedKeys = ['target'];
++        assert.equal(predicate(arg), true, 'the exact filtered result is now rendered');
++      },
++    };
++    await new Actions(pom).waitForSearchResults('target');
++  });
++}
++
++test('clearing Problems search waits for the complete restored tree', async () => {
++  let renderedKeys = ['one'];
++  const { Actions } = loadActions('utilityProblematicFilesActions.js', 'UtilityProblematicFilesActions', {
++    state: { utility: { searchQuery: '' } },
++    getFilteredProblematicAlbums: () => [{ key: 'one' }, { key: 'two' }],
++    document: { querySelectorAll: () => renderedKeys.map(key => ({ getAttribute: () => key })) },
++  });
++  await new Actions({
++    listItemSelector: '#utility-problematic-list [data-problematic-album-key]',
++    searchSection: { searchInput: { fill: async () => {} } },
++    async waitForPageCondition(predicate, _options, arg) {
++      assert.equal(predicate(arg), false, 'cleared input is not a committed tree');
++      renderedKeys = ['one', 'two'];
++      assert.equal(predicate(arg), true);
++    },
++  }).clearSearch();
++});
++
++for (const method of ['revertRuleContaining', 'beginRevertRuleContaining']) {
++  test(`${method} binds the rule key before the first matching row can change`, async () => {
++    const response = { ok: () => true };
++    const events = [];
++    const stableRow = { waitFor: async () => events.push('exact-row-detached') };
++    const matchingRow = {
++      getAttribute: async name => { assert.equal(name, 'data-cdt-row-key'); return 'album-one::missing-cover'; },
++      waitFor: async () => assert.fail('a text-filtered first row must not be observed after deletion'),
++    };
++    const { Actions } = loadActions('utilityRulesActions.js', 'UtilityRulesActions');
++    const actions = new Actions({
++      page: { waitForResponse: async () => response, waitForRequest: async () => ({}) },
++      exclusionRowContaining: () => matchingRow,
++      exclusionRowByKey: key => { assert.equal(key, 'album-one::missing-cover'); return stableRow; },
++      revertButtonForRow: row => { assert.equal(row, stableRow); return { click: async () => events.push('open') }; },
++      revertYes: { click: async () => events.push('confirm') },
++    });
++    const result = await actions[method]('Missing cover');
++    if (result) await result.waitForAcknowledgement();
++    assert.deepEqual(events, ['open', 'confirm', 'exact-row-detached']);
++  });
++}
++
++test('disabled tag Apply follows the shared disabled Button cursor without weakening disabled state', async () => {
++  const applyButton = {};
++  const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
++    expect: element => ({
++      async toBeDisabled() { assert.equal(element, applyButton); },
++      async toHaveAttribute(name, value) { assert.equal(element, applyButton); assert.equal(value, 'primary'); assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name)); },
++      async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, name === 'cursor' ? 'not-allowed' : '1'); },
++      toEqual(expected) { assert.deepEqual(element, expected); },
++    }),
++  });
++  await new Actions({
++    trackTitles: { allTextContents: async () => [] },
++    applyButton,
++    readApplyTheme: async () => ({ background: 'saved', expectedBackground: 'saved', ink: 'saved ink', expectedInk: 'saved ink' }),
++  }).expectPendingChanges([]);
++});
++
++test('Album Details reads the shared track table footer, not the superseded empty modal footer', async () => {
++  const { TrackModal } = await import('../e2e/poms/trackModal.js');
++  const locator = description => ({
++    description, locator: selector => locator(`${description} ${selector}`),
++    getByRole: role => locator(`${description} role:${role}`), nth: index => locator(`${description} nth:${index}`),
++  });
++  const modal = new TrackModal(locator('page'));
++  assert.equal(modal.footer, modal.albumTrackTable.total);
++});
++
++test('fresh-browser rename verification is scoped to the freshly opened album', () => {
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/specs/albumTagRename.spec.js'), 'utf8');
++  const step = source.split("stepLogger.step('Reload and open a fresh browser")[1].split("stepLogger.step('")[0];
++  assert.match(step, /await freshSession\.trackModalActions\.waitForTitle\(albumDetailsTitle\(RENAMED_ALBUM, RENAMED_YEAR\)\)/u);
++});
++
++
++test('failed rule confirmation can be dismissed through its native No action before a retry', async () => {
++  const dialog = {};
++  const calls = [];
++  const { Actions } = loadActions('utilityRulesActions.js', 'UtilityRulesActions', {
++    expect: actual => ({
++      async toBeVisible() { assert.equal(actual, dialog); calls.push('visible'); },
++      async toBeHidden() { assert.equal(actual, dialog); calls.push('hidden'); },
++    }),
++  });
++  const actions = new Actions({
++    revertConfirmation: dialog, revertNo: { click: async () => calls.push('cancel') },
++  });
++  await actions.cancelRevertConfirmation();
++  assert.deepEqual(calls, ['visible', 'cancel', 'hidden']);
++});
++
++
++test('exact-track navigation establishes a supported off-screen scenario before loading the app', () => {
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/specs/problematicFileNavigation.spec.js'), 'utf8');
++  const scenario = source.split("test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track")[1].split("test('")[0];
++  assert.match(scenario, /page\.setViewportSize\(\{ width: 1280, height: 720 \}\)[\s\S]*galleryActions\.goto/u);
++  assert.match(scenario, /waitForTargetAlbumBelowSidebarViewport\(ALBUM, \{\s*minimumResultCount: 9/u);
++  assert.match(scenario, /waitForActiveAlbumInSidebarViewport\(ALBUM\)/u);
++});
++
++test('restoring the saved recent player set leaves no dirty preference or pending color event', () => {
++  const appearance = require('../../music_app/static/js/appearance-backgrounds.js');
++  const style = {
++    surface: { mode: 'gradient', angle: 137, start: '#123456', end: '#234567' },
++    controls: { fill: '#51A1C4', border: '#2F91D1' },
++    waveform: { fill: '#56789A', edge: '#6789AB' }, handles: { color: '#789ABC' },
++  };
++  const initial = {
++    main_surface_color: null, panel_background_color: null, palette_id: 'paper', panel_index: 1,
++    player_override: null, player_style_override: style, player_recent_sets: [style],
++    compact_player_style: 'floating', album_details_layout: 'editorial_canvas',
++    album_playing_row_animation: 'enabled', alert_family: 'signal', loop_control_style: 'capsule',
++    revision: 1, waveform_recent_colors: ['#6789AB', '#56789A'],
++    interaction_overrides: { item_hover: '#31465D', item_selected: '#3F5F7E',
++      button_hover_background: '#27384B', button_pressed: '#203246',
++      item_outline: { source: 'custom', color: '#86B7EF' } },
++    selection_accent: { enabled: true, color: '#A1B2C3' },
++  };
++  const controller = appearance.createController({ initial, request: async () => initial });
++  controller.configureSeekbar('waveform', () => {});
++  controller.setActiveSection('seekbar');
++  controller.setWaveformColor('fill', '#6789AB');
++  controller.cancel();
++  controller.setPlayerStyle({ ...style, surface: { ...style.surface, start: '#0A2F24' } });
++  assert.equal(controller.getState().dirty, true);
++  controller.restorePlayerSet(controller.getState().playerRecentSets[0]);
++  const state = controller.getState();
++  assert.equal(state.dirty, false);
++  assert.equal(state.canSave, false);
++  assert.deepEqual(state.draft, state.saved);
++  assert.deepEqual(state.waveformColorUpdates, []);
++  assert.equal(state.footer.status, 'Saved to your account');
++});

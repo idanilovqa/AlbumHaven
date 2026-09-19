@@ -1,0 +1,28 @@
+name: Capture current PR source delta
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-capture-current-delta.yml]
+permissions:
+  contents: write
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Preserve exact reviewed source difference
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .chat-editor/e2e-current2
+          git diff --binary 18ea588e352c53c6ed6c705d5ccb1678023695f6 2ba1b63cd2b17a7d0d8e7ccea25a47cd22b80e8c > .chat-editor/e2e-current2/current.patch
+          sha256sum .chat-editor/e2e-current2/current.patch > .chat-editor/e2e-current2/current.sha256
+          git add .chat-editor/e2e-current2/current.patch .chat-editor/e2e-current2/current.sha256
+          if git diff --cached --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'ci: preserve exact 18ea588e to 2ba1b63 source delta'
+          git push origin HEAD:2026-09-18-pr3-e2e-batch

@@ -33,7 +33,8 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
-      '#utility-problematic-detail .alert-label[data-problem-exclusion-scope]',
+      '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '
+      + '#utility-problematic-detail .utility-album-problem-content .alert-label',
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');

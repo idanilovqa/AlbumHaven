@@ -21,36 +21,52 @@ test('hover measurements await real finite transitions before sampling color', a
   const { SettingsModalAppBar } = await import(moduleUrl);
   let settled = false;
   const transition = { effect: { getComputedTiming: () => ({ endTime: 120 }) }, finished: Promise.resolve().then(() => { settled = true; }) };
-  const element = { getAnimations: () => [transition] };
+  const element = { getAnimations: () => [transition], ownerDocument: { documentElement: { hasAttribute: () => false } } };
   const original = global.getComputedStyle;
   global.getComputedStyle = () => {
     assert.equal(settled, true);
-    return { getPropertyValue: () => '#171717', backgroundColor: 'rgb(23, 23, 23)' };
+    return { getPropertyValue: () => '#171717', backgroundColor: 'rgb(23, 45, 67)' };
   };
   try {
     const pending = SettingsModalAppBar.prototype.readAdminHoverTheme.call({ adminPanelMenuItem: { evaluate: callback => callback(element) } });
     const measured = await pending;
-    assert.deepEqual(measured.actual, [23, 23, 23]);
-    measured.expected.forEach(channel => assert.ok(Math.abs(channel - 23) < 1e-9));
+    assert.deepEqual(measured.actual, [23, 45, 67]);
+    assert.deepEqual(measured.expected, [23, 45, 67]);
   } finally { global.getComputedStyle = original; }
 });
 
-test('shared account hover uses independent text/panel tokens and rejects the waveform hover color', async () => {
+test('default account hover protects the approved navy color even when unused appearance tokens exist', async () => {
   const { SettingsModalAppBar } = await import(moduleUrl);
   const original = global.getComputedStyle;
   const tokens = { '--text': '#eeeeee', '--panel': '#171717', '--appearance-item-hover': 'rgb(28, 38, 34)' };
-  let backgroundColor = 'rgb(34, 34, 34)';
+  let backgroundColor = 'rgb(23, 45, 67)';
   global.getComputedStyle = () => ({ getPropertyValue: name => tokens[name] || '', backgroundColor });
-  const owner = { adminPanelMenuItem: { evaluate: callback => callback({ getAnimations: () => [] }) } };
+  const element = { getAnimations: () => [], ownerDocument: { documentElement: { hasAttribute: () => false } } };
+  const owner = { adminPanelMenuItem: { evaluate: callback => callback(element) } };
   const assertHover = measurement => measurement.expected.forEach((channel, index) => {
-    assert.ok(Math.abs(channel - measurement.actual[index]) <= 1, 'each hover channel must match the shared baseline within 1');
+    assert.ok(Math.abs(channel - measurement.actual[index]) <= 1, 'each hover channel must match the approved account-menu color within 1');
   });
   try {
     const correct = await SettingsModalAppBar.prototype.readAdminHoverTheme.call(owner);
-    correct.expected.forEach(channel => assert.ok(Math.abs(channel - 33.75) < 1e-9));
+    assert.deepEqual(correct.expected, [23, 45, 67]);
     assertHover(correct);
-    backgroundColor = tokens['--appearance-item-hover'];
+    backgroundColor = 'rgb(34, 34, 34)';
     const wrong = await SettingsModalAppBar.prototype.readAdminHoverTheme.call(owner);
     assert.throws(() => assertHover(wrong), /each hover channel/);
   } finally { global.getComputedStyle = original; }
 });
+
+for (const attribute of ['data-appearance-palette', 'data-appearance-item-hover']) {
+  test(`explicit ${attribute} uses the saved row-hover token without accepting arbitrary observed colors`, async () => {
+    const { SettingsModalAppBar } = await import(moduleUrl);
+    const original = global.getComputedStyle;
+    const tokens = { '--appearance-item-hover': '#387f68', '--appearance-hover': '#abcdef' };
+    global.getComputedStyle = () => ({ getPropertyValue: name => tokens[name] || '', backgroundColor: 'rgb(56, 127, 104)' });
+    const element = { getAnimations: () => [], ownerDocument: { documentElement: { hasAttribute: name => name === attribute } } };
+    try {
+      const result = await SettingsModalAppBar.prototype.readAdminHoverTheme.call({ adminPanelMenuItem: { evaluate: callback => callback(element) } });
+      assert.deepEqual(result.expected, [56, 127, 104]);
+      assert.deepEqual(result.actual, result.expected);
+    } finally { global.getComputedStyle = original; }
+  });
+}

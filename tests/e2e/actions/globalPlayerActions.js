@@ -282,7 +282,9 @@ export class GlobalPlayerActions {
   }
 
   async togglePlaybackWithSpace(expectedState, options = {}) {
-    await this.globalPlayer.appKeyboardSurface.press('Space');
+    await this.globalPlayer.timeline.focus();
+    await expect(this.globalPlayer.timeline).toBeFocused();
+    await this.globalPlayer.timeline.press('Space');
     await this.waitForPlaybackState(expectedState, options);
     return this.readCurrentPlaybackSummary();
   }

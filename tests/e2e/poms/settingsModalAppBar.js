@@ -35,16 +35,18 @@ export class SettingsModalAppBar extends BasePage {
   }
 
   async readAdminHoverTheme() {
-    // Baseline appearance-backgrounds.css (d0a34749): shared menu hover mixes 5% text with panel.
-    // parity-check: allow-read-only-measurement-evaluate -- resolve inherited baseline tokens and observed color without changing page styles
+    // FTC-PERMISSIONS-011 protects the approved navy menu; explicit saved row themes override it.
+    // parity-check: allow-read-only-measurement-evaluate -- compare approved/saved colors without changing page styles
     const colors = await this.adminPanelMenuItem.evaluate(async element => {
       await Promise.all(element.getAnimations()
         .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
         .map(animation => animation.finished));
       const style = getComputedStyle(element);
-      const text = style.getPropertyValue('--text').trim() || '#eee';
-      const panel = style.getPropertyValue('--panel').trim() || '#171717';
-      const expected = `color-mix(in srgb, ${text} 5%, ${panel})`;
+      const root = element.ownerDocument.documentElement;
+      const themed = root.hasAttribute('data-appearance-palette') || root.hasAttribute('data-appearance-item-hover');
+      const expected = themed
+        ? style.getPropertyValue('--appearance-item-hover').trim() || style.getPropertyValue('--appearance-hover').trim()
+        : '#172d43';
       return { expected, actual: style.backgroundColor };
     });
     return { expected: readThemeColorChannels(colors.expected), actual: readThemeColorChannels(colors.actual) };

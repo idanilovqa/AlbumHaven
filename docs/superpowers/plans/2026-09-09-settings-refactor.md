@@ -427,6 +427,31 @@ expose further failures beyond the repaired shared helper. The previously green
 Python, JavaScript, component and auth jobs remain required. No task checkbox or
 final-acceptance claim is changed.
 
+### E2E follow-up contract reconciliation — September 18, 2026
+
+The recovered batch was published as `4e4d93df` and native PR Gates #192
+(`35408558207`) preserves the green foundation jobs. Playback-media and
+scan-library performance now pass with their original budgets. Remaining
+E2E results still require a complete failure inventory and another native run.
+
+The owner's current request authorizes repair of outdated tests when the
+approved feature work establishes their replacement contract. This follow-up
+retains the approved navy account-menu hover for FTC-PERMISSIONS-011 (rather
+than an unrelated generic gray hover token), and continues to compare explicit
+saved row-hover themes independently of the observed color. Problems FTC009/010
+read album-level and file-level reason pills, and assert separate title and
+artist/year metadata in the current NavigationTree row. Their timing budgets,
+telemetry checks, data population and strict metadata equality are unchanged.
+
+FTC-PLAYER-014 follows the native keyboard correction already recorded in
+[Task 4's final browser pass](2026-09-09-settings-refactor-task4-validation.md):
+Space activates focused native buttons rather than globally hijacking their
+click action. Its close/open helpers now require the resulting overlay state;
+range-focused Space still controls playback. Full-cover occlusion, foreground
+player access, paused-state preservation, editable literal Space, and real
+non-silent advancing PCM evidence remain covered. No playback engine or native
+keyboard exemption is changed to accommodate the old test.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

@@ -187,9 +187,8 @@ export class TrackModalActions {
     await this.trackModal.closeButton.focus();
     await expect(this.trackModal.closeButton).toBeFocused();
     await this.trackModal.closeButton.press('Space');
-    await this.waitForLoadedSummary(options);
+    await this.waitForClosed(options);
     await options.afterSpace?.();
-    await expect(this.trackModal.closeButton).toBeFocused();
   }
 
   async readSummary() {
@@ -665,9 +664,8 @@ export class TrackModalActions {
     await this.trackModal.lightboxCloseButton.focus();
     await expect(this.trackModal.lightboxCloseButton).toBeFocused();
     await this.trackModal.lightboxCloseButton.press('Space');
+    await expect(this.trackModal.lightbox).toBeHidden({ timeout: options.timeout || 15000 });
     await options.afterSpace?.();
-    await expect(this.trackModal.lightbox).toBeVisible({ timeout: options.timeout || 15000 });
-    await expect(this.trackModal.lightboxCloseButton).toBeFocused();
   }
 
   async expectCoverLightboxNavigationUnavailable(options = {}) {

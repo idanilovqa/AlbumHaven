@@ -752,27 +752,27 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerOpener\([\s\S]*openDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerOpener\([\s\S]*closeDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(false/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsOpener\([\s\S]*openSettings\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsOpener\([\s\S]*waitForClosed\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*accountMenu\)\.toBeVisible[\s\S]*settingsMenuItem\)\.toBeFocused[\s\S]*settingsMenuItem\.press\('Space'\)[\s\S]*waitForOpen/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForLoadedSummary/,
+    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     spec,
-    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*closeCoverLightbox\(\)/,
+    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*expectedPlayback\(false\)/,
   );
   assert.match(
     trackModal,
@@ -784,8 +784,9 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*afterSpace[\s\S]*lightbox\)\.toBeVisible[\s\S]*lightboxCloseButton\)\.toBeFocused/,
+    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*lightbox\)\.toBeHidden[\s\S]*afterSpace/,
   );
+  assert.match(globalPlayerActions, /timeline\.focus\(\)[\s\S]*timeline\)\.toBeFocused\(\)[\s\S]*timeline\.press\('Space'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
@@ -4940,6 +4941,10 @@ test('Problematic Files mutation completion ignores matching identities outside 
         assert.equal(item, activeListItem);
         return { async textContent() { return 'Album Previous'; } };
       },
+      metaForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Artist · 2009'; } };
+      },
       async waitForMutationRemovalAndPreviousSelection(expected, options) {
         delegated = { expected, options };
       },
@@ -4955,6 +4960,7 @@ test('Problematic Files mutation completion ignores matching identities outside 
     }, { timeout: 4321 }), {
       key: 'album-previous',
       title: 'Album Previous',
+      meta: 'Artist · 2009',
     });
     assert.deepEqual(delegated, {
       expected: {

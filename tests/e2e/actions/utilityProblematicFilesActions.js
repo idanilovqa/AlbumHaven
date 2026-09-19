@@ -99,6 +99,7 @@ export class UtilityProblematicFilesActions {
     return {
       key: (await activeItem.getAttribute('data-problematic-album-key')) || '',
       title: ((await this.utilityProblematicFilesTab.titleForListItem(activeItem).textContent()) || '').trim(),
+      meta: ((await this.utilityProblematicFilesTab.metaForListItem(activeItem).textContent()) || '').trim(),
     };
   }
 

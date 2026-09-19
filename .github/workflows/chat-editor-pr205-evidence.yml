@@ -1,0 +1,58 @@
+name: Preserve exact PR205 failure evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-pr205-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Read completed logs and exact source objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, re, subprocess
+          from pathlib import Path
+          root = Path('.chat-editor/pr205-proof')
+          root.mkdir(parents=True, exist_ok=True)
+          head = 'a145d344e45248422aabff652e891df468baa2ac'
+          sources = {
+            'spec.js': 'tests/e2e/specs/playerOverlaySpaceShortcut.spec.js',
+            'player-loop-playback.js': 'music_app/static/js/runtime/player-loop-playback.js',
+            'browser-dialog-helpers.js': 'music_app/static/js/runtime/browser-dialog-helpers.js',
+            'node-test.js': 'tests/js/e2e-run204-contracts.test.js',
+          }
+          manifest = {'head': head, 'files': {}, 'jobs': {}}
+          for name, path in sources.items():
+            data = subprocess.check_output(['git', 'show', head + ':' + path])
+            (root / name).write_bytes(data)
+            manifest['files'][name] = {'path': path, 'blob': hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()}
+          for job in [105865221141, 105865221126, 105865221206]:
+            metadata = json.loads(subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}']))
+            assert metadata['status'] == 'completed'
+            raw = subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
+            lines = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw.decode('utf-8', 'replace')).splitlines()
+            selected = set()
+            for index,line in enumerate(lines):
+              if re.search(r'not ok |\[FAIL\]|\d+\) \[|error: |ReferenceError|TypeError|Expected string:|Received string:| failed \(', line):
+                selected.update(range(max(0,index-8), min(len(lines),index+28)))
+            text = '\n'.join(lines[index] for index in sorted(selected)) + '\n'
+            (root / f'{job}-failures.txt').write_text(text, encoding='utf-8')
+            manifest['jobs'][str(job)] = {'name':metadata['name'],'run_id':metadata['run_id'],'conclusion':metadata['conclusion'],'log_sha256':hashlib.sha256(raw).hexdigest(),'lines':len(lines),'excerpt_lines':len(selected)}
+          (root / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+          PY
+          git add -f -- .chat-editor/pr205-proof
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'checkpoint: retain exact completed PR205 errors and source identity'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

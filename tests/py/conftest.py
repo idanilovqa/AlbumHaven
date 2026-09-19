@@ -179,6 +179,15 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
     directory_identity = (stat.st_dev, stat.st_ino)
     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
         try:
+            current = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if (path.is_symlink() or (current.st_dev, current.st_ino) != directory_identity
+                or _owned_generated_pytest_root(path) != owner):
+            return False
+        try:
             shutil.rmtree(path)
         except OSError:
             if not path.exists():

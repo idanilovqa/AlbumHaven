@@ -373,3 +373,36 @@ def test_partial_cleanup_does_not_claim_a_replacement_directory(tmp_path, monkey
     assert not (owned_root / '.album-haven-pytest-owner.json').exists()
     assert (owned_root / 'unowned.txt').read_text(encoding='utf-8') == 'must survive'
     assert displaced_root.is_dir()
+
+
+@pytest.mark.parametrize("replacement", ["directory", "marker"])
+def test_cleanup_revalidates_ownership_after_retry_backoff(tmp_path, monkeypatch, replacement):
+    workspace_temp = tmp_path / "workspace-temp"
+    owned_root = workspace_temp / "pytest-444444-deadbeef"
+    displaced_root = workspace_temp / "preserved-original"
+    _write_owner_marker(owned_root, pid=444444, token="deadbeef")
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def locked_once(path):
+        attempts.append(Path(path))
+        if len(attempts) == 1:
+            raise PermissionError("temporary lock")
+        real_rmtree(path)
+
+    def replace_during_backoff(_seconds):
+        if replacement == "directory":
+            owned_root.rename(displaced_root)
+            owned_root.mkdir()
+        else:
+            (owned_root / ".album-haven-pytest-owner.json").unlink()
+        (owned_root / "unowned.txt").write_text("must survive", encoding="utf-8")
+
+    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", locked_once)
+    monkeypatch.setattr(pytest_harness.time, "sleep", replace_during_backoff)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, "deadbeef"),
+    )
+    assert attempts == [owned_root]
+    assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"

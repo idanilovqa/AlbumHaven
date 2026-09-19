@@ -541,6 +541,12 @@ Focused local validation: 11 pass, two existing Windows-only cases await native
 Windows validation. This is harness cleanup, not a change to application data,
 E2E timeouts, benchmark policy, or the permission model. Full PR CI remains required.
 
+The separately preserved cleanup candidate also identified replacement during
+retry backoff. Two additional deterministic cases replace the directory or remove
+its ownership marker between attempts. Each failed before the correction and now
+passes: every attempt revalidates both the original directory identity and exact
+owner marker before removal. Retry counts and delays are unchanged.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

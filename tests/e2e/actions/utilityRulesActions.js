@@ -48,6 +48,12 @@ export class UtilityRulesActions {
       .waitFor({ state: 'visible', timeout: 60000 });
   }
 
+  async cancelRevertConfirmation() {
+    await expect(this.utilityRulesTab.revertConfirmation).toBeVisible();
+    await this.utilityRulesTab.revertNo.click();
+    await expect(this.utilityRulesTab.revertConfirmation).toBeHidden();
+  }
+
   async readProblemExclusionTables() {
     const readTable = async (table) => {
       if (!await table.count()) {
@@ -155,7 +161,10 @@ export class UtilityRulesActions {
       response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/utilities/rules/problem-ignores/revert'
     ));
-    const row = this.utilityRulesTab.exclusionRowContaining(text);
+    const matchingRow = this.utilityRulesTab.exclusionRowContaining(text);
+    const rowKey = await matchingRow.getAttribute('data-cdt-row-key');
+    if (!rowKey) throw new Error('Problem Exclusion row is missing its durable key.');
+    const row = this.utilityRulesTab.exclusionRowByKey(rowKey);
     await this.utilityRulesTab.revertButtonForRow(row).click();
     await this.utilityRulesTab.revertYes.click();
     await row.waitFor({ state: 'detached', timeout: 60000 });
@@ -194,7 +203,10 @@ export class UtilityRulesActions {
       () => { acknowledgementSettled = true; },
       () => { acknowledgementSettled = true; },
     );
-    const row = this.utilityRulesTab.exclusionRowContaining(text);
+    const matchingRow = this.utilityRulesTab.exclusionRowContaining(text);
+    const rowKey = await matchingRow.getAttribute('data-cdt-row-key');
+    if (!rowKey) throw new Error('Problem Exclusion row is missing its durable key.');
+    const row = this.utilityRulesTab.exclusionRowByKey(rowKey);
     await this.utilityRulesTab.revertButtonForRow(row).click();
     await this.utilityRulesTab.revertYes.click();
     await row.waitFor({ state: 'detached', timeout: 60000 });

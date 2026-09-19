@@ -79,6 +79,7 @@ test('FTC-UTIL-PROBLEMS-011 hides dead problem actions for a generated excluded 
 });
 
 test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details', { tag: '@area:problematic-files' }, async ({
+  page,
   galleryActions,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -92,6 +93,9 @@ test('FTC-UTIL-PROBLEMS-011 opens the exact problematic track from album details
   let targetTrackPath = '';
 
   await stepLogger.step('Open the persisted album directly without loading Settings first', async () => {
+    // The approved compact rows fit all nine matches at 960px. At the supported
+    // 720px desktop height this unchanged fixture still exercises real scrolling.
+    await page.setViewportSize({ width: 1280, height: 720 });
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
     await searchToolbarActions.search(ALBUM, { submitWithEnter: true });
@@ -691,6 +695,9 @@ test('FTC-UTIL-PROBLEMS-001 rolls back failed exclusion creation and reversion',
         'Failed to revert problem exclusion',
       )).toContain('Failed to revert problem exclusion');
       await utilityRulesActions.waitForExclusionAcknowledged(ALBUM);
+      // The failed confirmation stays open for recovery; dismiss it normally
+      // before retrying the restored row once its persistence permission returns.
+      await utilityRulesActions.cancelRevertConfirmation();
     } finally {
       await privilegeGuard.restore();
     }

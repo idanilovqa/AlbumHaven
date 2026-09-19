@@ -276,7 +276,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
     expectApprovedCapsuleSpacing(playingPlayerLayout);
-    expect(playingPlayerLayout.playerBounds.height).toBe(108);
+    expect(playingPlayerLayout.playerBounds.height).toBe(100);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 

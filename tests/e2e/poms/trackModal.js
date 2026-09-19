@@ -17,7 +17,7 @@ export class TrackModal extends BasePage {
     this.closeButton = page.locator(this.closeButtonSelector);
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
-    this.footer = page.locator(this.footerSelector);
+    this.footer = this.albumTrackTable.total;
     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
     this.discTotals = this.dialog.locator('.album-track-table__disc-total');
     this.coverImage = page.locator(this.coverImageSelector);

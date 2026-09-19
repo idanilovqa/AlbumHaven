@@ -103,8 +103,8 @@ export class GlobalPlayerActions {
       normalized,
     );
     const expected = normalized === 'waveform'
-      ? { height: 92, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
-      : { height: 68, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+      ? { height: 100, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
+      : { height: 76, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
     await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
     const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
     const centerY = (bounds) => bounds.y + (bounds.height / 2);
@@ -137,7 +137,7 @@ export class GlobalPlayerActions {
       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
         - (checkpoint.timeline.y + checkpoint.timeline.height);
-      expect(Math.abs(bottomGap - 5)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bottomGap - 13)).toBeLessThanOrEqual(1);
     }
     return checkpoint;
   }

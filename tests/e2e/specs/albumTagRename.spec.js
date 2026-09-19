@@ -143,7 +143,7 @@ test('FTC-TAGS-008 completes an album rename before reporting the save task comp
       year: RENAMED_YEAR,
     });
     const summary = await freshSession.trackModalActions.waitForInteractiveSummary();
-    await trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
+    await freshSession.trackModalActions.waitForTitle(albumDetailsTitle(RENAMED_ALBUM, RENAMED_YEAR));
     expect(summary.trackRows).toBe(FIXTURE_TRACK_COUNT);
   });
 

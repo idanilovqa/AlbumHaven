@@ -452,6 +452,51 @@ player access, paused-state preservation, editable literal Space, and real
 non-silent advancing PCM evidence remain covered. No playback engine or native
 keyboard exemption is changed to accommodate the old test.
 
+### Complete run 192 E2E repair inventory — September 18, 2026
+
+The owner requested publication of the recovered follow-up and a complete repair
+of the six remaining failed jobs. The recovered follow-up is now on PR #3 as
+`18ea588e`; the following batch is based on all completed results from PR Gates
+#192 (`35408558207`, head `4e4d93df`). All six logs and their digests are retained
+on the diagnostic branch in `.chat-editor/e2e-current/`. The failures map to 20
+test cases; shared causes are repaired together rather than rerunning unchanged
+jobs after each small edit.
+
+- Admin FTC-PERMISSIONS-011, performance Problems FTC009/010 and native-button
+  Space FTC-PLAYER-014 are covered by the recovered follow-up already published.
+- Metadata FTC-TAGS-008 now verifies the freshly opened browser's album, not the
+  old modal; FTC-TAGS-011/022 retain disabled/opacity/theme assertions while using
+  the shared disabled Button cursor. Album Details FTC-ALBUM-DETAILS-005 reads
+  the existing shared AlbumTrackTable total rather than an obsolete empty footer.
+- Problems FTC013/007 wait for the keyed filtered collection after the existing
+  debounce, including Clear. Exclusion FTC001 captures the immutable row key
+  before deletion so its locator cannot retarget a surviving row. Failed revert
+  recovery dismisses the intentionally retained No/Yes dialog through native No
+  before retrying, preserving the real persistence-error and rollback assertions.
+- Exact-track FTC-UTIL-PROBLEMS-011 uses the supported 1280x720 desktop viewport:
+  nine approved shorter rows fit the old 960px height. The same dataset, minimum
+  result count, off-screen-before/in-view-after geometry, scroll and focus checks
+  are retained; no product rows or CSS are manipulated to establish the scenario.
+- FTC-PLAYBACK-LASTFM-013 asserts the actual rendered-PCM ledger acceptance and
+  stable row identity through finalization, alongside unchanged exact provider
+  request counts and persisted statistics, instead of the legacy response field.
+- Saved-loop and player-view FTC021/023/024/026/017/011 and FTC014/019/020/021/022
+  use B03's approved 100px waveform / 76px regular height and extra bottom padding;
+  original centerlines, waveform geometry and timing/PCM evidence remain intact.
+- Non-album FTC011/014 and the combined FTC010/009/008/007/006/TAGS007/005 journey
+  identify the exact album and separate artist/year metadata under S04.
+- Appearance FTC001 verifies restored cleanliness through disabled Save and the
+  saved status. Cancel remains available under the existing shared-footer behavior;
+  the exact saved aggregate, color history and cleared pending event are tested.
+
+Focused verification passes 289 Node checks, including eleven targeted run-192
+regressions, with no failures or skips. Production parity and whitespace checks
+pass. No production runtime source, benchmark budget, retry policy, readiness
+interval or timeout is changed by this batch. Local real-app navigation remains
+policy-blocked; these checks do not claim browser success. Native full PR CI must
+verify the recovered and additional fixes, and all previously green suites remain
+mandatory. No task checkbox, manual acceptance, merge or release is authorized.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

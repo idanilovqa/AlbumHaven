@@ -460,7 +460,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
       const rarityAlbumIndex = problematicItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(rarityAlbumIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(rarityAlbumIndex);
@@ -569,7 +569,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
       const sourceIndex = sourceItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(sourceIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(sourceIndex);
@@ -902,7 +902,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
     const looseProblemIndex = problematicItems.findIndex((item) => (
-      item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+      item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
     ));
     expect(looseProblemIndex).toBeGreaterThanOrEqual(0);
     await utilityProblematicFilesActions.selectListItemByIndex(looseProblemIndex);

@@ -378,7 +378,7 @@ export class TagEditorActions {
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
     } else {
       await expect(this.tagEditor.applyButton).toBeDisabled();
-      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'default');
+      await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
       const theme = await this.tagEditor.readApplyTheme();
       expect(theme.background).toEqual(theme.expectedBackground);

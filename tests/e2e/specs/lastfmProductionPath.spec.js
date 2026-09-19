@@ -166,7 +166,15 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     const evidence = await playbackEvidencePromise;
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    expect(playbackJourney.scrobble.accepted).toBe(1);
+    // Measured scrobbles return the scoped ledger row, not the legacy provider envelope.
+    expect(playbackJourney.scrobble.entry).toMatchObject({
+      measurement_version: 'rendered-pcm-v1',
+      scrobble_submission_state: 'accepted',
+      scrobbled: true,
+      finalized: false,
+    });
+    expect(playbackJourney.completion.entry.id).toBe(playbackJourney.scrobble.entry.id);
+    expect(playbackJourney.completion.entry.finalized).toBe(true);
     expect(playbackJourney.completion.entry.scrobbled).toBe(true);
   });
 

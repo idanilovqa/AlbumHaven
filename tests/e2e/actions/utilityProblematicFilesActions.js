@@ -120,8 +120,13 @@ export class UtilityProblematicFilesActions {
     await this.utilityProblematicFilesTab.waitForPageCondition((expected) => {
       if (typeof state === 'undefined') return false;
       if ((state.utility?.searchQuery || '') !== expected.term) return false;
+      // Input state changes before the debounced render. Observe the whole keyed
+      // projection, not merely the previous tree remaining nonempty.
+      if (typeof getFilteredProblematicAlbums !== 'function') return false;
+      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
       const items = Array.from(document.querySelectorAll(expected.listItemSelector));
-      return items.length > 0;
+      return keys.length > 0 && items.length === keys.length
+        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
     }, {
       timeout: options.timeout || 60000,
     }, {
@@ -132,9 +137,14 @@ export class UtilityProblematicFilesActions {
 
   async clearSearch() {
     await this.utilityProblematicFilesTab.searchSection.searchInput.fill('');
-    await this.utilityProblematicFilesTab.waitForPageCondition(() => (
-      typeof state !== 'undefined' && (state.utility?.searchQuery || '') === ''
-    ), { timeout: 60000 });
+    await this.utilityProblematicFilesTab.waitForPageCondition((selector) => {
+      if (typeof state === 'undefined' || (state.utility?.searchQuery || '') !== '') return false;
+      if (typeof getFilteredProblematicAlbums !== 'function') return false;
+      const keys = getFilteredProblematicAlbums().map(item => String(item.key));
+      const items = Array.from(document.querySelectorAll(selector));
+      return items.length === keys.length
+        && items.every((item, index) => item.getAttribute('data-problematic-album-key') === keys[index]);
+    }, { timeout: 60000 }, this.utilityProblematicFilesTab.listItemSelector);
   }
 
   async readProblemFilterValues() {

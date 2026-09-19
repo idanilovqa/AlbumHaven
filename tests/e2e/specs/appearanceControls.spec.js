@@ -375,7 +375,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.waveformHex('edge')).toHaveValue(PLAYER_COLORS.waveformEdge);
     await expect(appearance.playerStyleHex('handles.color')).toHaveValue(PLAYER_COLORS.handle);
     await expect(appearance.compactStyleButton('floating')).toHaveAttribute('aria-pressed', 'true');
-    await expect(appearance.editorFooter.secondary.root).toBeDisabled();
+    // Cancel remains available; Save and the shared status own the dirty contract.
+    await expect(appearance.editorFooter.secondary.root).toBeEnabled();
+    await expect(appearance.editorFooter.primary.root).toBeDisabled();
+    await expect(appearance.editorFooter.status).toHaveText('Saved to your account');
   });
 
   await stepLogger.step('Keep other pending pages while Reset affects only Player and Seekbar', async () => {

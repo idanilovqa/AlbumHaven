@@ -702,6 +702,13 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight",
+              "area": "log-history"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
               "case": "FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal",
               "area": "loops"
             },

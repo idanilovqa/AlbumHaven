@@ -72,3 +72,17 @@ No full local suite, merge, or release was performed. The final native full pipe
 ### Focused gallery completion
 
 FTC-SEARCH-NAV-026 passed 1/1 in the real browser, including unselection with zero loader mutations and no default-gallery request. The outer performance-target wrapper exited 1 because the exact regression selection excluded the target's metric-producing scenario (reporter-finalization classification: processStatus=0, no target report, metricsComplete=false); this is not recorded as a complete performance-target pass. The original browser regression is proven locally; full target metrics remain for the complete native CI pipeline. Its owned application/provider processes, ports 57564/57566, database, and roles were cleaned up. The final diff reconciliation found no further actionable issue in the corrective code. I01 remains unchanged pending the exact test-order approval.
+
+### Second full-branch pass and CI-only verification override
+
+The owner subsequently instructed: finish actual code changes and review, then push and let CI run the tests; do not continue local test/browser runs. All prior local runners have exited. Subsequent regression tests will be authored but not executed locally; runtime bundle generation and read-only diff review remain implementation work.
+
+The new local review guidance requires at least two complete passes. The second pass covers the full branch from 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3, including the remote repairs and checkpoint e085e0b. It confirmed a Log History date-boundary defect: selecting 2026-09-06 in America/Santiago throws because local midnight is skipped by DST. The direct reproduction preceded the owner's CI-only override.
+
+Corrective acceptance: use the first valid instant of the selected local calendar day, the earliest boundary for repeated midnight, and the next local day as the exclusive end. Preserve the existing query shape, timezone selection, and retained controller state. Add regression cases for skipped/repeated boundaries and a normal-UI browser case in the affected timezone; no new dependency or public API is required. Complete a third full review after the correction, then commit/push to the complete native CI pipeline with skip_reviews. The I01 flow-order decision remains separately pending.
+
+### Third-pass completion and CI handoff
+
+Third full backend/schema, frontend/E2E, and CI/harness reviews are complete against the full branch base plus all corrections. The remaining executable functional-total guard was reconciled to 114; the new H04 case preserves existing ownership and produces 114 functional, 68 component, and 26 performance cases (208 total). No further actionable finding remains in the corrected code. The new DST tests and implementation have not been run locally, per the owner's CI-only instruction.
+
+Push this corrective candidate through the native complete pipeline with skip_reviews and without skip_tests. I01 remains unchanged while its exact warning-dismissal reorder awaits approval; collect the complete CI result, including that known unresolved scenario. Do not start the port-5001 manual-test app until all required CI is green. The old isolated Python database remains idle after automatic approval review rejected teardown; its state and logs were preserved without bypassing the rejection.

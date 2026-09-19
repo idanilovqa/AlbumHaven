@@ -20,19 +20,33 @@ function normalizeUtilityLogHistoryQuery(draft, { now = new Date(), timeZone = I
     start = new Date(end.getTime() - (days - 1) * 86400000);
   }
   end = new Date(end.getTime() + 86400000);
-  const midnightUtc = date => {
-    const target = date.getTime(); let candidate = target;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const p = parts(new Date(candidate));
-      const represented = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-      const difference = target - represented;
-      if (!difference) return new Date(candidate).toISOString();
-      candidate += difference;
+  const dayBoundaryUtc = date => {
+    const target = date.getTime();
+    const representedTime = value => {
+      const p = parts(new Date(value));
+      return Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+    };
+    // Check both sides of offset changes so a repeated midnight uses its first occurrence.
+    const midnights = [];
+    for (let hours = -48; hours <= 48; hours += 6) {
+      const sample = target + hours * 3600000;
+      const candidate = target - (representedTime(sample) - sample);
+      if (representedTime(candidate) === target) midnights.push(candidate);
     }
-    throw new Error('Unable to resolve the selected local date.');
+    if (midnights.length) return new Date(Math.min(...midnights)).toISOString();
+    // Midnight can be skipped. Find the first valid instant reaching this calendar day.
+    let before = target / 1000 - 48 * 3600;
+    let after = target / 1000 + 48 * 3600;
+    while (after - before > 1) {
+      const middle = Math.floor((before + after) / 2);
+      const p = parts(new Date(middle * 1000));
+      if (Date.UTC(p.year, p.month - 1, p.day) < target) before = middle;
+      else after = middle;
+    }
+    return new Date(after * 1000).toISOString();
   };
   const list = value => Array.from(new Set((Array.isArray(value) ? value : []).map(item => String(item).trim()).filter(Boolean))).sort();
-  return { from_utc: midnightUtc(start), to_utc: midnightUtc(end), sources: list(draft.sources), event_types: list(draft.event_types), text: String(draft.text || '').trim(), event_ids: [] };
+  return { from_utc: dayBoundaryUtc(start), to_utc: dayBoundaryUtc(end), sources: list(draft.sources), event_types: list(draft.event_types), text: String(draft.text || '').trim(), event_ids: [] };
 }
 
 function createUtilityLogHistoryQueryController({ fetchPage, exportQuery, contextKey, now = () => new Date(), timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone, onChange = () => {}, onAccepted = () => {} }) {

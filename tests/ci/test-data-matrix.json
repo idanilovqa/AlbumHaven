@@ -4090,6 +4090,25 @@
     "ownerApproval": "approved"
   },
   {
+    "config": "playwright.config.js",
+    "project": "functional",
+    "test": "tests/e2e/specs/loops.functional.spec.js",
+    "case": "FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight",
+    "profile": "functional-core",
+    "setupScope": "suite",
+    "stateMode": "read-only",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "logs:dst-period"
+    ],
+    "filesystemScenarios": [],
+    "expectedContracts": [
+      "local-calendar-day-boundaries",
+      "skipped-midnight-period-query"
+    ],
+    "ownerApproval": "approved"
+  },
+  {
     "config": "playwright.component.config.js",
     "project": "",
     "test": "tests/components/playerViews.spec.js",

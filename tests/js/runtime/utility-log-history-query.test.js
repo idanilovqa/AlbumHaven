@@ -41,6 +41,21 @@ for (const [date, start, end] of [
   const query = api().normalizeUtilityLogHistoryQuery(custom(date, date), clock);
   assert.equal(query.from_utc, start); assert.equal(query.to_utc, end);
 });
+for (const [date, start, end] of [
+  ['2026-09-05', '2026-09-05T04:00:00.000Z', '2026-09-06T04:00:00.000Z'],
+  ['2026-09-06', '2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z'],
+]) test(`Santiago ${date} includes the whole date across skipped midnight`, () => {
+  const query = api().normalizeUtilityLogHistoryQuery(custom(date, date), { ...clock, timeZone: 'America/Santiago' });
+  assert.equal(query.from_utc, start);
+  assert.equal(query.to_utc, end);
+});
+
+test('repeated Havana midnight starts at its first occurrence', () => {
+  const query = api().normalizeUtilityLogHistoryQuery(custom('2026-11-01', '2026-11-01'), { ...clock, timeZone: 'America/Havana' });
+  assert.equal(query.from_utc, '2026-11-01T04:00:00.000Z');
+  assert.equal(query.to_utc, '2026-11-02T05:00:00.000Z');
+});
+
 test('calendar conversion uses the displayed timezone rather than the process timezone', () => {
   const query = api().normalizeUtilityLogHistoryQuery(custom('2026-09-09', '2026-09-09'), { ...clock, timeZone: 'Asia/Kathmandu' });
   assert.equal(query.from_utc, '2026-09-08T18:15:00.000Z');

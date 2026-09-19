@@ -121,6 +121,48 @@ test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot
   expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
 });
 
+test.describe(() => {
+  test.use({ timezoneId: 'America/Santiago' });
+
+  test('FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight', { tag: '@area:log-history' }, async ({
+    galleryActions, page, settingsModalAppBarActions, utilityLogHistoryActions, utilityTabBarActions,
+  }) => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('log-history');
+    await utilityLogHistoryActions.waitForReady();
+    const history = utilityLogHistoryActions.utilityLogHistoryTab;
+    for (const [date, start, end] of [
+      ['2026-09-05', '2026-09-05T04:00:00.000Z', '2026-09-06T04:00:00.000Z'],
+      ['2026-09-06', '2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z'],
+    ]) {
+      await history.periodButton.click();
+      await history.periodFrom.fill(date);
+      await history.periodTo.fill(date);
+      const [response] = await Promise.all([
+        page.waitForResponse(value => value.request().method() === 'GET'
+          && new URL(value.url()).pathname === '/utilities/log-history'
+          && new URL(value.url()).searchParams.get('from_utc') === start),
+        history.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click(),
+      ]);
+      expect(response.status()).toBe(200);
+      const params = new URL(response.url()).searchParams;
+      expect(params.get('from_utc')).toBe(start);
+      expect(params.get('to_utc')).toBe(end);
+      const captured = await response.json();
+      expect(captured.snapshot).toBeTruthy();
+      await expect(history.periodDialog).toBeHidden();
+      await expect(history.periodRow).toHaveCount(1);
+      await expect(history.periodRow).toContainText('America/Santiago');
+      await expect(history.console).toBeVisible();
+      await expect(history.consoleLines).toHaveCount(captured.items.length);
+      await history.clearPeriodButton.click();
+      await expect(history.periodRow).toHaveCount(0);
+    }
+  });
+});
+
 test('FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range', { tag: '@area:loops' }, async ({
   galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
   trackModalActions, utilityLoopsActions, utilityTabBarActions,

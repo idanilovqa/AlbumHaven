@@ -1,0 +1,71 @@
+name: Diagnose run 202 native-only failures
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-diagnose-run202-native.yml, .chat-editor/diagnose-run202-cleanup.py]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Verify exact candidate and diagnostic provenance
+        run: |
+          set -euo pipefail
+          cp .chat-editor/diagnose-run202-cleanup.py "$RUNNER_TEMP/diagnose-cleanup.py"
+          cp .chat-editor/run202-repair/verified.patch "$RUNNER_TEMP/repair.patch"
+          cp .chat-editor/run202-repair/validation-followup.patch "$RUNNER_TEMP/validation.patch"
+          python - <<'PY'
+          import hashlib,os
+          from pathlib import Path
+          for name,digest in [('repair.patch','7dccfe66a7ce56739abbdcf960bc144f79877c4139f3a57ca6f526f911a155ad'),('validation.patch','895da28ad9d983012d21201a73ede2894fdb9f30f7e727a3bc33278715a05fe1')]:
+              assert hashlib.sha256(Path(os.environ['RUNNER_TEMP'],name).read_bytes().replace(b'\r\n',b'\n')).hexdigest()==digest
+          PY
+          git switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/repair.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/repair.patch"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/validation.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/validation.patch"
+      - name: Install exact repository dependencies
+        run: |
+          set -euo pipefail
+          npm ci
+          python -m pip install -r requirements.txt
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '151.0.7922.138'
+      - name: Pinned browser contract unavailable in the local container
+        env:
+          PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          npm run test:component -- tests/components/playerViews.spec.js --grep 'retain one canvas'
+      - name: Trace the actual Windows concurrent cleanup failure
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          python -u "$RUNNER_TEMP/diagnose-cleanup.py"
+      - name: Preserve diagnostic output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: run202-native-diagnostic
+          path: test-results
+          if-no-files-found: ignore

@@ -1,0 +1,37 @@
+diff --git a/music_app/static/js/runtime-bundle.js b/music_app/static/js/runtime-bundle.js
+index 204e978..573231a 100644
+--- a/music_app/static/js/runtime-bundle.js
++++ b/music_app/static/js/runtime-bundle.js
+@@ -18612,6 +18612,7 @@ function effectiveProblemExclusionItems(album, items) {
+   // rule once: duplicate child rules would survive a later album-rule revert.
+   // Independently selected reasons and unknown identities still reach validation.
+   return selectedItems.filter(item => item.scope !== 'file'
++    || !coveredFiles.has(String(item.row_key || ''))
+     || coveredFiles.get(String(item.row_key || '')) !== item.path);
+ }
+ 
+diff --git a/music_app/static/js/runtime/problem-exclusion-mutations.js b/music_app/static/js/runtime/problem-exclusion-mutations.js
+index 245a316..b7aea00 100644
+--- a/music_app/static/js/runtime/problem-exclusion-mutations.js
++++ b/music_app/static/js/runtime/problem-exclusion-mutations.js
+@@ -420,6 +420,7 @@ function effectiveProblemExclusionItems(album, items) {
+   // rule once: duplicate child rules would survive a later album-rule revert.
+   // Independently selected reasons and unknown identities still reach validation.
+   return selectedItems.filter(item => item.scope !== 'file'
++    || !coveredFiles.has(String(item.row_key || ''))
+     || coveredFiles.get(String(item.row_key || '')) !== item.path);
+ }
+ 
+diff --git a/tests/js/runtime/problem-exclusion-mutations.test.js b/tests/js/runtime/problem-exclusion-mutations.test.js
+index c0c4cd8..29713bf 100644
+--- a/tests/js/runtime/problem-exclusion-mutations.test.js
++++ b/tests/js/runtime/problem-exclusion-mutations.test.js
+@@ -778,6 +778,7 @@ test('album selection canonicalization retains foreign or unknown file identitie
+   const ownedKey = album.track_problem_rows[0].ignorable_reasons[0].row_key;
+   const foreign = { row_key: ownedKey, scope: 'file', path: 'C:\\Other\\foreign.flac', problem_reason: 'Undecoded characters' };
+   const unknown = { row_key: 'unknown::undecoded', scope: 'file', path: album.track_problem_rows[0].path, problem_reason: 'Undecoded characters' };
+-  const selected = [albumItem(), foreign, unknown];
++  const missingPath = { row_key: 'unknown::without-path', scope: 'file', problem_reason: 'Undecoded characters' };
++  const selected = [albumItem(), foreign, unknown, missingPath];
+   assert.deepEqual(clone(context.effectiveProblemExclusionItems(album, selected)), selected);
+ });

@@ -1,0 +1,64 @@
+name: Preserve run 204 completed failure evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-run204-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Read completed jobs and retain failure evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64,gzip,hashlib,io,json,re,subprocess,zipfile
+          from pathlib import Path
+          run=35420739453
+          prefix='repos/idanilovqa/AlbumHaven'
+          def api(path):
+              return subprocess.check_output(['gh','api','--allow-escape-sequences',f'{prefix}/{path}'])
+          jobs=json.loads(api(f'actions/runs/{run}/jobs?per_page=100'))['jobs']
+          out=Path('.chat-editor/e2e-run204');out.mkdir(parents=True,exist_ok=True)
+          summary=[]
+          for job in jobs:
+              if not job['name'].startswith('E2E: '):continue
+              row={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','completed_at')}
+              summary.append(row)
+              if job['status']!='completed' or job['conclusion']!='failure':continue
+              raw=api(f"actions/jobs/{job['id']}/logs")
+              (out/f"{job['id']}.log.b64").write_text(base64.b64encode(gzip.compress(raw,mtime=0)).decode(),encoding='utf-8')
+              row['log_sha256']=hashlib.sha256(raw).hexdigest()
+              lines=raw.decode('utf-8',errors='replace').splitlines()
+              selected=set()
+              for i,line in enumerate(lines):
+                  if re.search(r'\[FAIL\]|\d+\) \[functional\]|Failed tests:|\d+ failed|\d+ passed',line):
+                      selected.update(range(max(0,i-3),min(len(lines),i+65)))
+              (out/f"{job['id']}-failures.txt").write_text('\n'.join(f'{i+1}: {lines[i]}' for i in sorted(selected))+'\n',encoding='utf-8')
+          artifacts=json.loads(api(f'actions/runs/{run}/artifacts?per_page=100'))['artifacts']
+          for artifact in artifacts:
+              if not artifact['name'].startswith('functional-debug-'):continue
+              archive=zipfile.ZipFile(io.BytesIO(api(f"actions/artifacts/{artifact['id']}/zip")))
+              for i,name in enumerate(archive.namelist()):
+                  if name.endswith('error-context.md'):
+                      data=archive.read(name)
+                      (out/f"context-{artifact['id']}-{i}.md").write_bytes(data)
+          (out/'manifest.json').write_text(json.dumps({'run_id':run,'jobs':summary,'artifacts':[{k:a.get(k) for k in ('id','name','size_in_bytes')} for a in artifacts]},indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+          git add .chat-editor/e2e-run204
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'checkpoint: retain run 204 completed E2E failures'
+            git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
+          fi

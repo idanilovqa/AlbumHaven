@@ -27,7 +27,7 @@ jobs:
           assert hashlib.sha256(patch).hexdigest()=='88780ad2ac11a596dc826d34662ed425361cb4c76a91de0591d736f14070514f'
           Path(os.environ['RUNNER_TEMP'],'cleanup.patch').write_bytes(patch)
           PY
-          git -c core.autocrlf=false switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          git switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
           git apply --check "$RUNNER_TEMP/cleanup.patch"
           git apply "$RUNNER_TEMP/cleanup.patch"
           git diff --check

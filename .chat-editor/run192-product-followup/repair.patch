@@ -1,0 +1,204 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index 81721d99f025c76536673674c3bb17745d09745f..513e6665007434fdfaa49d0f0ea608cb59b5541d 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -499,0 +500,29 @@ mandatory. No task checkbox, manual acceptance, merge or release is authorized.
++### Run 192 product-correction follow-up — September 18, 2026
++
++The queued run-192 publication landed as `2e4221c6`, followed by CI inventory
++correction `2ba1b63c`. Preserve those exact helper and fixture fixes. This follow-up
++corrects two product defects rather than treating their prior assertions as
++obsolete: clean Appearance drafts disable Cancel, consistently across all five
++editors; and album-only Problems retain the initially disabled Create Exception
++control so authorized selection can enable it. The original Appearance clean-
++draft assertion is restored, while the added disabled Save and saved-status
++assertions remain. Dirty/invalid drafts remain cancellable and all permission
++checks remain enforced. The earlier statement that Cancel must remain enabled
++is superseded by this witnessed clean-draft correction, not a new owner UX choice.
++
++The shared AlbumTrackTable total and superseded empty modal footer are distinct
++contracts: disc-total presentation reads the former directly, while legacy
++footer absence remains independently asserted. The 100px B03 waveform height is
++also applied to the later expanded-loop checkpoint and its contract guard, with
++unchanged waveform size, centerline and one-pixel tolerance. Already published
++keyed search readiness, immutable rule-row identity, native No/Yes recovery,
++1280x720 off-screen prerequisite, exact rarity identity, measured Last.fm
++finalization, and the Space scenario inventory are retained without duplication.
++
++The focused Appearance and album-only regressions failed before their product
++corrections. The reconciled affected-node verification passes 843 tests, zero
++failures and zero skips; the repository runtime bundle builder and production
++parity check pass. Native PR E2E verification remains required. No timeout,
++retry policy, benchmark, fixture population, audio architecture, skip policy,
++permission, task checkbox, final manual acceptance or merge authority is changed.
++
+ diff --git a/music_app/static/js/appearance-backgrounds.js b/music_app/static/js/appearance-backgrounds.js
+index bd555196a53e16d58b0990929921a8801f7872ab..c54979e0fa099e2a687df4aaf7b042084e703ab2 100644
+--- a/music_app/static/js/appearance-backgrounds.js
++++ b/music_app/static/js/appearance-backgrounds.js
+@@ -888 +888 @@
+-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
++        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+@@ -949 +949 @@
+-        findFooter('[data-background-cancel]').disabled = state.loading || state.saving;
++        findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+@@ -992 +992 @@
+-        findFooter('[data-background-cancel]').disabled = state.loading || state.saving;
++        findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+@@ -1039 +1039 @@
+-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
++        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+@@ -1170 +1170 @@
+-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
++        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
+diff --git a/music_app/static/js/runtime-bundle.js b/music_app/static/js/runtime-bundle.js
+index ddfd4c3487301aeee4be5a0432b66c8f5a10e3b7..54b4ab39945f1d35c15b7e57fa94821885a691c3 100644
+--- a/music_app/static/js/runtime-bundle.js
++++ b/music_app/static/js/runtime-bundle.js
+@@ -15699 +15699 @@ function buildDetectedProblemsHtml(album) {
+-    ${tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
++    ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
+diff --git a/music_app/static/js/runtime/utility-list-builders.js b/music_app/static/js/runtime/utility-list-builders.js
+index 5bff4d29c8a2a720eb017bc09a7982c0c8ca0f8c..bc2867e992ad5063725d4b8e2ec3f923f5d90b6a 100644
+--- a/music_app/static/js/runtime/utility-list-builders.js
++++ b/music_app/static/js/runtime/utility-list-builders.js
+@@ -458 +458 @@ function buildDetectedProblemsHtml(album) {
+-    ${tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
++    ${albumProblems || tableRows.length || separateActions || getIgnoredRepairRowKeys().length ? `<div class="utility-detected-actions">
+diff --git a/tests/e2e/poms/trackModal.js b/tests/e2e/poms/trackModal.js
+index 5fcc6853b6f234e17d1708fd8ebbac81661b1acb..7a29d7b3a85e06d01fa5d8b8e3aae74969838295 100644
+--- a/tests/e2e/poms/trackModal.js
++++ b/tests/e2e/poms/trackModal.js
+@@ -20 +20 @@ export class TrackModal extends BasePage {
+-    this.footer = this.albumTrackTable.total;
++    this.footer = page.locator(this.footerSelector);
+@@ -218 +218 @@ export class TrackModal extends BasePage {
+-      totals: await this.readFooterLines(),
++      totals: normalize(await this.albumTrackTable.total.locator(':scope > *').allTextContents()),
+diff --git a/tests/e2e/specs/appearanceControls.spec.js b/tests/e2e/specs/appearanceControls.spec.js
+index 1cb2299c3c0afb31f22854d1039565cb03cc72f2..e6f4f5c428f8563b0f801e128e59adb5ca724572 100644
+--- a/tests/e2e/specs/appearanceControls.spec.js
++++ b/tests/e2e/specs/appearanceControls.spec.js
+@@ -378,2 +378,2 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
+-    // Cancel remains available; Save and the shared status own the dirty contract.
+-    await expect(appearance.editorFooter.secondary.root).toBeEnabled();
++    // Restoring the saved aggregate leaves no pending work to cancel or save.
++    await expect(appearance.editorFooter.secondary.root).toBeDisabled();
+diff --git a/tests/e2e/specs/loops.functional.spec.js b/tests/e2e/specs/loops.functional.spec.js
+index 6ed2702011f27f3b929440b27f5268c574a4d711..44f9b334cf9123696b57f56fe9074eda9cf07baa 100644
+--- a/tests/e2e/specs/loops.functional.spec.js
++++ b/tests/e2e/specs/loops.functional.spec.js
+@@ -377 +377 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
+-    expect(Math.abs(opened.playerHeight - 92)).toBeLessThanOrEqual(1);
++    expect(Math.abs(opened.playerHeight - 100)).toBeLessThanOrEqual(1);
+diff --git a/tests/js/e2e-action-production-paths.test.js b/tests/js/e2e-action-production-paths.test.js
+index af2d7233abeafcdc3c3ef4197be8ed57dd52cc92..3e7c62f5b08b75cd99d001013530dd92ff189c58 100644
+--- a/tests/js/e2e-action-production-paths.test.js
++++ b/tests/js/e2e-action-production-paths.test.js
+@@ -5163 +5163 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
+-    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
++    /Math\.abs\(opened\.playerHeight - 100\)\)\.toBeLessThanOrEqual\(1\)/,
+diff --git a/tests/js/e2e-run192-contracts.test.js b/tests/js/e2e-run192-contracts.test.js
+index 9e96bf5edffaafc5d01506216efc92f7452b5752..2718e2cce5d94f5c608f25e158ddb6643affbaef 100644
+--- a/tests/js/e2e-run192-contracts.test.js
++++ b/tests/js/e2e-run192-contracts.test.js
+@@ -94 +94 @@ test('disabled tag Apply follows the shared disabled Button cursor without weake
+-test('Album Details reads the shared track table footer, not the superseded empty modal footer', async () => {
++test('Album Details keeps the legacy modal footer distinct from the shared table totals', async () => {
+@@ -101 +101,2 @@ test('Album Details reads the shared track table footer, not the superseded empt
+-  assert.equal(modal.footer, modal.albumTrackTable.total);
++  assert.notEqual(modal.footer, modal.albumTrackTable.total);
++  assert.equal(modal.footer.description, `page ${modal.footerSelector}`);
+@@ -168,0 +170,15 @@ test('restoring the saved recent player set leaves no dirty preference or pendin
++
++
++test('disc presentation reads shared track totals while the superseded modal footer stays empty', async () => {
++  const { TrackModal } = await import('../e2e/poms/trackModal.js');
++  const modal = Object.create(TrackModal.prototype);
++  modal.discHeaders = { allTextContents: async () => [' Disc 1 '] };
++  modal.albumTrackTable = { total: { locator(selector) {
++    assert.equal(selector, ':scope > *');
++    return { allTextContents: async () => [' Total Length: 18m 00s ', ''] };
++  } } };
++  modal.readFooterLines = async () => assert.fail('Disc totals must not use the removed legacy footer');
++  assert.deepEqual(await modal.readDiscGroupPresentation(), {
++    headers: ['Disc 1'], totals: ['Total Length: 18m 00s'],
++  });
++});
+diff --git a/tests/js/runtime/appearance-editor-theme.test.js b/tests/js/runtime/appearance-editor-theme.test.js
+index 9b7d7d9a9b6e20213d3dcf6441eecd571d15cb11..cb5cf056a7344f2a8cf0500ed60addbb96631658 100644
+--- a/tests/js/runtime/appearance-editor-theme.test.js
++++ b/tests/js/runtime/appearance-editor-theme.test.js
+@@ -27,0 +28 @@ function element() {
++    closest() { return this; },
+@@ -50,0 +52 @@ async function mounted(method, initial = preference(), saveResponse) {
++  const editorSelector = { mountAlerts: '.appearance-alerts', mountAlbumPage: '.appearance-album-page' }[method] || '.appearance-background-editor';
+@@ -52 +54 @@ async function mounted(method, initial = preference(), saveResponse) {
+-    instance, root, host, editor: host.querySelector('.appearance-background-editor'),
++    instance, root, host, editor: host.querySelector(editorSelector),
+@@ -234,0 +237,30 @@ for (const field of ['fill', 'edge']) for (const replacement of ['theme', 'histo
++
++for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAlerts', 'mountAlbumPage']) {
++  test(`${method} disables Cancel for a clean draft and enables it for discardable changes`, async () => {
++    const { instance, editor } = await mounted(method);
++    const cancel = editor.querySelector('.background-actions').querySelector('[data-background-cancel]');
++    assert.equal(instance.controller.getState().dirty, false);
++    assert.equal(cancel.disabled, true, 'No changes means there is nothing to discard');
++    instance.controller.setPalette('paper');
++    assert.equal(cancel.disabled, false, 'A dirty draft remains cancellable');
++    instance.controller.cancel();
++    assert.equal(instance.controller.getState().dirty, false);
++    assert.equal(cancel.disabled, true);
++  });
++}
++
++test('restoring the saved recent player set leaves a clean disabled Cancel button', async () => {
++  const style = api.playerThemes[1].style;
++  const initial = preference({ revision: 2, player_style_override: style,
++    player_recent_sets: [style], waveform_recent_colors: ['#123456'],
++    interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null,
++      button_pressed: null, item_outline: { source: 'automatic', color: null } },
++    selection_accent: { enabled: true, color: '#34CA78' } });
++  const { instance, editor } = await mounted('mountSeekbar', initial);
++  instance.controller.setWaveformColor('fill', '#123456');
++  instance.controller.cancel();
++  instance.controller.setPlayerStyle(api.playerThemes[0].style);
++  instance.controller.restorePlayerSet(instance.controller.getState().playerRecentSets[0]);
++  assert.equal(instance.controller.getState().dirty, false);
++  assert.equal(editor.querySelector('.background-actions').querySelector('[data-background-cancel]').disabled, true);
++});
+diff --git a/tests/js/runtime/utility-list-builders.test.js b/tests/js/runtime/utility-list-builders.test.js
+index 4de3660b4b138eaf1a55b9d96e9214093774bfe6..172eb62e856cf1eb062e5fc9d97aeccd226a84be 100644
+--- a/tests/js/runtime/utility-list-builders.test.js
++++ b/tests/js/runtime/utility-list-builders.test.js
+@@ -6129 +6129 @@ test('detected problems do not promote track reasons into an empty album-level s
+-test('album-only detected problems show explanatory text without an empty table or unused actions', () => {
++test('album-only detected problems retain their disabled exception action without an empty table or unused Apply action', () => {
+@@ -6146 +6146,3 @@ test('album-only detected problems show explanatory text without an empty table
+-  assert.doesNotMatch(html, />Create Exception<|>Apply All</);
++  assert.match(html, /data-open-exclusion-confirm="1" disabled aria-disabled="true"/);
++  assert.match(html, />Create Exception</);
++  assert.doesNotMatch(html, />Apply All</);
+diff --git a/tests/js/runtime/utility-suggested-edits.test.js b/tests/js/runtime/utility-suggested-edits.test.js
+index 389c349ab549029aea198f761d37a99ab9bf89dd..f6963fe645fdfaa62a3c7651daa4508fadfa99f1 100644
+--- a/tests/js/runtime/utility-suggested-edits.test.js
++++ b/tests/js/runtime/utility-suggested-edits.test.js
+@@ -364,0 +365,18 @@ for (const action of ['exclusion', 'suggestion']) {
++
++for (const allowed of [true, false]) {
++  test(`P08 album-only problems retain their ${allowed ? 'authorized' : 'unauthorized'} Create Exception action before selection`, () => {
++    const { context, album } = detailContext();
++    album.track_problem_rows = [];
++    album.suggested_edits = [];
++    album.allowed_actions = { 'library.rules.manage': allowed };
++    const html = context.buildDetectedProblemsHtml(album);
++    const button = html.match(/<button\b[^>]*data-open-exclusion-confirm="1"[^>]*>/u)?.[0];
++    assert.ok(button, 'Album-level problems must not require a track table to expose the shared action');
++    assert.match(button, /\bdisabled\b/u, 'Initial unselected action stays disabled');
++    assert.doesNotMatch(html, /role="table"/u);
++    assert.doesNotMatch(html, /data-apply-problem-suggestions/u);
++    context.state.utility.problemExclusionSelections = { 'cover-album': true };
++    const selected = context.buildDetectedProblemsHtml(album).match(/<button\b[^>]*data-open-exclusion-confirm="1"[^>]*>/u)[0];
++    assert.equal(/\bdisabled(?:\s|=|>)/u.test(selected), !allowed);
++  });
++}

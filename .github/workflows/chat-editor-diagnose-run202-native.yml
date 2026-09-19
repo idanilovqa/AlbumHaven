@@ -35,7 +35,10 @@ jobs:
           import hashlib,os
           from pathlib import Path
           for name,digest in [('repair.patch','7dccfe66a7ce56739abbdcf960bc144f79877c4139f3a57ca6f526f911a155ad'),('validation.patch','895da28ad9d983012d21201a73ede2894fdb9f30f7e727a3bc33278715a05fe1')]:
-              assert hashlib.sha256(Path(os.environ['RUNNER_TEMP'],name).read_bytes().replace(b'\r\n',b'\n')).hexdigest()==digest
+              path=Path(os.environ['RUNNER_TEMP'],name)
+              data=path.read_bytes().replace(b'\r\n',b'\n')
+              assert hashlib.sha256(data).hexdigest()==digest
+              path.write_bytes(data)
           PY
           git switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
           git apply --check --whitespace=error-all "$RUNNER_TEMP/repair.patch"
@@ -43,6 +46,7 @@ jobs:
           git apply --check --whitespace=error-all "$RUNNER_TEMP/validation.patch"
           git apply --whitespace=error-all "$RUNNER_TEMP/validation.patch"
       - name: Install exact repository dependencies
+        id: dependencies
         run: |
           set -euo pipefail
           npm ci
@@ -58,7 +62,7 @@ jobs:
           set -euo pipefail
           npm run test:component -- tests/components/playerViews.spec.js --grep 'retain one canvas'
       - name: Trace the actual Windows concurrent cleanup failure
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' }}
         run: |
           set -euo pipefail
           python -u "$RUNNER_TEMP/diagnose-cleanup.py"

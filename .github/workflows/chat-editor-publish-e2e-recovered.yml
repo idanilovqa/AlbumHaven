@@ -1,0 +1,33 @@
+name: Publish recovered E2E repairs
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths:
+      - .chat-editor/e2e-recovered.patch.gz.b64
+      - .chat-editor/publish-e2e-recovered.py
+      - .github/workflows/chat-editor-publish-e2e-recovered.yml
+permissions:
+  contents: write
+concurrency:
+  group: pr3-recovered-e2e-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Publish the exact locally verified batch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp -r .chat-editor "$RUNNER_TEMP/recovered-e2e-transport"
+          python "$RUNNER_TEMP/recovered-e2e-transport/publish-e2e-recovered.py"

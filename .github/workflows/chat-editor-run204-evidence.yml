@@ -24,17 +24,21 @@ jobs:
           import base64,gzip,hashlib,io,json,re,subprocess,zipfile
           from pathlib import Path
           run=35420739453
+          head='ff81ffd4e846fa6606054b9d3b30dadffa4a6e18'
           prefix='repos/idanilovqa/AlbumHaven'
           def api(path):
               return subprocess.check_output(['gh','api','--allow-escape-sequences',f'{prefix}/{path}'])
+          metadata=json.loads(api(f'actions/runs/{run}'))
+          assert metadata['head_sha']==head
           jobs=json.loads(api(f'actions/runs/{run}/jobs?per_page=100'))['jobs']
           out=Path('.chat-editor/e2e-run204');out.mkdir(parents=True,exist_ok=True)
           summary=[]
           for job in jobs:
               if not job['name'].startswith('E2E: '):continue
+              assert job['head_sha']==head
               row={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','completed_at')}
               summary.append(row)
-              if job['status']!='completed' or job['conclusion']!='failure':continue
+              if job['status']!='completed' or job['conclusion'] not in ('failure','cancelled'):continue
               raw=api(f"actions/jobs/{job['id']}/logs")
               (out/f"{job['id']}.log.b64").write_text(base64.b64encode(gzip.compress(raw,mtime=0)).decode(),encoding='utf-8')
               row['log_sha256']=hashlib.sha256(raw).hexdigest()
@@ -45,20 +49,30 @@ jobs:
                       selected.update(range(max(0,i-3),min(len(lines),i+65)))
               (out/f"{job['id']}-failures.txt").write_text('\n'.join(f'{i+1}: {lines[i]}' for i in sorted(selected))+'\n',encoding='utf-8')
           artifacts=json.loads(api(f'actions/runs/{run}/artifacts?per_page=100'))['artifacts']
+          images=[]
           for artifact in artifacts:
               if not artifact['name'].startswith('functional-debug-'):continue
-              archive=zipfile.ZipFile(io.BytesIO(api(f"actions/artifacts/{artifact['id']}/zip")))
+              raw=api(f"actions/artifacts/{artifact['id']}/zip")
+              digest=artifact.get('digest')
+              if digest:assert digest=='sha256:'+hashlib.sha256(raw).hexdigest()
+              archive=zipfile.ZipFile(io.BytesIO(raw))
               for i,name in enumerate(archive.namelist()):
                   if name.endswith('error-context.md'):
+                      (out/f"context-{artifact['id']}-{i}.md").write_bytes(archive.read(name))
+                  if artifact['name']=='functional-debug-gallery-search-visual-1' and name.endswith('.png'):
                       data=archive.read(name)
-                      (out/f"context-{artifact['id']}-{i}.md").write_bytes(data)
-          (out/'manifest.json').write_text(json.dumps({'run_id':run,'jobs':summary,'artifacts':[{k:a.get(k) for k in ('id','name','size_in_bytes')} for a in artifacts]},indent=2)+'\n',encoding='utf-8')
+                      assert len(data)<10000000
+                      destination=f"visual-{artifact['id']}-{i}.png"
+                      (out/destination).write_bytes(data)
+                      images.append({'file':destination,'artifact_id':artifact['id'],'member':name,'sha256':hashlib.sha256(data).hexdigest()})
+          (out/'manifest.json').write_text(json.dumps({'run_id':run,'head_sha':head,'jobs':summary,'artifacts':[{k:a.get(k) for k in ('id','name','size_in_bytes')} for a in artifacts],'visuals':images},indent=2)+'\n',encoding='utf-8')
           print(json.dumps(summary,indent=2))
+          print('Rendered visual files:',len(images))
           PY
           git add .chat-editor/e2e-run204
-          git config user.name 'idanilovqa'
-          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if ! git diff --cached --quiet; then
-            git commit -m 'checkpoint: retain run 204 completed E2E failures'
+            git commit -m 'checkpoint: retain complete run 204 E2E failures and rendered screenshots'
             git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
           fi

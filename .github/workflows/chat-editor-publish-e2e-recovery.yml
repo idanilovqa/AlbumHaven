@@ -48,6 +48,7 @@ jobs:
           assert len(paths) == 27 and len(set(paths)) == 27
           assert all(p.startswith(('tests/e2e/', 'tests/js/', 'music_app/static/js/', 'docs/superpowers/plans/')) for p in paths)
           Path(os.environ['RUNNER_TEMP'], 'e2e-recovery-files.txt').write_text('\n'.join(paths))
+          subprocess.run(['git', 'restore', '--worktree', '--', '.chat-editor/e2e-recovery.patch.gz.b64'], check=True)
           subprocess.run(['git', 'switch', '--detach', os.environ['EXPECTED_HEAD']], check=True)
           subprocess.run(['git', 'apply', '--check', '--whitespace=error-all', str(patch_path)], check=True)
           subprocess.run(['git', 'apply', '--whitespace=error-all', str(patch_path)], check=True)

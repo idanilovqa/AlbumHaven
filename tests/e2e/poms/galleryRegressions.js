@@ -34,6 +34,33 @@ export class GalleryRegressions {
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
   }
   cover(card) { return card.locator('img').first(); }
+  async observeSelectionLoader() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe rendered selection loader transitions without modifying product state
+    return this.page.evaluateHandle(() => {
+      const loader = document.getElementById('library-loader');
+      const evidence = { selections: 0, warningExposures: 0, missingSpinners: 0 };
+      const inspect = () => {
+        if (loader.hidden || document.getElementById('library-loader-title')?.textContent !== 'Loading selection') return;
+        evidence.selections += 1;
+        if ([...loader.querySelectorAll('[role="alert"]')].some(alert => alert.getClientRects().length > 0)) {
+          evidence.warningExposures += 1;
+        }
+        if (!loader.querySelector('.library-loader-spinner')?.getClientRects().length) {
+          evidence.missingSpinners += 1;
+        }
+      };
+      const observer = new MutationObserver(inspect);
+      observer.observe(loader, { subtree: true, childList: true, attributes: true, characterData: true });
+      inspect();
+      return { finish() { inspect(); observer.disconnect(); return evidence; } };
+    });
+  }
+  async finishSelectionLoaderObservation(observation) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- read and disconnect the owned loader observer
+      return await observation.evaluate(value => value.finish());
+    } finally { await observation.dispose(); }
+  }
   async readCompletedStartupPartialView() {
     // parity-check: allow-read-only-measurement-evaluate -- observe the production full-hydration paint marker
     return this.page.evaluate(() => window.__ALBUM_HAVEN_STARTUP_METRICS__

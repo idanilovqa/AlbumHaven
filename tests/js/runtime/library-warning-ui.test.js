@@ -10,11 +10,12 @@ function load() {
   return context;
 }
 
-function renderScanWarning(problem) {
+function renderScanWarning(problem, scanPageVisible = true) {
   const context = load();
   const elements = new Map(['library-warning-button', 'library-warning-panel', 'library-scan-warning']
     .map(id => [id, { innerHTML: '', hidden: true, dataset: {} }]));
   context.document.getElementById = id => elements.get(id) || null;
+  elements.set('library-loader', { classList: { contains: () => scanPageVisible } });
   context.escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
   context.ButtonComponent = require('../../../music_app/static/js/button-component.js');
@@ -24,9 +25,13 @@ function renderScanWarning(problem) {
     state: 'warning', warning_token: 'owned-warning', problems: [problem],
   } });
   const notice = elements.get('library-scan-warning');
-  assert.equal(notice.hidden, false);
+  assert.equal(notice.hidden, !scanPageVisible);
   return notice.innerHTML;
 }
+
+test('status refresh keeps the Library notice hidden outside the dedicated scan page', () => {
+  renderScanWarning({ allowed_actions: { 'library.refresh': true } }, false);
+});
 
 test('watcher health renders a path-free Library notice with the authorized full scan action', () => {
   const html = renderScanWarning({

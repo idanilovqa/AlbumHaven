@@ -584,6 +584,8 @@ function renderLibraryLoader(data = {}, options = {}) {
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
   loader.classList?.toggle('is-scan-page', scanPageVisible);
+  setDomPropertyIfChanged(document.getElementById('library-scan-warning'), 'hidden',
+    !scanPageVisible || data.watcher_health?.state !== 'warning');
   const galleryWasHidden = scroll.hidden;
   setDomPropertyIfChanged(scroll, 'hidden', shouldShow);
   if (galleryWasHidden && !shouldShow && scroll.clientWidth > 0 && typeof virtualGrid !== 'undefined') {

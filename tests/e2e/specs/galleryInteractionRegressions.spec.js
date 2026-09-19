@@ -208,7 +208,7 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,s
   } finally {await fixture.restore();}
 });
 
-test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,stepLogger})=>{
+test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,searchToolbarActions,stepLogger})=>{
   const fixture=await createGalleryRegressionFixture(PERFORMANCE_AUTH_USERNAME);
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
@@ -224,6 +224,23 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,stepLo
       await ui.warningPanel.getByRole('button',{name:'Open Library/Scan',exact:true}).click();
       await expect(ui.scanWarning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
+    });
+    await stepLogger.step('Searching with active watcher health shows only the selection loader',async()=>{
+      await expect(ui.scanWarning).toBeHidden();
+      const observation=await ui.observeSelectionLoader();
+      let evidence;
+      try {
+        await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
+        await searchToolbarActions.waitForQuery('Neal Morse');
+        await galleryActions.waitForGalleryReady();
+      } finally { evidence=await ui.finishSelectionLoaderObservation(observation); }
+      expect(evidence.selections).toBeGreaterThan(0);
+      expect(evidence.warningExposures).toBe(0);
+      expect(evidence.missingSpinners).toBe(0);
+      await expect(ui.scanWarning).toBeHidden();
+      await expect(ui.warning).toBeVisible();
+      await ui.rootSidebar.click();
+      await galleryActions.waitForGalleryReady();
     });
     await stepLogger.step('Dismiss survives reload but keeps the warning on Library/Scan',async()=>{
       await ui.warning.click();

@@ -17,7 +17,8 @@ function renderLibraryWarning(data = {}) {
   const notice = buildOnPageAlertHtml({severity:'warning',title:'Library watcher needs attention',message,
     actionsHtml: (health.problems || []).some(p => p.allowed_actions?.['library.refresh'] === true)
       ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
-  scanNotice.hidden = !model.warning;
+  scanNotice.hidden = !model.warning
+    || !document.getElementById('library-loader')?.classList?.contains('is-scan-page');
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
   if (panel.dataset.warningToken !== model.token || !panel.innerHTML) {
     panel.dataset.warningToken = model.token;

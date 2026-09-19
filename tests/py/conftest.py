@@ -140,6 +140,28 @@ def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
     return payload
 
 
+def _preserve_pytest_owner_after_partial_removal(
+    path: Path,
+    owner: dict[str, object],
+    directory_identity: tuple[int, int],
+) -> bool:
+    """Keep a failed deletion recoverable without claiming a replacement root."""
+    try:
+        stat = path.stat()
+        if not stat.st_ino or path.is_symlink() or (stat.st_dev, stat.st_ino) != directory_identity:
+            return False
+        marker = path / _PYTEST_BASETEMP_OWNER_FILE
+        try:
+            with marker.open("x", encoding="utf-8") as stream:
+                json.dump(owner, stream, sort_keys=True)
+        except FileExistsError:
+            # Never replace a marker written by another owner.
+            return _owned_generated_pytest_root(path) == owner
+    except OSError:
+        return False
+    return True
+
+
 def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int, str] | None = None) -> bool:
     owner = _owned_generated_pytest_root(path)
     if owner is None:
@@ -150,10 +172,21 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
             return False
     elif _process_is_running(owner_identity[0]):
         return False
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    directory_identity = (stat.st_dev, stat.st_ino)
     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
         try:
             shutil.rmtree(path)
         except OSError:
+            if not path.exists():
+                return True
+            # rmtree can remove our marker before an open Windows log blocks the
+            # rest. Preserve ownership so final teardown can retry after closure.
+            if not _preserve_pytest_owner_after_partial_removal(path, owner, directory_identity):
+                return False
             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
                 return False
         if not path.exists():

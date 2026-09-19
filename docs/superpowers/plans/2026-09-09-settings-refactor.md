@@ -526,6 +526,21 @@ parity check pass. Native PR E2E verification remains required. No timeout,
 retry policy, benchmark, fixture population, audio architecture, skip policy,
 permission, task checkbox, final manual acceptance or merge authority is changed.
 
+### Native run 199 Python cleanup correction — September 18, 2026
+
+Run `35418317766` on `2ba1b63c` completed Python with one failure and 5,710
+passes: concurrent probe processes left an owned temporary directory behind.
+The cleanup path can delete its ownership marker before encountering an open
+Windows file, leaving the final teardown unable to recognize the remainder.
+Two deterministic regressions establish marker loss and unsafe retry against a
+replacement directory. The correction preserves the marker after partial removal
+only when the original device/file identity is unchanged; it never overwrites
+another marker, claims an unowned replacement, or increases cleanup attempts.
+The original concurrent-process and no-leaked-directory assertions remain.
+Focused local validation: 11 pass, two existing Windows-only cases await native
+Windows validation. This is harness cleanup, not a change to application data,
+E2E timeouts, benchmark policy, or the permission model. Full PR CI remains required.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

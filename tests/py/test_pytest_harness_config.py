@@ -315,3 +315,61 @@ def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
         (owned_root, (os.getpid(), "acde1234")),
         (owned_root, (os.getpid(), "acde1234")),
     ]
+
+
+def test_partial_cleanup_preserves_ownership_for_unconfigure_retry(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / 'workspace-temp'
+    owned_root = workspace_temp / 'pytest-444444-deadbeef'
+    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
+    (owned_root / 'locked.log').write_text('held until logging teardown', encoding='utf-8')
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def partially_locked_rmtree(path):
+        attempts.append(Path(path))
+        # Windows may delete early entries before encountering an open log file.
+        (path / '.album-haven-pytest-owner.json').unlink()
+        raise PermissionError('log handler still owns locked.log')
+
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', partially_locked_rmtree)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert len(attempts) == pytest_harness._PYTEST_ROOT_REMOVAL_ATTEMPTS
+    assert pytest_harness._owned_generated_pytest_root(owned_root) is not None
+    assert (owned_root / 'locked.log').read_text(encoding='utf-8') == 'held until logging teardown'
+
+    # Once the plugin closes the file, the final hook must still recognize its root.
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', real_rmtree)
+    assert pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert not owned_root.exists()
+
+
+def test_partial_cleanup_does_not_claim_a_replacement_directory(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / 'workspace-temp'
+    owned_root = workspace_temp / 'pytest-444444-deadbeef'
+    displaced_root = workspace_temp / 'preserved-original'
+    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
+    attempts = []
+
+    def replaced_rmtree(path):
+        attempts.append(Path(path))
+        path.rename(displaced_root)
+        path.mkdir()
+        (path / 'unowned.txt').write_text('must survive', encoding='utf-8')
+        raise PermissionError('directory was replaced')
+
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', replaced_rmtree)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert attempts == [owned_root]
+    assert not (owned_root / '.album-haven-pytest-owner.json').exists()
+    assert (owned_root / 'unowned.txt').read_text(encoding='utf-8') == 'must survive'
+    assert displaced_root.is_dir()

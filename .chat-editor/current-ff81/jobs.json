@@ -17,7 +17,8 @@
       "conclusion": "failure",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
       "completed_at": "2026-09-19T05:06:04Z",
-      "log_sha256": "61b2ad8c58f5f9ecf22cc9407b7e8a5689a95ef5720b642891b76f00e6c29c9d"
+      "log_sha256": "61b2ad8c58f5f9ecf22cc9407b7e8a5689a95ef5720b642891b76f00e6c29c9d",
+      "log_lines": 13525
     },
     {
       "id": 105842633839,
@@ -54,10 +55,12 @@
     {
       "id": 105842633931,
       "name": "E2E: gallery-search-visual",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "failure",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
-      "completed_at": null
+      "completed_at": "2026-09-19T05:31:21Z",
+      "log_sha256": "54233475483789667b028e429b63c7852b268b2254dbd64eaffc599a68e4f890",
+      "log_lines": 2924
     },
     {
       "id": 105842633938,
@@ -70,10 +73,10 @@
     {
       "id": 105842633951,
       "name": "E2E: cover-providers",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "success",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
-      "completed_at": null
+      "completed_at": "2026-09-19T05:26:09Z"
     },
     {
       "id": 105842633961,
@@ -82,7 +85,8 @@
       "conclusion": "failure",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
       "completed_at": "2026-09-19T05:14:29Z",
-      "log_sha256": "ff65ce6160f63fd0b5ab2dcfd582cc535a8d34643e0af90c604d68ce792d865d"
+      "log_sha256": "ff65ce6160f63fd0b5ab2dcfd582cc535a8d34643e0af90c604d68ce792d865d",
+      "log_lines": 2531
     },
     {
       "id": 105842633969,

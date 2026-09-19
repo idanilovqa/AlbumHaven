@@ -4,7 +4,7 @@ on:
     branches: [2026-09-18-pr3-e2e-batch]
     paths: [.github/workflows/chat-editor-diagnose-cleanup-202.yml]
 permissions:
-  contents: read
+  contents: write
 jobs:
   diagnose:
     runs-on: windows-2025
@@ -15,7 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
+          fetch-depth: 0
+      - name: Preserve diagnostic helper and check out exact current PR head
+        run: |
+          cp .chat-editor/diagnose-cleanup.py "$RUNNER_TEMP/diagnose-cleanup.py"
+          git switch --detach ff81ffd4e846fa6606054b9d3b30dadffa4a6e18
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -23,87 +27,49 @@ jobs:
           cache-dependency-path: requirements.txt
       - name: Install repository dependencies
         run: python -m pip install -r requirements.txt
-      - name: Preserve exact tracked text source for local focused investigation
+      - name: Archive exact tracked text to the diagnostic branch only
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
-          import hashlib, json, os, subprocess, tarfile
+          import base64,gzip,hashlib,json,os,subprocess,urllib.request,urllib.error
           from pathlib import Path
-          archive = Path(os.environ['RUNNER_TEMP']) / 'pr3-ff81ffd4-source.tar.gz'
-          names = subprocess.check_output(['git', 'ls-files', '-z']).decode().split('\0')
-          extensions = {'.py','.js','.cjs','.mjs','.css','.html','.json','.md','.txt','.ini','.yml','.yaml','.toml','.sql','.ps1'}
-          names = [name for name in names if name and Path(name).suffix in extensions and not name.startswith(('.codex-restart/', '.chat-editor/', 'docs/design-mockups/'))]
-          with tarfile.open(archive, 'w:gz') as tar:
-              for name in names:
-                  path = Path(name)
-                  if path.is_file() and not path.is_symlink():
-                      tar.add(path, arcname=name, recursive=False)
-          print('Snapshot head:', subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip())
-          print('Snapshot bytes:', archive.stat().st_size)
-          print('Snapshot SHA256:', hashlib.sha256(archive.read_bytes()).hexdigest())
+          head='ff81ffd4e846fa6606054b9d3b30dadffa4a6e18'
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==head
+          names=subprocess.check_output(['git','ls-tree','-r','--name-only',head],text=True).splitlines()
+          ext={'.py','.js','.cjs','.mjs','.css','.html','.json','.md','.txt','.ini','.yml','.yaml','.toml','.sql','.ps1'}
+          names=[n for n in names if Path(n).suffix in ext and not n.startswith(('.codex-restart/','.chat-editor/','docs/design-mockups/'))]
+          # Feed paths through stdin to avoid the Windows process argument-length limit.
+          raw=subprocess.check_output(['git','archive','--format=tar',head])
+          import io,tarfile
+          trimmed=io.BytesIO()
+          selected=set(names)
+          with tarfile.open(fileobj=io.BytesIO(raw),mode='r:') as source,tarfile.open(fileobj=trimmed,mode='w:') as target:
+              for member in source:
+                  if member.isfile() and member.name in selected:
+                      target.addfile(member,source.extractfile(member))
+          archive=gzip.compress(trimmed.getvalue(),mtime=0)
+          filename='.chat-editor/current-ff81ffd4-source.tar.gz'
+          branch='2026-09-18-pr3-e2e-batch'
+          url='https://api.github.com/repos/idanilovqa/AlbumHaven/contents/'+filename
+          headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','User-Agent':'AlbumHaven-owned-diagnostic'}
+          payload={'message':'checkpoint: preserve exact ff81ffd4 source for the authorized repair','branch':branch,'content':base64.b64encode(archive).decode()}
+          try:
+              previous=json.load(urllib.request.urlopen(urllib.request.Request(url+'?ref='+branch,headers=headers)))
+              payload['sha']=previous['sha']
+          except urllib.error.HTTPError as exc:
+              if exc.code!=404: raise
+          result=json.load(urllib.request.urlopen(urllib.request.Request(url,data=json.dumps(payload).encode(),headers=headers,method='PUT')))
+          print('Source archive head:',head,'bytes:',len(archive),'sha256:',hashlib.sha256(archive).hexdigest())
+          print('Diagnostic branch archive blob:',result['content']['sha'])
           PY
       - name: Capture bounded diagnostic repetitions and exact cleanup errors
-        run: |
-          python - <<'PY'
-          import os, subprocess
-          from pathlib import Path
-          folder = Path(os.environ['RUNNER_TEMP']) / 'cleanup-diagnostics'
-          folder.mkdir()
-          os.environ['AH_CLEANUP_DIAGNOSTICS'] = str(folder)
-          harness = Path('tests/py/conftest.py')
-          source = harness.read_text(encoding='utf-8')
-          source += '''
-          # Temporary read-only diagnostic instrumentation; never published to PR.
-          def _cleanup_diagnostic(event, path, **values):
-              import logging
-              output = Path(os.environ["AH_CLEANUP_DIAGNOSTICS"]) / f"process-{os.getpid()}.jsonl"
-              try:
-                  values.update(event=event, pid=os.getpid(), path=str(path), workspace=str(_workspace_pytest_temp_root()),
-                                exists=path.exists(), owner=_owned_generated_pytest_root(path),
-                                remaining=[str(item.relative_to(path)) for item in path.rglob("*")][:50] if path.is_dir() else [],
-                                file_handlers=[{"file":str(getattr(ref(),"baseFilename","")), "closed":getattr(getattr(ref(),"stream",None),"closed",None)} for ref in logging._handlerList if ref() is not None and getattr(ref(),"baseFilename",None)])
-                  with output.open("a", encoding="utf-8") as stream:
-                      stream.write(json.dumps(values, default=str) + "\\n")
-              except Exception as exc:
-                  print("cleanup diagnostic failed:", type(exc).__name__, file=sys.stderr)
-          _diagnostic_original_rmtree = shutil.rmtree
-          def _diagnostic_rmtree(path, *args, **kwargs):
-              try:
-                  return _diagnostic_original_rmtree(path, *args, **kwargs)
-              except OSError as exc:
-                  _cleanup_diagnostic("rmtree-error", Path(path), error=repr(exc), errno=exc.errno, winerror=getattr(exc,"winerror",None), filename=exc.filename, filename2=exc.filename2)
-                  raise
-          shutil.rmtree = _diagnostic_rmtree
-          _diagnostic_original_remove = _remove_owned_generated_pytest_root
-          def _remove_owned_generated_pytest_root(path, *, expected_owner=None):
-              result = _diagnostic_original_remove(path, expected_owner=expected_owner)
-              _cleanup_diagnostic("remove-result", path, expected_owner=expected_owner, result=result)
-              return result
-          '''
-          import textwrap
-          harness.write_text(source[:source.index('          # Temporary read-only diagnostic')] + textwrap.dedent(source[source.index('          # Temporary read-only diagnostic'):]), encoding='utf-8', newline='\n')
-          command = ['python','-m','pytest','-q','--tb=short','tests/py/test_pytest_harness_config.py::test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_both']
-          results=[]
-          for attempt in range(1, 13):
-              result=subprocess.run(command,capture_output=True,text=True,timeout=120)
-              (folder/f'attempt-{attempt:02d}.log').write_text(result.stdout+'\n'+result.stderr,encoding='utf-8')
-              results.append(result.returncode)
-              print(f'DIAGNOSTIC attempt {attempt}: exit={result.returncode}', flush=True)
-              if result.returncode:
-                  print(result.stdout[-5000:]+result.stderr[-5000:])
-                  break
-          print('Diagnostic exit codes:', results)
-          for path in sorted(folder.glob('process-*.jsonl')):
-              for line in path.read_text(encoding='utf-8').splitlines():
-                  if '"result": false' in line or '"event": "rmtree-error"' in line:
-                      print(line)
-          PY
-      - name: Retain diagnostic evidence and source
+        run: python "$RUNNER_TEMP/diagnose-cleanup.py"
+      - name: Retain diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pr3-cleanup-diagnostic-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/cleanup-diagnostics
-            ${{ runner.temp }}/pr3-ff81ffd4-source.tar.gz
+          path: ${{ runner.temp }}/cleanup-diagnostics
           if-no-files-found: error
           retention-days: 14

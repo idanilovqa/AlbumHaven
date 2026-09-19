@@ -1,0 +1,290 @@
+[
+  {
+    "method": "GET",
+    "url_path": "/account/appearance",
+    "time": "2026-09-19T00:40:14.473Z",
+    "status": 200,
+    "preferences_response": {
+      "palette_id": null,
+      "panel_index": 0,
+      "player_override": null,
+      "compact_player_style": "docked",
+      "album_details_layout": "classic_bar",
+      "album_playing_row_animation": "enabled",
+      "alert_family": "ember",
+      "loop_control_style": "capsule",
+      "main_surface_color": null,
+      "panel_background_color": null,
+      "waveform_recent_colors": [],
+      "revision": 0,
+      "interaction_overrides": {
+        "item_hover": null,
+        "item_selected": null,
+        "button_hover_background": null,
+        "button_pressed": null,
+        "item_outline": {
+          "source": "automatic",
+          "color": null
+        }
+      },
+      "selection_accent": {
+        "enabled": true,
+        "color": "#34CA78"
+      },
+      "player_style_override": null,
+      "player_recent_sets": [],
+      "csrf_token": "HSDJgU1pQYQl2dugclPIGsUqqTqejWce3VQgtH_W-5g"
+    }
+  },
+  {
+    "method": "GET",
+    "url_path": "/account/appearance",
+    "time": "2026-09-19T00:40:15.404Z",
+    "status": 200,
+    "preferences_response": {
+      "palette_id": null,
+      "panel_index": 0,
+      "player_override": null,
+      "compact_player_style": "docked",
+      "album_details_layout": "classic_bar",
+      "album_playing_row_animation": "enabled",
+      "alert_family": "ember",
+      "loop_control_style": "capsule",
+      "main_surface_color": null,
+      "panel_background_color": null,
+      "waveform_recent_colors": [],
+      "revision": 0,
+      "interaction_overrides": {
+        "item_hover": null,
+        "item_selected": null,
+        "button_hover_background": null,
+        "button_pressed": null,
+        "item_outline": {
+          "source": "automatic",
+          "color": null
+        }
+      },
+      "selection_accent": {
+        "enabled": true,
+        "color": "#34CA78"
+      },
+      "player_style_override": null,
+      "player_recent_sets": [],
+      "csrf_token": "HSDJgU1pQYQl2dugclPIGsUqqTqejWce3VQgtH_W-5g"
+    }
+  },
+  {
+    "method": "PUT",
+    "url_path": "/account/appearance",
+    "time": "2026-09-19T00:40:22.394Z",
+    "status": 200,
+    "preferences_response": {
+      "palette_id": "paper",
+      "panel_index": 1,
+      "player_override": null,
+      "compact_player_style": "floating",
+      "album_details_layout": "editorial_canvas",
+      "album_playing_row_animation": "enabled",
+      "alert_family": "signal",
+      "loop_control_style": "capsule",
+      "main_surface_color": null,
+      "panel_background_color": null,
+      "waveform_recent_colors": [
+        "#6789AB",
+        "#56789A"
+      ],
+      "revision": 1,
+      "interaction_overrides": {
+        "item_hover": "#31465D",
+        "item_selected": "#3F5F7E",
+        "button_hover_background": "#27384B",
+        "button_pressed": "#203246",
+        "item_outline": {
+          "source": "custom",
+          "color": "#86B7EF"
+        }
+      },
+      "selection_accent": {
+        "enabled": true,
+        "color": "#A1B2C3"
+      },
+      "player_style_override": {
+        "surface": {
+          "mode": "gradient",
+          "angle": 137,
+          "start": "#123456",
+          "end": "#234567"
+        },
+        "controls": {
+          "fill": "#51A1C4",
+          "border": "#2F91D1"
+        },
+        "waveform": {
+          "fill": "#56789A",
+          "edge": "#6789AB"
+        },
+        "handles": {
+          "color": "#789ABC"
+        }
+      },
+      "player_recent_sets": [
+        {
+          "surface": {
+            "mode": "gradient",
+            "angle": 137,
+            "start": "#123456",
+            "end": "#234567"
+          },
+          "controls": {
+            "fill": "#51A1C4",
+            "border": "#2F91D1"
+          },
+          "waveform": {
+            "fill": "#56789A",
+            "edge": "#6789AB"
+          },
+          "handles": {
+            "color": "#789ABC"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "url_path": "/account/appearance",
+    "time": "2026-09-19T00:40:38.060Z",
+    "status": 200,
+    "preferences_response": {
+      "palette_id": "paper",
+      "panel_index": 1,
+      "player_override": null,
+      "compact_player_style": "floating",
+      "album_details_layout": "editorial_canvas",
+      "album_playing_row_animation": "enabled",
+      "alert_family": "signal",
+      "loop_control_style": "capsule",
+      "main_surface_color": null,
+      "panel_background_color": null,
+      "waveform_recent_colors": [
+        "#6789AB",
+        "#56789A"
+      ],
+      "revision": 1,
+      "interaction_overrides": {
+        "item_hover": "#31465D",
+        "item_selected": "#3F5F7E",
+        "button_hover_background": "#27384B",
+        "button_pressed": "#203246",
+        "item_outline": {
+          "source": "custom",
+          "color": "#86B7EF"
+        }
+      },
+      "selection_accent": {
+        "enabled": true,
+        "color": "#A1B2C3"
+      },
+      "player_style_override": {
+        "surface": {
+          "mode": "gradient",
+          "angle": 137,
+          "start": "#123456",
+          "end": "#234567"
+        },
+        "controls": {
+          "fill": "#51A1C4",
+          "border": "#2F91D1"
+        },
+        "waveform": {
+          "fill": "#56789A",
+          "edge": "#6789AB"
+        },
+        "handles": {
+          "color": "#789ABC"
+        }
+      },
+      "player_recent_sets": [
+        {
+          "surface": {
+            "mode": "gradient",
+            "angle": 137,
+            "start": "#123456",
+            "end": "#234567"
+          },
+          "controls": {
+            "fill": "#51A1C4",
+            "border": "#2F91D1"
+          },
+          "waveform": {
+            "fill": "#56789A",
+            "edge": "#6789AB"
+          },
+          "handles": {
+            "color": "#789ABC"
+          }
+        }
+      ],
+      "csrf_token": "HSDJgU1pQYQl2dugclPIGsUqqTqejWce3VQgtH_W-5g"
+    }
+  },
+  {
+    "method": "PUT",
+    "url_path": "/account/appearance",
+    "time": "2026-09-19T00:40:38.209Z",
+    "status": 200,
+    "preferences_response": {
+      "palette_id": null,
+      "panel_index": 0,
+      "player_override": null,
+      "compact_player_style": "docked",
+      "album_details_layout": "classic_bar",
+      "album_playing_row_animation": "enabled",
+      "alert_family": "ember",
+      "loop_control_style": "capsule",
+      "main_surface_color": null,
+      "panel_background_color": null,
+      "waveform_recent_colors": [
+        "#6789AB",
+        "#56789A"
+      ],
+      "revision": 2,
+      "interaction_overrides": {
+        "item_hover": null,
+        "item_selected": null,
+        "button_hover_background": null,
+        "button_pressed": null,
+        "item_outline": {
+          "source": "automatic",
+          "color": null
+        }
+      },
+      "selection_accent": {
+        "enabled": true,
+        "color": "#34CA78"
+      },
+      "player_style_override": null,
+      "player_recent_sets": [
+        {
+          "surface": {
+            "mode": "gradient",
+            "angle": 137,
+            "start": "#123456",
+            "end": "#234567"
+          },
+          "controls": {
+            "fill": "#51A1C4",
+            "border": "#2F91D1"
+          },
+          "waveform": {
+            "fill": "#56789A",
+            "edge": "#6789AB"
+          },
+          "handles": {
+            "color": "#789ABC"
+          }
+        }
+      ]
+    }
+  }
+]

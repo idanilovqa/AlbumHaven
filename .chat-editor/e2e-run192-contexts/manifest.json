@@ -1,0 +1,15 @@
+{
+  "run": 35408558207,
+  "head": "4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091",
+  "artifact": 10574708871,
+  "selected_names": [
+    "wave-01-01-playwright-config-js/problematicFileNavigation--6bb93-ic-track-from-album-details-functional/error-context.md",
+    "wave-01-01-playwright-config-js/problematicFileNavigation--6bb93-ic-track-from-album-details-functional/trace.zip",
+    "wave-01-02-playwright-config-js/problematicFileNavigation--00ba5-stic-persistence-and-reload-functional/error-context.md",
+    "wave-01-02-playwright-config-js/problematicFileNavigation--00ba5-stic-persistence-and-reload-functional/trace.zip",
+    "wave-02-14-playwright-config-js/appearanceControls-FTC-APP-3cc8b--preserves-it-across-reload-functional/error-context.md",
+    "wave-02-14-playwright-config-js/appearanceControls-FTC-APP-3cc8b--preserves-it-across-reload-functional/trace.zip",
+    "wave-03-33-playwright-config-js/problematicFileNavigation--160bf-sion-creation-and-reversion-functional/error-context.md",
+    "wave-03-33-playwright-config-js/problematicFileNavigation--160bf-sion-creation-and-reversion-functional/trace.zip"
+  ]
+}

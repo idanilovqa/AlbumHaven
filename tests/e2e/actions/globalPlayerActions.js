@@ -584,14 +584,9 @@ export class GlobalPlayerActions {
       bounds.x + (bounds.width / 2),
       bounds.y + (bounds.height / 2),
     );
-    if (target === 'cancel') {
-      await expect(locator).toHaveCSS('color', 'rgb(239, 68, 68)');
-    } else if (target === 'create') {
-      const themedPlayerInk = await this.globalPlayer.readThemedPlayerInkColor();
-      await expect(locator).toHaveCSS(
-        'color',
-        themedPlayerInk.active ? themedPlayerInk.color : 'rgb(74, 222, 128)',
-      );
+    if (target === 'cancel' || target === 'create') {
+      const semanticColor = await this.globalPlayer.readLoopActionHoverColor(target);
+      await expect(locator).toHaveCSS('color', semanticColor);
     }
     return this.readLoopActionVisualState();
   }

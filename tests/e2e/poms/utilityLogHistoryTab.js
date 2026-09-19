@@ -16,10 +16,13 @@ export class UtilityLogHistoryTab extends BasePage {
     this.exportButton = page.locator('#utility-problematic-detail [data-log-history-action="export-current"]');
     this.consoleLines = page.locator('#utility-problematic-detail .console-log__line');
     this.console = page.locator('#utility-problematic-detail .console-log');
+    this.emptySnapshot = this.console.getByText('No events in this snapshot.', { exact: true });
     this.detailTitle = page.locator('#utility-problematic-detail .utility-log-toolbar > h3');
     this.refresh = page.locator('#utility-problematic-detail [data-log-history-action="refresh"]');
     this.periodButton = page.locator('#utility-problem-filter-button');
-    this.periodDialog = page.getByRole('dialog', { name: 'Filter log period', exact: true });
+    this.periodDialog = page.getByRole('dialog', { name: 'Date range', exact: true });
+    this.periodFrom = this.periodDialog.getByRole('textbox', { name: 'From date', exact: true });
+    this.periodTo = this.periodDialog.getByRole('textbox', { name: 'To date', exact: true });
     this.periodRow = page.locator('[data-log-query-row="1"]');
     this.clearPeriodButton = page.locator('[data-log-history-action="clear"]');
   }

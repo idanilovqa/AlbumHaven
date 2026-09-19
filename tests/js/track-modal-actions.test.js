@@ -439,3 +439,20 @@ test('cover readiness rejects loaded toolbar icons when the actual artwork is un
   art.size = 280;
   assert.equal(predicate(selectors), true, 'the actual decoded visible artwork satisfies readiness');
 });
+
+test('TrackModal constructs the shared AlbumTrackTable in the real modal scope', async () => {
+  const { TrackModal } = await import('../e2e/poms/trackModal.js');
+  const { AlbumTrackTable } = await import('../e2e/poms/components/albumTrackTable.js');
+  function locator(description) {
+    return {
+      description,
+      locator: selector => locator(`${description} ${selector}`),
+      getByRole: role => locator(`${description} role:${role}`),
+      nth: index => locator(`${description} nth:${index}`),
+    };
+  }
+  const modal = new TrackModal(locator('page'));
+  assert.ok(modal.albumTrackTable instanceof AlbumTrackTable);
+  assert.equal(modal.albumTrackTable.root.description, 'page #track-modal .album-track-table');
+  assert.equal(modal.albumTrackTable.total.description, 'page #track-modal .album-track-table .album-track-table__total');
+});

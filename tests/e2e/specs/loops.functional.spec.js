@@ -23,7 +23,7 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
-  await utilityAppearanceActions.selectSeekbarMode('waveform');
+  await utilityAppearanceActions.saveSeekbarMode('waveform');
   await settingsModalAppBarActions.closeSettings();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
   const playbackMark = await playbackEvidence.playbackMark();
@@ -97,7 +97,9 @@ test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot
   expect(downloaded.document.count).toBe(captured.items.length);
   const history = utilityLogHistoryActions.utilityLogHistoryTab;
   await history.periodButton.click();
-  await history.periodDialog.getByRole('button', { name: 'Today', exact: true }).click();
+  // The shared calendar opens with today's start/end; presets belong to Export all logs.
+  await expect(history.periodFrom).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
+  await expect(history.periodTo).toHaveValue(await history.periodFrom.inputValue());
   const [periodResponse] = await Promise.all([
     page.waitForResponse(value => value.request().method() === 'GET' && new URL(value.url()).pathname === '/utilities/log-history'),
     history.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click(),
@@ -265,7 +267,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('waveform');
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
     await settingsModalAppBarActions.closeSettings();
     playingPlayerLayout = await globalPlayerActions.readLoopActionVisualState();
     expect(playingPlayerLayout.coverCenterY).not.toBeNull();
@@ -1072,7 +1074,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
-  await utilityAppearanceActions.selectSeekbarMode('waveform');
+  await utilityAppearanceActions.saveSeekbarMode('waveform');
   await settingsModalAppBarActions.closeSettings();
 
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);

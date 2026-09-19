@@ -95,7 +95,12 @@
     );
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg };
+  function setDisabled(element, disabled) {
+    element.disabled = Boolean(disabled);
+    element.setAttribute('aria-disabled', String(element.disabled));
+  }
+
+  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

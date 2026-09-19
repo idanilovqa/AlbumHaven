@@ -798,8 +798,8 @@ test.describe('isolated scan performance benchmarks', () => {
       await scanPageActions.expectBrowseContextCleared();
       await navigationPanelActions.selectSidebarArtistByName(BACKGROUND_BROWSE_ARTIST_NAME);
       await scanPageActions.waitForDedicatedPageHidden({ timeout: 60000 });
-      // Selecting a different primary artist clears search under the approved Gallery contract.
-      await searchToolbarActions.waitForQuery('', { timeout: 60000 });
+      // Primary-artist navigation preserves the committed query and its filtered tree.
+      await searchToolbarActions.waitForQuery(BACKGROUND_BROWSE_QUERY, { timeout: 60000 });
       await navigationPanelActions.waitForSidebarArtistNames(BACKGROUND_BROWSE_ARTIST_NAMES, { timeout: 60000 });
       await navigationPanelActions.waitForSidebarSelection(BACKGROUND_BROWSE_ARTIST_NAME, { timeout: 60000 });
       expect(await navigationPanelActions.readSidebarArtistNames()).toEqual(BACKGROUND_BROWSE_ARTIST_NAMES);
@@ -807,7 +807,7 @@ test.describe('isolated scan performance benchmarks', () => {
       expect(await navigationPanelActions.readActiveSidebarArtistName()).toBe(BACKGROUND_BROWSE_ARTIST_NAME);
       await galleryActions.waitForSelectedArtistGallery(BACKGROUND_BROWSE_ARTIST_NAME, {
         timeout: 60000,
-        queryValue: '',
+        queryValue: BACKGROUND_BROWSE_QUERY,
         requireExclusiveView: true,
       });
       await galleryActions.waitForVisibleGalleryCoversLoaded({

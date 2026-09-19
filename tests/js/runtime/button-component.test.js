@@ -157,3 +157,16 @@ test('Jinja ActionButton macro shares the JavaScript contract and accepts struct
   assert.match(macro, /action-button__content/);
   assert.match(macro, /caller\(\)/);
 });
+
+test('shared Button state changes update both native and accessible disabled state', () => {
+  const { setDisabled } = require(componentPath);
+  const attributes = new Map([['aria-disabled', 'true']]);
+  const element = { disabled: true, setAttribute(name, value) { attributes.set(name, value); } };
+  assert.equal(typeof setDisabled, 'function');
+  setDisabled(element, false);
+  assert.equal(element.disabled, false);
+  assert.equal(attributes.get('aria-disabled'), 'false');
+  setDisabled(element, true);
+  assert.equal(element.disabled, true);
+  assert.equal(attributes.get('aria-disabled'), 'true');
+});

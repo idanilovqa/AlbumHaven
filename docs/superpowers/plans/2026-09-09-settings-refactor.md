@@ -389,6 +389,44 @@ Pinned Windows Chrome verification therefore precedes publication, followed by t
 three full native jobs. A focused result is not a complete PR or release pass.
 No existing task checkbox changed; the plan has no numeric checkbox counter.
 
+### E2E repair recovery checkpoint — September 18, 2026
+
+The owner requested recovery and publication of the earlier unpushed E2E repair
+batch, followed by repair of the remaining complete CI failure inventory. This
+supersedes historical no-push instructions for these repairs only, not merge,
+release or final manual acceptance. Baseline: `ea256e48e5b72e1617f01c9954beec3b432e7da2`,
+PR Gates #189 (`35389965541`). All nine completed E2E job logs, hashes and job
+metadata are retained on `2026-09-18-pr3-e2e-batch` in `.chat-editor/e2e-run189/`.
+
+The recovered application fixes synchronize native and accessible disabled
+state for P08/P09 through the shared Button component, retaining permission and
+selection checks; and restore Scan Page Browse while its previous Gallery and
+nonempty query are deliberately retained but hidden. Pending transitions and
+duplicate submissions remain blocked. No benchmark ceiling, grace, retry,
+timeout, readiness interval, dataset or audio behavior is changed.
+
+The owner-approved recovered contract repairs preserve B07 semantic action
+colors rather than player text ink; keep Appearance selection staged until the
+shared Save action; verify P01/P02's single three-column Problems table; recognize
+the H02 ConsoleLog empty snapshot; use the shared Date range form for H03 while
+leaving export presets on Export all logs; retain search until explicit Clear;
+check pointer and keyboard account-menu focus separately; include the existing
+Admin log-export capability; and acknowledge the intentionally unavailable I01
+root's persistent watcher warning through its visible Dismiss button. The
+TrackModal page object now constructs the existing shared AlbumTrackTable in
+its own modal scope, removing a common failure before actual scenario assertions.
+
+Recovery verification repeated the earlier tests rather than assuming their
+results survived: 15 new regression failures were witnessed on the unchanged
+baseline; the completed combined focused run passes 457 tests with no failures
+or skips. The runtime bundle was regenerated with the repository builder and
+the production-parity check passed. Local browser navigation was policy-blocked
+in the earlier investigation; these Node checks are not native browser passes.
+The recovered batch must still pass native E2E and performance CI, which may
+expose further failures beyond the repaired shared helper. The previously green
+Python, JavaScript, component and auth jobs remain required. No task checkbox or
+final-acceptance claim is changed.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

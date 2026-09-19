@@ -4734,11 +4734,17 @@ function renderLibraryLoader(data = {}, options = {}) {
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
-  const canBrowseScanned = shouldShow && !hasSearch
+  // The dedicated page hides, but deliberately retains, the previous gallery and
+  // query. Its Browse action must not wait for that retained view to become empty.
+  const retainedBrowseAvailable = scanPageVisible
+    && (scanBusy || relBusy || state.awaitingInitialDataRefresh)
+    && Number(state.view?.album_count || 0) > 0;
+  const canBrowseScanned = shouldShow && (scanPageVisible || !hasSearch)
     && !pendingViewTransition
     && (
       finalizingActiveScan
-      || shouldOfferBrowseScannedLibraryAction(state.view, data, state.awaitingInitialDataRefresh)
+      || retainedBrowseAvailable
+      || shouldOfferBrowseScannedLibraryAction(scanPageVisible ? {} : state.view, data, state.awaitingInitialDataRefresh)
     );
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
@@ -18165,7 +18171,7 @@ function syncProblemSuggestionSelection() {
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
     label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
-    apply.disabled = !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy);
+    ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }
 function syncProblemExclusionSelection() {
@@ -18177,7 +18183,7 @@ function syncProblemExclusionSelection() {
     button.setAttribute('aria-pressed', keys.length && keys.every(key => state.utility.problemExclusionSelections?.[key]) ? 'true' : 'false');
   });
   const action = document.querySelector?.('[data-open-exclusion-confirm]');
-  if (action) action.disabled = !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage'];
+  if (action) ButtonComponent.setDisabled(action, !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage']);
 }
 
 // END js/runtime/utility-list-builders.js

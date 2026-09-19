@@ -2930,7 +2930,7 @@ function syncProblemSuggestionSelection() {
   if (apply) {
     const label = apply.querySelector?.('.ui-button__content') || apply;
     label.textContent = Object.values(state.utility.proposalSelections || {}).some(Boolean) ? 'Apply' : 'Apply All';
-    apply.disabled = !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy);
+    ButtonComponent.setDisabled(apply, !getSelectedProblematicAlbum()?.allowed_actions?.['library.files.edit_tags'] || !getApplicableProblemSuggestions().length || Boolean(state.utility.proposalApplyBusy));
   }
 }
 function syncProblemExclusionSelection() {
@@ -2942,5 +2942,5 @@ function syncProblemExclusionSelection() {
     button.setAttribute('aria-pressed', keys.length && keys.every(key => state.utility.problemExclusionSelections?.[key]) ? 'true' : 'false');
   });
   const action = document.querySelector?.('[data-open-exclusion-confirm]');
-  if (action) action.disabled = !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage'];
+  if (action) ButtonComponent.setDisabled(action, !getIgnoredRepairRowKeys().length || !getSelectedProblematicAlbum()?.allowed_actions?.['library.rules.manage']);
 }

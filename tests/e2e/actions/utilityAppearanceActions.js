@@ -36,15 +36,17 @@ export class UtilityAppearanceActions {
     }
     const input = this.utilityAppearanceTab.seekbarModeInput(normalized);
     await input.check();
-    await this.utilityAppearanceTab.waitForPageCondition((expected) => {
-      const selected = document.querySelector(expected.selector);
-      return selected instanceof HTMLInputElement
-        && selected.checked
-        && state.player?.appearance?.seekbarMode === expected.mode;
-    }, { timeout: 60000 }, {
-      mode: normalized,
-      selector: this.utilityAppearanceTab.seekbarModeSelectorFor(normalized),
-    });
+    await expect(input).toBeChecked();
+  }
+
+  async saveSeekbarMode(mode) {
+    const normalized = mode === 'waveform' ? 'waveform' : 'default';
+    await this.selectSeekbarMode(normalized);
+    // Selection is a draft; playback changes only through the shared Save action.
+    if (await this.utilityAppearanceTab.editorFooter.primary.root.isEnabled()) await this.save();
+    await expect(this.utilityAppearanceTab.globalPlayer).toHaveAttribute(
+      'data-player-seekbar-presentation', normalized === 'waveform' ? 'waveform' : 'regular',
+    );
   }
 
   async saveCompactPlayerStyle(style) {

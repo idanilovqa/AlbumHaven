@@ -11,6 +11,7 @@ export class TrackModal extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.dialog = page.locator(this.dialogSelector);
+    this.albumTrackTable = new AlbumTrackTable(this.dialog);
     this.loadingRow = page.locator(this.loadingRowSelector);
     this.trackRows = page.locator(this.trackRowSelector);
     this.closeButton = page.locator(this.closeButtonSelector);

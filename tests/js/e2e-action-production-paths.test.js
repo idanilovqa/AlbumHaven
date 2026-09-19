@@ -4610,7 +4610,7 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(spec, /FTC-UTIL-LOOPS-021 \/ FTC-UTIL-LOOPS-023 \/ FTC-UTIL-LOOPS-024/);
   assert.match(
     spec,
-    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.selectSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
+    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.saveSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
   );
   assert.match(
     spec,

@@ -13,7 +13,7 @@ export class UtilityLogHistoryActions {
 
   async readSummary() {
     const detailTitle = this.utilityLogHistoryTab.detailTitle;
-    const emptyState = this.utilityLogHistoryTab.mainBody.emptyState;
+    const emptyState = this.utilityLogHistoryTab.emptySnapshot;
     return {
       itemCount: await this.utilityLogHistoryTab.listItems.count(),
       detailTitle: await detailTitle.count() ? String(await detailTitle.textContent() || '').trim() : '',

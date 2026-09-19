@@ -849,3 +849,33 @@ test('revealing the gallery recalculates columns after a hidden search render', 
   context.renderLibraryLoader({});
   assert.equal(resized, 1);
 });
+
+for (const query of ['', 'Scan Artist 00']) {
+  for (const phase of ['indexing', 'finalizing']) {
+    test(`dedicated Scan Page exposes retained browsing during ${phase} with ${query ? 'a saved query' : 'the root gallery'}`, () => {
+      const { context, browseButton, cancelButton } = createLoaderRenderFixture();
+      context.savedQuery = query;
+      context.scanPhase = phase;
+      vm.runInContext(`
+        state.view = {
+          query: savedQuery, selected_artist: savedQuery ? 'Scan Artist 001' : '',
+          album_count: 10, artists_sidebar: [{ artist: 'Scan Artist 001', count: 10 }],
+          artist_groups: [{ artist: 'Scan Artist 001', albums: [{ key: 'scan::one' }] }],
+          primary_artist_groups: [], family_artist_groups: [],
+        };
+        state.status = { scan_in_progress: true, scan_phase: scanPhase, scan_mode: 'background', album_total: 1000 };
+        state.awaitingInitialDataRefresh = false;
+        state.ui.pendingViewTransition = false;
+        state.ui.scanPageReturnContext = { view: state.view, searchDraftQuery: savedQuery };
+        renderLibraryLoader(state.status, { scanPageVisible: true });
+      `, context);
+      assert.equal(browseButton.hidden, false, 'Browse must not wait for scan finalization or clear the retained search');
+      assert.equal(browseButton.disabled, false);
+      assert.equal(cancelButton.hidden, false);
+      assert.equal(vm.runInContext('state.view.query', context), query);
+      vm.runInContext('state.ui.browseScannedResultsLoading = true; renderLibraryLoader(state.status);', context);
+      assert.equal(browseButton.hidden, false);
+      assert.equal(browseButton.disabled, true, 'duplicate submissions remain blocked');
+    });
+  }
+}

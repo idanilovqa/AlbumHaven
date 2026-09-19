@@ -329,3 +329,36 @@ for (const status of ['committed', 'stale', 'failed_rolled_back', 'recovery_pend
     }
   });
 }
+
+function disabledButton() {
+  const attributes = new Map([['aria-disabled', 'true']]);
+  return {
+    disabled: true,
+    querySelector: () => ({ textContent: '' }),
+    setAttribute: (name, value) => attributes.set(name, String(value)),
+    getAttribute: name => attributes.get(name) ?? null,
+    removeAttribute: name => attributes.delete(name),
+  };
+}
+
+for (const action of ['exclusion', 'suggestion']) {
+  test(`P08/P09 ${action} state updates keep native and accessible disabled state synchronized`, () => {
+    const context = loadHelpers();
+    const button = disabledButton();
+    context.ButtonComponent = require('../../../music_app/static/js/button-component.js');
+    context.document = { querySelectorAll: () => [], querySelector: () => button };
+    const album = context.state.utility.problematicFiles[0];
+    const permission = action === 'exclusion' ? 'library.rules.manage' : 'library.files.edit_tags';
+    album.allowed_actions = { [permission]: true };
+    const sync = action === 'exclusion' ? context.syncProblemExclusionSelection : context.syncProblemSuggestionSelection;
+    if (action === 'exclusion') context.state.utility.problemExclusionSelections = { 'year-problem': true };
+    else album.suggested_edits = [{ id: 'year-suggestion', field: 'year', original: null, corrected: 2008 }];
+    sync();
+    assert.equal(button.disabled, false, 'authorized selection enables the native button');
+    assert.notEqual(button.getAttribute('aria-disabled'), 'true', 'accessible state must not keep the enabled button inert');
+    album.allowed_actions[permission] = false;
+    sync();
+    assert.equal(button.disabled, true, 'revoked authority must disable the button');
+    assert.equal(button.getAttribute('aria-disabled'), 'true');
+  });
+}

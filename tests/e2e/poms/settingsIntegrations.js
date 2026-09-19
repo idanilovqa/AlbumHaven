@@ -8,6 +8,8 @@ export class SettingsIntegrations {
     this.picker = page.getByRole('dialog', { name: 'Choose library folder', exact: true });
     this.pickerPath = this.picker.locator('#app-form-content > p');
     this.guide = page.getByRole('dialog', { name: 'Foobar2000 setup instructions', exact: true });
+    this.watcherWarning = page.locator('#toast-layer .system-warning-notification').filter({ hasText: 'Library watcher needs attention' });
+    this.dismissWatcherWarning = this.watcherWarning.getByRole('button', { name: 'Dismiss', exact: true });
     this.save = this.detail.getByRole('button', { name: 'Save library settings', exact: true });
     this.error = this.detail.locator('.library-settings-error');
     this.search = page.locator('#utility-problematic-search');
@@ -33,10 +35,16 @@ export class SettingsIntegrations {
     await expect(this.picker).toBeHidden();
     if (!cancel) await expect(this.roots(title).last()).toHaveValue(new RegExp(`[\\\\/]${escapedFolder}$`, 'u'));
   }
+  async acknowledgeUnavailableRootWarning() {
+    await expect(this.watcherWarning).toBeVisible();
+    await this.dismissWatcherWarning.click();
+    await expect(this.watcherWarning).toBeHidden();
+  }
   async saveResult() {
-    const pending = this.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/library-settings');
-    await this.save.click();
-    const response = await pending;
+    const [response] = await Promise.all([
+      this.page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === '/library-settings'),
+      this.save.click(),
+    ]);
     return { status: response.status(), payload: await response.json() };
   }
   async readSettings() {

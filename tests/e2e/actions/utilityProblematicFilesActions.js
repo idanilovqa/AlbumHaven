@@ -54,9 +54,13 @@ export class UtilityProblematicFilesActions {
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailOpenInExplorerButton);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailEditTagsButton);
     await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailDiscogsButton);
-    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailDetectedProblemsSection);
-    if (await this.utilityProblematicFilesTab.detailSuggestedEditsSection.count()) {
-      await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detailSuggestedEditsSection);
+    await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.detectedProblemsHeading);
+    if (await this.utilityProblematicFilesTab.trackProblemsTable.count()) {
+      await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.trackProblemsTable);
+      const headers = await this.utilityProblematicFilesTab.trackProblemHeaders.allTextContents();
+      assert.deepEqual(headers.map(text => text.trim()), ['Track / file', 'Problems', 'Suggested edits']);
+    } else {
+      await this.utilityProblematicFilesTab.waitForVisible(this.utilityProblematicFilesTab.noTrackProblems);
     }
   }
 

@@ -58,6 +58,7 @@ const EDITABLE_CAPABILITIES = Object.freeze([
   'View album opinions',
   'View library rules',
   'View operational logs',
+  'Export operational logs',
   'View virtual discography',
 ]);
 
@@ -137,6 +138,11 @@ test('FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared 
   await expect(menu.accountMenu.getByRole('menuitem').nth(1)).toHaveAccessibleName('Admin Panel');
   await expect(menu.accountMenu.getByRole('menuitem').nth(2)).toHaveAccessibleName('Sign Out');
   await expect(menu.settingsButton).toHaveAttribute('aria-expanded', 'true');
+  await expect(menu.settingsMenuItem).not.toBeFocused();
+  await menu.settingsButton.press('Escape');
+  await expect(menu.accountMenu).toBeHidden();
+  await menu.settingsButton.press('ArrowDown');
+  await expect(menu.accountMenu).toBeVisible();
   await expect(menu.settingsMenuItem).toBeFocused();
   await menu.adminPanelMenuItem.hover();
   await expect(menu.adminPanelMenuItem).toHaveCSS('border-radius', '9px');

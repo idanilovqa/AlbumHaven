@@ -212,8 +212,13 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     });
   });
 
-  await stepLogger.step('Selecting a different primary artist clears search and restores its complete gallery', async () => {
+  await stepLogger.step('Selecting a different primary artist preserves the query until explicit Clear restores its complete gallery', async () => {
     await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
+    expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
+    await searchToolbarActions.clearSearch();
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
     expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);

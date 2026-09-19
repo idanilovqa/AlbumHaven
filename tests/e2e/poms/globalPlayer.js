@@ -482,12 +482,20 @@ export class GlobalPlayer extends BasePage {
     };
   }
 
-  async readThemedPlayerInkColor() {
-    // parity-check: allow-read-only-measurement-evaluate -- read the production player theme boundary
-    return this.player.evaluate((player) => ({
-      active: document.documentElement.hasAttribute('data-appearance-player'),
-      color: getComputedStyle(player).color,
-    }));
+  async readLoopActionHoverColor(target) {
+    // parity-check: allow-read-only-measurement-evaluate -- read the shared semantic token independently of the action's painted color
+    return this.loopAction.evaluate((root, action) => {
+      const token = action === 'cancel' ? '--loop-action-cancel-color' : '--loop-action-save-color';
+      const value = getComputedStyle(root).getPropertyValue(token).trim();
+      const hex = /^#([\da-f]{3}|[\da-f]{6})$/iu.exec(value);
+      if (hex) {
+        const digits = hex[1].length === 3 ? [...hex[1]].map(digit => digit + digit).join('') : hex[1];
+        const channels = [0, 2, 4].map(offset => Number.parseInt(digits.slice(offset, offset + 2), 16));
+        return `rgb(${channels.join(', ')})`;
+      }
+      if (/^rgba?\(/u.test(value)) return value;
+      throw new Error(`Expected a resolved semantic loop color for ${token}; received ${value}`);
+    }, target);
   }
 
   async readMainLoopVisualSnapshot() {

@@ -43,7 +43,7 @@ jobs:
           jobs=[105803412142,105803412178,105803412190,105803412242,105803412244,105803412324]
           manifest['logs']=[]
           for job in jobs:
-              data=subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
+              data=subprocess.check_output(['gh','api','--allow-escape-sequences',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job}/logs'])
               (out/f'{job}.log').write_bytes(data)
               manifest['logs'].append({'job_id':job,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'lines':len(data.splitlines())})
           (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')

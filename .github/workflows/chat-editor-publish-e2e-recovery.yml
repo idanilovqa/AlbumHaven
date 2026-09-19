@@ -4,6 +4,7 @@ on:
     branches: [2026-09-18-pr3-e2e-batch]
     paths:
       - .chat-editor/e2e-recovery.patch.gz.b64
+      - .chat-editor/restore-e2e-transport.py
       - .github/workflows/chat-editor-publish-e2e-recovery.yml
 permissions:
   contents: write
@@ -25,6 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Restore verified transport
+        run: python .chat-editor/restore-e2e-transport.py
       - name: Verify and apply the locally completed repair
         shell: bash
         run: |

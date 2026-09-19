@@ -1,0 +1,55 @@
+{
+  "head": "b3283d2ac7a3dc7951196a9e611785de89a89e1c",
+  "files": {
+    "spec.js": {
+      "path": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
+      "blob": "451e66fa36822670a48645b4819bc45b1cff3a54"
+    },
+    "player-loop-playback.js": {
+      "path": "music_app/static/js/runtime/player-loop-playback.js",
+      "blob": "3883324293c2557dd4a60302a2f54731adbde03d"
+    },
+    "browser-dialog-helpers.js": {
+      "path": "music_app/static/js/runtime/browser-dialog-helpers.js",
+      "blob": "75c642faa46d3de66b6c6ca36849b2382b5fae23"
+    },
+    "node-test.js": {
+      "path": "tests/js/e2e-run204-contracts.test.js",
+      "blob": "a3f0dd1faa3eb057b5172da5bfe4fc80679addc5"
+    }
+  },
+  "jobs": {
+    "105874776033": {
+      "name": "JavaScript Tests (Portable)",
+      "run_id": 35434479136,
+      "conclusion": "failure",
+      "log_sha256": "bcf3950fa249de99d8dae823843e2a9e79d777908fd07bea23839c3905c85db3",
+      "lines": 21220,
+      "excerpt_lines": 916
+    },
+    "105874776020": {
+      "name": "JavaScript Tests (Windows Contract)",
+      "run_id": 35434479136,
+      "conclusion": "failure",
+      "log_sha256": "27c0e831d2985c4ea0bcd41f44a604b294f827fd8a411b8cbc03ec773ba9361a",
+      "lines": 21910,
+      "excerpt_lines": 914
+    },
+    "105874776026": {
+      "name": "E2E: playback-utilities",
+      "run_id": 35434479136,
+      "conclusion": "failure",
+      "log_sha256": "8db954334bbaf1eef9a6db112afedb3f9bcd61aabadf537ac99c337e271e4aae",
+      "lines": 4401,
+      "excerpt_lines": 1933
+    },
+    "105881754312": {
+      "name": "Cloud Verification Gate",
+      "run_id": 35434479136,
+      "conclusion": "failure",
+      "log_sha256": "2e045ef711671c4975434fda7931a969ee3e3efe780c95fc9f535744ef71585b",
+      "lines": 215,
+      "excerpt_lines": 0
+    }
+  }
+}

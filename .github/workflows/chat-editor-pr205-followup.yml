@@ -2,7 +2,7 @@ name: Verify and publish PR205 follow-up
 on:
   push:
     branches: [2026-09-18-pr3-e2e-batch]
-    paths: [.github/workflows/chat-editor-pr205-followup.yml, .chat-editor/pr205-followup.patch]
+    paths: [.github/workflows/chat-editor-pr205-followup.yml, .chat-editor/pr205-followup.patch, .chat-editor/pr205-matrix.patch]
 permissions:
   contents: write
 concurrency:
@@ -35,8 +35,10 @@ jobs:
           old = b'diff --git a/tests/js/e2e-pr205-followup-contracts.test.js b/tests/js/e2e-pr205-followup-contracts.test.js\n--- /dev/null'
           assert patch.count(old) == 1
           patch = patch.replace(old, old.replace(b'\n--- /dev/null', b'\nnew file mode 100644\n--- /dev/null'))
+          matrix = Path('.chat-editor/pr205-matrix.patch').read_bytes()
+          assert hashlib.sha256(matrix).hexdigest() == '09a0d22f6c89f8de4a55be58ed66f566a8062e8172419c5c807f779a5ceb8ccd'
           root = Path(os.environ['RUNNER_TEMP'])
-          (root / 'pr205-followup.patch').write_bytes(patch)
+          (root / 'pr205-followup.patch').write_bytes(patch + matrix)
           files = {
             'tests/e2e/actions/utilityLoopsActions.js': ['a397fe6e8d5c51e0d915dfc004ca6c2a2c85496b','3a601dad9982a5dd74329042eb0f9189911da406'],
             'tests/e2e/actions/utilityProblematicFilesActions.js': ['3af22b1924556d04f3c6a7cab7e499eaad053fb5','8ed93eed5e655a4009d12e95a0489ac4c4d51484'],
@@ -44,6 +46,7 @@ jobs:
             'tests/js/ci-fixture-data-contracts.test.js': ['fcffc7509056e08315466d756e62c6d07f20a119','096fcc50340c2683319801fd8a4ae41475490905'],
             'tests/js/e2e-action-production-paths.test.js': ['3e7c62f5b08b75cd99d001013530dd92ff189c58','51d433f109e71c7457e0317ed7ac61c78b94c79f'],
             'tests/js/e2e-pr205-followup-contracts.test.js': [None,'e603ecaeac2f07a3c76938044a4a309f57e870fd'],
+            'tests/ci/test-data-matrix.json': ['667361666fec340ddec64874cbb23d42b1634009','1cf03401137fd66ed7ad7ef20d180bc4a9f0a7c4'],
           }
           subprocess.run(['git','switch','--detach',os.environ['EXPECTED_HEAD']],check=True)
           for path, (before, after) in files.items():
@@ -59,7 +62,7 @@ jobs:
             data = Path(path).read_bytes()
             assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == after, path
           (root/'pr205-files.json').write_text(json.dumps(files))
-          print('All six source/output identities and patch bytes verified.')
+          print('All seven source/output identities and patch bytes verified.')
           PY
       - run: npm ci
       - name: Verify affected helpers and production-path guards
@@ -68,7 +71,7 @@ jobs:
         run: node --test --test-name-pattern='read-only inventory command' tests/js/ci-fixture-data-contracts.test.js
       - name: Verify production parity
         run: node scripts/check-e2e-production-parity.cjs
-      - name: Publish the six reviewed files to the actual PR branch
+      - name: Publish the seven reviewed files to the actual PR branch
         shell: bash
         run: |
           set -euo pipefail

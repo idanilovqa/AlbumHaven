@@ -1,0 +1,59 @@
+name: Repair Space scenario inventory registration
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-publish-space-inventory.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-complete-batch-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: 2e4221c6977e75fd2b363eaad44f0a0fa25a701e
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Correct only the two scenario registrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git switch --detach "$EXPECTED_HEAD"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          old='FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings'
+          new='FTC-PLAYER-014 Space preserves native overlay actions and range playback across Album Details, notifications, and Settings'
+          for name in ['tests/ci/functional-shards.json','tests/ci/test-data-matrix.json']:
+              p=Path(name);source=p.read_text();assert source.count(old)==1
+              p.write_text(source.replace(old,new),newline='\n');json.loads(p.read_text())
+          PY
+      - run: npm ci
+      - name: Verify exact ownership and focused guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/validate-functional-shards.cjs --list
+          node --test --test-concurrency=1 tests/js/validate-functional-shards.test.js tests/js/ci-shard-config.test.js tests/js/e2e-action-production-paths.test.js
+          git diff --check
+      - name: Publish only the inventory correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add tests/ci/functional-shards.json tests/ci/test-data-matrix.json
+          test "$(git diff --cached --name-only | wc -l)" = 2
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'test: register the renamed native Space scenario in CI inventories'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Published registration correction: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

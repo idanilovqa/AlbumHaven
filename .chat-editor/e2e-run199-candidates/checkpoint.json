@@ -1,0 +1,9 @@
+{
+  "base_head": "2ba1b63cd2b17a7d0d8e7ccea25a47cd22b80e8c",
+  "source_run": 35408558207,
+  "active_native_run": 35418317766,
+  "status": "Candidate only. Preserve current in-flight PR; combine with complete run 199 failure inventory before publication.",
+  "reason": "The old ordinary-disc assertion still requires a per-disc total although the canonical shared AlbumTrackTable owns the exact 18m00s aggregate. The prior footer page-object correction did not change this separate failing assertion.",
+  "verification": "Regression witnessed failing before correction; 58 focused Node checks pass afterward. Exact aggregate duration, absent bonus headings, and absent superseded modal-footer lines remain asserted.",
+  "infrastructure": "Run 199 playback-utilities stopped at trusted fixture archive download, before tests. Native rerun-failed request is rejected while the workflow remains in progress; retry only after completion."
+}

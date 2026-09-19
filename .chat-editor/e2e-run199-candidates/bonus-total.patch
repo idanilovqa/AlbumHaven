@@ -1,0 +1,29 @@
+diff --git a/tests/e2e/specs/albumTrackCredits.spec.js b/tests/e2e/specs/albumTrackCredits.spec.js
+index 22e2fd8..084baf5 100644
+--- a/tests/e2e/specs/albumTrackCredits.spec.js
++++ b/tests/e2e/specs/albumTrackCredits.spec.js
+@@ -371,7 +371,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@a
+   await stepLogger.step('Show only the ordinary album total', async () => {
+     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
+       headers: [],
+-      totals: ['Total Length: 18m 00s'],
++      totals: [],
+     });
+     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
+       .toBe('Total Length: 18m 00s');
+diff --git a/tests/js/e2e-run192-contracts.test.js b/tests/js/e2e-run192-contracts.test.js
+index 9e96bf5..e405977 100644
+--- a/tests/js/e2e-run192-contracts.test.js
++++ b/tests/js/e2e-run192-contracts.test.js
+@@ -166,3 +166,11 @@ test('restoring the saved recent player set leaves no dirty preference or pendin
+   assert.deepEqual(state.waveformColorUpdates, []);
+   assert.equal(state.footer.status, 'Saved to your account');
+ });
++
++test('ordinary bonus-like titles require one shared album total and no duplicate disc total', () => {
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/specs/albumTrackCredits.spec.js'), 'utf8');
++  const scenario = source.split("test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words")[1].split("test('")[0];
++  assert.match(scenario, /readDiscGroupPresentation\(\)\)\.toEqual\(\{\s*headers: \[\],\s*totals: \[\],/u);
++  assert.match(scenario, /readAlbumTrackTableTotal\(\)\)[\s\S]*\.toBe\('Total Length: 18m 00s'\)/u);
++  assert.match(scenario, /readFooterLines\(\)\)\.toEqual\(\[\]\)/u);
++});

@@ -1,0 +1,69 @@
+name: Preserve run 202 final attempt evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-run202-final-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Wait for the active native inventory and preserve exact logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64,gzip,hashlib,io,json,re,subprocess,time,zipfile
+          from pathlib import Path
+          run=35419743702
+          head='ff81ffd4e846fa6606054b9d3b30dadffa4a6e18'
+          def api(path):
+              return subprocess.check_output(['gh','api','--allow-escape-sequences','repos/idanilovqa/AlbumHaven/'+path])
+          for trial in range(25):
+              jobs=json.loads(api(f'actions/runs/{run}/jobs?filter=latest&per_page=100'))['jobs']
+              assert all(j['head_sha']==head and j['run_attempt']==2 for j in jobs)
+              active=[j['name'] for j in jobs if j['status']!='completed']
+              if not active:break
+              print('Native jobs still active:',active,flush=True)
+              if trial<24:time.sleep(30)
+          assert not active, 'Native inventory is still incomplete; do not infer a complete repair list'
+          subprocess.run(['git','pull','--ff-only','origin','2026-09-18-pr3-e2e-batch'],check=True)
+          out=Path('.chat-editor/run202-attempt2');out.mkdir(parents=True,exist_ok=True)
+          summary=[]
+          for job in jobs:
+              row={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','run_attempt','completed_at')}
+              summary.append(row)
+              if job['conclusion']!='failure' or job['name']=='Cloud Verification Gate':continue
+              raw=api(f"actions/jobs/{job['id']}/logs")
+              row['sha256']=hashlib.sha256(raw).hexdigest()
+              row['log_file']=f"{job['id']}.log.gz.b64"
+              (out/row['log_file']).write_text(base64.b64encode(gzip.compress(raw,mtime=0)).decode()+'\n')
+              lines=raw.decode('utf-8',errors='replace').splitlines();selected=set()
+              for i,line in enumerate(lines):
+                  if re.search(r'\[FAIL\]|\d+\) \[functional\]|FAILED tests|Failed tests:|\d+ failed|short test summary|E   ',line):
+                      selected.update(range(max(0,i-3),min(len(lines),i+65)))
+              (out/f"{job['id']}-failures.txt").write_text('\n'.join(f'{i+1}: {lines[i]}' for i in sorted(selected))+'\n')
+          artifacts=json.loads(api(f'actions/runs/{run}/artifacts?per_page=100'))['artifacts']
+          for artifact in artifacts:
+              if not (artifact['name'].startswith('functional-debug-') and artifact['name'].endswith('-2')):continue
+              archive=zipfile.ZipFile(io.BytesIO(api(f"actions/artifacts/{artifact['id']}/zip")))
+              for i,name in enumerate(archive.namelist()):
+                  if name.endswith('error-context.md'):(out/f"context-{artifact['id']}-{i}.md").write_bytes(archive.read(name))
+          (out/'manifest.json').write_text(json.dumps({'run_id':run,'run_attempt':2,'head_sha':head,'jobs':summary},indent=2)+'\n')
+          print(json.dumps(summary,indent=2))
+          PY
+          git add .chat-editor/run202-attempt2
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'checkpoint: retain full run 202 attempt 2 failure inventory'
+            git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
+          fi

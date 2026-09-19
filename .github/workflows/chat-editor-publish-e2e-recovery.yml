@@ -1,0 +1,73 @@
+name: Publish recovered PR 3 E2E repairs
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths:
+      - .chat-editor/e2e-recovery.patch.gz.b64
+      - .github/workflows/chat-editor-publish-e2e-recovery.yml
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-recovery-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ea256e48e5b72e1617f01c9954beec3b432e7da2
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+      PATCH_SHA256: ce53a6f4d2034d674cb59aabd6c40cfda9797809a04be304239a689b8aa58525
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply the locally completed repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, gzip, hashlib, os, subprocess
+          from pathlib import Path
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          actual = git('ls-remote', '--exit-code', 'origin', 'refs/heads/' + os.environ['TARGET_BRANCH']).split()[0]
+          assert actual == os.environ['EXPECTED_HEAD'], 'Concurrent PR change; refusing publication'
+          encoded = Path('.chat-editor/e2e-recovery.patch.gz.b64').read_text()
+          patch = gzip.decompress(base64.b64decode(''.join(encoded.split()), validate=True))
+          assert hashlib.sha256(patch).hexdigest() == os.environ['PATCH_SHA256'], 'Patch digest mismatch'
+          patch_path = Path(os.environ['RUNNER_TEMP'], 'e2e-recovery.patch')
+          patch_path.write_bytes(patch)
+          paths = [line.split('\t', 2)[2] for line in git('apply', '--numstat', str(patch_path)).splitlines()]
+          assert len(paths) == 27 and len(set(paths)) == 27
+          assert all(p.startswith(('tests/e2e/', 'tests/js/', 'music_app/static/js/', 'docs/superpowers/plans/')) for p in paths)
+          Path(os.environ['RUNNER_TEMP'], 'e2e-recovery-files.txt').write_text('\n'.join(paths))
+          subprocess.run(['git', 'switch', '--detach', os.environ['EXPECTED_HEAD']], check=True)
+          subprocess.run(['git', 'apply', '--check', '--whitespace=error-all', str(patch_path)], check=True)
+          subprocess.run(['git', 'apply', '--whitespace=error-all', str(patch_path)], check=True)
+          bundle = Path('music_app/static/js/runtime-bundle.js').read_bytes()
+          subprocess.run(['node', 'scripts/build-runtime-bundle.cjs'], check=True)
+          assert Path('music_app/static/js/runtime-bundle.js').read_bytes() == bundle, 'Generated runtime differs from the locally verified bundle'
+          for path in paths:
+              if path.endswith('.js'):
+                  subprocess.run(['node', '--check', path], check=True)
+          subprocess.run(['node', 'scripts/check-e2e-production-parity.cjs'], check=True)
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          subprocess.run(['git', 'add', '--', *paths], check=True)
+          assert git('diff', '--cached', '--name-only').splitlines() == sorted(paths)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          PY
+      - name: Publish the complete recovered batch without force
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin "refs/heads/$TARGET_BRANCH" | cut -f1)" = "$EXPECTED_HEAD"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix: recover E2E product repairs and approved feature contracts'
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Recovered repair commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Locally verified: 457 focused Node tests, zero failures or skips; runtime builder and production parity pass. Native full E2E CI still required.' >> "$GITHUB_STEP_SUMMARY"

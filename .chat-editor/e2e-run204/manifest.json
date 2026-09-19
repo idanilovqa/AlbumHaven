@@ -1,5 +1,6 @@
 {
   "run_id": 35420739453,
+  "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
   "jobs": [
     {
       "id": 105837891531,
@@ -37,29 +38,36 @@
     {
       "id": 105837891568,
       "name": "E2E: cover-providers",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "success",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
-      "completed_at": null
+      "completed_at": "2026-09-19T04:47:52Z"
     },
     {
       "id": 105837891595,
       "name": "E2E: gallery-search-visual",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "failure",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
-      "completed_at": null
+      "completed_at": "2026-09-19T04:52:26Z",
+      "log_sha256": "146c581ff66f45b9a92480dd8c6c17c8b22e495ecc2fa48a96d8adeed8f95940"
     },
     {
       "id": 105837891711,
       "name": "E2E: playback-utilities",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "cancelled",
       "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
-      "completed_at": null
+      "completed_at": "2026-09-19T04:53:21Z",
+      "log_sha256": "142896f7c2f5bf1285a44d5bb05f2f29408004f93d15b6ae8c764837723b2286"
     }
   ],
   "artifacts": [
+    {
+      "id": 10577894436,
+      "name": "foundation-versions-functional-playback-utilities-1",
+      "size_in_bytes": 545
+    },
     {
       "id": 10577872275,
       "name": "performance-result-gapless-playback-1",
@@ -76,6 +84,16 @@
       "size_in_bytes": 340
     },
     {
+      "id": 10577834234,
+      "name": "functional-blob-cover-providers-1",
+      "size_in_bytes": 1525635
+    },
+    {
+      "id": 10577759628,
+      "name": "functional-blob-gallery-search-visual-1",
+      "size_in_bytes": 34601569
+    },
+    {
       "id": 10577727533,
       "name": "foundation-versions-performance-gapless-playback-1",
       "size_in_bytes": 543
@@ -84,6 +102,11 @@
       "id": 10577703231,
       "name": "foundation-versions-python-windows-1",
       "size_in_bytes": 213399
+    },
+    {
+      "id": 10577674896,
+      "name": "functional-debug-gallery-search-visual-1",
+      "size_in_bytes": 37894973
     },
     {
       "id": 10577662581,
@@ -96,9 +119,19 @@
       "size_in_bytes": 183811
     },
     {
+      "id": 10577554500,
+      "name": "foundation-versions-functional-cover-providers-1",
+      "size_in_bytes": 539
+    },
+    {
       "id": 10577542325,
       "name": "pr1-review-waiver-35420739453-1",
       "size_in_bytes": 339
+    },
+    {
+      "id": 10577514923,
+      "name": "foundation-versions-functional-gallery-search-visual-1",
+      "size_in_bytes": 551
     },
     {
       "id": 10577482688,
@@ -289,6 +322,188 @@
       "id": 10576703822,
       "name": "performance-result-search-all-artists-1",
       "size_in_bytes": 63701
+    }
+  ],
+  "visuals": [
+    {
+      "file": "visual-10577674896-4.png",
+      "artifact_id": 10577674896,
+      "member": "wave-01-03-playwright-config-js/albumIdentityConsolidation-84626-olidate-one-logical-release-functional/ftc-tags-021-after-20-seconds-gallery.png",
+      "sha256": "e3c6e97d636c5300b307977206c5f575f0a48809fe2fbd244f2f74c9eda21a6f"
+    },
+    {
+      "file": "visual-10577674896-5.png",
+      "artifact_id": 10577674896,
+      "member": "wave-01-03-playwright-config-js/albumIdentityConsolidation-84626-olidate-one-logical-release-functional/ftc-tags-021-immediate-gallery.png",
+      "sha256": "fe5670a707835a7aa0a27729a58effb25951a4e0f13c6dd8f7068e5ff84ce150"
+    },
+    {
+      "file": "visual-10577674896-8.png",
+      "artifact_id": 10577674896,
+      "member": "wave-01-08-playwright-config-js/ddtRemixesRenderer-FTC-TAG-5f317-ough-five-\u0420\u0435\u043c\u0438\u043a\u0441\u044b-rerenders-functional/ftc-tags-015-ddt-remixes-after-five-moves.png",
+      "sha256": "037b09025a71a143e5d2cf965ef8c10406a514b6d8c2602b53e9213399d4e766"
+    },
+    {
+      "file": "visual-10577674896-9.png",
+      "artifact_id": 10577674896,
+      "member": "wave-01-08-playwright-config-js/ddtRemixesRenderer-FTC-TAG-5f317-ough-five-\u0420\u0435\u043c\u0438\u043a\u0441\u044b-rerenders-functional/ftc-tags-015-ddt-remixes-initial-editor.png",
+      "sha256": "07f8ec8338827a1fa019869608d5aa7894bcd84ca6eec837d79664f32ffbc89f"
+    },
+    {
+      "file": "visual-10577674896-10.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-17-playwright-config-js/responsiveGallery-FTC-MOBI-b4314-reserve-selected-card-scale-functional/attachments/responsive-gallery-scale-125-narrow-png-9268503e22111082dae1f7eba0846673dbb3e3b1.png",
+      "sha256": "7e43415601500a5a7f1797367e5b5cee5c78db0f701a8e026b0dabd5d50f4160"
+    },
+    {
+      "file": "visual-10577674896-11.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-17-playwright-config-js/responsiveGallery-FTC-MOBI-b4314-reserve-selected-card-scale-functional/attachments/responsive-gallery-scale-125-wide-png-e87cf0478b1511a176905098227e16e0ad4627bd.png",
+      "sha256": "38d34b0d526b307072f077f59d9c62d1f62c6e445f5827b566520b517760fc55"
+    },
+    {
+      "file": "visual-10577674896-12.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-17-playwright-config-js/responsiveGallery-FTC-MOBI-b4314-reserve-selected-card-scale-functional/responsive-gallery-scale-125-narrow.png",
+      "sha256": "7e43415601500a5a7f1797367e5b5cee5c78db0f701a8e026b0dabd5d50f4160"
+    },
+    {
+      "file": "visual-10577674896-13.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-17-playwright-config-js/responsiveGallery-FTC-MOBI-b4314-reserve-selected-card-scale-functional/responsive-gallery-scale-125-wide.png",
+      "sha256": "38d34b0d526b307072f077f59d9c62d1f62c6e445f5827b566520b517760fc55"
+    },
+    {
+      "file": "visual-10577674896-14.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-restore-2-immediate-gallery.png",
+      "sha256": "5b0f3107b4671c08c6031b00f9e356b427ed73386679c82cd86f567aacbd7f59"
+    },
+    {
+      "file": "visual-10577674896-15.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-restore-3-immediate-gallery.png",
+      "sha256": "b482c09f8ecafdfbe115da628ae8c61e14573b326017deda8a72d00b8d59b4a3"
+    },
+    {
+      "file": "visual-10577674896-16.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-restore-4-immediate-gallery.png",
+      "sha256": "e3df9dfd741601780ec5cd95ea1ca4a5cbc050a0a5f37edfa63646c7b8e47193"
+    },
+    {
+      "file": "visual-10577674896-17.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-restore-5-immediate-gallery.png",
+      "sha256": "b0c79009f1809d3470d63030e8718e5ef6145e7ed22cce5acc3b3d09bbb20a5d"
+    },
+    {
+      "file": "visual-10577674896-18.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-restores-final-same-session-gallery.png",
+      "sha256": "5b0f3107b4671c08c6031b00f9e356b427ed73386679c82cd86f567aacbd7f59"
+    },
+    {
+      "file": "visual-10577674896-19.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-2-immediate-source-details.png",
+      "sha256": "9b1a915918f8c4bf167d2f5b23923d6617b91d7f0d0d10deab2d341777e3e6f9"
+    },
+    {
+      "file": "visual-10577674896-20.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-2-immediate.png",
+      "sha256": "b7279724a272eb24a0db8dd2186a1882c41edffdd8d3724f99d83a172e3fccf5"
+    },
+    {
+      "file": "visual-10577674896-21.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-2-settled.png",
+      "sha256": "c4c2bbff7b4ba4a776b92568f6771d74c0cca2ae611e7fb5cc9815f8189721b3"
+    },
+    {
+      "file": "visual-10577674896-22.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-3-immediate-source-details.png",
+      "sha256": "5c30aae15f4b6d93171c60b70ed2fb489725856d639f0d071afc0bedab5be9ca"
+    },
+    {
+      "file": "visual-10577674896-23.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-3-immediate.png",
+      "sha256": "9b3b88d37ecca4b798a5fcec3a45e376588c487a781a9b3b36e6c1cf0ef1053c"
+    },
+    {
+      "file": "visual-10577674896-24.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-3-settled.png",
+      "sha256": "cfc016f8aa6cf4eab4c5cfc37f3143db2077773dcab800e6d86c14a893943aa7"
+    },
+    {
+      "file": "visual-10577674896-25.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-4-immediate-source-details.png",
+      "sha256": "26eeff227fd429963f7191dd1586bd46cc63dcabb23c14d1b9370b83c3620bd2"
+    },
+    {
+      "file": "visual-10577674896-26.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-4-immediate.png",
+      "sha256": "cf3f679b3939766025f38ed4caa72de88b4c2bb1af9990387fe3a711aeaf0441"
+    },
+    {
+      "file": "visual-10577674896-27.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-4-settled.png",
+      "sha256": "644ccd75e5962ac7fa9e3efb602fa994899aacd7d95abd337676c0cc309caba1"
+    },
+    {
+      "file": "visual-10577674896-28.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-5-immediate-source-details.png",
+      "sha256": "7237b7d98f69b8ef0dcffb015e681f47d68c2d63f1269e6c8c0005d1d15aac4b"
+    },
+    {
+      "file": "visual-10577674896-29.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-5-immediate.png",
+      "sha256": "be605715753e37c0d10420ebc5ad091a9090ef436a509777e5a46d6d6ff9213b"
+    },
+    {
+      "file": "visual-10577674896-30.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-split-5-settled.png",
+      "sha256": "1f125e24129e40197db13dc40458aa2bba764f326f0937a7c638b501eb78f512"
+    },
+    {
+      "file": "visual-10577674896-31.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/ftc-tags-020-studio-records-baseline.png",
+      "sha256": "9f1ff62f2ea0dd972cf862832fd0e1b9ecf553b37bd7172f468f50203eb12036"
+    },
+    {
+      "file": "visual-10577674896-32.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/restore-2-immediate-source.png",
+      "sha256": "2d868a33e78a3f2c03a3ba3c73c98f047487305a51890006e865433cae6e0b3c"
+    },
+    {
+      "file": "visual-10577674896-33.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/restore-3-immediate-source.png",
+      "sha256": "ebf876a19254f5d999241c64bf257aa73a1dd84c567d976790d12f5b5d5f46a4"
+    },
+    {
+      "file": "visual-10577674896-34.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/restore-4-immediate-source.png",
+      "sha256": "97bd9a8d6d1f97497bbc3cfa57353594749db50c9d76eeb9a780802b3abc620c"
+    },
+    {
+      "file": "visual-10577674896-35.png",
+      "artifact_id": 10577674896,
+      "member": "wave-02-18-playwright-config-js/ddtStudioRecordsRenderer-F-0b89b-Records-splits-and-restores-functional/restore-5-immediate-source.png",
+      "sha256": "038ce5f9410794e75d3b26c697307699f7d70de01d6246e6c9175891a4720a9e"
     }
   ]
 }

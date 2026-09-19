@@ -1,0 +1,93 @@
+name: Publish verified E2E product corrections
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-publish-e2e-product.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-complete-batch-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      EXPECTED_HEAD: 2ba1b63cd2b17a7d0d8e7ccea25a47cd22b80e8c
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply the exact locally tested patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          python - <<'PY'
+          import hashlib,json,os,re
+          from pathlib import Path
+          text=Path('.chat-editor/run192-product-followup/repair.patch').read_text()
+          # Only undo the verified transport framing space; require the original digest.
+          text='\n'.join(line[1:] if line.startswith(' diff --git ') else line for line in text.split('\n'))
+          patch=text.encode()
+          assert len(patch)==14504
+          assert hashlib.sha256(patch).hexdigest()=='50c6aa98ad776670f5a1363b6355a6e058ebf258118bf5b0c7ba4a512723aa6e'
+          files={}
+          for block in text.split('diff --git ')[1:]:
+              lines=block.splitlines(); left,right=lines[0].split(' b/',1)
+              assert left=='a/'+right and right.startswith(('music_app/','tests/','docs/'))
+              match=re.fullmatch(r'index ([0-9a-f]{40})\.\.([0-9a-f]{40}) 100644',lines[1])
+              assert match and right not in files
+              files[right]=match.group(2)
+          assert len(files)==12
+          tmp=Path(os.environ['RUNNER_TEMP'])
+          (tmp/'e2e-product.patch').write_bytes(patch)
+          (tmp/'e2e-product-files.json').write_text(json.dumps(files))
+          PY
+          git switch --detach "$EXPECTED_HEAD"
+          git apply --check --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/e2e-product.patch"
+          git apply --unidiff-zero --whitespace=error-all "$RUNNER_TEMP/e2e-product.patch"
+      - name: Install focused test dependencies
+        run: npm ci
+      - name: Regenerate runtime and verify every repaired file
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/build-runtime-bundle.cjs
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          files=json.loads(Path(os.environ['RUNNER_TEMP'],'e2e-product-files.json').read_text())
+          for name,digest in files.items():
+              actual=subprocess.check_output(['git','hash-object','--',name],text=True).strip()
+              assert actual==digest,(name,actual,digest)
+          PY
+          git diff --check
+      - name: Repeat affected regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 tests/js/e2e-run192-contracts.test.js tests/js/e2e-settings-contracts.test.js tests/js/e2e-action-production-paths.test.js tests/js/track-modal-actions.test.js tests/js/runtime/appearance*.test.js tests/js/runtime/utility*.test.js tests/js/runtime/bootstrap-utility-event-handlers.test.js tests/js/runtime/app-loader-bundle.test.js
+          node scripts/check-e2e-production-parity.cjs
+      - name: Publish only the verified corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          files=json.loads(Path(os.environ['RUNNER_TEMP'],'e2e-product-files.json').read_text())
+          subprocess.run(['git','add','--',*files],check=True)
+          staged=subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert sorted(staged)==sorted(files)
+          PY
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'fix: restore clean editor actions and album-only exclusions'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Published repair $(git rev-parse HEAD); native full PR verification remains mandatory." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,521 @@
+1383: 2026-09-19T05:00:21.4108375Z 2026-09-19 05:00:21,409 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 254.61, "hydrate_in_progress": false, "payload_elapsed_ms": 130.26, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1384: 2026-09-19T05:00:24.6734243Z 2026-09-19 05:00:24,670 [INFO] music_app: {"action": "Problem exclusion reverted", "row_key": "generated problem fixture::?::problem-album::undecoded-characters"}
+1385: 2026-09-19T05:00:25.0789947Z 2026-09-19 05:00:25,077 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 253.09, "hydrate_in_progress": false, "payload_elapsed_ms": 124.11, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1386: 2026-09-19T05:00:27.9132873Z   [FAIL] Apply an album exclusion optimistically over matching legacy file-field rules :: expect(received).toHaveLength(expected)
+1387: 2026-09-19T05:00:27.9134180Z 
+1388: 2026-09-19T05:00:27.9134664Z Expected length: 18
+1389: 2026-09-19T05:00:27.9135285Z Received length: 0
+1390: 2026-09-19T05:00:27.9136376Z Received array:  [] (15911 ms)
+1391: 2026-09-19T05:00:28.4298552Z 2026-09-19 05:00:28,428 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 424.97, "hydrate_in_progress": false, "payload_elapsed_ms": 220.82, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1392: 2026-09-19T05:00:32.2390250Z 2026-09-19 05:00:32,237 [INFO] music_app: {"action": "Problem exclusion created", "migrated_legacy_row_keys": [], "row_keys": ["generated problem fixture::?::problem-album::undecoded-characters"]}
+1393: 2026-09-19T05:00:32.8956689Z 2026-09-19 05:00:32,894 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 391.52, "hydrate_in_progress": false, "payload_elapsed_ms": 261.01, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1394: 2026-09-19T05:00:39.3124211Z   x  1 [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:189:1 › FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files (25.5s)
+1395: 2026-09-19T05:00:39.3126992Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1396: 2026-09-19T05:00:39.3130347Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"39591f4c305ad5e5e27231f9893ca33204c1641e53742dab84864a3a7b645bf6","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1397: 2026-09-19T05:00:40.5123267Z 
+1398: 2026-09-19T05:00:40.5123332Z 
+1399: 2026-09-19T05:00:40.5123344Z 
+1400: 2026-09-19T05:00:40.5126090Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"39591f4c305ad5e5e27231f9893ca33204c1641e53742dab84864a3a7b645bf6","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1401: 2026-09-19T05:00:40.5129801Z 
+1402: 2026-09-19T05:00:40.5132243Z   1) [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:189:1 › FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files 
+1403: 2026-09-19T05:00:40.5134053Z 
+1404: 2026-09-19T05:00:40.5134448Z     Error: expect(received).toHaveLength(expected)
+1405: 2026-09-19T05:00:40.5134962Z 
+1406: 2026-09-19T05:00:40.5135250Z     Expected length: 18
+1407: 2026-09-19T05:00:40.5135828Z     Received length: 0
+1408: 2026-09-19T05:00:40.5136374Z     Received array:  []
+1409: 2026-09-19T05:00:40.5136734Z 
+1410: 2026-09-19T05:00:40.5137076Z       342 |       LEGACY_IGNORED_DISPLAY_REASON,
+1411: 2026-09-19T05:00:40.5137756Z       343 |     ]);
+1412: 2026-09-19T05:00:40.5138869Z     > 344 |     expect(await utilityProblematicFilesActions.readDetectedTrackRows()).toHaveLength(18);
+1413: 2026-09-19T05:00:40.5140146Z           |                                                                          ^
+1414: 2026-09-19T05:00:40.5142925Z       345 |     expect(await utilityProblematicFilesActions.readTagRepairErrorToastCount()).toBe(0);
+1415: 2026-09-19T05:00:40.5144021Z       346 |   });
+1416: 2026-09-19T05:00:40.5144524Z       347 |
+1417: 2026-09-19T05:00:40.5145434Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:344:74
+1418: 2026-09-19T05:00:40.5146791Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+1419: 2026-09-19T05:00:40.5148091Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:204:3
+1420: 2026-09-19T05:00:40.5148853Z 
+1421: 2026-09-19T05:00:40.5149841Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+1422: 2026-09-19T05:00:40.5151282Z     [TEST] FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload
+1423: 2026-09-19T05:00:40.5152586Z       [STEP] Apply an album exclusion optimistically over matching legacy file-field rules
+1424: 2026-09-19T05:00:40.5154627Z       [FAIL] Apply an album exclusion optimistically over matching legacy file-field rules :: expect(received...
+1425: 2026-09-19T05:00:40.5157339Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1426: 2026-09-19T05:00:40.5158621Z 
+1427: 2026-09-19T05:00:40.5163117Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+1428: 2026-09-19T05:00:40.5164053Z     Error 1
+1429: 2026-09-19T05:00:40.5164669Z     Error: expect(received).toHaveLength(expected)
+1430: 2026-09-19T05:00:40.5165312Z     
+1431: 2026-09-19T05:00:40.5165841Z     Expected length: 18
+1432: 2026-09-19T05:00:40.5166385Z     Received length: 0
+1433: 2026-09-19T05:00:40.5166956Z     Received array:  []
+1434: 2026-09-19T05:00:40.5168144Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:344:74
+1435: 2026-09-19T05:00:40.5169097Z         at r...
+1436: 2026-09-19T05:00:40.5170125Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1437: 2026-09-19T05:00:40.5170770Z 
+1438: 2026-09-19T05:00:40.5171581Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+1439: 2026-09-19T05:00:40.5174356Z     [2026-09-19T05:00:15.104Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5500/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-playback-utilities%5Cshared%5Cmedia%5CProgressive%20Projects%5CFlower%20Kings%20Family%5CAgents%20Of%20Mercy%5CFunctional%20Fixture%20Album%20330%5Cc...
+1440: 2026-09-19T05:00:40.5177350Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1441: 2026-09-19T05:00:40.5177910Z 
+1442: 2026-09-19T05:00:40.5179315Z     Error Context: ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\error-context.md
+1443: 2026-09-19T05:00:40.5180746Z 
+1444: 2026-09-19T05:00:40.5181476Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+1445: 2026-09-19T05:00:40.5183334Z     ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\trace.zip
+1446: 2026-09-19T05:00:40.5184780Z     Usage:
+1447: 2026-09-19T05:00:40.5184994Z 
+1448: 2026-09-19T05:00:40.5186379Z         npx playwright show-trace ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\trace.zip
+1449: 2026-09-19T05:00:40.5187824Z 
+1450: 2026-09-19T05:00:40.5188545Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1451: 2026-09-19T05:00:40.5189096Z 
+1452: 2026-09-19T05:00:40.5189251Z   1 failed
+1453: 2026-09-19T05:00:40.5190922Z     [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:189:1 › FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files 
+1454: 2026-09-19T05:00:42.2477264Z 
+1455: 2026-09-19T05:00:42.2477886Z === Playwright Summary ===
+1456: 2026-09-19T05:00:42.2480348Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+1457: 2026-09-19T05:00:42.2483654Z [31m[x][0m problematicFileNavigation.spec
+1458: 2026-09-19T05:00:42.2485096Z   [31m[x][0m FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files
+1459: 2026-09-19T05:00:42.2485969Z 
+1460: 2026-09-19T05:00:42.2486201Z Overall: 0/1 passed
+1461: 2026-09-19T05:00:42.2486674Z Failed tests:
+1462: 2026-09-19T05:00:42.2488355Z - problematicFileNavigation.spec > FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files
+1463: 2026-09-19T05:00:49.3387766Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+1464: 2026-09-19T05:00:51.0589811Z {"restored":0,"removed":0,"unchanged":1497}
+1465: 2026-09-19T05:01:13.0769212Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1466: 2026-09-19T05:01:14.7126271Z 2026-09-19 05:01:14,710 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1467: 2026-09-19T05:01:14.7128141Z 2026-09-19 05:01:14,710 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1468: 2026-09-19T05:01:15.3365991Z 2026-09-19 05:01:15,335 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=471.14 source_load=136.17 fingerprint=59.14 pure_build=165.82 family_link_replacement=8.05 snapshot_publication=1.74
+1469: 2026-09-19T05:01:16.5863038Z 2026-09-19 05:01:16,583 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 417.37, "hydrate_in_progress": false, "payload_elapsed_ms": 175.13, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1470: 2026-09-19T05:01:39.3709696Z 
+1471: 2026-09-19T05:01:39.3710371Z Running 1 test using 1 worker
+1472: 2026-09-19T05:01:39.3742395Z 
+1473: 2026-09-19T05:01:42.3609435Z 2026-09-19 05:01:42,359 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 286.33, "hydrate_in_progress": false, "payload_elapsed_ms": 159.26, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1474: 2026-09-19T05:01:44.9577326Z [TEST] FTC-TAGS-024 completes a verified Album and Exception intent during app restart
+1475: 2026-09-19T05:01:44.9620859Z   [STEP] Stage the exact crash boundary after file verification and before Postgres publication
+1476: 2026-09-19T05:01:45.7381218Z   [PASS] Stage the exact crash boundary after file verification and before Postgres publication (776 ms)
+1477: 2026-09-19T05:01:45.7383966Z   [STEP] Restart the production app and reconcile the unfinished intent before hydration
+1478: 2026-09-19T05:01:50.2993180Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1479: 2026-09-19T05:01:51.3836345Z 2026-09-19 05:01:51,382 [INFO] music_app: Tag edit recovery completed completed=1 rolled_back=0 external=0 failed=0
+1480: 2026-09-19T05:01:52.5729129Z 2026-09-19 05:01:52,571 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1481: 2026-09-19T05:01:53.8722712Z 2026-09-19 05:01:53,870 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 369.56, "hydrate_in_progress": false, "payload_elapsed_ms": 125.81, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1482: 2026-09-19T05:02:10.8881473Z 2026-09-19 05:02:10,886 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 283.75, "hydrate_in_progress": false, "payload_elapsed_ms": 215.51, "query": "", "scan_in_progress": false, "selected_artist": "E2E Rarity Artist"}
+1483: 2026-09-19T05:02:12.9755107Z   [PASS] Restart the production app and reconcile the unfinished intent before hydration (27237 ms)
+1484: 2026-09-19T05:02:12.9757018Z   [STEP] Expose the recovered physical Album and app-owned Exception through Loose Tracks
+1485: 2026-09-19T05:02:13.9259236Z   [PASS] Expose the recovered physical Album and app-owned Exception through Loose Tracks (951 ms)
+1486: 2026-09-19T05:02:13.9261441Z   [STEP] Clear the recovered Exception and publish the recovered album card
+1487: 2026-09-19T05:02:14.9135919Z 2026-09-19 05:02:14,912 [INFO] music_app: {"action": "Tags edited", "album": "", "artist": "", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\02 - Remain Editable.mp3"]}
+1488: 2026-09-19T05:02:16.2512974Z 2026-09-19 05:02:16,249 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 389.12, "hydrate_in_progress": false, "payload_elapsed_ms": 315.08, "query": "", "scan_in_progress": false, "selected_artist": "E2E Rarity Artist"}
+1489: 2026-09-19T05:02:17.3120512Z   [PASS] Clear the recovered Exception and publish the recovered album card (3385 ms)
+1490: 2026-09-19T05:02:17.3122208Z   [STEP] Restore the generated track to its original album through Edit Tags
+1491: 2026-09-19T05:02:19.6330540Z 2026-09-19 05:02:19,631 [INFO] music_app: {"action": "Tags edited", "album": "Recovered Rarity Album", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\02 - Remain Editable.mp3"]}
+1492: 2026-09-19T05:02:20.7991146Z 2026-09-19 05:02:20,798 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 491.77, "hydrate_in_progress": false, "payload_elapsed_ms": 362.92, "query": "", "scan_in_progress": false, "selected_artist": "E2E Rarity Artist"}
+1493: 2026-09-19T05:02:22.5828129Z   [PASS] Restore the generated track to its original album through Edit Tags (5267 ms)
+1494: 2026-09-19T05:02:22.6471480Z   ok 1 [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:999:1 › FTC-TAGS-024 completes a verified Album and Exception intent during app restart @area:tag-edit (37.9s)
+1495: 2026-09-19T05:02:22.6541570Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"bed0142b8de54daba3808cb7e4290df19797604a444ca70d14c2ad3cc527c999","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1496: 2026-09-19T05:02:23.3085746Z 
+1497: 2026-09-19T05:02:23.3085769Z 
+1498: 2026-09-19T05:02:23.3085779Z 
+1499: 2026-09-19T05:02:23.3087675Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"bed0142b8de54daba3808cb7e4290df19797604a444ca70d14c2ad3cc527c999","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1500: 2026-09-19T05:02:23.3088733Z   1 passed (44.5s)
+1501: 2026-09-19T05:02:23.8083659Z 
+1502: 2026-09-19T05:02:23.8084796Z === Playwright Summary ===
+1503: 2026-09-19T05:02:23.8085927Z [[32m✓[0m] nonAlbumRarity.spec
+1504: 2026-09-19T05:02:23.8087391Z   [[32m✓[0m] FTC-TAGS-024 completes a verified Album and Exception intent during app restart @area:tag-edit
+1505: 2026-09-19T05:02:23.8088683Z 
+1506: 2026-09-19T05:02:23.8088961Z Overall: 1/1 passed
+1507: 2026-09-19T05:02:29.4498315Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+1508: 2026-09-19T05:02:31.1323187Z {"restored":1,"removed":0,"unchanged":1496}
+1509: 2026-09-19T05:02:56.2321014Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1510: 2026-09-19T05:02:57.6619391Z 2026-09-19 05:02:57,660 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1511: 2026-09-19T05:02:57.6620758Z 2026-09-19 05:02:57,660 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1512: 2026-09-19T05:02:58.1566290Z 2026-09-19 05:02:58,154 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=455.29 source_load=135.82 fingerprint=57.85 pure_build=145.63 family_link_replacement=7.97 snapshot_publication=1.65
+1513: 2026-09-19T05:02:59.3988467Z 2026-09-19 05:02:59,396 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 516.5, "hydrate_in_progress": false, "payload_elapsed_ms": 266.22, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1514: 2026-09-19T05:03:23.1231634Z 
+1515: 2026-09-19T05:03:23.1232303Z Running 1 test using 1 worker
+1516: 2026-09-19T05:03:23.1263899Z 
+1517: 2026-09-19T05:03:26.3900225Z 2026-09-19 05:03:26,388 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 302.54, "hydrate_in_progress": false, "payload_elapsed_ms": 189.87, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1518: 2026-09-19T05:03:29.1712821Z [TEST] FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track
+1519: 2026-09-19T05:03:29.1816855Z   [STEP] Open the fake-data gallery and wait for the initial view to settle
+1520: 2026-09-19T05:03:29.6135544Z 2026-09-19 05:03:29,612 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 272.06, "hydrate_in_progress": false, "payload_elapsed_ms": 160.18, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1521: 2026-09-19T05:03:32.1746222Z   [PASS] Open the fake-data gallery and wait for the initial view to settle (2989 ms)
+1522: 2026-09-19T05:03:32.1747787Z   [STEP] Prove the no-track scissors is natively disabled without a busy cursor or callback
+1523: 2026-09-19T05:03:32.8844049Z   [PASS] Prove the no-track scissors is natively disabled without a busy cursor or callback (715 ms)
+1524: 2026-09-19T05:03:32.8845492Z   [STEP] Select the exact signed journey album and start its fake loop source track
+1525: 2026-09-19T05:03:35.8130957Z   [PASS] Select the exact signed journey album and start its fake loop source track (2928 ms)
+1526: 2026-09-19T05:03:35.8132373Z   [STEP] Select the owner-approved waveform seekbar through Appearance and return to the gallery
+1527: 2026-09-19T05:03:38.2248496Z   [PASS] Select the owner-approved waveform seekbar through Appearance and return to the gallery (2412 ms)
+1528: 2026-09-19T05:03:38.2251385Z   [STEP] Pause and resume the same bottom-player track with the app-body Space shortcut
+1529: 2026-09-19T05:03:38.9797537Z   [PASS] Pause and resume the same bottom-player track with the app-body Space shortcut (755 ms)
+1530: 2026-09-19T05:03:38.9798771Z   [STEP] Reload with the full track duration and keep loop editing inactive
+1531: 2026-09-19T05:03:39.3516328Z 2026-09-19 05:03:39,350 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 235.37, "hydrate_in_progress": false, "payload_elapsed_ms": 125.92, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1532: 2026-09-19T05:03:42.9878719Z   [PASS] Reload with the full track duration and keep loop editing inactive (3936 ms)
+1533: 2026-09-19T05:03:42.9915040Z   [STEP] Use the compact bottom-player scissors, shared range, cancellation, and naming workflow
+1534: 2026-09-19T05:03:55.7289472Z 2026-09-19 05:03:55,727 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "13b8e22186d844069d871a02600334e1", "name": "Warmup Loop", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+1535: 2026-09-19T05:03:55.9111533Z   [PASS] Use the compact bottom-player scissors, shared range, cancellation, and naming workflow (12993 ms)
+1536: 2026-09-19T05:03:55.9112964Z   [STEP] Open Utility Loops and confirm the first loop plays back
+1537: 2026-09-19T05:03:59.2551285Z   [FAIL] Open Utility Loops and confirm the first loop plays back :: expect(received).toBeLessThan(expected)
+1538: 2026-09-19T05:03:59.2554515Z 
+1539: 2026-09-19T05:03:59.2563288Z Expected: < 140
+1540: 2026-09-19T05:03:59.2565138Z Received:   147 (3318 ms)
+1541: 2026-09-19T05:04:03.9830050Z   x  1 [functional] › tests\e2e\specs\loops.functional.spec.js:184:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops (32.7s)
+1542: 2026-09-19T05:04:03.9833550Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1543: 2026-09-19T05:04:03.9836761Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"993d6babb109ffcbc70719b73d0adfee25cc2cd9fa9dc0d64c85737ca91bad37","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1544: 2026-09-19T05:04:04.8110781Z 
+1545: 2026-09-19T05:04:04.8110803Z 
+1546: 2026-09-19T05:04:04.8110951Z 
+1547: 2026-09-19T05:04:04.8113503Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"993d6babb109ffcbc70719b73d0adfee25cc2cd9fa9dc0d64c85737ca91bad37","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1548: 2026-09-19T05:04:04.8115337Z 
+1549: 2026-09-19T05:04:04.8117810Z   1) [functional] › tests\e2e\specs\loops.functional.spec.js:184:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops 
+1550: 2026-09-19T05:04:04.8120221Z 
+1551: 2026-09-19T05:04:04.8120493Z     Error: expect(received).toBeLessThan(expected)
+1552: 2026-09-19T05:04:04.8120799Z 
+1553: 2026-09-19T05:04:04.8120946Z     Expected: < 140
+1554: 2026-09-19T05:04:04.8121267Z     Received:   147
+1555: 2026-09-19T05:04:04.8121447Z 
+1556: 2026-09-19T05:04:04.8121549Z       519 |     });
+1557: 2026-09-19T05:04:04.8122165Z       520 |     const compactLayout = await utilityLoopsActions.readCompactLoopLayoutByName('Warmup Loop');
+1558: 2026-09-19T05:04:04.8122915Z     > 521 |     expect(compactLayout.entryBounds.height).toBeLessThan(140);
+1559: 2026-09-19T05:04:04.8123437Z           |                                              ^
+1560: 2026-09-19T05:04:04.8124096Z       522 |     expect(compactLayout.pitchBounds.y).toBeGreaterThanOrEqual(compactLayout.topRowBounds.y);
+1561: 2026-09-19T05:04:04.8125106Z       523 |     expect(compactLayout.pitchBounds.y + compactLayout.pitchBounds.height)
+1562: 2026-09-19T05:04:04.8126753Z       524 |       .toBeLessThanOrEqual(compactLayout.topRowBounds.y + compactLayout.topRowBounds.height + 1);
+1563: 2026-09-19T05:04:04.8127594Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:521:46
+1564: 2026-09-19T05:04:04.8128282Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+1565: 2026-09-19T05:04:04.8128961Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:481:3
+1566: 2026-09-19T05:04:04.8129330Z 
+1567: 2026-09-19T05:04:04.8130232Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+1568: 2026-09-19T05:04:04.8133955Z     [TEST] FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track
+1569: 2026-09-19T05:04:04.8136218Z       [STEP] Open the fake-data gallery and wait for the initial view to settle
+1570: 2026-09-19T05:04:04.8137051Z       [PASS] Op...
+1571: 2026-09-19T05:04:04.8138107Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1572: 2026-09-19T05:04:04.8138735Z 
+1573: 2026-09-19T05:04:04.8139567Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+1574: 2026-09-19T05:04:04.8140530Z     Error 1
+1575: 2026-09-19T05:04:04.8141462Z     Error: expect(received).toBeLessThan(expected)
+1576: 2026-09-19T05:04:04.8142105Z     
+1577: 2026-09-19T05:04:04.8142583Z     Expected: < 140
+1578: 2026-09-19T05:04:04.8143101Z     Received:   147
+1579: 2026-09-19T05:04:04.8143931Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:521:46
+1580: 2026-09-19T05:04:04.8145043Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\s...
+1581: 2026-09-19T05:04:04.8146364Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1582: 2026-09-19T05:04:04.8147388Z 
+1583: 2026-09-19T05:04:04.8148261Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+1584: 2026-09-19T05:04:04.8150413Z     [2026-09-19T05:03:33.828Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5500/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-playback-utilities%5Cshared%5Cmedia%5CAlbum%20Rating%20Contract%5CRating%20Import%20Candidate%5Ccover.png&size=480&v=process-0c447d171b2d24e762429285...
+1585: 2026-09-19T05:04:04.8152491Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1586: 2026-09-19T05:04:04.8153178Z 
+1587: 2026-09-19T05:04:04.8154489Z     Error Context: ..\..\_temp\functional-output-playback-utilities\wave-02-04-playwright-config-js\loops.functional-FTC-UTIL--1d25d-tay-grouped-under-one-track-functional\error-context.md
+1588: 2026-09-19T05:04:04.8155346Z 
+1589: 2026-09-19T05:04:04.8155852Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+1590: 2026-09-19T05:04:04.8157350Z     ..\..\_temp\functional-output-playback-utilities\wave-02-04-playwright-config-js\loops.functional-FTC-UTIL--1d25d-tay-grouped-under-one-track-functional\trace.zip
+1591: 2026-09-19T05:04:04.8159875Z     Usage:
+1592: 2026-09-19T05:04:04.8160124Z 
+1593: 2026-09-19T05:04:04.8161323Z         npx playwright show-trace ..\..\_temp\functional-output-playback-utilities\wave-02-04-playwright-config-js\loops.functional-FTC-UTIL--1d25d-tay-grouped-under-one-track-functional\trace.zip
+1594: 2026-09-19T05:04:04.8162929Z 
+1595: 2026-09-19T05:04:04.8163600Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1596: 2026-09-19T05:04:04.8163977Z 
+1597: 2026-09-19T05:04:04.8164125Z   1 failed
+1598: 2026-09-19T05:04:04.8165544Z     [functional] › tests\e2e\specs\loops.functional.spec.js:184:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops 
+1599: 2026-09-19T05:04:05.5951764Z 
+1600: 2026-09-19T05:04:05.5952876Z === Playwright Summary ===
+1601: 2026-09-19T05:04:05.5954486Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+1602: 2026-09-19T05:04:05.5956250Z [31m[x][0m loops.functional.spec
+1603: 2026-09-19T05:04:05.5957556Z   [31m[x][0m FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops
+1604: 2026-09-19T05:04:05.5958437Z 
+1605: 2026-09-19T05:04:05.5958619Z Overall: 0/1 passed
+1606: 2026-09-19T05:04:05.5958907Z Failed tests:
+1607: 2026-09-19T05:04:05.5960108Z - loops.functional.spec > FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops
+1608: 2026-09-19T05:04:11.1899704Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+1609: 2026-09-19T05:04:12.8695608Z {"restored":0,"removed":0,"unchanged":1497}
+1610: 2026-09-19T05:04:34.5681509Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1611: 2026-09-19T05:04:36.1861629Z 2026-09-19 05:04:36,184 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1612: 2026-09-19T05:04:36.1862656Z 2026-09-19 05:04:36,184 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1613: 2026-09-19T05:04:36.6688863Z 2026-09-19 05:04:36,667 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=446.94 source_load=135.80 fingerprint=58.75 pure_build=146.17 family_link_replacement=7.40 snapshot_publication=1.62
+1614: 2026-09-19T05:04:37.7841582Z 2026-09-19 05:04:37,782 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 416.39, "hydrate_in_progress": false, "payload_elapsed_ms": 169.49, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1615: 2026-09-19T05:05:00.6946179Z 
+1616: 2026-09-19T05:05:00.6947330Z Running 1 test using 1 worker
+1617: 2026-09-19T05:05:00.6979716Z 
+1618: 2026-09-19T05:05:03.6929168Z 2026-09-19 05:05:03,691 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 273.98, "hydrate_in_progress": false, "payload_elapsed_ms": 160.91, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1619: 2026-09-19T05:05:06.7476433Z 2026-09-19 05:05:06,746 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 271.16, "hydrate_in_progress": false, "payload_elapsed_ms": 149.5, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1620: 2026-09-19T05:05:14.4548465Z 2026-09-19 05:05:14,453 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "fc826c216aac477ea640ff465e13395a", "name": "Playing native reorder 0-1789794306330", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+1621: 2026-09-19T05:05:17.2323617Z 2026-09-19 05:05:17,231 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "1867aaf5897747c8bb2d0581b28b0047", "name": "Move native reorder 0-1789794306330", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+1622: 2026-09-19T05:05:19.9606422Z 2026-09-19 05:05:19,956 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "06f69f07d80e4fa094a0eefaa4efacaa", "name": "Target native reorder 0-1789794306330", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+1623: 2026-09-19T05:05:26.1130345Z 2026-09-19 05:05:26,112 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 302.46, "hydrate_in_progress": false, "payload_elapsed_ms": 180.7, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1624: 2026-09-19T05:05:30.7813200Z   ok 1 [functional] › tests\e2e\specs\loops.functional.spec.js:124:1 › FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range @area:loops (24.7s)
+1625: 2026-09-19T05:05:30.7872925Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"e10fa5959091decb79a82dd39e05f0d8503919fbbc9037c1329b57eb32520073","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1626: 2026-09-19T05:05:31.3494130Z 
+1627: 2026-09-19T05:05:31.3494386Z 
+1628: 2026-09-19T05:05:31.3494914Z 
+1629: 2026-09-19T05:05:31.3497313Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"e10fa5959091decb79a82dd39e05f0d8503919fbbc9037c1329b57eb32520073","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1630: 2026-09-19T05:05:31.3498352Z   1 passed (31.2s)
+1631: 2026-09-19T05:05:31.7784242Z 
+1632: 2026-09-19T05:05:31.7784763Z === Playwright Summary ===
+1633: 2026-09-19T05:05:31.7785509Z [[32m✓[0m] loops.functional.spec
+1634: 2026-09-19T05:05:31.7786407Z   [[32m✓[0m] FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range @area:loops
+1635: 2026-09-19T05:05:31.7786976Z 
+1636: 2026-09-19T05:05:31.7787135Z Overall: 1/1 passed
+1637: 2026-09-19T05:05:37.4046319Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+1638: 2026-09-19T05:05:39.2003400Z {"restored":0,"removed":0,"unchanged":1497}
+1639: 2026-09-19T05:06:02.4747742Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1640: 2026-09-19T05:06:03.9056890Z 2026-09-19 05:06:03,904 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1641: 2026-09-19T05:06:03.9058749Z 2026-09-19 05:06:03,904 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1642: 2026-09-19T05:06:04.6201512Z 2026-09-19 05:06:04,618 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=577.04 source_load=149.39 fingerprint=58.48 pure_build=144.64 family_link_replacement=7.70 snapshot_publication=1.76
+1643: 2026-09-19T05:06:06.1017111Z 2026-09-19 05:06:06,100 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 416.71, "hydrate_in_progress": false, "payload_elapsed_ms": 164.01, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1644: 2026-09-19T05:06:30.6760193Z 
+1645: 2026-09-19T05:06:30.6760894Z Running 1 test using 1 worker
+1646: 2026-09-19T05:06:30.6794203Z 
+1647: 2026-09-19T05:06:33.7041571Z 2026-09-19 05:06:33,703 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 273.87, "hydrate_in_progress": false, "payload_elapsed_ms": 158.18, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1648: 2026-09-19T05:06:36.7876207Z 2026-09-19 05:06:36,786 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 274.17, "hydrate_in_progress": false, "payload_elapsed_ms": 164.09, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1649: 2026-09-19T05:06:44.6785825Z 2026-09-19 05:06:44,677 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "c7e30bfd97a84badab6de036a083e517", "name": "Export snapshot 0-1789794396352", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+1650: 2026-09-19T05:06:49.0178035Z   ok 1 [functional] › tests\e2e\specs\loops.functional.spec.js:69:1 › FTC-SETTINGS-H03 real log download matches the displayed captured snapshot @area:log-history (12.9s)
+1651: 2026-09-19T05:06:49.0196609Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"29d4513a9015074ef678ce1bb913c819e037992ba11bd068729c91bcd51c6171","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1652: 2026-09-19T05:06:49.6566435Z 
+1653: 2026-09-19T05:06:49.6566555Z 
+1654: 2026-09-19T05:06:49.6566576Z 
+1655: 2026-09-19T05:06:49.6568672Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"29d4513a9015074ef678ce1bb913c819e037992ba11bd068729c91bcd51c6171","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1656: 2026-09-19T05:06:49.6569742Z   1 passed (19.5s)
+1657: 2026-09-19T05:06:50.1342010Z 
+1658: 2026-09-19T05:06:50.1343019Z === Playwright Summary ===
+1659: 2026-09-19T05:06:50.1346659Z [[32m✓[0m] loops.functional.spec
+1660: 2026-09-19T05:06:50.1348001Z   [[32m✓[0m] FTC-SETTINGS-H03 real log download matches the displayed captured snapshot @area:log-history
+1661: 2026-09-19T05:06:50.1348908Z 
+1662: 2026-09-19T05:06:50.1349105Z Overall: 1/1 passed
+1663: 2026-09-19T05:06:55.8352434Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+1664: 2026-09-19T05:06:57.5401836Z {"restored":0,"removed":0,"unchanged":1497}
+1665: 2026-09-19T05:07:19.5464654Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+1666: 2026-09-19T05:07:21.2342990Z 2026-09-19 05:07:21,233 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1667: 2026-09-19T05:07:21.2352357Z 2026-09-19 05:07:21,233 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1668: 2026-09-19T05:07:21.8455778Z 2026-09-19 05:07:21,843 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=574.22 source_load=138.46 fingerprint=59.66 pure_build=159.65 family_link_replacement=7.59 snapshot_publication=1.72
+1669: 2026-09-19T05:07:23.0613695Z 2026-09-19 05:07:23,059 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 411.16, "hydrate_in_progress": false, "payload_elapsed_ms": 168.49, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1670: 2026-09-19T05:07:46.1603252Z 
+2349: 2026-09-19T05:25:35.4438590Z 2026-09-19 05:25:35,443 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 258.92, "hydrate_in_progress": false, "payload_elapsed_ms": 147.43, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2350: 2026-09-19T05:25:45.6199231Z   [PASS] Start generated playback through the production album flow (10694 ms)
+2351: 2026-09-19T05:25:45.6201159Z   [STEP] Apply regular and waveform seekbar geometry without changing playback identity
+2352: 2026-09-19T05:25:46.8903234Z   [FAIL] Apply regular and waveform seekbar geometry without changing playback identity :: expect(received).toBeNull()
+2353: 2026-09-19T05:25:46.8904506Z 
+2354: 2026-09-19T05:25:46.8905450Z Received: {"height": 7.8399658203125, "width": 1268, "x": 156, "y": 916.0800170898438} (1244 ms)
+2355: 2026-09-19T05:25:49.7733694Z   x  1 [functional] › tests\e2e\specs\playerViewModes.spec.js:10:1 › FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback (13.6s)
+2356: 2026-09-19T05:25:49.7737433Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"6a2da294af82e02ebe447d29b0c460d1e65458b13be07d1a269c1802c3143ca1","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2357: 2026-09-19T05:25:49.7751562Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2358: 2026-09-19T05:25:50.4001628Z 
+2359: 2026-09-19T05:25:50.4001667Z 
+2360: 2026-09-19T05:25:50.4002238Z 
+2361: 2026-09-19T05:25:50.4004496Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"6a2da294af82e02ebe447d29b0c460d1e65458b13be07d1a269c1802c3143ca1","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2362: 2026-09-19T05:25:50.4006068Z 
+2363: 2026-09-19T05:25:50.4008339Z   1) [functional] › tests\e2e\specs\playerViewModes.spec.js:10:1 › FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback 
+2364: 2026-09-19T05:25:50.4009943Z 
+2365: 2026-09-19T05:25:50.4010255Z     Error: expect(received).toBeNull()
+2366: 2026-09-19T05:25:50.4010624Z 
+2367: 2026-09-19T05:25:50.4011184Z     Received: {"height": 7.8399658203125, "width": 1268, "x": 156, "y": 916.0800170898438}
+2368: 2026-09-19T05:25:50.4011822Z 
+2369: 2026-09-19T05:25:50.4013137Z        at ..\actions\globalPlayerActions.js:136
+2370: 2026-09-19T05:25:50.4013654Z 
+2371: 2026-09-19T05:25:50.4013963Z       134 |         .toBeLessThanOrEqual(1);
+2372: 2026-09-19T05:25:50.4014630Z       135 |     } else {
+2373: 2026-09-19T05:25:50.4015821Z     > 136 |       expect(checkpoint.waveform).toBeNull();
+2374: 2026-09-19T05:25:50.4016294Z           |                                   ^
+2375: 2026-09-19T05:25:50.4017438Z       137 |       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
+2376: 2026-09-19T05:25:50.4018238Z       138 |       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
+2377: 2026-09-19T05:25:50.4018918Z       139 |         - (checkpoint.timeline.y + checkpoint.timeline.height);
+2378: 2026-09-19T05:25:50.4019781Z         at GlobalPlayerActions.expectExpandedGeometry (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:136:35)
+2379: 2026-09-19T05:25:50.4020637Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerViewModes.spec.js:64:5
+2380: 2026-09-19T05:25:50.4021355Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2381: 2026-09-19T05:25:50.4023235Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\playerViewModes.spec.js:55:3
+2382: 2026-09-19T05:25:50.4023931Z 
+2383: 2026-09-19T05:25:50.4024857Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2384: 2026-09-19T05:25:50.4026646Z     [TEST] FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state
+2385: 2026-09-19T05:25:50.4028841Z       [STEP] Start generated playback through the production album flow
+2386: 2026-09-19T05:25:50.4029975Z       [PASS] Start generated playback through the production album flow (10694 ms...
+2387: 2026-09-19T05:25:50.4031336Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2388: 2026-09-19T05:25:50.4031921Z 
+2389: 2026-09-19T05:25:50.4032971Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2390: 2026-09-19T05:25:50.4034371Z     Error 1
+2391: 2026-09-19T05:25:50.4034983Z     Error: expect(received).toBeNull()
+2392: 2026-09-19T05:25:50.4036086Z     
+2393: 2026-09-19T05:25:50.4036844Z     Received: {"height": 7.8399658203125, "width": 1268, "x": 156, "y": 916.0800170898438}
+2394: 2026-09-19T05:25:50.4038482Z         at GlobalPlayerActions.expectExpandedGeometry (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:136...
+2395: 2026-09-19T05:25:50.4040784Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2396: 2026-09-19T05:25:50.4041258Z 
+2397: 2026-09-19T05:25:50.4041758Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2398: 2026-09-19T05:25:50.4044468Z     [2026-09-19T05:25:39.123Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5500/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-playback-utilities%5Cshared%5Cmedia%5CAlbum%20Rating%20Contract%5CRating%20Absent%5Ccover.png&size=480&v=process-18cf7af6fffc182914aa80c8c7c304a0
+2399: 2026-09-19T05:25:50.4046738Z     [20...
+2400: 2026-09-19T05:25:50.4047679Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2401: 2026-09-19T05:25:50.4048310Z 
+2402: 2026-09-19T05:25:50.4049746Z     Error Context: ..\..\_temp\functional-output-playback-utilities\wave-02-19-playwright-config-js\playerViewModes-FTC-PLAYER-36a3f-ithout-sharing-runner-state-functional\error-context.md
+2403: 2026-09-19T05:25:50.4051272Z 
+2404: 2026-09-19T05:25:50.4052071Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+2405: 2026-09-19T05:25:50.4054010Z     ..\..\_temp\functional-output-playback-utilities\wave-02-19-playwright-config-js\playerViewModes-FTC-PLAYER-36a3f-ithout-sharing-runner-state-functional\trace.zip
+2406: 2026-09-19T05:25:50.4055615Z     Usage:
+2407: 2026-09-19T05:25:50.4055919Z 
+2408: 2026-09-19T05:25:50.4057724Z         npx playwright show-trace ..\..\_temp\functional-output-playback-utilities\wave-02-19-playwright-config-js\playerViewModes-FTC-PLAYER-36a3f-ithout-sharing-runner-state-functional\trace.zip
+2409: 2026-09-19T05:25:50.4059253Z 
+2410: 2026-09-19T05:25:50.4059982Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2411: 2026-09-19T05:25:50.4060598Z 
+2412: 2026-09-19T05:25:50.4060812Z   1 failed
+2413: 2026-09-19T05:25:50.4063355Z     [functional] › tests\e2e\specs\playerViewModes.spec.js:10:1 › FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback 
+2414: 2026-09-19T05:25:50.9718260Z 
+2415: 2026-09-19T05:25:50.9718881Z === Playwright Summary ===
+2416: 2026-09-19T05:25:50.9719946Z [31m[x][0m playerViewModes.spec
+2417: 2026-09-19T05:25:50.9721717Z   [31m[x][0m FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback
+2418: 2026-09-19T05:25:50.9738470Z 
+2419: 2026-09-19T05:25:50.9739016Z Overall: 0/1 passed
+2420: 2026-09-19T05:25:50.9739389Z Failed tests:
+2421: 2026-09-19T05:25:50.9740404Z - playerViewModes.spec > FTC-PLAYER-019 / FTC-PLAYER-020 / FTC-PLAYER-021 / FTC-PLAYER-022 switches expanded, docked, and floating player views without sharing runner state @area:playback
+2422: 2026-09-19T05:25:50.9742219Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+2423: 2026-09-19T05:25:56.5383921Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+2424: 2026-09-19T05:25:58.2190951Z {"restored":0,"removed":0,"unchanged":1497}
+2425: 2026-09-19T05:26:20.2048319Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+2426: 2026-09-19T05:26:21.5179744Z 2026-09-19 05:26:21,516 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2427: 2026-09-19T05:26:21.5181613Z 2026-09-19 05:26:21,516 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2428: 2026-09-19T05:26:22.1162273Z 2026-09-19 05:26:22,114 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=560.77 source_load=137.32 fingerprint=57.34 pure_build=147.96 family_link_replacement=9.56 snapshot_publication=1.75
+2429: 2026-09-19T05:26:23.4669191Z 2026-09-19 05:26:23,466 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 386.33, "hydrate_in_progress": false, "payload_elapsed_ms": 173.59, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2430: 2026-09-19T05:26:49.5772368Z 
+2431: 2026-09-19T05:26:49.5798934Z Running 1 test using 1 worker
+2432: 2026-09-19T05:26:49.5806487Z 
+2433: 2026-09-19T05:26:53.3026363Z 2026-09-19 05:26:53,301 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 319.57, "hydrate_in_progress": false, "payload_elapsed_ms": 175.0, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2434: 2026-09-19T05:26:56.3340255Z [TEST] FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result
+2435: 2026-09-19T05:26:56.3358940Z   [STEP] Start playback from the generated Various Artists fixture
+2436: 2026-09-19T05:26:56.8113256Z 2026-09-19 05:26:56,810 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 312.9, "hydrate_in_progress": false, "payload_elapsed_ms": 186.1, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2437: 2026-09-19T05:26:59.7506779Z 2026-09-19 05:26:59,721 [INFO] music_app: {"action": "Postgres album search request started", "query": "Featured Signal Collection"}
+2438: 2026-09-19T05:26:59.8613614Z 2026-09-19 05:26:59,855 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 135.32, "query": "Featured Signal Collection", "selected_artist": "Various Artists"}
+2439: 2026-09-19T05:27:01.9489945Z   [PASS] Start playback from the generated Various Artists fixture (5591 ms)
+2440: 2026-09-19T05:27:01.9620920Z   [STEP] Reload and restore the same playing track before changing search context
+2441: 2026-09-19T05:27:02.2533049Z 2026-09-19 05:27:02,252 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "full_view", "covers_in_progress": false, "elapsed_ms": 158.34, "hydrate_in_progress": false, "payload_elapsed_ms": 114.44, "query": "Featured Signal Collection", "scan_in_progress": false, "selected_artist": "Various Artists"}
+2442: 2026-09-19T05:27:03.8165450Z   [PASS] Reload and restore the same playing track before changing search context (1850 ms)
+2443: 2026-09-19T05:27:03.8383844Z   [STEP] Search for and select an unrelated artist while playback continues
+2444: 2026-09-19T05:27:04.3732433Z 2026-09-19 05:27:04,190 [INFO] music_app: {"action": "Postgres album search request started", "query": "Album Haven Last.fm Fixture"}
+2445: 2026-09-19T05:27:04.4296051Z 2026-09-19 05:27:04,354 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 163.45, "query": "Album Haven Last.fm Fixture", "selected_artist": "Album Haven Last.fm Fixture"}
+2446: 2026-09-19T05:27:05.6259479Z   [PASS] Search for and select an unrelated artist while playback continues (1848 ms)
+2447: 2026-09-19T05:27:05.6261133Z   [STEP] Open player artwork and recover the original playing album and track
+2448: 2026-09-19T05:27:06.2057957Z   [PASS] Open player artwork and recover the original playing album and track (550 ms)
+2449: 2026-09-19T05:27:06.2959405Z   ok 1 [functional] › tests\e2e\specs\playerArtworkSearchContext.spec.js:10:1 › FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result @area:playback (10.3s)
+2450: 2026-09-19T05:27:06.3132199Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"2b75f086ddd9b3bfc3768db0aaf8333ec53a573a4e5058274e22aa39993159dc","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2451: 2026-09-19T05:27:06.8659378Z 
+2452: 2026-09-19T05:27:06.8659619Z 
+2453: 2026-09-19T05:27:06.8659830Z 
+2454: 2026-09-19T05:27:06.8661240Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"2b75f086ddd9b3bfc3768db0aaf8333ec53a573a4e5058274e22aa39993159dc","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2455: 2026-09-19T05:27:06.8662294Z   1 passed (17.9s)
+2456: 2026-09-19T05:27:07.2999871Z 
+2457: 2026-09-19T05:27:07.3000458Z === Playwright Summary ===
+2458: 2026-09-19T05:27:07.3001215Z [[32m✓[0m] playerArtworkSearchContext.spec
+2459: 2026-09-19T05:27:07.3002102Z   [[32m✓[0m] FTC-PLAYER-015 player artwork reopens the playing album after selecting an unrelated search result @area:playback
+2460: 2026-09-19T05:27:07.3002649Z 
+2461: 2026-09-19T05:27:07.3002778Z Overall: 1/1 passed
+2462: 2026-09-19T05:27:12.8226114Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+2463: 2026-09-19T05:27:14.5044312Z {"restored":0,"removed":0,"unchanged":1497}
+2464: 2026-09-19T05:27:36.1080339Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+2465: 2026-09-19T05:27:37.6659758Z 2026-09-19 05:27:37,664 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2466: 2026-09-19T05:27:37.6661332Z 2026-09-19 05:27:37,664 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2467: 2026-09-19T05:27:38.2576038Z 2026-09-19 05:27:38,256 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=556.00 source_load=137.77 fingerprint=58.40 pure_build=144.30 family_link_replacement=7.67 snapshot_publication=1.68
+2468: 2026-09-19T05:27:39.4547888Z 2026-09-19 05:27:39,453 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 390.36, "hydrate_in_progress": false, "payload_elapsed_ms": 162.47, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2469: 2026-09-19T05:28:05.3497653Z 
+2470: 2026-09-19T05:28:05.3527769Z Running 1 test using 1 worker
+2471: 2026-09-19T05:28:05.3528573Z 
+2472: 2026-09-19T05:28:08.8813942Z 2026-09-19 05:28:08,879 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 317.11, "hydrate_in_progress": false, "payload_elapsed_ms": 183.05, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2473: 2026-09-19T05:28:11.7885370Z [TEST] FTC-PLAYER-015 allowed Chrome policy automatically continues playback after reload
+2474: 2026-09-19T05:28:11.7900372Z   [STEP] Start real playback from the generated featured collection
+2475: 2026-09-19T05:28:12.2737886Z 2026-09-19 05:28:12,272 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 290.95, "hydrate_in_progress": false, "payload_elapsed_ms": 161.47, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2476: 2026-09-19T05:28:15.9025585Z 2026-09-19 05:28:15,278 [INFO] music_app: {"action": "Postgres album search request started", "query": "Length And Repetition"}
+2477: 2026-09-19T05:28:15.9521595Z 2026-09-19 05:28:15,447 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 168.41, "query": "Length And Repetition", "selected_artist": "Playback Start Signals"}
+2478: 2026-09-19T05:28:19.8468488Z   [PASS] Start real playback from the generated featured collection (8056 ms)
+2479: 2026-09-19T05:28:19.8473199Z   [STEP] Reload and automatically continue at the restored offset
+2480: 2026-09-19T05:28:20.1716440Z 2026-09-19 05:28:20,170 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "full_view", "covers_in_progress": false, "elapsed_ms": 144.05, "hydrate_in_progress": false, "payload_elapsed_ms": 95.31, "query": "Length And Repetition", "scan_in_progress": false, "selected_artist": "Playback Start Signals"}
+2481: 2026-09-19T05:28:21.3070233Z   [PASS] Reload and automatically continue at the restored offset (1460 ms)
+2482: 2026-09-19T05:28:21.3837804Z   ok 1 [reload-autoplay-allowed] › tests\e2e\specs\playerReloadAutoplayAllowed.spec.js:7:1 › FTC-PLAYER-015 allowed Chrome policy automatically continues playback after reload @area:playback (9.9s)
+2483: 2026-09-19T05:28:21.3850219Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"f9b6b136da5e9ceea7c878a0ff1a465d7a7699c4c70cdf29b9d1e53db19ba0ea","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2484: 2026-09-19T05:28:21.9782188Z 
+2601: 2026-09-19T05:33:27.5356072Z Running 1 test using 1 worker
+2602: 2026-09-19T05:33:27.5386798Z 
+2603: 2026-09-19T05:33:30.5216060Z 2026-09-19 05:33:30,520 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 369.33, "hydrate_in_progress": false, "payload_elapsed_ms": 160.62, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2604: 2026-09-19T05:33:33.1627433Z [TEST] FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry
+2605: 2026-09-19T05:33:33.1656168Z   [STEP] Open the generated two-track source album
+2606: 2026-09-19T05:33:33.7695880Z 2026-09-19 05:33:33,768 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 333.3, "hydrate_in_progress": false, "payload_elapsed_ms": 127.02, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2607: 2026-09-19T05:33:36.5524049Z 2026-09-19 05:33:36,465 [INFO] music_app: {"action": "Postgres album search request started", "query": "Two Track Rarity Fixture"}
+2608: 2026-09-19T05:33:36.6072845Z 2026-09-19 05:33:36,605 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 139.67, "query": "Two Track Rarity Fixture", "selected_artist": "E2E Rarity Artist"}
+2609: 2026-09-19T05:33:37.5609016Z   [PASS] Open the generated two-track source album (4395 ms)
+2610: 2026-09-19T05:33:37.5612128Z   [STEP] Preserve the hydrated source modal after the terminal persistence failure
+2611: 2026-09-19T05:33:38.7996057Z 2026-09-19 05:33:38,798 [ERROR] music_app: {"action": "Tag edit failed", "album": "Two Track Rarity Fixture", "artist": "E2E Rarity Artist", "error": "permission denied for table ignored_versions", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2612: 2026-09-19T05:33:39.1231716Z   [PASS] Preserve the hydrated source modal after the terminal persistence failure (1562 ms)
+2613: 2026-09-19T05:33:39.1233040Z   [STEP] Retry the same edit and remove only the moved track from the source modal
+2614: 2026-09-19T05:33:40.0939258Z 2026-09-19 05:33:40,092 [INFO] music_app: {"action": "Tags edited", "album": "Two Track Rarity Fixture", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2615: 2026-09-19T05:33:41.1235038Z   [PASS] Retry the same edit and remove only the moved track from the source modal (1933 ms)
+2616: 2026-09-19T05:33:41.1242177Z   [STEP] Restore and verify the generated fixture for the following rarity scenario
+2617: 2026-09-19T05:33:41.4489022Z 2026-09-19 05:33:41,433 [INFO] music_app: {"action": "Postgres album search request started", "query": "Permission Failure Destination"}
+2618: 2026-09-19T05:33:41.6310020Z 2026-09-19 05:33:41,570 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 137.64, "query": "Permission Failure Destination", "selected_artist": "E2E Rarity Artist"}
+2619: 2026-09-19T05:33:43.2556840Z 2026-09-19 05:33:43,254 [INFO] music_app: {"action": "Tags edited", "album": "Permission Failure Destination", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2620: 2026-09-19T05:33:43.8422851Z 2026-09-19 05:33:43,756 [INFO] music_app: {"action": "Postgres album search request started", "query": "Two Track Rarity Fixture"}
+2621: 2026-09-19T05:33:43.9358394Z 2026-09-19 05:33:43,905 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 149.17, "query": "Two Track Rarity Fixture", "selected_artist": "E2E Rarity Artist"}
+2622: 2026-09-19T05:33:44.6404230Z   [PASS] Restore and verify the generated fixture for the following rarity scenario (3584 ms)
+2623: 2026-09-19T05:33:44.6864664Z   ok 1 [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:207:1 › FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry @area:tag-edit (11.8s)
+2624: 2026-09-19T05:33:44.6868133Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"9f766ddee6abe3a0fbab54951d1f339131db2aa784f182311c12a9dfb50e08d1","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2625: 2026-09-19T05:33:45.2539061Z 
+2626: 2026-09-19T05:33:45.6946758Z 
+2627: 2026-09-19T05:33:45.6946785Z 
+2628: 2026-09-19T05:33:45.6948564Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"9f766ddee6abe3a0fbab54951d1f339131db2aa784f182311c12a9dfb50e08d1","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2629: 2026-09-19T05:33:45.6950536Z   1 passed (18.3s)
+2630: 2026-09-19T05:33:45.6950939Z 
+2631: 2026-09-19T05:33:45.6951392Z === Playwright Summary ===
+2632: 2026-09-19T05:33:45.6952446Z [[32m✓[0m] nonAlbumRarity.spec
+2633: 2026-09-19T05:33:45.6953805Z   [[32m✓[0m] FTC-TAGS-023 failed tag saves preserve the source modal for a successful retry @area:tag-edit
+2634: 2026-09-19T05:33:45.6954680Z 
+2635: 2026-09-19T05:33:45.6954903Z Overall: 1/1 passed
+2636: 2026-09-19T05:33:51.2083861Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+2637: 2026-09-19T05:33:52.9022907Z {"restored":1,"removed":0,"unchanged":1496}
+2638: 2026-09-19T05:34:15.8421387Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+2639: 2026-09-19T05:34:17.3108401Z 2026-09-19 05:34:17,309 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2640: 2026-09-19T05:34:17.3110270Z 2026-09-19 05:34:17,309 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2641: 2026-09-19T05:34:17.7894859Z 2026-09-19 05:34:17,788 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=442.80 source_load=136.19 fingerprint=57.21 pure_build=142.34 family_link_replacement=7.70 snapshot_publication=1.70
+2642: 2026-09-19T05:34:18.9904412Z 2026-09-19 05:34:18,988 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 400.25, "hydrate_in_progress": false, "payload_elapsed_ms": 166.74, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2643: 2026-09-19T05:34:42.3974373Z 
+2644: 2026-09-19T05:34:42.3975186Z Running 1 test using 1 worker
+2645: 2026-09-19T05:34:42.4011243Z 
+2646: 2026-09-19T05:34:46.0752228Z 2026-09-19 05:34:46,073 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 294.09, "hydrate_in_progress": false, "payload_elapsed_ms": 166.0, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2647: 2026-09-19T05:34:48.9643932Z [TEST] FTC-NON-ALBUM-012 renders exception groups as the approved compact track table
+2648: 2026-09-19T05:34:48.9674294Z   [STEP] Assign the two supported exception groups to generated tracks
+2649: 2026-09-19T05:34:49.4332876Z 2026-09-19 05:34:49,432 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 299.66, "hydrate_in_progress": false, "payload_elapsed_ms": 172.27, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2650: 2026-09-19T05:34:52.9217088Z 2026-09-19 05:34:52,766 [INFO] music_app: {"action": "Postgres album search request started", "query": "Two Track Rarity Fixture"}
+2651: 2026-09-19T05:34:52.9357428Z 2026-09-19 05:34:52,907 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 141.31, "query": "Two Track Rarity Fixture", "selected_artist": "E2E Rarity Artist"}
+2652: 2026-09-19T05:34:55.3229731Z 2026-09-19 05:34:55,321 [INFO] music_app: {"action": "Tags edited", "album": "Two Track Rarity Fixture", "artist": "E2E Rarity Artist", "file_count": 2, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\02 - Remain Editable.mp3"]}
+2653: 2026-09-19T05:34:55.8443175Z   [PASS] Assign the two supported exception groups to generated tracks (6860 ms)
+2654: 2026-09-19T05:34:55.8447009Z   [STEP] Inspect the widened grouped compact table and row content
+2655: 2026-09-19T05:34:58.1185074Z 2026-09-19 05:34:58,117 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 539.52, "hydrate_in_progress": false, "payload_elapsed_ms": 410.36, "query": "", "scan_in_progress": false, "selected_artist": "E2E Rarity Artist"}
+2656: 2026-09-19T05:35:00.7516741Z   [PASS] Inspect the widened grouped compact table and row content (4904 ms)
+2657: 2026-09-19T05:35:00.7525851Z   [STEP] Restore both generated exceptions through the shared editor
+2658: 2026-09-19T05:35:02.5171555Z 2026-09-19 05:35:02,513 [INFO] music_app: {"action": "Tags edited", "album": "", "artist": "", "file_count": 2, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\02 - Remain Editable.mp3"]}
+2659: 2026-09-19T05:35:03.2504657Z   [PASS] Restore both generated exceptions through the shared editor (2518 ms)
+2660: 2026-09-19T05:35:03.3309193Z   ok 1 [functional] › tests\e2e\specs\nonAlbumRarity.spec.js:316:1 › FTC-NON-ALBUM-012 renders exception groups as the approved compact track table @area:album-details (14.6s)
+2661: 2026-09-19T05:35:03.3352674Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"4e17f991a20e7e488eacd10a788a1aac6f48e52f504cfbc06b5a95a0c2ed167e","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2662: 2026-09-19T05:35:03.9559754Z 
+2663: 2026-09-19T05:35:03.9559775Z 
+2664: 2026-09-19T05:35:03.9559788Z 
+2665: 2026-09-19T05:35:03.9562370Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"4e17f991a20e7e488eacd10a788a1aac6f48e52f504cfbc06b5a95a0c2ed167e","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2666: 2026-09-19T05:35:03.9564145Z   1 passed (22.2s)
+2667: 2026-09-19T05:35:04.4311527Z 
+2668: 2026-09-19T05:35:04.4312197Z === Playwright Summary ===
+2669: 2026-09-19T05:35:04.4313344Z [[32m✓[0m] nonAlbumRarity.spec
+2670: 2026-09-19T05:35:04.4314755Z   [[32m✓[0m] FTC-NON-ALBUM-012 renders exception groups as the approved compact track table @area:album-details
+2671: 2026-09-19T05:35:04.4315647Z 
+2672: 2026-09-19T05:35:04.4315912Z Overall: 1/1 passed
+2673: 2026-09-19T05:35:10.3084795Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5500,"status":"completed","error":null,"ownerCount":0},{"port":5502,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+2674: 2026-09-19T05:35:12.0625264Z {"restored":0,"removed":0,"unchanged":1497}
+2675: 2026-09-19T05:35:34.9721631Z Album Haven production E2E app listening on http://127.0.0.1:5500 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5502
+2676: 2026-09-19T05:35:36.4658166Z 2026-09-19 05:35:36,462 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2677: 2026-09-19T05:35:36.4660381Z 2026-09-19 05:35:36,462 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2678: 2026-09-19T05:35:36.9808800Z 2026-09-19 05:35:36,978 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=472.89 source_load=149.17 fingerprint=59.60 pure_build=150.42 family_link_replacement=8.61 snapshot_publication=1.75
+2679: 2026-09-19T05:35:38.2536958Z 2026-09-19 05:35:38,252 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 464.94, "hydrate_in_progress": false, "payload_elapsed_ms": 185.98, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2680: 2026-09-19T05:36:05.9483887Z 
+2681: 2026-09-19T05:36:05.9484724Z Running 1 test using 1 worker
+2682: 2026-09-19T05:36:05.9521806Z 
+2683: 2026-09-19T05:36:09.2437860Z 2026-09-19 05:36:09,242 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 333.63, "hydrate_in_progress": false, "payload_elapsed_ms": 196.94, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2684: 2026-09-19T05:36:12.1796762Z [TEST] FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problematic Files
+2685: 2026-09-19T05:36:12.1836232Z   [STEP] Convert the generated track into the reported post-rarity state
+2686: 2026-09-19T05:36:12.6754907Z 2026-09-19 05:36:12,673 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 293.61, "hydrate_in_progress": false, "payload_elapsed_ms": 155.83, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2687: 2026-09-19T05:36:15.6525386Z 2026-09-19 05:36:15,454 [INFO] music_app: {"action": "Postgres album search request started", "query": "Two Track Rarity Fixture"}
+2688: 2026-09-19T05:36:15.6528645Z 2026-09-19 05:36:15,616 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 160.7, "query": "Two Track Rarity Fixture", "selected_artist": "E2E Rarity Artist"}
+2689: 2026-09-19T05:36:17.9472367Z 2026-09-19 05:36:17,945 [INFO] music_app: {"action": "Tags edited", "album": "Two Track Rarity Fixture", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2690: 2026-09-19T05:36:18.0851692Z   [PASS] Convert the generated track into the reported post-rarity state (5902 ms)
+2691: 2026-09-19T05:36:18.0854437Z   [STEP] Rename the non-album track through its Problematic Files edit scope
+2692: 2026-09-19T05:36:20.8629172Z 2026-09-19 05:36:20,821 [INFO] music_app: {"action": "Tags edited", "album": "Two Track Rarity Fixture", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2693: 2026-09-19T05:36:22.2414168Z   [PASS] Rename the non-album track through its Problematic Files edit scope (4156 ms)
+2694: 2026-09-19T05:36:22.2419467Z   [STEP] Read the renamed Album from Loose Tracks and restore the fixture
+2695: 2026-09-19T05:36:24.9235913Z 2026-09-19 05:36:24,921 [INFO] music_app: {"action": "Tags edited", "album": "", "artist": "", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2696: 2026-09-19T05:36:27.2408008Z 2026-09-19 05:36:27,239 [INFO] music_app: {"action": "Tags edited", "album": "", "artist": "", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\E2E Rarity Artist\\Two Track Rarity Fixture\\01 - Apply Rarity Here.mp3"]}
+2697: 2026-09-19T05:36:28.0707332Z 2026-09-19 05:36:28,069 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 302.67, "hydrate_in_progress": false, "payload_elapsed_ms": 181.9, "query": "", "scan_in_progress": false, "selected_artist": ""}

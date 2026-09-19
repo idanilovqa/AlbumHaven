@@ -1,0 +1,323 @@
+1493: 2026-09-19T05:02:35.6094156Z [TEST] FTC-TAGS-011 keeps a track-name-only edit on one retained album card
+1494: 2026-09-19T05:02:35.6160359Z   [STEP] Open the generated album and select one physical file
+1495: 2026-09-19T05:02:36.0344184Z 2026-09-19 05:02:36,033 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 274.04, "hydrate_in_progress": false, "payload_elapsed_ms": 157.12, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1496: 2026-09-19T05:02:57.3732068Z   [FAIL] Open the generated album and select one physical file :: expect(locator).toHaveCSS(expected) failed
+1497: 2026-09-19T05:02:57.3733324Z 
+1498: 2026-09-19T05:02:57.3734085Z Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+1499: 2026-09-19T05:02:57.3739964Z Expected: "1"
+1500: 2026-09-19T05:02:57.3741265Z Received: "0.55"
+1501: 2026-09-19T05:02:57.3742662Z Timeout:  10000ms
+1502: 2026-09-19T05:02:57.3743022Z 
+1503: 2026-09-19T05:02:57.3743289Z Call log:
+1504: 2026-09-19T05:02:57.3744113Z   - Expect "toHaveCSS" with timeout 10000ms
+1505: 2026-09-19T05:02:57.3745720Z   - waiting for locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+1506: 2026-09-19T05:02:57.3750731Z     24 × locator resolved to <button disabled type="button" data-background-save="" data-open-tag-edit-confirm="1" data-ui-button-action="primary" data-editor-footer-action="primary" class="button ui-button ui-button--primary ui-button--medium background-save">…</button>
+1507: 2026-09-19T05:02:57.3754311Z        - unexpected value "0.55"
+1508: 2026-09-19T05:02:57.3755914Z  (21728 ms)
+1509: 2026-09-19T05:02:59.2641855Z   x  1 [functional] › tests\e2e\specs\sparseTagEditReconciliation.spec.js:41:1 › FTC-TAGS-011 keeps a track-name-only edit on one retained album card @area:tag-edit (22.9s)
+1510: 2026-09-19T05:02:59.2644247Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"64b16e59d983c13f58e0d8a704fdc47328cf9456e4ed61adce10a37164f775d1","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1511: 2026-09-19T05:02:59.2646065Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1512: 2026-09-19T05:02:59.9092328Z 
+1513: 2026-09-19T05:02:59.9092348Z 
+1514: 2026-09-19T05:02:59.9092356Z 
+1515: 2026-09-19T05:02:59.9095535Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"64b16e59d983c13f58e0d8a704fdc47328cf9456e4ed61adce10a37164f775d1","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+1516: 2026-09-19T05:02:59.9097181Z 
+1517: 2026-09-19T05:02:59.9098768Z   1) [functional] › tests\e2e\specs\sparseTagEditReconciliation.spec.js:41:1 › FTC-TAGS-011 keeps a track-name-only edit on one retained album card @area:tag-edit 
+1518: 2026-09-19T05:02:59.9100023Z 
+1519: 2026-09-19T05:02:59.9100417Z     Error: expect(locator).toHaveCSS(expected) failed
+1520: 2026-09-19T05:02:59.9100919Z 
+1521: 2026-09-19T05:02:59.9101557Z     Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+1522: 2026-09-19T05:02:59.9102513Z     Expected: "1"
+1523: 2026-09-19T05:02:59.9102985Z     Received: "0.55"
+1524: 2026-09-19T05:02:59.9103527Z     Timeout:  10000ms
+1525: 2026-09-19T05:02:59.9105717Z 
+1526: 2026-09-19T05:02:59.9105972Z     Call log:
+1527: 2026-09-19T05:02:59.9106595Z       - Expect "toHaveCSS" with timeout 10000ms
+1528: 2026-09-19T05:02:59.9107719Z       - waiting for locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+1529: 2026-09-19T05:02:59.9112618Z         24 × locator resolved to <button disabled type="button" data-background-save="" data-open-tag-edit-confirm="1" data-ui-button-action="primary" data-editor-footer-action="primary" class="button ui-button ui-button--primary ui-button--medium background-save">…</button>
+1530: 2026-09-19T05:02:59.9115233Z            - unexpected value "0.55"
+1531: 2026-09-19T05:02:59.9115653Z 
+1532: 2026-09-19T05:02:59.9115663Z 
+1533: 2026-09-19T05:02:59.9115988Z        at ..\actions\tagEditorActions.js:382
+1534: 2026-09-19T05:02:59.9116462Z 
+1535: 2026-09-19T05:02:59.9117830Z       380 |       await expect(this.tagEditor.applyButton).toBeDisabled();
+1536: 2026-09-19T05:02:59.9119101Z       381 |       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+1537: 2026-09-19T05:02:59.9120828Z     > 382 |       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+1538: 2026-09-19T05:02:59.9121803Z           |                                                ^
+1539: 2026-09-19T05:02:59.9122659Z       383 |       const theme = await this.tagEditor.readApplyTheme();
+1540: 2026-09-19T05:02:59.9123706Z       384 |       expect(theme.background).toEqual(theme.expectedBackground);
+1541: 2026-09-19T05:02:59.9124659Z       385 |       expect(theme.ink).toEqual(theme.expectedInk);
+1542: 2026-09-19T05:02:59.9126250Z         at TagEditorActions.expectPendingChanges (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\tagEditorActions.js:382:48)
+1543: 2026-09-19T05:02:59.9128138Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\sparseTagEditScenario.js:130:7
+1544: 2026-09-19T05:02:59.9129382Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+1545: 2026-09-19T05:02:59.9130836Z         at runSparseTagEditScenario (D:\a\AlbumHaven\AlbumHaven\tests\e2e\helpers\sparseTagEditScenario.js:88:3)
+1546: 2026-09-19T05:02:59.9132890Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\sparseTagEditReconciliation.spec.js:49:3
+1547: 2026-09-19T05:02:59.9136695Z 
+1548: 2026-09-19T05:02:59.9137845Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+1549: 2026-09-19T05:02:59.9139483Z     [TEST] FTC-TAGS-011 keeps a track-name-only edit on one retained album card
+1550: 2026-09-19T05:02:59.9140634Z       [STEP] Open the generated album and select one physical file
+1551: 2026-09-19T05:02:59.9142022Z       [FAIL] Open the generated album and select one physical file :: expect(locator).toHaveCSS(expected) fai...
+1552: 2026-09-19T05:02:59.9143621Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1553: 2026-09-19T05:02:59.9144253Z 
+1554: 2026-09-19T05:02:59.9145071Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+1555: 2026-09-19T05:02:59.9145959Z     Error 1
+1556: 2026-09-19T05:02:59.9146596Z     Error: expect(locator).toHaveCSS(expected) failed
+1557: 2026-09-19T05:02:59.9147281Z     
+1558: 2026-09-19T05:02:59.9148154Z     Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+1559: 2026-09-19T05:02:59.9149085Z     Expected: "1"
+1560: 2026-09-19T05:02:59.9149592Z     Received: "0.55"
+1561: 2026-09-19T05:02:59.9150139Z     Timeout:  10000ms
+1562: 2026-09-19T05:02:59.9151924Z     
+1563: 2026-09-19T05:02:59.9152373Z     Call log:
+1564: 2026-09-19T05:02:59.9152881Z       - Expect...
+1565: 2026-09-19T05:02:59.9153940Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1566: 2026-09-19T05:02:59.9154589Z 
+1567: 2026-09-19T05:02:59.9155460Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+1568: 2026-09-19T05:02:59.9158616Z     [2026-09-19T05:02:45.262Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5400/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-metadata-mutations%5Cshared%5Cmedia%5CE2E%20Rarity%20Artist%5CSparse%20Title%20Edit%20Fixture%5Ccover.png&size=480&v=process-9fa8626fc29241b9e5cbee02...
+1569: 2026-09-19T05:02:59.9163176Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1570: 2026-09-19T05:02:59.9163826Z 
+1571: 2026-09-19T05:02:59.9165414Z     Error Context: ..\..\_temp\functional-output-metadata-mutations\wave-01-05-playwright-config-js\sparseTagEditReconciliatio-5915c--on-one-retained-album-card-functional\error-context.md
+1572: 2026-09-19T05:02:59.9167003Z 
+1573: 2026-09-19T05:02:59.9167832Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+1574: 2026-09-19T05:02:59.9169977Z     ..\..\_temp\functional-output-metadata-mutations\wave-01-05-playwright-config-js\sparseTagEditReconciliatio-5915c--on-one-retained-album-card-functional\trace.zip
+1575: 2026-09-19T05:02:59.9172045Z     Usage:
+1576: 2026-09-19T05:02:59.9172346Z 
+1577: 2026-09-19T05:02:59.9176477Z         npx playwright show-trace ..\..\_temp\functional-output-metadata-mutations\wave-01-05-playwright-config-js\sparseTagEditReconciliatio-5915c--on-one-retained-album-card-functional\trace.zip
+1578: 2026-09-19T05:02:59.9178373Z 
+1579: 2026-09-19T05:02:59.9179144Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1580: 2026-09-19T05:02:59.9179765Z 
+1581: 2026-09-19T05:02:59.9180153Z   1 failed
+1582: 2026-09-19T05:02:59.9181762Z     [functional] › tests\e2e\specs\sparseTagEditReconciliation.spec.js:41:1 › FTC-TAGS-011 keeps a track-name-only edit on one retained album card @area:tag-edit 
+1583: 2026-09-19T05:03:00.4007737Z 
+1584: 2026-09-19T05:03:00.4008449Z === Playwright Summary ===
+1585: 2026-09-19T05:03:00.4009470Z [31m[x][0m sparseTagEditReconciliation.spec
+1586: 2026-09-19T05:03:00.4010274Z   [31m[x][0m FTC-TAGS-011 keeps a track-name-only edit on one retained album card @area:tag-edit
+1587: 2026-09-19T05:03:00.4010729Z 
+1588: 2026-09-19T05:03:00.4010892Z Overall: 0/1 passed
+1589: 2026-09-19T05:03:00.4011226Z Failed tests:
+1590: 2026-09-19T05:03:00.4011940Z - sparseTagEditReconciliation.spec > FTC-TAGS-011 keeps a track-name-only edit on one retained album card @area:tag-edit
+1591: 2026-09-19T05:03:00.4013678Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+1592: 2026-09-19T05:03:06.2415584Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5400,"status":"completed","error":null,"ownerCount":0},{"port":5402,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+1593: 2026-09-19T05:03:07.9085677Z {"restored":0,"removed":0,"unchanged":1497}
+1594: 2026-09-19T05:03:29.9996962Z Album Haven production E2E app listening on http://127.0.0.1:5400 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5402
+1595: 2026-09-19T05:03:31.4612148Z 2026-09-19 05:03:31,459 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1596: 2026-09-19T05:03:31.4613839Z 2026-09-19 05:03:31,459 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1597: 2026-09-19T05:03:31.9613194Z 2026-09-19 05:03:31,959 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=463.50 source_load=143.79 fingerprint=57.76 pure_build=150.68 family_link_replacement=7.49 snapshot_publication=1.67
+1598: 2026-09-19T05:03:33.2356531Z 2026-09-19 05:03:33,234 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 426.37, "hydrate_in_progress": false, "payload_elapsed_ms": 174.45, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1599: 2026-09-19T05:03:57.2547760Z 
+1600: 2026-09-19T05:03:57.2548518Z Running 1 test using 1 worker
+1601: 2026-09-19T05:03:57.2581637Z 
+1602: 2026-09-19T05:04:00.4719682Z 2026-09-19 05:04:00,471 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 285.12, "hydrate_in_progress": false, "payload_elapsed_ms": 162.08, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1603: 2026-09-19T05:04:03.1546302Z [TEST] FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON
+1604: 2026-09-19T05:04:03.1587599Z   [STEP] Open the generated album and select one physical file
+1605: 2026-09-19T05:04:03.5643724Z 2026-09-19 05:04:03,562 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 262.29, "hydrate_in_progress": false, "payload_elapsed_ms": 148.15, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1606: 2026-09-19T05:04:14.7432632Z   [PASS] Open the generated album and select one physical file (11583 ms)
+1607: 2026-09-19T05:04:14.7434357Z   [STEP] Apply the exact sparse update and retain the optimistic gallery after the response
+1608: 2026-09-19T05:04:15.9440205Z 2026-09-19 05:04:15,942 [INFO] music_app: {"action": "Tags edited", "album": "Sparse Genre Edit Fixture", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\E2E Rarity Artist\\Sparse Genre Edit Fixture\\01 - Sparse Genre Track 1.mp3"]}
+1609: 2026-09-19T05:04:16.8912233Z   [PASS] Apply the exact sparse update and retain the optimistic gallery after the response (2149 ms)
+1610: 2026-09-19T05:04:16.8926943Z   [STEP] Verify only the requested physical ID3 frame changed
+1611: 2026-09-19T05:04:16.9946396Z   [PASS] Verify only the requested physical ID3 frame changed (102 ms)
+1612: 2026-09-19T05:04:16.9947502Z   [STEP] Verify the current authoritative gallery state
+1613: 2026-09-19T05:04:18.0107664Z   [PASS] Verify the current authoritative gallery state (986 ms)
+1614: 2026-09-19T05:04:18.0110723Z   [STEP] Verify the authoritative topology in a fresh browser
+1615: 2026-09-19T05:04:18.9923886Z 2026-09-19 05:04:18,991 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 469.07, "hydrate_in_progress": false, "payload_elapsed_ms": 367.09, "query": "", "scan_in_progress": false, "selected_artist": "E2E Rarity Artist"}
+1616: 2026-09-19T05:04:21.1239993Z   [PASS] Verify the authoritative topology in a fresh browser (3140 ms)
+1617: 2026-09-19T05:04:21.2250710Z   ok 1 [functional] › tests\e2e\specs\sparseTagEditReconciliation.spec.js:76:1 › FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON @area:tag-edit (18.3s)
+1618: 2026-09-19T05:04:21.2255058Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"d27fcf4d88682e68ae09f42ca8f9d84464c4d3b9b3831cd747b42ae17f7bccc9","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1619: 2026-09-19T05:04:21.8376339Z 
+1620: 2026-09-19T05:04:21.8376361Z 
+1621: 2026-09-19T05:04:21.8376371Z 
+1622: 2026-09-19T05:04:21.8378520Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"d27fcf4d88682e68ae09f42ca8f9d84464c4d3b9b3831cd747b42ae17f7bccc9","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1623: 2026-09-19T05:04:21.8380374Z   1 passed (25.1s)
+1624: 2026-09-19T05:04:22.8117352Z 
+1625: 2026-09-19T05:04:22.8118106Z === Playwright Summary ===
+1626: 2026-09-19T05:04:22.8119356Z [[32m✓[0m] sparseTagEditReconciliation.spec
+1627: 2026-09-19T05:04:22.8120720Z   [[32m✓[0m] FTC-TAGS-012 carries Genre through selected Postgres payloads and edits only TCON @area:tag-edit
+1628: 2026-09-19T05:04:22.8121386Z 
+1629: 2026-09-19T05:04:22.8121589Z Overall: 1/1 passed
+1630: 2026-09-19T05:04:28.5457857Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5400,"status":"completed","error":null,"ownerCount":0},{"port":5402,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+1631: 2026-09-19T05:04:30.2532645Z {"restored":1,"removed":0,"unchanged":1496}
+1632: 2026-09-19T05:04:54.4820597Z Album Haven production E2E app listening on http://127.0.0.1:5400 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5402
+1633: 2026-09-19T05:04:56.1601260Z 2026-09-19 05:04:56,158 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1634: 2026-09-19T05:04:56.1603242Z 2026-09-19 05:04:56,158 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1635: 2026-09-19T05:04:56.6546877Z 2026-09-19 05:04:56,653 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=456.22 source_load=139.41 fingerprint=58.88 pure_build=146.85 family_link_replacement=7.79 snapshot_publication=1.71
+1636: 2026-09-19T05:04:57.7982198Z 2026-09-19 05:04:57,797 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 417.25, "hydrate_in_progress": false, "payload_elapsed_ms": 179.23, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1637: 2026-09-19T05:05:21.7844872Z 
+1638: 2026-09-19T05:05:21.7845889Z Running 1 test using 1 worker
+1639: 2026-09-19T05:05:21.7892073Z 
+1640: 2026-09-19T05:05:24.9206542Z 2026-09-19 05:05:24,919 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 290.55, "hydrate_in_progress": false, "payload_elapsed_ms": 167.81, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1641: 2026-09-19T05:05:27.6078134Z [TEST] FTC-ALBUM-TASTE-013 keeps app ratings authoritative while import and scan seed missing ratings
+1642: 2026-09-19T05:05:27.6080074Z   [STEP] Render absent and invalid ratings as ten empty stars in hydrated album cards
+1643: 2026-09-19T05:05:28.0597214Z 2026-09-19 05:05:28,059 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 275.82, "hydrate_in_progress": false, "payload_elapsed_ms": 158.43, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1644: 2026-09-19T05:05:31.0578479Z 2026-09-19 05:05:31,052 [INFO] music_app: {"action": "Postgres album search request started", "query": "Rating Absent"}
+1645: 2026-09-19T05:05:31.2150900Z 2026-09-19 05:05:31,191 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 138.73, "query": "Rating Absent", "selected_artist": "Album Rating Contract"}
+1646: 2026-09-19T05:05:31.7120493Z 2026-09-19 05:05:31,707 [INFO] music_app: {"action": "Postgres album search request started", "query": "Rating Malformed"}
+1647: 2026-09-19T05:05:31.8610734Z 2026-09-19 05:05:31,843 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 135.91, "query": "Rating Malformed", "selected_artist": "Album Rating Contract"}
+1648: 2026-09-19T05:05:32.4291201Z 2026-09-19 05:05:32,422 [INFO] music_app: {"action": "Postgres album search request started", "query": "Rating Zero"}
+1649: 2026-09-19T05:05:32.5869828Z 2026-09-19 05:05:32,569 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 147.66, "query": "Rating Zero", "selected_artist": "Album Rating Contract"}
+1650: 2026-09-19T05:05:33.1512985Z 2026-09-19 05:05:33,126 [INFO] music_app: {"action": "Postgres album search request started", "query": "Rating Out Of Range"}
+1651: 2026-09-19T05:05:33.2843750Z 2026-09-19 05:05:33,272 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 146.27, "query": "Rating Out Of Range", "selected_artist": "Album Rating Contract"}
+1652: 2026-09-19T05:05:33.5489412Z   [PASS] Render absent and invalid ratings as ten empty stars in hydrated album cards (5940 ms)
+1653: 2026-09-19T05:05:33.5491204Z   [STEP] Prefer the numeric app rating and honor an explicitly cleared app rating
+2099: 2026-09-19T05:12:11.7919849Z 2026-09-19 05:12:11,790 [INFO] music_app: {"action": "Tags edited", "album": "Auto Number Selected Fixture", "artist": "E2E Rarity Artist", "file_count": 3, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\E2E Rarity Artist\\Auto Number Selected Fixture\\03 - Auto Number Track 3.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\E2E Rarity Artist\\Auto Number Selected Fixture\\04 - Auto Number Track 4.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\E2E Rarity Artist\\Auto Number Selected Fixture\\05 - Auto Number Track 5.mp3"]}
+2100: 2026-09-19T05:12:12.8452197Z   [PASS] Create a second disc through the production tag-save path (15065 ms)
+2101: 2026-09-19T05:12:12.9466829Z   [STEP] Preserve the editor and hide the exact footer group for one or gapped files
+2102: 2026-09-19T05:12:24.1088555Z   [FAIL] Preserve the editor and hide the exact footer group for one or gapped files :: expect(locator).toHaveCSS(expected) failed
+2103: 2026-09-19T05:12:24.1091918Z 
+2104: 2026-09-19T05:12:24.1093591Z Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+2105: 2026-09-19T05:12:24.1095655Z Expected: "1"
+2106: 2026-09-19T05:12:24.1096405Z Received: "0.55"
+2107: 2026-09-19T05:12:24.1097097Z Timeout:  10000ms
+2108: 2026-09-19T05:12:24.1097521Z 
+2109: 2026-09-19T05:12:24.1099900Z Call log:
+2110: 2026-09-19T05:12:24.1100651Z   - Expect "toHaveCSS" with timeout 10000ms
+2111: 2026-09-19T05:12:24.1102231Z   - waiting for locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+2112: 2026-09-19T05:12:24.1105560Z     24 × locator resolved to <button disabled type="button" data-background-save="" data-open-tag-edit-confirm="1" data-ui-button-action="primary" data-editor-footer-action="primary" class="button ui-button ui-button--primary ui-button--medium background-save">…</button>
+2113: 2026-09-19T05:12:24.1106916Z        - unexpected value "0.55"
+2114: 2026-09-19T05:12:24.1107273Z  (11135 ms)
+2115: 2026-09-19T05:12:26.1733652Z   x  1 [functional] › tests\e2e\specs\tagEditorAutoNumber.spec.js:109:1 › FTC-TAGS-022 restarts one consecutive selection for each disc @area:tag-edit (27.6s)
+2116: 2026-09-19T05:12:26.1735856Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"72d1528d4a65a205485efde1c308a3b78b44ebe9e7707aa6c43f8c76be980346","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2117: 2026-09-19T05:12:26.1737701Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2118: 2026-09-19T05:12:26.7745460Z 
+2119: 2026-09-19T05:12:26.7745482Z 
+2120: 2026-09-19T05:12:26.7745492Z 
+2121: 2026-09-19T05:12:26.7748290Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"72d1528d4a65a205485efde1c308a3b78b44ebe9e7707aa6c43f8c76be980346","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2122: 2026-09-19T05:12:26.7749909Z 
+2123: 2026-09-19T05:12:26.7751979Z   1) [functional] › tests\e2e\specs\tagEditorAutoNumber.spec.js:109:1 › FTC-TAGS-022 restarts one consecutive selection for each disc @area:tag-edit 
+2124: 2026-09-19T05:12:26.7753116Z 
+2125: 2026-09-19T05:12:26.7753748Z     Error: expect(locator).toHaveCSS(expected) failed
+2126: 2026-09-19T05:12:26.7754490Z 
+2127: 2026-09-19T05:12:26.7755204Z     Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+2128: 2026-09-19T05:12:26.7756496Z     Expected: "1"
+2129: 2026-09-19T05:12:26.7756972Z     Received: "0.55"
+2130: 2026-09-19T05:12:26.7757474Z     Timeout:  10000ms
+2131: 2026-09-19T05:12:26.7757802Z 
+2132: 2026-09-19T05:12:26.7758003Z     Call log:
+2133: 2026-09-19T05:12:26.7758574Z       - Expect "toHaveCSS" with timeout 10000ms
+2134: 2026-09-19T05:12:26.7759680Z       - waiting for locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+2135: 2026-09-19T05:12:26.7762821Z         24 × locator resolved to <button disabled type="button" data-background-save="" data-open-tag-edit-confirm="1" data-ui-button-action="primary" data-editor-footer-action="primary" class="button ui-button ui-button--primary ui-button--medium background-save">…</button>
+2136: 2026-09-19T05:12:26.7765606Z            - unexpected value "0.55"
+2137: 2026-09-19T05:12:26.7766011Z 
+2138: 2026-09-19T05:12:26.7766021Z 
+2139: 2026-09-19T05:12:26.7766332Z        at ..\actions\tagEditorActions.js:382
+2140: 2026-09-19T05:12:26.7786343Z 
+2141: 2026-09-19T05:12:26.7786856Z       380 |       await expect(this.tagEditor.applyButton).toBeDisabled();
+2142: 2026-09-19T05:12:26.7788052Z       381 |       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+2143: 2026-09-19T05:12:26.7789394Z     > 382 |       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+2144: 2026-09-19T05:12:26.7790295Z           |                                                ^
+2145: 2026-09-19T05:12:26.7791175Z       383 |       const theme = await this.tagEditor.readApplyTheme();
+2146: 2026-09-19T05:12:26.7792213Z       384 |       expect(theme.background).toEqual(theme.expectedBackground);
+2147: 2026-09-19T05:12:26.7793223Z       385 |       expect(theme.ink).toEqual(theme.expectedInk);
+2148: 2026-09-19T05:12:26.7794611Z         at TagEditorActions.expectPendingChanges (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\tagEditorActions.js:382:48)
+2149: 2026-09-19T05:12:26.7796083Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\tagEditorAutoNumber.spec.js:151:5
+2150: 2026-09-19T05:12:26.8020390Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2151: 2026-09-19T05:12:26.8021725Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\tagEditorAutoNumber.spec.js:138:3
+2152: 2026-09-19T05:12:26.8022794Z 
+2153: 2026-09-19T05:12:26.8023808Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2154: 2026-09-19T05:12:26.8024925Z     [TEST] FTC-TAGS-022 restarts one consecutive selection for each disc
+2155: 2026-09-19T05:12:26.8026084Z       [STEP] Create a second disc through the production tag-save path
+2156: 2026-09-19T05:12:26.8027046Z       [PASS] Create a second disc through the production tag-save path (15065 ms)
+2157: 2026-09-19T05:12:26.8028173Z       [STEP] Preserve the editor and hide the exact footer group for one or gapped files
+2158: 2026-09-19T05:12:26.8028947Z      ...
+2159: 2026-09-19T05:12:26.8029830Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2160: 2026-09-19T05:12:26.8030368Z 
+2161: 2026-09-19T05:12:26.8031076Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2162: 2026-09-19T05:12:26.8031923Z     Error 1
+2163: 2026-09-19T05:12:26.8032458Z     Error: expect(locator).toHaveCSS(expected) failed
+2164: 2026-09-19T05:12:26.8033038Z     
+2165: 2026-09-19T05:12:26.8033808Z     Locator:  locator('#tag-editor-modal').getByRole('button', { name: 'Apply', exact: true })
+2166: 2026-09-19T05:12:26.8034722Z     Expected: "1"
+2167: 2026-09-19T05:12:26.8035152Z     Received: "0.55"
+2168: 2026-09-19T05:12:26.8035649Z     Timeout:  10000ms
+2169: 2026-09-19T05:12:26.8036106Z     
+2170: 2026-09-19T05:12:26.8036531Z     Call log:
+2171: 2026-09-19T05:12:26.8036960Z       - Expect...
+2172: 2026-09-19T05:12:26.8037804Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2173: 2026-09-19T05:12:26.8038373Z 
+2174: 2026-09-19T05:12:26.8039409Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2175: 2026-09-19T05:12:26.8041994Z     [2026-09-19T05:12:08.800Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5400/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-metadata-mutations%5Cshared%5Cmedia%5CE2E%20Rarity%20Artist%5CSparse%20Year%20Edit%20Fixture%5Ccover.png&size=480&v=process-f6259067880b3597323eaaa0c...
+2176: 2026-09-19T05:12:26.8044509Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2177: 2026-09-19T05:12:26.8045048Z 
+2178: 2026-09-19T05:12:26.8046373Z     Error Context: ..\..\_temp\functional-output-metadata-mutations\wave-03-11-playwright-config-js\tagEditorAutoNumber-FTC-TA-f7ef6-ive-selection-for-each-disc-functional\error-context.md
+2179: 2026-09-19T05:12:26.8047735Z 
+2180: 2026-09-19T05:12:26.8048422Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+2181: 2026-09-19T05:12:26.8094646Z     ..\..\_temp\functional-output-metadata-mutations\wave-03-11-playwright-config-js\tagEditorAutoNumber-FTC-TA-f7ef6-ive-selection-for-each-disc-functional\trace.zip
+2182: 2026-09-19T05:12:26.8096981Z     Usage:
+2183: 2026-09-19T05:12:26.8097270Z 
+2184: 2026-09-19T05:12:26.8098823Z         npx playwright show-trace ..\..\_temp\functional-output-metadata-mutations\wave-03-11-playwright-config-js\tagEditorAutoNumber-FTC-TA-f7ef6-ive-selection-for-each-disc-functional\trace.zip
+2185: 2026-09-19T05:12:26.8101063Z 
+2186: 2026-09-19T05:12:26.8101897Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2187: 2026-09-19T05:12:26.8102521Z 
+2188: 2026-09-19T05:12:26.8103011Z   1 failed
+2189: 2026-09-19T05:12:26.8104552Z     [functional] › tests\e2e\specs\tagEditorAutoNumber.spec.js:109:1 › FTC-TAGS-022 restarts one consecutive selection for each disc @area:tag-edit 
+2190: 2026-09-19T05:12:27.2948823Z 
+2191: 2026-09-19T05:12:27.2949357Z === Playwright Summary ===
+2192: 2026-09-19T05:12:27.2950699Z [31m[x][0m tagEditorAutoNumber.spec
+2193: 2026-09-19T05:12:27.2952565Z   [31m[x][0m FTC-TAGS-022 restarts one consecutive selection for each disc @area:tag-edit
+2194: 2026-09-19T05:12:27.2953362Z 
+2195: 2026-09-19T05:12:27.2953644Z Overall: 0/1 passed
+2196: 2026-09-19T05:12:27.2954218Z Failed tests:
+2197: 2026-09-19T05:12:27.2955335Z - tagEditorAutoNumber.spec > FTC-TAGS-022 restarts one consecutive selection for each disc @area:tag-edit
+2198: 2026-09-19T05:12:27.2958491Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+2199: 2026-09-19T05:12:32.9323395Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5400,"status":"completed","error":null,"ownerCount":0},{"port":5402,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+2200: 2026-09-19T05:12:34.6008995Z {"restored":3,"removed":0,"unchanged":1494}
+2201: 2026-09-19T05:12:57.3718300Z Album Haven production E2E app listening on http://127.0.0.1:5400 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5402
+2202: 2026-09-19T05:12:58.9930644Z 2026-09-19 05:12:58,991 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2203: 2026-09-19T05:12:58.9933775Z 2026-09-19 05:12:58,991 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2204: 2026-09-19T05:12:59.5716134Z 2026-09-19 05:12:59,568 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=537.44 source_load=176.13 fingerprint=58.13 pure_build=175.39 family_link_replacement=7.87 snapshot_publication=1.73
+2205: 2026-09-19T05:13:00.8704373Z 2026-09-19 05:13:00,868 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 492.86, "hydrate_in_progress": false, "payload_elapsed_ms": 176.55, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2206: 2026-09-19T05:13:27.2134888Z 
+2207: 2026-09-19T05:13:27.2135546Z Running 1 test using 1 worker
+2208: 2026-09-19T05:13:27.2167435Z 
+2209: 2026-09-19T05:13:30.2689636Z 2026-09-19 05:13:30,267 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 273.04, "hydrate_in_progress": false, "payload_elapsed_ms": 157.07, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2210: 2026-09-19T05:13:32.8950884Z [TEST] FTC-TAGS-013 keeps a year-only edit sparse and retains its optimistic split
+2211: 2026-09-19T05:13:32.8992268Z   [STEP] Open the generated album and select one physical file
+2212: 2026-09-19T05:13:33.3099492Z 2026-09-19 05:13:33,309 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 264.66, "hydrate_in_progress": false, "payload_elapsed_ms": 150.42, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2213: 2026-09-19T05:13:43.7112722Z   [PASS] Open the generated album and select one physical file (10811 ms)
+2214: 2026-09-19T05:13:43.7114353Z   [STEP] Apply the exact sparse update and retain the optimistic gallery after the response
+2215: 2026-09-19T05:13:44.6639089Z 2026-09-19 05:13:44,662 [INFO] music_app: {"action": "Tags edited", "album": "Sparse Year Edit Fixture", "artist": "E2E Rarity Artist", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\E2E Rarity Artist\\Sparse Year Edit Fixture\\01 - Sparse Year Track 1.mp3"]}
+2216: 2026-09-19T05:13:45.6186018Z   [PASS] Apply the exact sparse update and retain the optimistic gallery after the response (1908 ms)
+2217: 2026-09-19T05:13:45.6199452Z   [STEP] Verify only the requested physical ID3 frame changed
+2218: 2026-09-19T05:13:45.7095718Z   [PASS] Verify only the requested physical ID3 frame changed (89 ms)
+2219: 2026-09-19T05:13:45.7097018Z   [STEP] Verify the current authoritative gallery state
+2220: 2026-09-19T05:13:47.1310524Z   [PASS] Verify the current authoritative gallery state (1421 ms)
+2221: 2026-09-19T05:13:47.1311702Z   [STEP] Run an incremental scan and retain the exact year-split topology
+2222: 2026-09-19T05:13:47.2990287Z 2026-09-19 05:13:47,297 [WARNING] music_app: refresh_api: payload keys=['full_rescan']
+2223: 2026-09-19T05:13:47.5336549Z 2026-09-19 05:13:47,403 [INFO] music_app: {"action": "Library indexing started", "force": true}
+2224: 2026-09-19T05:13:53.4263313Z 2026-09-19 05:13:53,424 [INFO] music_app: {"action": "Library indexing completed", "album_count": 64, "file_count": 1090}
+2225: 2026-09-19T05:13:53.4265887Z 2026-09-19 05:13:53,425 [INFO] music_app: {"action": "Cover art refresh queued after indexing", "added_album_count": 1}
+2226: 2026-09-19T05:13:54.1882061Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover jobs built total_folders=64 queued=64 skipped=0 skipped_samples=[]
+2227: 2026-09-19T05:13:54.1886706Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover refresh background job selection queued=16 user_owned=1 scan_generation=1 file_cache_entries=1090
+2228: 2026-09-19T05:13:54.1900173Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=1 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 01' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 01' track_count=18 force_search=False
+2229: 2026-09-19T05:13:54.1905711Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=2 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 02' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 02' track_count=18 force_search=False
+2230: 2026-09-19T05:13:54.1914092Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=3 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 03' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 03' track_count=18 force_search=False
+2231: 2026-09-19T05:13:54.1921291Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=4 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 04' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 04' track_count=18 force_search=False
+2232: 2026-09-19T05:13:54.1934398Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=5 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 05' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 05' track_count=18 force_search=False
+2233: 2026-09-19T05:13:54.1943041Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=6 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 06' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 06' track_count=18 force_search=False
+2234: 2026-09-19T05:13:54.1949699Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=7 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 07' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 07' track_count=18 force_search=False
+2235: 2026-09-19T05:13:54.1952882Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=8 total=16 artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 08' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 08' track_count=18 force_search=False
+2236: 2026-09-19T05:13:54.1959585Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=9 total=16 artist='Generated Problem Fixture' album='Encoding And Missing Metadata' year=None folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Encoding And Missing Metadata' track_count=18 force_search=False
+2237: 2026-09-19T05:13:54.1966099Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=10 total=16 artist='Mastodon' album='Crack The Skye Fixture 07' year=2009 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Mastodon\\Crack The Skye Fixture 07' track_count=18 force_search=False
+2238: 2026-09-19T05:13:54.1970944Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=11 total=16 artist='Mastodon' album='Crack The Skye Fixture 08' year=2009 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Mastodon\\Crack The Skye Fixture 08' track_count=18 force_search=False
+2239: 2026-09-19T05:13:54.1976332Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=12 total=16 artist='Mastodon' album='Crack The Skye Fixture 09' year=2009 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Mastodon\\Crack The Skye Fixture 09' track_count=18 force_search=False
+2240: 2026-09-19T05:13:54.1985164Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=13 total=16 artist='Mastodon' album='Crack The Skye Fixture 10' year=2009 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Mastodon\\Crack The Skye Fixture 10' track_count=18 force_search=False
+2241: 2026-09-19T05:13:54.1993509Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=14 total=16 artist='Neal Morse' album='Neal Morse Plays Pink Floyd' year=2023 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Progressive Projects\\Morse Family\\Neal Morse\\Neal Morse Plays Pink Floyd' track_count=18 force_search=False
+2242: 2026-09-19T05:13:54.2003710Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=15 total=16 artist='Various Artists' album='Mulan' year=1998 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Various Artists\\Mulan' track_count=14 force_search=False
+2243: 2026-09-19T05:13:54.2012085Z 2026-09-19 05:13:54,187 [VERBOSE] music_app: Cover fetch queue item index=16 total=16 artist='\u0414\u0414\u0422' album='\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438' year=1990 folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438' track_count=16 force_search=False
+2244: 2026-09-19T05:13:54.2023578Z 2026-09-19 05:13:54,191 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 01' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 01' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 01::::2023' age_seconds=63.95 ttl_seconds=43200.0
+2245: 2026-09-19T05:13:54.2033229Z 2026-09-19 05:13:54,193 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 01' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 01' downloaded=False has_cover=False
+2246: 2026-09-19T05:13:54.2045174Z 2026-09-19 05:13:54,200 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 02' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 02' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 02::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2247: 2026-09-19T05:13:54.2059306Z 2026-09-19 05:13:54,200 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 04' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 04' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 04::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2248: 2026-09-19T05:13:54.2085804Z 2026-09-19 05:13:54,200 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 02' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 02' downloaded=False has_cover=False
+2249: 2026-09-19T05:13:54.2109488Z 2026-09-19 05:13:54,202 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 04' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 04' downloaded=False has_cover=False
+2250: 2026-09-19T05:13:54.2129962Z 2026-09-19 05:13:54,202 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 03' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 03' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 03::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2251: 2026-09-19T05:13:54.2140036Z 2026-09-19 05:13:54,203 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 03' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 03' downloaded=False has_cover=False
+2252: 2026-09-19T05:13:54.2148212Z 2026-09-19 05:13:54,203 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 05' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 05' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 05::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2253: 2026-09-19T05:13:54.2214114Z 2026-09-19 05:13:54,205 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 05' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 05' downloaded=False has_cover=False
+2254: 2026-09-19T05:13:54.2221592Z 2026-09-19 05:13:54,207 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 06' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 06' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 06::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2255: 2026-09-19T05:13:54.2229425Z 2026-09-19 05:13:54,207 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 06' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 06' downloaded=False has_cover=False
+2256: 2026-09-19T05:13:54.2238299Z 2026-09-19 05:13:54,209 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 07' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 07' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 07::::2023' age_seconds=63.96 ttl_seconds=43200.0
+2257: 2026-09-19T05:13:54.2246728Z 2026-09-19 05:13:54,209 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 07' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 07' downloaded=False has_cover=False
+2258: 2026-09-19T05:13:54.2253356Z 2026-09-19 05:13:54,211 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 08' artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 08' year=2023 reason=negative_cache_ttl_active cache_key='generated problem fixture::comfortably numb sidebar fixture 08::::2023' age_seconds=63.97 ttl_seconds=43200.0
+2259: 2026-09-19T05:13:54.2259635Z 2026-09-19 05:13:54,211 [VERBOSE] music_app: Cover fetch processed artist='Generated Problem Fixture' album='Comfortably Numb Sidebar Fixture 08' folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Comfortably Numb Sidebar Fixture 08' downloaded=False has_cover=False
+2260: 2026-09-19T05:13:54.2291577Z 2026-09-19 05:13:54,213 [VERBOSE] music_app.services.cover_refresh_provider: Cover fetch skipped folder='D:\\a\\_temp\\album-haven-e2e-functional-fixtures-metadata-mutations\\shared\\media\\Generated Problem Fixture\\Encoding And Missing Metadata' artist='Generated Problem Fixture' album='Encoding And Missing Metadata' year=None reason=negative_cache_ttl_active cache_key='generated problem fixture::encoding and missing metadata::::' age_seconds=63.97 ttl_seconds=43200.0

@@ -1,0 +1,103 @@
+13281: 2026-09-19T05:05:43.1447676Z             for result in results
+13282: 2026-09-19T05:05:43.1448244Z         )
+13283: 2026-09-19T05:05:43.1448964Z >       assert all(not ***.exists() for *** in ***s)
+13284: 2026-09-19T05:05:43.1449700Z E       assert False
+13285: 2026-09-19T05:05:43.1451431Z E        +  where False = all(<generator object test_two_concurrent_default_pytest_processes_use_isolated_***s_and_cleanup_both.<locals>.<genexpr> at 0x0000016F32849220>)
+13286: 2026-09-19T05:05:43.1452752Z 
+13287: 2026-09-19T05:05:43.1453246Z tests\py\test_pytest_harness_config.py:162: AssertionError
+13288: 2026-09-19T05:05:43.1455407Z ============================== warnings summary ===============================
+13289: 2026-09-19T05:05:43.1456845Z tests/py/test_cover_refresh_provider.py::test_automatic_write_guard_receives_final_encoded_cover_revision
+13290: 2026-09-19T05:05:43.1459214Z   D:\a\AlbumHaven\AlbumHaven\music_app\services\covers.py:170: DeprecationWarning: Image.Image.getdata is deprecated and will be removed in Pillow 14 (2027-10-15). Use get_flattened_data instead.
+13291: 2026-09-19T05:05:43.1461334Z     pixels = list(sample.getdata())
+13292: 2026-09-19T05:05:43.1461718Z 
+13293: 2026-09-19T05:05:43.1462311Z -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+13294: 2026-09-19T05:05:43.1463537Z -------------- generated xml file: D:\a\_temp\pytest-results.xml --------------
+13295: 2026-09-19T05:05:43.1464669Z ============================ slowest 20 durations =============================
+13296: 2026-09-19T05:05:43.1466271Z 10.44s call     tests/py/test_settings_measured_retry_account.py::test_retry_limit_applies_after_connected_account_selection[False]
+13297: 2026-09-19T05:05:43.1468376Z 9.82s call     tests/py/test_settings_measured_retry_account.py::test_retry_limit_applies_after_connected_account_selection[True]
+13298: 2026-09-19T05:05:43.1470252Z 9.69s call     tests/py/test_fetch_test_fixtures.py::test_valid_authenticated_download_extracts_and_exports
+13299: 2026-09-19T05:05:43.1472200Z 9.01s call     tests/py/test_log_history_postgres.py::test_100001_event_export_refuses_instead_of_returning_a_truncated_success
+13300: 2026-09-19T05:05:43.1473852Z 6.31s call     tests/py/test_isolated_postgres_live.py::test_live_phase6_browse_queries_use_bounded_production_plans_and_search_indexes
+13301: 2026-09-19T05:05:43.1475889Z 4.20s call     tests/py/test_isolated_postgres_live.py::test_live_album_splits_with_newer_file_years_restore_into_existing_semantic_album
+13302: 2026-09-19T05:05:43.1477541Z 3.99s call     tests/py/test_app_factory.py::test_active_python_surfaces_do_not_import_flask
+13303: 2026-09-19T05:05:43.1479173Z 3.13s call     tests/py/test_appearance_native_components_live.py::test_live_native_player_components_roundtrip_and_constraints
+13304: 2026-09-19T05:05:43.1481393Z 3.11s call     tests/py/test_isolated_postgres_live.py::test_live_scan_snapshot_replaces_only_scan_owned_featured_artist_memberships
+13305: 2026-09-19T05:05:43.1483270Z 3.00s call     tests/py/test_isolated_postgres_live.py::test_live_targeted_reconciliation_preserves_untouched_disc_guest_browse[hoard]
+13306: 2026-09-19T05:05:43.1485180Z 2.91s call     tests/py/test_isolated_postgres_live.py::test_live_isolated_postgres_pristine_bootstrap_cleanup_and_second_run
+13307: 2026-09-19T05:05:43.1486894Z 2.87s call     tests/py/test_isolated_postgres_live.py::test_live_removed_member_retains_account_access_and_scoped_admin_recovery
+13308: 2026-09-19T05:05:43.1489113Z 2.81s call     tests/py/test_appearance_migration_live.py::test_live_legacy_selection_accent_survives_aggregate_upgrade[False-desktop]
+13309: 2026-09-19T05:05:43.1491021Z 2.78s call     tests/py/test_appearance_migration_live.py::test_live_legacy_selection_accent_survives_aggregate_upgrade[False-None]
+13310: 2026-09-19T05:05:43.1492905Z 2.76s call     tests/py/test_isolated_postgres_live.py::test_live_aggregate_appearance_persists_and_clears_migrated_player_colors
+13311: 2026-09-19T05:05:43.1494851Z 2.60s call     tests/py/test_library_indexing.py::test_forced_full_rescan_with_existing_projection_builds_only_final_album_state
+13312: 2026-09-19T05:05:43.1496761Z 2.60s call     tests/py/test_isolated_postgres_live.py::test_live_targeted_album_rename_commits_without_rebuilding_unrelated_inventory
+13313: 2026-09-19T05:05:43.1498690Z 2.60s call     tests/py/test_isolated_postgres_live.py::test_live_appearance_fixture_restores_exact_row_or_absence_and_rolls_back[True]
+13314: 2026-09-19T05:05:43.1500295Z 2.55s call     tests/py/test_publish_workflow_scripts.py::test_test_coderabbit_launch_reports_ready_for_host_gh_auth
+13315: 2026-09-19T05:05:43.1502555Z 2.44s call     tests/py/test_lastfm_session_conflict_identity_migration_postgres.py::test_live_lastfm_session_conflict_identity_repair_upgrades_partial_only_index
+13316: 2026-09-19T05:05:43.1504443Z =========================== short test summary info ===========================
+13317: 2026-09-19T05:05:43.1506132Z FAILED tests/py/test_pytest_harness_config.py::test_two_concurrent_default_pytest_processes_use_isolated_***s_and_cleanup_both - assert False
+13318: 2026-09-19T05:05:43.1508347Z  +  where False = all(<generator object test_two_concurrent_default_pytest_processes_use_isolated_***s_and_cleanup_both.<locals>.<genexpr> at 0x0000016F32849220>)
+13319: 2026-09-19T05:05:43.1510030Z ====== 1 failed, 5714 passed, 4 skipped, 1 warning in 582.09s (0:09:42) =======
+13320: 2026-09-19T05:05:43.7246910Z ##[error]Process completed with exit code 1.
+13321: 2026-09-19T05:05:43.7430831Z ##[group]Run node scripts/ci/validate-foundation-gates.cjs --pytest-junit=D:\a\_temp\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json
+13322: 2026-09-19T05:05:43.7432060Z [36;1mnode scripts/ci/validate-foundation-gates.cjs --pytest-junit=D:\a\_temp\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json[0m
+13323: 2026-09-19T05:05:43.7508368Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+13324: 2026-09-19T05:05:43.7508807Z env:
+13325: 2026-09-19T05:05:43.7509192Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+13326: 2026-09-19T05:05:43.7509708Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13327: 2026-09-19T05:05:43.7510201Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+13328: 2026-09-19T05:05:43.7510685Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13329: 2026-09-19T05:05:43.7511124Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13330: 2026-09-19T05:05:43.7511673Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13331: 2026-09-19T05:05:43.7512126Z   PGPASSFILE: D:\a\_temp\album-haven-python-combined.pgpass
+13332: 2026-09-19T05:05:43.7512560Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_py_contract_35419743702_2
+13333: 2026-09-19T05:05:43.7513248Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13334: 2026-09-19T05:05:43.7514073Z   DATABASE_APP_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13335: 2026-09-19T05:05:43.7514880Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13336: 2026-09-19T05:05:43.7515709Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13337: 2026-09-19T05:05:43.7516500Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13338: 2026-09-19T05:05:43.7517310Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13339: 2026-09-19T05:05:43.7518138Z   PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13340: 2026-09-19T05:05:43.7518936Z   PYTEST_DESTRUCTIVE_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13341: 2026-09-19T05:05:43.7519608Z   PYTEST_DESTRUCTIVE_PGPASSFILE: D:\a\_temp\album-haven-postgres-py_35419743702_2.pgpass
+13342: 2026-09-19T05:05:43.7520357Z   ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13343: 2026-09-19T05:05:43.7521170Z   ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13344: 2026-09-19T05:05:43.7522046Z   ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13345: 2026-09-19T05:05:43.7522669Z ##[endgroup]
+13346: 2026-09-19T05:05:44.0745520Z foundation gates validated
+13347: 2026-09-19T05:05:44.1859572Z ##[group]Run $statePath = "D:\a\_temp\album-haven-python-contract-postgres.state.json"
+13348: 2026-09-19T05:05:44.1860458Z [36;1m$statePath = "D:\a\_temp\album-haven-python-contract-postgres.state.json"[0m
+13349: 2026-09-19T05:05:44.1861213Z [36;1mif (Test-Path -LiteralPath $statePath -PathType Leaf) {[0m
+13350: 2026-09-19T05:05:44.1861660Z [36;1m  .\scripts\ci\bootstrap-windows-postgres.ps1 `[0m
+13351: 2026-09-19T05:05:44.1862060Z [36;1m    -Mode Teardown `[0m
+13352: 2026-09-19T05:05:44.1862404Z [36;1m    -ExpectedMajorVersion 17 `[0m
+13353: 2026-09-19T05:05:44.1862764Z [36;1m    -Pgbin $env:PGBIN `[0m
+13354: 2026-09-19T05:05:44.1863097Z [36;1m    -HostName 127.0.0.1 `[0m
+13355: 2026-09-19T05:05:44.1863441Z [36;1m    -DatabaseSuffix "py_contract_35419743702_2" `[0m
+13356: 2026-09-19T05:05:44.1863821Z [36;1m    -StatePath $statePath[0m
+13357: 2026-09-19T05:05:44.1864140Z [36;1m}[0m
+13358: 2026-09-19T05:05:44.1926959Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+13359: 2026-09-19T05:05:44.1927453Z env:
+13360: 2026-09-19T05:05:44.1928474Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+13361: 2026-09-19T05:05:44.1929556Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13362: 2026-09-19T05:05:44.1930231Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+13363: 2026-09-19T05:05:44.1930874Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13364: 2026-09-19T05:05:44.1931377Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13365: 2026-09-19T05:05:44.1931960Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+13366: 2026-09-19T05:05:44.1932537Z   PGPASSFILE: D:\a\_temp\album-haven-python-combined.pgpass
+13367: 2026-09-19T05:05:44.1933003Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_py_contract_35419743702_2
+13368: 2026-09-19T05:05:44.1933682Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13369: 2026-09-19T05:05:44.1934516Z   DATABASE_APP_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13370: 2026-09-19T05:05:44.1935310Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13371: 2026-09-19T05:05:44.1936152Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13372: 2026-09-19T05:05:44.1936966Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13373: 2026-09-19T05:05:44.1938106Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13374: 2026-09-19T05:05:44.1938949Z   PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13375: 2026-09-19T05:05:44.1940008Z   PYTEST_DESTRUCTIVE_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13376: 2026-09-19T05:05:44.1940700Z   PYTEST_DESTRUCTIVE_PGPASSFILE: D:\a\_temp\album-haven-postgres-py_35419743702_2.pgpass
+13377: 2026-09-19T05:05:44.1941439Z   ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL: postgresql://album_haven_migrator_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13378: 2026-09-19T05:05:44.1942286Z   ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL: postgresql://album_haven_app_py_35419743702_2@127.0.0.1/album_haven_ci_py_35419743702_2
+13379: 2026-09-19T05:05:44.1943148Z   ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL: postgresql://album_haven_app_py_contract_35419743702_2@127.0.0.1/album_haven_ci_py_contract_35419743702_2
+13380: 2026-09-19T05:05:44.1943777Z ##[endgroup]
+13381: 2026-09-19T05:05:44.7478147Z  pg_terminate_backend 
+13382: 2026-09-19T05:05:44.7478721Z ----------------------
+13383: 2026-09-19T05:05:44.7479084Z (0 rows)

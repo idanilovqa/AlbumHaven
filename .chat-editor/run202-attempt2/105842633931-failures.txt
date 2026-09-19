@@ -1,0 +1,490 @@
+1455: 2026-09-19T04:59:13.2746492Z 2026-09-19 04:59:13,272 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 132.41, "query": "Explicit Disc Label Control", "selected_artist": "Various Artists"}
+1456: 2026-09-19T04:59:14.1585122Z   [PASS] Open a mixed album with an explicit raw bonus-disc label (3930 ms)
+1457: 2026-09-19T04:59:14.1586459Z   [STEP] Show the exact main-album and bonus-disc durations
+1458: 2026-09-19T04:59:14.1973802Z   [FAIL] Show the exact main-album and bonus-disc durations :: expect(received).toEqual(expected) // deep equality
+1459: 2026-09-19T04:59:14.1975323Z 
+1460: 2026-09-19T04:59:14.1975511Z - Expected  - 1
+1461: 2026-09-19T04:59:14.1975870Z + Received  + 5
+1462: 2026-09-19T04:59:14.1976059Z 
+1463: 2026-09-19T04:59:14.1976206Z - Array []
+1464: 2026-09-19T04:59:14.1976822Z + Array [
+1465: 2026-09-19T04:59:14.1979606Z +   "Total Length: 25m 30s",
+1466: 2026-09-19T04:59:14.1984329Z +   "Total Main Album Length: 3:00",
+1467: 2026-09-19T04:59:14.1984921Z +   "Bonus Disc Length: 22:30",
+1468: 2026-09-19T04:59:14.1986162Z + ] (37 ms)
+1469: 2026-09-19T04:59:15.5930323Z   x   4 [functional] › tests\e2e\specs\albumTrackCredits.spec.js:327:1 › FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label @area:album-details (4.8s)
+1470: 2026-09-19T04:59:18.5187972Z 2026-09-19 04:59:18,517 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 275.67, "hydrate_in_progress": false, "payload_elapsed_ms": 156.34, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1471: 2026-09-19T04:59:21.0641785Z [TEST] FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words
+1472: 2026-09-19T04:59:21.0668556Z   [STEP] Open an ordinary album whose title and path contain bonus-like words
+1473: 2026-09-19T04:59:21.5801265Z 2026-09-19 04:59:21,579 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 347.1, "hydrate_in_progress": false, "payload_elapsed_ms": 141.39, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1474: 2026-09-19T04:59:24.3890051Z 2026-09-19 04:59:24,350 [INFO] music_app: {"action": "Postgres album search request started", "query": "Rarity Outtakes Archive"}
+1475: 2026-09-19T04:59:24.5056451Z 2026-09-19 04:59:24,493 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 142.58, "query": "Rarity Outtakes Archive", "selected_artist": "Various Artists"}
+1476: 2026-09-19T04:59:25.2992355Z   [PASS] Open an ordinary album whose title and path contain bonus-like words (4232 ms)
+1477: 2026-09-19T04:59:25.2995344Z   [STEP] Show only the ordinary album total
+1478: 2026-09-19T04:59:25.3508535Z   [PASS] Show only the ordinary album total (52 ms)
+1479: 2026-09-19T04:59:25.3980100Z   ok  5 [functional] › tests\e2e\specs\albumTrackCredits.spec.js:355:1 › FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words @area:album-details (4.6s)
+1480: 2026-09-19T04:59:25.6298312Z [TEST] FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2
+1481: 2026-09-19T04:59:25.6299679Z   [STEP] Open a numeric two-disc album whose first tracks omit disc tags
+1482: 2026-09-19T04:59:26.1135408Z 2026-09-19 04:59:26,112 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 354.39, "hydrate_in_progress": false, "payload_elapsed_ms": 147.77, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1483: 2026-09-19T04:59:28.9335926Z 2026-09-19 04:59:28,907 [INFO] music_app: {"action": "Postgres album search request started", "query": "Ordinary Numeric Disc Control"}
+1484: 2026-09-19T04:59:29.0495264Z 2026-09-19 04:59:29,034 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 127.19, "query": "Ordinary Numeric Disc Control", "selected_artist": "Various Artists"}
+1485: 2026-09-19T04:59:29.8043476Z   [PASS] Open a numeric two-disc album whose first tracks omit disc tags (4177 ms)
+1486: 2026-09-19T04:59:29.8044593Z   [STEP] Render inferred CD1 and numeric CD2 without bonus semantics
+1487: 2026-09-19T04:59:29.8345645Z   [FAIL] Render inferred CD1 and numeric CD2 without bonus semantics :: expect(received).toEqual(expected) // deep equality
+1488: 2026-09-19T04:59:29.8346520Z 
+1489: 2026-09-19T04:59:29.8346698Z - Expected  - 1
+1490: 2026-09-19T04:59:29.8347094Z + Received  + 3
+1491: 2026-09-19T04:59:29.8347314Z 
+1492: 2026-09-19T04:59:29.8347460Z   Object {
+1493: 2026-09-19T04:59:29.8347810Z     "headers": Array [
+1494: 2026-09-19T04:59:29.8348184Z       "CD 1",
+1495: 2026-09-19T04:59:29.8348492Z       "CD 2",
+1496: 2026-09-19T04:59:29.8348812Z     ],
+1497: 2026-09-19T04:59:29.8349549Z -   "totals": Array [],
+1498: 2026-09-19T04:59:29.8350263Z +   "totals": Array [
+1499: 2026-09-19T04:59:29.8351249Z +     "Total Length: 18m 00s",
+1500: 2026-09-19T04:59:29.8351740Z +   ],
+1501: 2026-09-19T04:59:29.8352075Z   } (24 ms)
+1502: 2026-09-19T04:59:31.2237639Z   x   6 [functional] › tests\e2e\specs\albumTrackCredits.spec.js:382:1 › FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2 @area:album-details (5.0s)
+1503: 2026-09-19T04:59:33.9326340Z 2026-09-19 04:59:33,931 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 288.62, "hydrate_in_progress": false, "payload_elapsed_ms": 164.44, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1504: 2026-09-19T04:59:36.4077622Z [TEST] FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation
+1505: 2026-09-19T04:59:36.4090437Z   [STEP] Open the complete unfiltered ordinary family with viewport virtualization
+1506: 2026-09-19T04:59:36.8963464Z 2026-09-19 04:59:36,894 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 317.82, "hydrate_in_progress": false, "payload_elapsed_ms": 186.08, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1507: 2026-09-19T04:59:41.2797491Z   [PASS] Open the complete unfiltered ordinary family with viewport virtualization (4574 ms)
+1508: 2026-09-19T04:59:41.2807229Z   [STEP] Promote another family member locally without a loading transition
+1509: 2026-09-19T04:59:41.4944834Z   [PASS] Promote another family member locally without a loading transition (507 ms)
+1510: 2026-09-19T04:59:41.6725960Z   [STEP] Keep the rearranged primary and virtualized family albums reachable
+1511: 2026-09-19T04:59:43.9486661Z   [PASS] Keep the rearranged primary and virtualized family albums reachable (2458 ms)
+1512: 2026-09-19T04:59:43.9932753Z   ok  7 [functional] › tests\e2e\specs\artistCompilationFamily.spec.js:287:1 › FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation @area:gallery-search (7.8s)
+1513: 2026-09-19T04:59:44.2129269Z [TEST] FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity
+1514: 2026-09-19T04:59:44.2144102Z   [STEP] Open the production app against the isolated Postgres library
+1515: 2026-09-19T04:59:44.6067697Z 2026-09-19 04:59:44,605 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 270.99, "hydrate_in_progress": false, "payload_elapsed_ms": 150.17, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1516: 2026-09-19T04:59:47.3279359Z   [PASS] Open the production app against the isolated Postgres library (3093 ms)
+1517: 2026-09-19T04:59:47.3355272Z   [STEP] Select the merged composite artist row through its clean tree label
+1518: 2026-09-19T04:59:47.6675699Z 2026-09-19 04:59:47,661 [INFO] music_app: {"action": "Postgres album search request started", "query": "Snow White And The Seven Dwarfs"}
+1519: 2026-09-19T04:59:47.8046116Z 2026-09-19 04:59:47,791 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 129.07, "query": "Snow White And The Seven Dwarfs", "selected_artist": "Frank Churchill / Leigh Harline / Larry Morey"}
+1520: 2026-09-19T04:59:48.1371783Z   [PASS] Select the merged composite artist row through its clean tree label (829 ms)
+1521: 2026-09-19T04:59:48.1374416Z   [STEP] Verify the deduplicated display credit and normalized durable album key
+1522: 2026-09-19T04:59:48.2900102Z   [PASS] Verify the deduplicated display credit and normalized durable album key (153 ms)
+1523: 2026-09-19T04:59:48.2901629Z   [STEP] Open the album through its visible title and retain the legitimate composite identity
+1524: 2026-09-19T04:59:48.9237542Z   [PASS] Open the album through its visible title and retain the legitimate composite identity (631 ms)
+1525: 2026-09-19T04:59:48.9670688Z   ok  8 [functional] › tests\e2e\specs\artistCompositeCredits.spec.js:10:1 › FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity @area:gallery-search (4.9s)
+1526: 2026-09-19T04:59:49.1926432Z [TEST] FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits
+1527: 2026-09-19T04:59:49.1931158Z   [STEP] Unfiltered gallery counts each soundtrack track once
+1528: 2026-09-19T04:59:49.5887747Z 2026-09-19 04:59:49,587 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 260.2, "hydrate_in_progress": false, "payload_elapsed_ms": 147.06, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1529: 2026-09-19T04:59:54.6341357Z   [PASS] Unfiltered gallery counts each soundtrack track once (5442 ms)
+1530: 2026-09-19T04:59:54.6342572Z   [STEP] Search the multi-artist soundtrack and count its duration once
+1531: 2026-09-19T04:59:55.2301575Z 2026-09-19 04:59:55,229 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 344.3, "hydrate_in_progress": false, "payload_elapsed_ms": 210.68, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1532: 2026-09-19T04:59:57.3787149Z 2026-09-19 04:59:57,361 [INFO] music_app: {"action": "Postgres album search request started", "query": "Mulan"}
+1533: 2026-09-19T04:59:57.4961941Z 2026-09-19 04:59:57,494 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 9, "elapsed_ms": 133.16, "query": "Mulan", "selected_artist": "U.D.O."}
+1534: 2026-09-19T04:59:57.7244419Z   [PASS] Search the multi-artist soundtrack and count its duration once (3090 ms)
+1535: 2026-09-19T04:59:57.7256438Z   [STEP] Album Details independently shows 14 tracks totaling 56m 18s
+1536: 2026-09-19T04:59:58.2802634Z   [PASS] Album Details independently shows 14 tracks totaling 56m 18s (551 ms)
+1537: 2026-09-19T04:59:58.2804808Z   [STEP] Artist navigation and reload preserve the same gallery total
+1538: 2026-09-19T04:59:59.8010117Z 2026-09-19 04:59:59,799 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 352.56, "hydrate_in_progress": false, "payload_elapsed_ms": 278.26, "query": "", "scan_in_progress": false, "selected_artist": "Compilation Signal Lead"}
+1539: 2026-09-19T05:00:00.8592935Z   [PASS] Artist navigation and reload preserve the same gallery total (2584 ms)
+1540: 2026-09-19T05:00:00.9109169Z   ok  9 [functional] › tests\e2e\specs\gallerySoundtrackDuration.spec.js:9:1 › FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits @area:gallery-search (11.9s)
+1541: 2026-09-19T05:00:01.1794105Z [TEST] FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload
+1542: 2026-09-19T05:00:01.2016407Z   [STEP] Direct-load and reload the selected-artist gallery in a fresh browser
+1543: 2026-09-19T05:00:01.9777683Z 2026-09-19 05:00:01,976 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 671.7, "hydrate_in_progress": false, "payload_elapsed_ms": 473.99, "query": "", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1544: 2026-09-19T05:00:08.6920606Z 2026-09-19 05:00:08,690 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 484.89, "hydrate_in_progress": false, "payload_elapsed_ms": 303.48, "query": "", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1545: 2026-09-19T05:00:13.1312014Z   [PASS] Direct-load and reload the selected-artist gallery in a fresh browser (11962 ms)
+1546: 2026-09-19T05:00:13.1313592Z   [STEP] Direct-load and reload the search-results gallery in a fresh browser
+1547: 2026-09-19T05:00:13.7739640Z 2026-09-19 05:00:13,773 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "full_view", "covers_in_progress": false, "elapsed_ms": 234.83, "hydrate_in_progress": false, "payload_elapsed_ms": 163.34, "query": "\u0414\u0414\u0422", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1548: 2026-09-19T05:00:16.2755361Z 2026-09-19 05:00:16,273 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "full_view", "covers_in_progress": false, "elapsed_ms": 303.34, "hydrate_in_progress": false, "payload_elapsed_ms": 214.92, "query": "\u0414\u0414\u0422", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1549: 2026-09-19T05:00:18.8483300Z   [PASS] Direct-load and reload the search-results gallery in a fresh browser (5717 ms)
+1550: 2026-09-19T05:00:18.9310753Z   ok 10 [functional] › tests\e2e\specs\searchTreeCorrectness.spec.js:46:1 › FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload @area:gallery-search (18.0s)
+1551: 2026-09-19T05:00:19.1545787Z [TEST] FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete
+1758: 2026-09-19T05:02:06.2060242Z 
+1759: 2026-09-19T05:02:06.2062127Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"53a02dfb7954dd653348a9bedad960bb8b0c6430862f2cec5a494a7ec47b09da","status":"failed","total":26,"completed":26,"failed":2,"skipped":0,"errors":0}
+1760: 2026-09-19T05:02:06.2063928Z 
+1761: 2026-09-19T05:02:06.2065460Z   1) [functional] › tests\e2e\specs\albumTrackCredits.spec.js:327:1 › FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label @area:album-details 
+1762: 2026-09-19T05:02:06.2066645Z 
+1763: 2026-09-19T05:02:06.2067636Z     Error: expect(received).toEqual(expected) // deep equality
+1764: 2026-09-19T05:02:06.2069845Z 
+1765: 2026-09-19T05:02:06.2070044Z     - Expected  - 1
+1766: 2026-09-19T05:02:06.2095875Z     + Received  + 5
+1767: 2026-09-19T05:02:06.2096144Z 
+1768: 2026-09-19T05:02:06.2096316Z     - Array []
+1769: 2026-09-19T05:02:06.2096674Z     + Array [
+1770: 2026-09-19T05:02:06.2097054Z     +   "Total Length: 25m 30s",
+1771: 2026-09-19T05:02:06.2097550Z     +   "Total Main Album Length: 3:00",
+1772: 2026-09-19T05:02:06.2098074Z     +   "Bonus Disc Length: 22:30",
+1773: 2026-09-19T05:02:06.2098505Z     + ]
+1774: 2026-09-19T05:02:06.2098695Z 
+1775: 2026-09-19T05:02:06.2099564Z       344 |     const groups = await trackModalActions.readDiscGroupPresentation();
+1776: 2026-09-19T05:02:06.2101581Z       345 |     expect(groups.headers).toEqual(['Bonus Disc']);
+1777: 2026-09-19T05:02:06.2102282Z     > 346 |     expect(groups.totals).toEqual([]);
+1778: 2026-09-19T05:02:06.2102854Z           |                           ^
+1779: 2026-09-19T05:02:06.2103685Z       347 |     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
+1780: 2026-09-19T05:02:06.2104583Z       348 |       .toBe('Total Length: 25m 30s');
+1781: 2026-09-19T05:02:06.2106194Z       349 |     await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');
+1782: 2026-09-19T05:02:06.2108377Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumTrackCredits.spec.js:346:27
+1783: 2026-09-19T05:02:06.2109461Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+1784: 2026-09-19T05:02:06.2111673Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumTrackCredits.spec.js:343:3
+1785: 2026-09-19T05:02:06.2112295Z 
+1786: 2026-09-19T05:02:06.2113257Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+1787: 2026-09-19T05:02:06.2114523Z     [TEST] FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label
+1788: 2026-09-19T05:02:06.2115571Z       [STEP] Open a mixed album with an explicit raw bonus-disc label
+1789: 2026-09-19T05:02:06.2116500Z       [PASS] Open a mixed album with an explicit raw bonus-disc label (3930 ms)
+1790: 2026-09-19T05:02:06.2117374Z       [STEP] Show the exact main-album and bonus-disc durations
+1791: 2026-09-19T05:02:06.2117964Z       [FAIL] S...
+1792: 2026-09-19T05:02:06.2119813Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1793: 2026-09-19T05:02:06.2120329Z 
+1794: 2026-09-19T05:02:06.2121090Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+1795: 2026-09-19T05:02:06.2121871Z     Error 1
+1796: 2026-09-19T05:02:06.2122387Z     Error: expect(received).toEqual(expected) // deep equality
+1797: 2026-09-19T05:02:06.2123012Z     
+1798: 2026-09-19T05:02:06.2123352Z     - Expected  - 1
+1799: 2026-09-19T05:02:06.2123734Z     + Received  + 5
+1800: 2026-09-19T05:02:06.2124092Z     
+1801: 2026-09-19T05:02:06.2124413Z     - Array []
+1802: 2026-09-19T05:02:06.2124757Z     + Array [
+1803: 2026-09-19T05:02:06.2125140Z     +   "Total Length: 25m 30s",
+1804: 2026-09-19T05:02:06.2125813Z     +   "Total Main Album Length: 3:00",[...
+1805: 2026-09-19T05:02:06.2127069Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1806: 2026-09-19T05:02:06.2128751Z 
+1807: 2026-09-19T05:02:06.2129525Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+1808: 2026-09-19T05:02:06.2132001Z     [2026-09-19T04:59:13.015Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5200/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-gallery-search-visual%5Cshared%5Cmedia%5C!!!%5CThree%20Bangs%5Ccover.png&size=480&v=process-51b4b66b61130076169ec8aff7c3cf32
+1809: 2026-09-19T05:02:06.2134210Z     [2026-09-19T04:59:13.016...
+1810: 2026-09-19T05:02:06.2136629Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1811: 2026-09-19T05:02:06.2137259Z 
+1812: 2026-09-19T05:02:06.2138966Z     Error Context: ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-cd3ea-n-explicit-bonus-disc-label-functional\error-context.md
+1813: 2026-09-19T05:02:06.2140421Z 
+1814: 2026-09-19T05:02:06.2141233Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+1815: 2026-09-19T05:02:06.2144351Z     ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-cd3ea-n-explicit-bonus-disc-label-functional\trace.zip
+1816: 2026-09-19T05:02:06.2145900Z     Usage:
+1817: 2026-09-19T05:02:06.2146114Z 
+1818: 2026-09-19T05:02:06.2147577Z         npx playwright show-trace ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-cd3ea-n-explicit-bonus-disc-label-functional\trace.zip
+1819: 2026-09-19T05:02:06.2149097Z 
+1820: 2026-09-19T05:02:06.2149768Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1821: 2026-09-19T05:02:06.2150294Z 
+1822: 2026-09-19T05:02:06.2151622Z   2) [functional] › tests\e2e\specs\albumTrackCredits.spec.js:382:1 › FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2 @area:album-details 
+1823: 2026-09-19T05:02:06.2152421Z 
+1824: 2026-09-19T05:02:06.2152781Z     Error: expect(received).toEqual(expected) // deep equality
+1825: 2026-09-19T05:02:06.2153232Z 
+1826: 2026-09-19T05:02:06.2153398Z     - Expected  - 1
+1827: 2026-09-19T05:02:06.2153766Z     + Received  + 3
+1828: 2026-09-19T05:02:06.2153980Z 
+1829: 2026-09-19T05:02:06.2154174Z       Object {
+1830: 2026-09-19T05:02:06.2154611Z         "headers": Array [
+1831: 2026-09-19T05:02:06.2155119Z           "CD 1",
+1832: 2026-09-19T05:02:06.2155582Z           "CD 2",
+1833: 2026-09-19T05:02:06.2156031Z         ],
+1834: 2026-09-19T05:02:06.2156447Z     -   "totals": Array [],
+1835: 2026-09-19T05:02:06.2156989Z     +   "totals": Array [
+1836: 2026-09-19T05:02:06.2157537Z     +     "Total Length: 18m 00s",
+1837: 2026-09-19T05:02:06.2158062Z     +   ],
+1838: 2026-09-19T05:02:06.2158463Z       }
+1839: 2026-09-19T05:02:06.2158671Z 
+1840: 2026-09-19T05:02:06.2158809Z       400 |
+1841: 2026-09-19T05:02:06.2160075Z       401 |   await stepLogger.step('Render inferred CD1 and numeric CD2 without bonus semantics', async () => {
+1842: 2026-09-19T05:02:06.2161495Z     > 402 |     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
+1843: 2026-09-19T05:02:06.2162611Z           |                                                                 ^
+1844: 2026-09-19T05:02:06.2163310Z       403 |       headers: ['CD 1', 'CD 2'],
+1845: 2026-09-19T05:02:06.2164494Z       404 |       totals: [],
+1846: 2026-09-19T05:02:06.2165035Z       405 |     });
+1847: 2026-09-19T05:02:06.2166223Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumTrackCredits.spec.js:402:65
+1848: 2026-09-19T05:02:06.2168015Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+1849: 2026-09-19T05:02:06.2169527Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumTrackCredits.spec.js:401:3
+1850: 2026-09-19T05:02:06.2170196Z 
+1851: 2026-09-19T05:02:06.2171077Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+1852: 2026-09-19T05:02:06.2175464Z     [TEST] FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2
+1853: 2026-09-19T05:02:06.2176633Z       [STEP] Open a numeric two-disc album whose first tracks omit disc tags
+1854: 2026-09-19T05:02:06.2177533Z       [PASS] Open a numeric two-disc album whose first tracks omit disc tags (4177 ms)
+1855: 2026-09-19T05:02:06.2178643Z       [STEP] Render inferred CD1 and numeric CD2 without bonus semantics
+1856: 2026-09-19T05:02:06.2179473Z       [F...
+1857: 2026-09-19T05:02:06.2180294Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1858: 2026-09-19T05:02:06.2180665Z 
+1859: 2026-09-19T05:02:06.2181136Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+1860: 2026-09-19T05:02:06.2182742Z     Error 1
+1861: 2026-09-19T05:02:06.2184205Z     Error: expect(received).toEqual(expected) // deep equality
+1862: 2026-09-19T05:02:06.2185008Z     
+1863: 2026-09-19T05:02:06.2185886Z     - Expected  - 1
+1864: 2026-09-19T05:02:06.2186477Z     + Received  + 3
+1865: 2026-09-19T05:02:06.2186936Z     
+1866: 2026-09-19T05:02:06.2187463Z       Object {
+1867: 2026-09-19T05:02:06.2188011Z         "headers": Array [
+1868: 2026-09-19T05:02:06.2188587Z           "CD 1",
+1869: 2026-09-19T05:02:06.2189064Z           "CD 2",
+1870: 2026-09-19T05:02:06.2189584Z         ],
+1871: 2026-09-19T05:02:06.2190074Z     -   ...
+1872: 2026-09-19T05:02:06.2194101Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1873: 2026-09-19T05:02:06.2194809Z 
+1874: 2026-09-19T05:02:06.2195582Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+1875: 2026-09-19T05:02:06.2197620Z     [2026-09-19T04:59:28.744Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5200/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-gallery-search-visual%5Cshared%5Cmedia%5C!!!%5CThree%20Bangs%5Ccover.png&size=480&v=process-51b4b66b61130076169ec8aff7c3cf32
+1876: 2026-09-19T05:02:06.2199969Z     [2026-09-19T04:59:28.744...
+1877: 2026-09-19T05:02:06.2201150Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1878: 2026-09-19T05:02:06.2201806Z 
+1879: 2026-09-19T05:02:06.2206376Z     Error Context: ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-84295-ide-an-ordinary-numeric-CD2-functional\error-context.md
+1880: 2026-09-19T05:02:06.2207959Z 
+1881: 2026-09-19T05:02:06.2208860Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+1882: 2026-09-19T05:02:06.2212330Z     ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-84295-ide-an-ordinary-numeric-CD2-functional\trace.zip
+1883: 2026-09-19T05:02:06.2214228Z     Usage:
+1884: 2026-09-19T05:02:06.2214515Z 
+1885: 2026-09-19T05:02:06.2216078Z         npx playwright show-trace ..\..\_temp\functional-output-gallery-search-visual\wave-01-02-playwright-config-js\albumTrackCredits-FTC-ALBU-84295-ide-an-ordinary-numeric-CD2-functional\trace.zip
+1886: 2026-09-19T05:02:06.2217656Z 
+1887: 2026-09-19T05:02:06.2220068Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+1888: 2026-09-19T05:02:06.2220768Z 
+1889: 2026-09-19T05:02:06.2220971Z   2 failed
+1890: 2026-09-19T05:02:06.2222723Z     [functional] › tests\e2e\specs\albumTrackCredits.spec.js:327:1 › FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label @area:album-details 
+1891: 2026-09-19T05:02:06.2225254Z     [functional] › tests\e2e\specs\albumTrackCredits.spec.js:382:1 › FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2 @area:album-details 
+1892: 2026-09-19T05:02:06.2228313Z   24 passed (3.3m)
+1893: 2026-09-19T05:02:07.1296329Z 
+1894: 2026-09-19T05:02:07.1297038Z === Playwright Summary ===
+1895: 2026-09-19T05:02:07.1298539Z [31m[x][0m albumTrackCredits.spec
+1896: 2026-09-19T05:02:07.1300247Z   [[32m✓[0m] FTC-ALBUM-TRACK-CREDITS-001 shows clean titles and per-track credits on a Various Artists release @area:album-details
+1897: 2026-09-19T05:02:07.1302172Z   [[32m✓[0m] FTC-ALBUM-TRACK-CREDITS-002 shows each normalized album-header artist once @area:album-details
+1898: 2026-09-19T05:02:07.1303916Z   [[32m✓[0m] FTC-ALBUM-DETAILS-017 orders missing track numbers by natural filename @area:album-details
+1899: 2026-09-19T05:02:07.1305702Z   [31m[x][0m FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label @area:album-details
+1900: 2026-09-19T05:02:07.1307348Z   [[32m✓[0m] FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words @area:album-details
+1901: 2026-09-19T05:02:07.1309145Z   [31m[x][0m FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2 @area:album-details
+1902: 2026-09-19T05:02:07.1310316Z [[32m✓[0m] artistCompilationFamily.spec
+1903: 2026-09-19T05:02:07.1311760Z   [[32m✓[0m] FTC-ARTIST-FAMILY-016 reuses complete virtualized family data for no-query member navigation @area:gallery-search
+1904: 2026-09-19T05:02:07.1313160Z [[32m✓[0m] artistCompositeCredits.spec
+1905: 2026-09-19T05:02:07.1314624Z   [[32m✓[0m] FTC-ARTIST-FAMILY-014 deduplicates the Snow White display credit without changing its click identity @area:gallery-search
+1906: 2026-09-19T05:02:07.1315998Z [[32m✓[0m] gallerySoundtrackDuration.spec
+1907: 2026-09-19T05:02:07.1317241Z   [[32m✓[0m] FTC-GALLERY-030 counts each Mulan soundtrack track once across artist credits @area:gallery-search
+1908: 2026-09-19T05:02:07.1318438Z [[32m✓[0m] searchTreeCorrectness.spec
+1909: 2026-09-19T05:02:07.1319709Z   [[32m✓[0m] FTC-SEARCH-NAV-027 keeps canonical positive card counts on direct load and reload @area:gallery-search
+1910: 2026-09-19T05:02:07.1322419Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+1911: 2026-09-19T05:02:07.1325474Z   [[32m✓[0m] FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an artist-name match complete @area:gallery-search
+1912: 2026-09-19T05:02:07.1327837Z   [[32m✓[0m] FTC-SEARCH-NAV-026 clears Neal Morse search without remounting the selected gallery or family filters and restores the full tree @area:gallery-search
+1913: 2026-09-19T05:02:07.1330822Z   [[32m✓[0m] FTC-SEARCH-NAV-002, FTC-SEARCH-NAV-003, and FTC-SEARCH-NAV-026 keep one-family search narrow, alphabetical, and selected through full-tree restoration @area:gallery-search
+1914: 2026-09-19T05:02:07.1333223Z   [[32m✓[0m] FTC-SEARCH-NAV-026 keeps a cold direct-loaded selected gallery mounted through natural search clear @area:gallery-search
+1915: 2026-09-19T05:02:07.1335154Z   [[32m✓[0m] FTC-SEARCH-NAV-003 direct query links hydrate the same one-family tree as visible search @area:gallery-search
+1916: 2026-09-19T05:02:07.1337024Z   [[32m✓[0m] FTC-SEARCH-NAV-004A keeps a clicked related-family artist selected as the primary artist @area:gallery-search
+1917: 2026-09-19T05:02:07.1339677Z   [[32m✓[0m] FTC-SEARCH-NAV-004A and FTC-SEARCH-NAV-007A (BUG-06) hide stale Artist Family content while an unrelated artist selection loads @area:gallery-search
+1918: 2026-09-19T05:02:07.1342339Z   [[32m✓[0m] FTC-SEARCH-NAV-003 accepts a new search from direct-loaded state and clearing restores the full tree while retaining selection @area:gallery-search
+1919: 2026-09-19T05:02:07.1344562Z   [[32m✓[0m] FTC-SEARCH-NAV-025 keeps committed searches in an app-owned keyboard and mouse popover @area:gallery-search
+1920: 2026-09-19T05:02:07.1346581Z   [[32m✓[0m] FTC-SEARCH-NAV-025 persists only an explicitly submitted completed query after debounced prefixes @area:gallery-search
+1921: 2026-09-19T05:02:07.1348348Z   [[32m✓[0m] FTC-SEARCH-NAV-025 aligns the desktop recent-search popover below the search input @area:gallery-search
+1922: 2026-09-19T05:02:07.1349492Z [[32m✓[0m] settingsRefactorShell.spec
+1923: 2026-09-19T05:02:07.1350362Z   [[32m✓[0m] FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing @area:settings
+1924: 2026-09-19T05:02:07.1351361Z   [[32m✓[0m] FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard anchor focus @area:settings
+1925: 2026-09-19T05:02:07.1352376Z   [[32m✓[0m] FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll and focused row @area:settings
+1926: 2026-09-19T05:02:07.1353462Z   [[32m✓[0m] FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection through the real lightbox lifecycle @area:settings
+1927: 2026-09-19T05:02:07.1354558Z   [[32m✓[0m] FTC-SETTINGS-S05 an open Filters surface remains inside Settings after narrow resize and reopen @area:settings
+1928: 2026-09-19T05:02:07.1355051Z 
+1929: 2026-09-19T05:02:07.1355182Z Overall: 24/26 passed
+1930: 2026-09-19T05:02:07.1355504Z Failed tests:
+1931: 2026-09-19T05:02:07.1356246Z - albumTrackCredits.spec > FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc label @area:album-details
+1932: 2026-09-19T05:02:07.1357250Z - albumTrackCredits.spec > FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2 @area:album-details
+1933: 2026-09-19T05:02:12.5461910Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5200,"status":"completed","error":null,"ownerCount":0},{"port":5202,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":26,"completed":26,"failed":2,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+1934: 2026-09-19T05:02:14.2387754Z {"restored":0,"removed":0,"unchanged":1497}
+1935: 2026-09-19T05:02:36.2119071Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+1936: 2026-09-19T05:02:37.6899627Z 2026-09-19 05:02:37,687 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1937: 2026-09-19T05:02:37.6901424Z 2026-09-19 05:02:37,687 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1938: 2026-09-19T05:02:38.2314704Z 2026-09-19 05:02:38,228 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=501.66 source_load=160.05 fingerprint=65.74 pure_build=150.49 family_link_replacement=8.27 snapshot_publication=1.79
+1939: 2026-09-19T05:02:39.5666609Z 2026-09-19 05:02:39,565 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 470.27, "hydrate_in_progress": false, "payload_elapsed_ms": 188.11, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1940: 2026-09-19T05:03:06.9622110Z 
+1941: 2026-09-19T05:03:06.9622918Z Running 1 test using 1 worker
+1942: 2026-09-19T05:03:06.9658099Z 
+1943: 2026-09-19T05:03:09.9789016Z 2026-09-19 05:03:09,977 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 287.42, "hydrate_in_progress": false, "payload_elapsed_ms": 165.55, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1944: 2026-09-19T05:03:12.7241872Z [TEST] FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release
+1945: 2026-09-19T05:03:12.7293013Z   [STEP] Set the reported release year on the complete source album
+1946: 2026-09-19T05:03:13.6018765Z 2026-09-19 05:03:13,600 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 735.56, "hydrate_in_progress": false, "payload_elapsed_ms": 441.6, "query": "", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1947: 2026-09-19T05:03:21.3471756Z 2026-09-19 05:03:21,339 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438", "artist": "\u0414\u0414\u0422", "file_count": 16, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\01. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 1.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\02. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 2.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\03. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 3.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\04. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 4.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\05. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 5.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\06. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 6.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\07. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 7.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\08. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 8.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\09. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 9.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\10. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 10.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\11. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 11.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\12. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 12.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\13. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 13.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\16. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16.mp3"]}
+1948: 2026-09-19T05:03:23.8509155Z 2026-09-19 05:03:23,849 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 682.95, "hydrate_in_progress": false, "payload_elapsed_ms": 393.63, "query": "", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1949: 2026-09-19T05:03:25.8200180Z   [PASS] Set the reported release year on the complete source album (13090 ms)
+1950: 2026-09-19T05:03:25.8203062Z   [STEP] Create a second durable release identity through the normal tag editor
+1951: 2026-09-19T05:03:28.0328964Z 2026-09-19 05:03:28,030 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438", "artist": "\u0414\u0414\u0422", "file_count": 3, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\16. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16.mp3"]}
+1952: 2026-09-19T05:03:29.3919204Z   [PASS] Create a second durable release identity through the normal tag editor (3572 ms)
+1953: 2026-09-19T05:03:29.3921764Z   [STEP] Create a numbering gap and a distinct missing-number problem
+1954: 2026-09-19T05:03:31.3477662Z 2026-09-19 05:03:31,345 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate", "artist": "\u0414\u0414\u0422", "file_count": 2, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3"]}
+1955: 2026-09-19T05:03:32.6891696Z   [PASS] Create a numbering gap and a distinct missing-number problem (3296 ms)
+1956: 2026-09-19T05:03:32.6900166Z   [STEP] Merge the split identity back and capture the complete immediate gallery
+1957: 2026-09-19T05:03:35.4256012Z 2026-09-19 05:03:35,423 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate", "artist": "\u0414\u0414\u0422", "file_count": 3, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\16. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16.mp3"]}
+1958: 2026-09-19T05:04:01.9391201Z   [PASS] Merge the split identity back and capture the complete immediate gallery (29249 ms)
+1959: 2026-09-19T05:04:01.9392516Z   [STEP] Show one 16-track release without a redundant Original tab
+1960: 2026-09-19T05:04:02.6347090Z   [PASS] Show one 16-track release without a redundant Original tab (654 ms)
+1961: 2026-09-19T05:04:02.6426234Z   [STEP] Retain the consolidated release in a fresh browser
+1962: 2026-09-19T05:04:03.6879328Z 2026-09-19 05:04:03,687 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 564.31, "hydrate_in_progress": false, "payload_elapsed_ms": 352.76, "query": "", "scan_in_progress": false, "selected_artist": "\u0414\u0414\u0422"}
+1963: 2026-09-19T05:04:22.7922896Z 2026-09-19 05:04:22,755 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438", "artist": "\u0414\u0414\u0422", "file_count": 16, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\01. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 1.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\02. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 2.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\03. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 3.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\04. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 4.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\05. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 5.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\06. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 6.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\07. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 7.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\08. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 8.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\09. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 9.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\10. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 10.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\11. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 11.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\12. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 12.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\13. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 13.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\16. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16.mp3"]}
+1964: 2026-09-19T05:04:24.8035517Z   [PASS] Retain the consolidated release in a fresh browser (22210 ms)
+1965: 2026-09-19T05:04:30.7884294Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+1966: 2026-09-19T05:04:32.2004866Z 2026-09-19 05:04:32,198 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1967: 2026-09-19T05:04:33.4883504Z 2026-09-19 05:04:33,486 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_readiness_metadata builder_version=local-relation-builder-v9 source_row_count=15042 duration_ms=1243.09 source_load=570.81 fingerprint=142.27 pure_build=420.70 family_link_replacement=6.31 snapshot_publication=1.64
+1968: 2026-09-19T05:04:35.0151436Z 2026-09-19 05:04:35,012 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 455.33, "hydrate_in_progress": false, "payload_elapsed_ms": 218.38, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1969: 2026-09-19T05:04:53.8951677Z   ok 1 [functional] › tests\e2e\specs\albumIdentityConsolidation.spec.js:51:1 › FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release @area:tag-edit (1.7m)
+1970: 2026-09-19T05:04:53.8954723Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"1491113ebf802316f48bfbb235ac86b4c1e0be1d215b0706edb89a2e6742155c","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1971: 2026-09-19T05:04:54.4687539Z 
+1972: 2026-09-19T05:04:54.4687561Z 
+1973: 2026-09-19T05:04:54.4687614Z 
+1974: 2026-09-19T05:04:54.4689644Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"1491113ebf802316f48bfbb235ac86b4c1e0be1d215b0706edb89a2e6742155c","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+1975: 2026-09-19T05:04:54.4691115Z   1 passed (1.8m)
+1976: 2026-09-19T05:04:54.9226141Z 
+1977: 2026-09-19T05:04:54.9227226Z === Playwright Summary ===
+1978: 2026-09-19T05:04:54.9228348Z [[32m✓[0m] albumIdentityConsolidation.spec
+1979: 2026-09-19T05:04:54.9229574Z   [[32m✓[0m] FTC-TAGS-021 and FTC-ALBUM-DETAILS-018 consolidate one logical release @area:tag-edit (1.7m)
+1980: 2026-09-19T05:04:54.9230115Z 
+1981: 2026-09-19T05:04:54.9230287Z Overall: 1/1 passed
+1982: 2026-09-19T05:05:00.1301441Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5200,"status":"completed","error":null,"ownerCount":0},{"port":5202,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+1983: 2026-09-19T05:05:01.8783194Z {"restored":16,"removed":0,"unchanged":1481}
+1984: 2026-09-19T05:05:22.2918363Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+1985: 2026-09-19T05:05:23.7109306Z 2026-09-19 05:05:23,708 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+1986: 2026-09-19T05:05:23.7112159Z 2026-09-19 05:05:23,708 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+1987: 2026-09-19T05:05:24.2395128Z 2026-09-19 05:05:24,238 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=490.17 source_load=161.38 fingerprint=68.70 pure_build=145.03 family_link_replacement=7.65 snapshot_publication=1.67
+1988: 2026-09-19T05:05:25.3755618Z 2026-09-19 05:05:25,374 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 424.04, "hydrate_in_progress": false, "payload_elapsed_ms": 167.73, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1989: 2026-09-19T05:05:49.7074253Z 
+1990: 2026-09-19T05:05:49.7075036Z Running 1 test using 1 worker
+1991: 2026-09-19T05:05:49.7106580Z 
+1992: 2026-09-19T05:05:52.8488945Z 2026-09-19 05:05:52,847 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 289.81, "hydrate_in_progress": false, "payload_elapsed_ms": 160.46, "query": "", "scan_in_progress": false, "selected_artist": ""}
+1993: 2026-09-19T05:05:55.4672386Z [TEST] FTC-UTIL-PROBLEMS-013 shows one logical album with exact scoped reasons and tracks
+1994: 2026-09-19T05:05:55.4697949Z   [STEP] Prepare the consolidated release year
+2051: 2026-09-19T05:08:29.4661557Z   [STEP] Repair the selected album through the approved detail-only mutation state
+2052: 2026-09-19T05:08:31.5904217Z 2026-09-19 05:08:31,586 [INFO] music_app: {"action": "Problem exclusion created", "migrated_legacy_row_keys": [], "row_keys": ["\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438::year::1988::problem-album::missing-cover-art"]}
+2053: 2026-09-19T05:08:33.4294965Z 2026-09-19 05:08:33,424 [INFO] music_app: {"action": "Tags edited", "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438", "artist": "\u0414\u0414\u0422", "file_count": 2, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\14. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14.mp3", "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\\u0414\u0414\u0422\\\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438\\15. \u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15.mp3"]}
+2054: 2026-09-19T05:08:35.7983104Z   [FAIL] Repair the selected album through the approved detail-only mutation state :: expect(received).toEqual(expected) // deep equality
+2055: 2026-09-19T05:08:35.7984553Z 
+2056: 2026-09-19T05:08:35.7985029Z - Expected  - 0
+2057: 2026-09-19T05:08:35.7985715Z + Received  + 1
+2058: 2026-09-19T05:08:35.7986201Z 
+2059: 2026-09-19T05:08:35.7986632Z   Object {
+2060: 2026-09-19T05:08:35.7987524Z     "key": "e2e rarity artist::two track rarity fixture",
+2061: 2026-09-19T05:08:35.7989039Z +   "meta": "E2E Rarity Artist · 2026",
+2062: 2026-09-19T05:08:35.7990349Z     "title": "Two Track Rarity Fixture",
+2063: 2026-09-19T05:08:35.7991216Z   } (6321 ms)
+2064: 2026-09-19T05:08:41.1789559Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+2065: 2026-09-19T05:08:42.4043302Z 2026-09-19 05:08:42,402 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2066: 2026-09-19T05:08:42.8872117Z 2026-09-19 05:08:42,884 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_readiness_metadata builder_version=local-relation-builder-v9 source_row_count=7454 duration_ms=446.60 source_load=136.34 fingerprint=58.39 pure_build=143.95 family_link_replacement=5.97 snapshot_publication=1.47
+2067: 2026-09-19T05:08:44.1634833Z 2026-09-19 05:08:44,161 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 493.63, "hydrate_in_progress": false, "payload_elapsed_ms": 225.84, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2068: 2026-09-19T05:09:09.5595690Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2069: 2026-09-19T05:09:09.5599326Z   x  1 [functional] › tests\e2e\specs\albumIdentityConsolidation.spec.js:331:1 › FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity @area:problematic-files @area:tag-edit (1.1m)
+2070: 2026-09-19T05:09:09.5631404Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"de5095335e14f39b3949853bec36999de3126ad95445cbc1a2d3eb26402755ca","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2071: 2026-09-19T05:09:10.2531823Z 
+2072: 2026-09-19T05:09:10.2532136Z 
+2073: 2026-09-19T05:09:10.2532586Z 
+2074: 2026-09-19T05:09:10.2536473Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"de5095335e14f39b3949853bec36999de3126ad95445cbc1a2d3eb26402755ca","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2075: 2026-09-19T05:09:10.2538685Z 
+2076: 2026-09-19T05:09:10.2540832Z   1) [functional] › tests\e2e\specs\albumIdentityConsolidation.spec.js:331:1 › FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity @area:problematic-files @area:tag-edit 
+2077: 2026-09-19T05:09:10.2543636Z 
+2078: 2026-09-19T05:09:10.2544256Z     Error: expect(received).toEqual(expected) // deep equality
+2079: 2026-09-19T05:09:10.2544964Z 
+2080: 2026-09-19T05:09:10.2545310Z     - Expected  - 0
+2081: 2026-09-19T05:09:10.2545987Z     + Received  + 1
+2082: 2026-09-19T05:09:10.2546427Z 
+2083: 2026-09-19T05:09:10.2546777Z       Object {
+2084: 2026-09-19T05:09:10.2547879Z         "key": "e2e rarity artist::two track rarity fixture",
+2085: 2026-09-19T05:09:10.2549969Z     +   "meta": "E2E Rarity Artist · 2026",
+2086: 2026-09-19T05:09:10.2550932Z         "title": "Two Track Rarity Fixture",
+2087: 2026-09-19T05:09:10.2551796Z       }
+2088: 2026-09-19T05:09:10.2552248Z 
+2089: 2026-09-19T05:09:10.2552963Z       392 |     const previousSelection = await utilityProblematicFilesActions
+2090: 2026-09-19T05:09:10.2555092Z       393 |       .waitForMutationRemovalAndPreviousSelection(mutationTarget);
+2091: 2026-09-19T05:09:10.2557266Z     > 394 |     expect(previousSelection).toEqual({
+2092: 2026-09-19T05:09:10.2558237Z           |                               ^
+2093: 2026-09-19T05:09:10.2559545Z       395 |       key: mutationTarget.previousKey,
+2094: 2026-09-19T05:09:10.2560667Z       396 |       title: mutationTarget.previousTitle,
+2095: 2026-09-19T05:09:10.2563053Z       397 |     });
+2096: 2026-09-19T05:09:10.2566494Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumIdentityConsolidation.spec.js:394:31
+2097: 2026-09-19T05:09:10.2569838Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2098: 2026-09-19T05:09:10.2572518Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\albumIdentityConsolidation.spec.js:357:3
+2099: 2026-09-19T05:09:10.2573523Z 
+2100: 2026-09-19T05:09:10.2574648Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2101: 2026-09-19T05:09:10.2576161Z     [TEST] FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity
+2102: 2026-09-19T05:09:10.2578490Z       [STEP] Prepare the consolidated release year
+2103: 2026-09-19T05:09:10.2579622Z       [PASS] Prepare the consolidated release year (12935 ms)
+2104: 2026-09-19T05:09:10.2580494Z       [STEP] Prepare a split release with two numbering problems
+2105: 2026-09-19T05:09:10.2581577Z       [PASS] Prepare a split release w...
+2106: 2026-09-19T05:09:10.2582677Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2107: 2026-09-19T05:09:10.2583261Z 
+2108: 2026-09-19T05:09:10.2584206Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2109: 2026-09-19T05:09:10.2585060Z     Error 1
+2110: 2026-09-19T05:09:10.2585694Z     Error: expect(received).toEqual(expected) // deep equality
+2111: 2026-09-19T05:09:10.2586361Z     
+2112: 2026-09-19T05:09:10.2586792Z     - Expected  - 0
+2113: 2026-09-19T05:09:10.2587233Z     + Received  + 1
+2114: 2026-09-19T05:09:10.2587665Z     
+2115: 2026-09-19T05:09:10.2588069Z       Object {
+2116: 2026-09-19T05:09:10.2588684Z         "key": "e2e rarity artist::two track rarity fixture",
+2117: 2026-09-19T05:09:10.2589356Z     +   "meta": "E2E Rarity Artist ...
+2118: 2026-09-19T05:09:10.2590381Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2119: 2026-09-19T05:09:10.2590972Z 
+2120: 2026-09-19T05:09:10.2591708Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2121: 2026-09-19T05:09:10.2594356Z     [2026-09-19T05:08:06.228Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5200/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-gallery-search-visual%5Cshared%5Cmedia%5C%D0%94%D0%94%D0%A2%5C%D0%A1%D0%BE%D0%BB%D1%8C%D0%BD%D0%B8%D0%BA%5Ccover.png&size=480&v=process-70e7a5994411c...
+2122: 2026-09-19T05:09:10.2596868Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2123: 2026-09-19T05:09:10.2597860Z 
+2124: 2026-09-19T05:09:10.2601367Z     Error Context: ..\..\_temp\functional-output-gallery-search-visual\wave-01-05-playwright-config-js\albumIdentityConsolidation-a7471--and-removes-stale-identity-functional\error-context.md
+2125: 2026-09-19T05:09:10.2602872Z 
+2126: 2026-09-19T05:09:10.2603688Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+2127: 2026-09-19T05:09:10.2606005Z     ..\..\_temp\functional-output-gallery-search-visual\wave-01-05-playwright-config-js\albumIdentityConsolidation-a7471--and-removes-stale-identity-functional\trace.zip
+2128: 2026-09-19T05:09:10.2607509Z     Usage:
+2129: 2026-09-19T05:09:10.2607754Z 
+2130: 2026-09-19T05:09:10.2609241Z         npx playwright show-trace ..\..\_temp\functional-output-gallery-search-visual\wave-01-05-playwright-config-js\albumIdentityConsolidation-a7471--and-removes-stale-identity-functional\trace.zip
+2131: 2026-09-19T05:09:10.2610721Z 
+2132: 2026-09-19T05:09:10.2611364Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2133: 2026-09-19T05:09:10.2611938Z 
+2134: 2026-09-19T05:09:10.2612133Z   1 failed
+2135: 2026-09-19T05:09:10.2614002Z     [functional] › tests\e2e\specs\albumIdentityConsolidation.spec.js:331:1 › FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity @area:problematic-files @area:tag-edit 
+2136: 2026-09-19T05:09:10.9503863Z 
+2137: 2026-09-19T05:09:10.9504546Z === Playwright Summary ===
+2138: 2026-09-19T05:09:10.9505976Z [31m[x][0m albumIdentityConsolidation.spec
+2139: 2026-09-19T05:09:10.9507760Z   [31m[x][0m FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity @area:problematic-files @area:tag-edit (1.1m)
+2140: 2026-09-19T05:09:10.9508883Z 
+2141: 2026-09-19T05:09:10.9509529Z Overall: 0/1 passed
+2142: 2026-09-19T05:09:10.9510099Z Failed tests:
+2143: 2026-09-19T05:09:10.9512255Z - albumIdentityConsolidation.spec > FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and removes stale identity @area:problematic-files @area:tag-edit (1.1m)
+2144: 2026-09-19T05:09:10.9515372Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+2145: 2026-09-19T05:09:16.3778447Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5200,"status":"completed","error":null,"ownerCount":0},{"port":5202,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+2146: 2026-09-19T05:09:18.1374996Z {"restored":16,"removed":0,"unchanged":1481}
+2147: 2026-09-19T05:09:38.4091195Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+2148: 2026-09-19T05:09:40.0230076Z 2026-09-19 05:09:40,020 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2149: 2026-09-19T05:09:40.0231705Z 2026-09-19 05:09:40,020 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2150: 2026-09-19T05:09:40.5083794Z 2026-09-19 05:09:40,506 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=450.30 source_load=135.45 fingerprint=59.56 pure_build=145.77 family_link_replacement=7.51 snapshot_publication=1.69
+2151: 2026-09-19T05:09:41.5777149Z 2026-09-19 05:09:41,575 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 370.99, "hydrate_in_progress": false, "payload_elapsed_ms": 162.57, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2152: 2026-09-19T05:10:08.3918514Z 
+2153: 2026-09-19T05:10:08.3919307Z Running 1 test using 1 worker
+2154: 2026-09-19T05:10:08.3955327Z 
+2155: 2026-09-19T05:10:11.7136320Z 2026-09-19 05:10:11,712 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 305.35, "hydrate_in_progress": false, "payload_elapsed_ms": 163.57, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2156: 2026-09-19T05:10:14.8247781Z [TEST] FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split
+2157: 2026-09-19T05:10:14.8277785Z   [STEP] Stage one album-only split through the visible Edit Tags controls
+2158: 2026-09-19T05:10:15.3100833Z 2026-09-19 05:10:15,308 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 304.43, "hydrate_in_progress": false, "payload_elapsed_ms": 174.34, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2159: 2026-09-19T05:10:18.7783381Z 2026-09-19 05:10:18,521 [INFO] music_app: {"action": "Postgres album search request started", "query": "Featured Signal Collection"}
+2160: 2026-09-19T05:10:18.7845352Z 2026-09-19 05:10:18,674 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 152.91, "query": "Featured Signal Collection", "selected_artist": "Various Artists"}
+2161: 2026-09-19T05:10:20.1413567Z   [PASS] Stage one album-only split through the visible Edit Tags controls (5312 ms)
+2162: 2026-09-19T05:10:20.1415073Z   [STEP] Keep source and destination server-owned credits before save completion
+2163: 2026-09-19T05:10:21.9846659Z 2026-09-19 05:10:21,982 [INFO] music_app: {"action": "Tags edited", "album": "Featured Signal Collection", "artist": "Various Artists", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\Various Artists\\Featured Signal Collection\\01 - Credit Signal 1.mp3"]}
+2164: 2026-09-19T05:10:23.9623351Z   [PASS] Keep source and destination server-owned credits before save completion (3821 ms)
+2165: 2026-09-19T05:10:23.9624759Z   [STEP] Retain the same credits after authoritative save completion
+2166: 2026-09-19T05:10:24.4270168Z 2026-09-19 05:10:24,306 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "full_view", "covers_in_progress": false, "elapsed_ms": 214.18, "hydrate_in_progress": false, "payload_elapsed_ms": 130.1, "query": "Featured Signal Collection", "scan_in_progress": false, "selected_artist": "Various Artists"}
+2167: 2026-09-19T05:10:26.5752581Z   [PASS] Retain the same credits after authoritative save completion (2613 ms)
+2168: 2026-09-19T05:10:28.2747123Z 2026-09-19 05:10:28,273 [INFO] music_app: {"action": "Tags edited", "album": "Featured Signal Collection Split Credit", "artist": "Solo Voice", "file_count": 1, "files": ["D:\\a\\_temp\\album-haven-e2e-functional-fixtures-gallery-search-visual\\shared\\media\\Various Artists\\Featured Signal Collection\\01 - Credit Signal 1.mp3"]}
+2169: 2026-09-19T05:10:28.8774072Z   ok 1 [functional] › tests\e2e\specs\albumTrackCredits.spec.js:132:1 › FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split @area:album-details (14.3s)
+2170: 2026-09-19T05:10:28.8978640Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"34cdd9b561a475efdc21d56572e10cf3d1f2b64753aad6c4658346091010dac2","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2171: 2026-09-19T05:10:28.9078519Z 
+2172: 2026-09-19T05:10:29.5849650Z 
+2173: 2026-09-19T05:10:29.5849676Z 
+2174: 2026-09-19T05:10:29.5851811Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"34cdd9b561a475efdc21d56572e10cf3d1f2b64753aad6c4658346091010dac2","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2175: 2026-09-19T05:10:29.5853562Z   1 passed (22.1s)
+2176: 2026-09-19T05:10:30.3485783Z 
+2177: 2026-09-19T05:10:30.3486519Z === Playwright Summary ===
+2178: 2026-09-19T05:10:30.3488027Z [[32m✓[0m] albumTrackCredits.spec
+2179: 2026-09-19T05:10:30.3489875Z   [[32m✓[0m] FTC-ALBUM-DETAILS-006 preserves mixed credits through an optimistic album-only split @area:album-details
+2180: 2026-09-19T05:10:30.3490869Z 
+2181: 2026-09-19T05:10:30.3491105Z Overall: 1/1 passed
+2182: 2026-09-19T05:10:35.4548919Z [playwright-wrapper-final-decision] {"wrapperExitCode":0,"attemptReturn":{"exitCode":0,"exitReason":"authoritative-pass"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":1},"passivePortDiagnostics":[{"port":5200,"status":"completed","error":null,"ownerCount":0},{"port":5202,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0,"listOnly":false},"exitReason":"authoritative-pass"}
+2183: 2026-09-19T05:10:37.1204487Z {"restored":1,"removed":0,"unchanged":1496}
+2184: 2026-09-19T05:10:56.7985600Z Album Haven production E2E app listening on http://127.0.0.1:5200 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:5202
+2185: 2026-09-19T05:10:58.2041518Z 2026-09-19 05:10:58,202 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2186: 2026-09-19T05:10:58.2043203Z 2026-09-19 05:10:58,202 [INFO] music_app: Legacy album exclusions migrated albums=1 removed_rules=18 created_rules=1
+2187: 2026-09-19T05:10:58.6835663Z 2026-09-19 05:10:58,682 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7438 duration_ms=441.59 source_load=137.09 fingerprint=57.46 pure_build=140.26 family_link_replacement=7.53 snapshot_publication=1.58
+2188: 2026-09-19T05:10:59.9174238Z 2026-09-19 05:10:59,916 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 403.42, "hydrate_in_progress": false, "payload_elapsed_ms": 164.12, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2189: 2026-09-19T05:11:25.9619072Z 
+2190: 2026-09-19T05:11:25.9620362Z Running 1 test using 1 worker
+2191: 2026-09-19T05:11:25.9652438Z 
+2192: 2026-09-19T05:11:29.3125472Z 2026-09-19 05:11:29,311 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 322.96, "hydrate_in_progress": false, "payload_elapsed_ms": 196.18, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2193: 2026-09-19T05:11:32.4271974Z [TEST] FTC-PLAYER-012 reopens a Various Artists album from player artwork after playing a credited track
+2194: 2026-09-19T05:11:32.4428015Z   [STEP] Start the Solo Voice track from the generated Various Artists album
+2195: 2026-09-19T05:11:32.8264211Z 2026-09-19 05:11:32,824 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 291.73, "hydrate_in_progress": false, "payload_elapsed_ms": 179.53, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2196: 2026-09-19T05:11:35.7908684Z 2026-09-19 05:11:35,603 [INFO] music_app: {"action": "Postgres album search request started", "query": "Featured Signal Collection"}
+2197: 2026-09-19T05:11:35.7916777Z 2026-09-19 05:11:35,740 [INFO] music_app: {"action": "View data request completed", "album_count": 1, "artist_count": 1, "elapsed_ms": 137.16, "query": "Featured Signal Collection", "selected_artist": "Various Artists"}
+2198: 2026-09-19T05:11:38.5794450Z   [PASS] Start the Solo Voice track from the generated Various Artists album (6155 ms)
+2199: 2026-09-19T05:11:38.5829482Z   [STEP] Close album details and reopen the same Various Artists album from player artwork
+2200: 2026-09-19T05:11:39.3253424Z   [PASS] Close album details and reopen the same Various Artists album from player artwork (751 ms)
+2201: 2026-09-19T05:11:39.3852315Z   ok 1 [functional] › tests\e2e\specs\albumTrackCredits.spec.js:219:1 › FTC-PLAYER-012 reopens a Various Artists album from player artwork after playing a credited track @area:playback (7.4s)
+2202: 2026-09-19T05:11:39.3912792Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"9722f0c3b84f72d16e0ce6ae06bc962e324993901a360dcabdd4d9026605a35b","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}
+2203: 2026-09-19T05:11:39.9819153Z 
+2204: 2026-09-19T05:11:39.9819210Z 
+2205: 2026-09-19T05:11:39.9819221Z 
+2206: 2026-09-19T05:11:39.9821198Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"9722f0c3b84f72d16e0ce6ae06bc962e324993901a360dcabdd4d9026605a35b","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}

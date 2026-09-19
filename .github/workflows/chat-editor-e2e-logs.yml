@@ -1,0 +1,36 @@
+name: Retain six completed E2E job logs
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-e2e-logs.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Preserve the exact logs listed in the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib,json,subprocess
+          from pathlib import Path
+          out=Path('.chat-editor/e2e-current')
+          manifest=json.loads((out/'manifest.json').read_text())
+          names=[]
+          for item in manifest['logs']:
+              data=subprocess.check_output(['gh','api','--allow-escape-sequences',f"repos/idanilovqa/AlbumHaven/actions/jobs/{item['job_id']}/logs"])
+              assert hashlib.sha256(data).hexdigest()==item['sha256']
+              path=out/f"{item['job_id']}.log";path.write_bytes(data);names.append(str(path))
+          subprocess.run(['git','add','-f','--',*names],check=True)
+          PY
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'checkpoint: retain all six complete E2E logs with verified digests'
+          git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch

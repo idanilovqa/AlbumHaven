@@ -1,0 +1,355 @@
+2026-09-19T08:02:48.9309414Z env:
+2026-09-19T08:02:48.9309688Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:48.9310083Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T08:02:48.9310380Z   ALBUM_HAVEN_FIXTURE_PROFILE: functional-core
+2026-09-19T08:02:48.9310846Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828
+2026-09-19T08:02:48.9311449Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828\media
+2026-09-19T08:02:48.9311871Z ##[endgroup]
+2026-09-19T08:02:49.1899772Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.2\x64
+2026-09-19T08:02:49.1908670Z (node:2836) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:02:49.1909682Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:02:49.1912874Z ##[group]Environment details
+2026-09-19T08:02:54.5013936Z node: v22.23.2
+2026-09-19T08:02:54.5014287Z npm: 10.9.8
+2026-09-19T08:02:54.5014499Z yarn: 1.22.22
+2026-09-19T08:02:54.5014937Z ##[endgroup]
+2026-09-19T08:02:54.5844243Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\22.23.2\x64\npm.cmd config get cache"
+2026-09-19T08:02:55.1242778Z C:\npm\cache
+2026-09-19T08:02:55.4579969Z Cache hit for: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T08:02:55.4701941Z (node:2836) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:02:55.9105598Z Received 3822098 of 3822098 (100.0%), 11.7 MBs/sec
+2026-09-19T08:02:55.9107290Z Cache Size: ~4 MB (3822098 B)
+2026-09-19T08:02:55.9132443Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/f047d5c6-f79d-40c1-b82d-194cd7693636/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T08:02:56.1031820Z Cache restored successfully
+2026-09-19T08:02:56.1045759Z Cache restored from key: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T08:02:56.1453881Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T08:02:56.1455253Z ##[group]Run actions/setup-python@v5
+2026-09-19T08:02:56.1455507Z with:
+2026-09-19T08:02:56.1455683Z   python-version: 3.11
+2026-09-19T08:02:56.1455879Z   cache: pip
+2026-09-19T08:02:56.1456081Z   cache-dependency-path: requirements.txt
+2026-09-19T08:02:56.1456343Z   check-latest: false
+2026-09-19T08:02:56.1458998Z   token: ***
+2026-09-19T08:02:56.1459196Z   update-environment: true
+2026-09-19T08:02:56.1459422Z   allow-prereleases: false
+2026-09-19T08:02:56.1459626Z   freethreaded: false
+2026-09-19T08:02:56.1459816Z env:
+2026-09-19T08:02:56.1460088Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:56.1460516Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T08:02:56.1460826Z   ALBUM_HAVEN_FIXTURE_PROFILE: functional-core
+2026-09-19T08:02:56.1461273Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828
+2026-09-19T08:02:56.1461891Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828\media
+2026-09-19T08:02:56.1462324Z ##[endgroup]
+2026-09-19T08:02:56.3065069Z ##[group]Installed versions
+2026-09-19T08:02:56.3330472Z (node:7156) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:02:56.3331934Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:02:56.3332845Z Successfully set up CPython (3.11.9)
+2026-09-19T08:02:56.3333576Z ##[endgroup]
+2026-09-19T08:02:58.9340343Z Cache hit for: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T08:02:58.9459783Z (node:7156) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:02:59.6663745Z Received 58149912 of 58149912 (100.0%), 94.2 MBs/sec
+2026-09-19T08:02:59.6667642Z Cache Size: ~55 MB (58149912 B)
+2026-09-19T08:02:59.6707766Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/2bbbf07d-adca-443a-9193-8c33ef9e58d7/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T08:03:00.4452729Z Cache restored successfully
+2026-09-19T08:03:00.4501160Z Cache restored from key: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T08:03:00.4831492Z ##[group]Run npm ci
+2026-09-19T08:03:00.4831787Z npm ci
+2026-09-19T08:03:00.4902774Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T08:03:00.4903399Z env:
+2026-09-19T08:03:00.4903745Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:03:00.4904166Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T08:03:00.4904493Z   ALBUM_HAVEN_FIXTURE_PROFILE: functional-core
+2026-09-19T08:03:00.4904958Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828
+2026-09-19T08:03:00.4905583Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-db92ea22573b4ad39cd3fb527c64b828\media
+2026-09-19T08:03:00.4906116Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:03:00.4906581Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T08:03:00.4907081Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:03:00.4907487Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:03:00.4907895Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:03:00.4908211Z ##[endgroup]
+2026-09-19T08:03:03.5091585Z 
+2026-09-19T08:03:03.5092340Z added 3 packages, and audited 4 packages in 2s
+2026-09-19T08:03:03.5101406Z 
+2026-09-19T08:03:03.5101779Z found 0 vulnerabilities
+2026-09-19T08:03:04.6768071Z ##[group]Run python -m pip install --upgrade pip
+2026-09-19T08:03:04.6768540Z python -m pip install --upgrade pip
+2026-09-19T08:03:04.6768908Z python -m pip install -r requirements.txt
+2026-09-19T08:06:36.5819114Z 
+2026-09-19T08:06:36.5819704Z Running 1 test using 1 worker
+2026-09-19T08:06:36.5851067Z 
+2026-09-19T08:06:39.5627836Z 2026-09-19 08:06:39,561 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 286.78, "hydrate_in_progress": false, "payload_elapsed_ms": 154.68, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-19T08:06:42.1478373Z [TEST] FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload
+2026-09-19T08:06:42.1535650Z   [STEP] Apply an album exclusion optimistically over matching legacy file-field rules
+2026-09-19T08:06:42.5785890Z 2026-09-19 08:06:42,577 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 263.13, "hydrate_in_progress": false, "payload_elapsed_ms": 149.92, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-19T08:06:47.2866411Z 2026-09-19 08:06:47,283 [INFO] music_app: {"action": "Problem exclusion reverted", "row_key": "generated problem fixture::?::problem-album::undecoded-characters"}
+2026-09-19T08:06:49.9533551Z   [FAIL] Apply an album exclusion optimistically over matching legacy file-field rules :: Expected values to be strictly deep-equal:
+2026-09-19T08:06:49.9534905Z + actual - expected
+2026-09-19T08:06:49.9535752Z 
+2026-09-19T08:06:49.9536085Z   [
+2026-09-19T08:06:49.9536554Z     {
+2026-09-19T08:06:49.9537976Z -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\01 - Track 1.mp3',
+2026-09-19T08:06:49.9545195Z -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\01 - Track 1.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:49.9547346Z -     scope: 'file'
+2026-09-19T08:06:49.9547893Z -   },
+2026-09-19T08:06:49.9548394Z -   {
+2026-09-19T08:06:49.9549822Z -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\02 - Track 2.mp3',
+2026-09-19T08:06:49.9552849Z -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\02 - Track 2.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:49.9582169Z -     scope: 'file'
+2026-09-19T08:06:49.9663890Z -   },
+2026-09-19T08:06:49.9665456Z -   {
+2026-09-19T08:06:49.9670214Z -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\03 - Track 3.mp3',
+2026-09-19T08:06:49.9672813Z -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\03 - Track 3.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:49.9675240Z -     scope: 'file'
+2026-09-19T08:06:49.9675642Z -   },
+2026-09-19T08:06:49.9676111Z -   {
+2026-09-19T08:06:49.9678928Z -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\04 - Track 4.mp3',
+2026-09-19T08:06:49.9681650Z -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\04 - Track 4.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:49.9789817Z -     scope: 'file'
+2026-09-19T08:06:49.9791319Z -   },
+2026-09-19T08:06:49.9791866Z -   {
+2026-09-19T08:06:49.9793452Z -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\05 - Track 5.mp3',
+2026-09-19T08:06:49.9796247Z -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\05 - Track 5.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:49.9798336Z -     scope: 'file'
+2026-09-19T08:06:59.0773489Z   x  1 [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:189:1 › FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files (15.8s)
+2026-09-19T08:06:59.0776125Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:06:59.0778979Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"34fc81c3377065791b9f922b364009b0f8af0c40c3d264342ff1735bef29c52e","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:06:59.6993559Z 
+2026-09-19T08:06:59.6993583Z 
+2026-09-19T08:06:59.6993614Z 
+2026-09-19T08:06:59.6995584Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"34fc81c3377065791b9f922b364009b0f8af0c40c3d264342ff1735bef29c52e","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:06:59.6997184Z 
+2026-09-19T08:06:59.6998435Z   1) [functional] › tests\e2e\specs\problematicFileNavigation.spec.js:189:1 › FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload @area:problematic-files 
+2026-09-19T08:06:59.6999184Z 
+2026-09-19T08:06:59.6999406Z     AssertionError: Expected values to be strictly deep-equal:
+2026-09-19T08:06:59.6999784Z     + actual - expected
+2026-09-19T08:06:59.6999951Z 
+2026-09-19T08:06:59.7000035Z       [
+2026-09-19T08:06:59.7000225Z         {
+2026-09-19T08:06:59.7000898Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\01 - Track 1.mp3',
+2026-09-19T08:06:59.7002205Z     -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\01 - Track 1.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:59.7003351Z     -     scope: 'file'
+2026-09-19T08:06:59.7004130Z     -   },
+2026-09-19T08:06:59.7004507Z     -   {
+2026-09-19T08:06:59.7005952Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\02 - Track 2.mp3',
+2026-09-19T08:06:59.7008927Z     -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\02 - Track 2.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:59.7011339Z     -     scope: 'file'
+2026-09-19T08:06:59.7011769Z     -   },
+2026-09-19T08:06:59.7012079Z     -   {
+2026-09-19T08:06:59.7013241Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\03 - Track 3.mp3',
+2026-09-19T08:06:59.7015844Z     -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\03 - Track 3.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:59.7017309Z     -     scope: 'file'
+2026-09-19T08:06:59.7017668Z     -   },
+2026-09-19T08:06:59.7017956Z     -   {
+2026-09-19T08:06:59.7019453Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\04 - Track 4.mp3',
+2026-09-19T08:06:59.7020866Z     -     row_key: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\04 - Track 4.mp3::problem-file::undecoded-characters',
+2026-09-19T08:06:59.7021708Z     -     scope: 'file'
+2026-09-19T08:06:59.7021937Z     -   },
+2026-09-19T08:06:59.7022122Z     -   {
+2026-09-19T08:06:59.7022788Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\05 - Track 5.mp3',
+2026-09-19T08:06:59.7124108Z         at UtilityProblematicFilesActions.beginConfirmExclusion (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityProblematicFilesActions.js:715:10)
+2026-09-19T08:06:59.7125392Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:265:30
+2026-09-19T08:06:59.7126872Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2026-09-19T08:06:59.7127547Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\problematicFileNavigation.spec.js:204:3
+2026-09-19T08:06:59.7127921Z 
+2026-09-19T08:06:59.7128532Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2026-09-19T08:06:59.7129229Z     [TEST] FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and reload
+2026-09-19T08:06:59.7130389Z       [STEP] Apply an album exclusion optimistically over matching legacy file-field rules
+2026-09-19T08:06:59.7131243Z       [FAIL] Apply an album exclusion optimistically over matching legacy file-field rules :: Expected values to be strictly deep-e...
+2026-09-19T08:06:59.7132371Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T08:06:59.7162953Z 
+2026-09-19T08:06:59.7172428Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2026-09-19T08:06:59.7174315Z     Error 1
+2026-09-19T08:06:59.7174908Z     AssertionError: Expected values to be strictly deep-equal:
+2026-09-19T08:06:59.7175574Z     + actual - expected
+2026-09-19T08:06:59.7175957Z     
+2026-09-19T08:06:59.7176244Z       [
+2026-09-19T08:06:59.7176536Z         {
+2026-09-19T08:06:59.7177708Z     -     path: 'D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Generated Problem Fixture\\_\\01 - Track 1.mp3',
+2026-09-19T08:06:59.7179173Z     -    ...
+2026-09-19T08:06:59.7182115Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T08:06:59.7182710Z 
+2026-09-19T08:06:59.7183457Z     attachment #4: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2026-09-19T08:06:59.7190960Z     [2026-09-19T08:06:45.345Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:5500/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-e2e-functional-fixtures-playback-utilities%5Cshared%5Cmedia%5CProgressive%20Projects%5CFlower%20Kings%20Family%5CAgents%20Of%20Mercy%5CFunctional%20Fixture%20Album%20329%5Cc...
+2026-09-19T08:06:59.7195202Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T08:06:59.7195803Z 
+2026-09-19T08:06:59.7197265Z     Error Context: ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\error-context.md
+2026-09-19T08:06:59.7198749Z 
+2026-09-19T08:06:59.7199538Z     attachment #7: trace (application/zip) ─────────────────────────────────────────────────────────
+2026-09-19T08:06:59.7201476Z     ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\trace.zip
+2026-09-19T08:06:59.7207404Z     Usage:
+2026-09-19T08:06:59.7207615Z 
+2026-09-19T08:06:59.7209108Z         npx playwright show-trace ..\..\_temp\functional-output-playback-utilities\wave-01-02-playwright-config-js\problematicFileNavigation--00ba5-stic-persistence-and-reload-functional\trace.zip
+2026-09-19T08:06:59.7210793Z 
+2026-09-19T08:06:59.7212332Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T08:06:59.7212890Z 
+2026-09-19T08:09:55.4415642Z   [PASS] Pause and resume the same bottom-player track with the app-body Space shortcut (1306 ms)
+2026-09-19T08:09:55.4416594Z   [STEP] Reload with the full track duration and keep loop editing inactive
+2026-09-19T08:09:55.9477012Z 2026-09-19 08:09:55,946 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 344.06, "hydrate_in_progress": false, "payload_elapsed_ms": 232.89, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-19T08:09:59.9160140Z   [PASS] Reload with the full track duration and keep loop editing inactive (4474 ms)
+2026-09-19T08:09:59.9162282Z   [STEP] Use the compact bottom-player scissors, shared range, cancellation, and naming workflow
+2026-09-19T08:10:13.8035663Z 2026-09-19 08:10:13,802 [INFO] music_app: {"action": "Loop created", "album": "Signed Scrobble Journey", "artist": "Album Haven Last.fm Fixture", "loop_id": "2a4036523a75480a94c081053eb70b1e", "name": "Warmup Loop", "source_path": "D:\\a\\_temp\\album-haven-e2e-functional-fixtures-playback-utilities\\shared\\media\\Album Haven Last.fm Fixture\\Signed Scrobble Journey\\21 - Track 21.wav"}
+2026-09-19T08:10:14.0027198Z   [PASS] Use the compact bottom-player scissors, shared range, cancellation, and naming workflow (14087 ms)
+2026-09-19T08:10:14.0028529Z   [STEP] Open Utility Loops and confirm the first loop plays back
+2026-09-19T08:11:19.3545486Z   [FAIL] Open Utility Loops and confirm the first loop plays back :: page.waitForFunction: Timeout 60000ms exceeded. (65350 ms)
+2026-09-19T08:11:27.7325526Z   x  1 [functional] › tests\e2e\specs\loops.functional.spec.js:184:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops (1.6m)
+2026-09-19T08:11:27.7329456Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:11:27.7332297Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"09deb4e4717a7e32049e03bb99e811a6699930916233641c80af1abe18d61d16","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:11:29.5488253Z 
+2026-09-19T08:11:29.5488279Z 
+2026-09-19T08:11:29.5488288Z 
+2026-09-19T08:11:29.5490136Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"09deb4e4717a7e32049e03bb99e811a6699930916233641c80af1abe18d61d16","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T08:11:29.5491142Z 
+2026-09-19T08:11:29.5492770Z   1) [functional] › tests\e2e\specs\loops.functional.spec.js:184:1 › FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track @area:loops 
+2026-09-19T08:11:29.5493967Z 
+2026-09-19T08:11:29.5494264Z     TimeoutError: page.waitForFunction: Timeout 60000ms exceeded.
+2026-09-19T08:11:29.5494610Z 
+2026-09-19T08:11:29.5494785Z        at ..\poms\basePage.js:71
+2026-09-19T08:11:29.5495014Z 
+2026-09-19T08:11:29.5495149Z       69 |
+2026-09-19T08:11:29.5495615Z       70 |   async waitForPageCondition(callback, options = {}, arg = null) {
+2026-09-19T08:11:29.5496220Z     > 71 |     await this.page.waitForFunction(callback, arg, options);
+2026-09-19T08:11:29.5496712Z          |                     ^
+2026-09-19T08:11:29.5497050Z       72 |   }
+2026-09-19T08:11:29.5497339Z       73 |
+2026-09-19T08:11:29.5497699Z       74 |   async readProductionBootstrapPayload() {
+2026-09-19T08:11:29.5498454Z         at GlobalPlayer.waitForPageCondition (D:\a\AlbumHaven\AlbumHaven\tests\e2e\poms\basePage.js:71:21)
+2026-09-19T08:11:29.5499733Z         at GlobalPlayerActions.waitForPlaybackState (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\globalPlayerActions.js:185:29)
+2026-09-19T08:11:29.5500676Z         at Object.afterSpace (D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:562:45)
+2026-09-19T08:11:29.5501651Z         at UtilityLoopsActions.pressSpaceBeforeLoopOwnership (D:\a\AlbumHaven\AlbumHaven\tests\e2e\actions\utilityLoopsActions.js:154:29)
+2026-09-19T08:11:29.5502589Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:561:5
+2026-09-19T08:11:29.5503450Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2026-09-19T08:11:29.5504091Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\specs\loops.functional.spec.js:481:3
+2026-09-19T08:11:29.5504803Z 
+2026-09-19T08:11:29.5505335Z     attachment #1: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2026-09-19T08:11:29.5507032Z     [TEST] FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track
+2026-09-19T08:11:29.5508599Z       [STEP] Open the fake-data gallery and wait for the initial view to settle
+2026-09-19T08:11:29.5509098Z       [PASS] Op...
+2026-09-19T08:11:29.5509938Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T08:11:29.5510301Z 
+2026-09-19T08:11:29.5510866Z     attachment #3: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2026-09-19T08:59:18.5369976Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5370556Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5371300Z   DATABASE_APP_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5372072Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5373125Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5373989Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5374788Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:18.5375310Z ##[endgroup]
+2026-09-19T08:59:18.7340930Z (node:9148) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:59:18.7341760Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:59:18.7390752Z With the provided path, there will be 1 file uploaded
+2026-09-19T08:59:18.7396321Z Artifact name is valid!
+2026-09-19T08:59:18.7398311Z Root directory input is valid!
+2026-09-19T08:59:19.0286461Z Beginning upload of artifact content to blob storage
+2026-09-19T08:59:19.0488729Z (node:9148) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:59:19.1628688Z Uploaded bytes 545
+2026-09-19T08:59:19.2015934Z Finished uploading artifact content to blob storage!
+2026-09-19T08:59:19.2016965Z SHA256 digest of uploaded artifact zip is a76362673b01d9cc55603bc5818f2b7dccb9bfd88b530f889ec36d215cada8c1
+2026-09-19T08:59:19.2019207Z Finalizing artifact upload
+2026-09-19T08:59:19.4259571Z Artifact foundation-versions-functional-playback-utilities-2.zip successfully finalized. Artifact ID 10581083013
+2026-09-19T08:59:19.4261468Z Artifact foundation-versions-functional-playback-utilities-2 has been successfully uploaded! Final size is 545 bytes. Artifact ID is 10581083013
+2026-09-19T08:59:19.4271673Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35430873883/artifacts/10581083013
+2026-09-19T08:59:19.4587775Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T08:59:19.4589428Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T08:59:19.4589721Z with:
+2026-09-19T08:59:19.4590148Z   name: functional-blob-playback-utilities-2
+2026-09-19T08:59:19.4590536Z   path: D:\a\_temp\functional-blobs-playback-utilities
+2026-09-19T08:59:19.4590874Z   if-no-files-found: error
+2026-09-19T08:59:19.4591108Z   retention-days: 14
+2026-09-19T08:59:19.4591326Z   compression-level: 6
+2026-09-19T08:59:19.4591543Z   overwrite: false
+2026-09-19T08:59:19.4591758Z   include-hidden-files: false
+2026-09-19T08:59:19.4591990Z env:
+2026-09-19T08:59:19.4592286Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:59:19.4592736Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T08:59:19.4593066Z   ALBUM_HAVEN_FIXTURE_PROFILE: functional-core
+2026-09-19T08:59:19.4593574Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-e2e-functional-fixtures-playback-utilities\shared
+2026-09-19T08:59:19.4594303Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-e2e-functional-fixtures-playback-utilities\shared\media
+2026-09-19T08:59:19.4594884Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:59:19.4595348Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T08:59:19.4595804Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:59:19.4596224Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:59:19.4598980Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4599571Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4600327Z   DATABASE_APP_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4601069Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4601905Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4602759Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4603560Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:19.4604081Z ##[endgroup]
+2026-09-19T08:59:19.6543415Z (node:8836) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:59:19.6544233Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:59:19.6715904Z With the provided path, there will be 34 files uploaded
+2026-09-19T08:59:19.6724889Z Artifact name is valid!
+2026-09-19T08:59:19.6726678Z Root directory input is valid!
+2026-09-19T08:59:19.9691817Z Beginning upload of artifact content to blob storage
+2026-09-19T08:59:20.2487046Z (node:8836) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:59:20.7201761Z Uploaded bytes 8388608
+2026-09-19T08:59:20.9439698Z Uploaded bytes 16777216
+2026-09-19T08:59:21.0240699Z Uploaded bytes 25165824
+2026-09-19T08:59:21.2437657Z Uploaded bytes 33554432
+2026-09-19T08:59:21.5430714Z Uploaded bytes 41943040
+2026-09-19T08:59:21.6810817Z Uploaded bytes 42544275
+2026-09-19T08:59:21.7220433Z Finished uploading artifact content to blob storage!
+2026-09-19T08:59:21.7224674Z SHA256 digest of uploaded artifact zip is 0268b28cde212c4fe9753b645a56f6a528ad72cda998d8dba335332673a8d57b
+2026-09-19T08:59:21.7227209Z Finalizing artifact upload
+2026-09-19T08:59:21.9411544Z Artifact functional-blob-playback-utilities-2.zip successfully finalized. Artifact ID 10582290875
+2026-09-19T08:59:21.9413016Z Artifact functional-blob-playback-utilities-2 has been successfully uploaded! Final size is 42544275 bytes. Artifact ID is 10582290875
+2026-09-19T08:59:21.9425429Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35430873883/artifacts/10582290875
+2026-09-19T08:59:21.9748437Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T08:59:21.9749847Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T08:59:21.9750136Z with:
+2026-09-19T08:59:21.9750383Z   name: functional-debug-playback-utilities-2
+2026-09-19T08:59:21.9750765Z   path: D:\a\_temp\functional-output-playback-utilities
+2026-09-19T08:59:21.9751108Z   if-no-files-found: error
+2026-09-19T08:59:21.9751350Z   retention-days: 7
+2026-09-19T08:59:21.9751575Z   compression-level: 6
+2026-09-19T08:59:21.9751802Z   overwrite: false
+2026-09-19T08:59:21.9752022Z   include-hidden-files: false
+2026-09-19T08:59:21.9752259Z env:
+2026-09-19T08:59:21.9752562Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:59:21.9753059Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T08:59:21.9753403Z   ALBUM_HAVEN_FIXTURE_PROFILE: functional-core
+2026-09-19T08:59:21.9753926Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-e2e-functional-fixtures-playback-utilities\shared
+2026-09-19T08:59:21.9759409Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9760010Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9760786Z   DATABASE_APP_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9761541Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9762387Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9763470Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9764290Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_f_35430873883_2_3@127.0.0.1/album_haven_ci_f_35430873883_2_3
+2026-09-19T08:59:21.9764822Z ##[endgroup]
+2026-09-19T08:59:22.1687639Z (node:5928) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:59:22.1688848Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:59:22.2028320Z With the provided path, there will be 4 files uploaded
+2026-09-19T08:59:22.2033827Z Artifact name is valid!
+2026-09-19T08:59:22.2035095Z Root directory input is valid!
+2026-09-19T08:59:22.5043801Z Beginning upload of artifact content to blob storage
+2026-09-19T08:59:22.7859570Z (node:5928) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:59:23.2858032Z Uploaded bytes 8388608
+2026-09-19T08:59:23.5226514Z Uploaded bytes 16777216
+2026-09-19T08:59:23.5503646Z Uploaded bytes 25165824
+2026-09-19T08:59:23.8395893Z Uploaded bytes 33554432
+2026-09-19T08:59:23.9836140Z Uploaded bytes 39494769
+2026-09-19T08:59:24.0220289Z Finished uploading artifact content to blob storage!
+2026-09-19T08:59:24.0224615Z SHA256 digest of uploaded artifact zip is 676d952dbba6252c53a5a71acb610daac5113eb5d3b4168a881807ec02b47282
+2026-09-19T08:59:24.0227215Z Finalizing artifact upload
+2026-09-19T08:59:24.2399953Z Artifact functional-debug-playback-utilities-2.zip successfully finalized. Artifact ID 10582100955
+2026-09-19T08:59:24.2401609Z Artifact functional-debug-playback-utilities-2 has been successfully uploaded! Final size is 39494769 bytes. Artifact ID is 10582100955
+2026-09-19T08:59:24.2415623Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35430873883/artifacts/10582100955
+2026-09-19T08:59:24.2788670Z Post job cleanup.
+2026-09-19T08:59:24.4757697Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T08:59:24.5034876Z git version 2.55.0.windows.5
+2026-09-19T08:59:24.5101050Z Temporarily overriding HOME='D:\a\_temp\c90f012b-5858-405d-b179-6ad1aebf41eb' before making global git config changes
+2026-09-19T08:59:24.5102116Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T08:59:24.5113104Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven\.trusted-ci
+2026-09-19T08:59:24.5426622Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T08:59:24.5775864Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T08:59:25.1269664Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T08:59:25.1558351Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T08:59:25.6750794Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T08:59:25.7039601Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T08:59:26.2971787Z Post job cleanup.
+2026-09-19T08:59:26.4942058Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T08:59:26.5217011Z git version 2.55.0.windows.5
+2026-09-19T08:59:26.5280736Z Temporarily overriding HOME='D:\a\_temp\ab059c76-9458-470c-b437-a22f465d7a3a' before making global git config changes

@@ -1,0 +1,560 @@
+2026-09-19T08:02:38.1886275Z   cache-dependency-path: package-lock.json
+2026-09-19T08:02:38.1886605Z   always-auth: false
+2026-09-19T08:02:38.1886847Z   check-latest: false
+2026-09-19T08:02:38.1889780Z   token: ***
+2026-09-19T08:02:38.1889992Z env:
+2026-09-19T08:02:38.1890326Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:38.1890759Z ##[endgroup]
+2026-09-19T08:02:38.3999021Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.2\x64
+2026-09-19T08:02:38.4006589Z (node:7692) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:02:38.4007758Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:02:38.4010981Z ##[group]Environment details
+2026-09-19T08:02:43.9662970Z node: v22.23.2
+2026-09-19T08:02:43.9663371Z npm: 10.9.8
+2026-09-19T08:02:43.9663669Z yarn: 1.22.22
+2026-09-19T08:02:43.9665142Z ##[endgroup]
+2026-09-19T08:02:44.0550625Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\22.23.2\x64\npm.cmd config get cache"
+2026-09-19T08:02:44.6420199Z C:\npm\cache
+2026-09-19T08:02:44.9072155Z Cache hit for: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T08:02:44.9196072Z (node:7692) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:02:45.0659914Z Received 3822098 of 3822098 (100.0%), 34.7 MBs/sec
+2026-09-19T08:02:45.0662434Z Cache Size: ~4 MB (3822098 B)
+2026-09-19T08:02:45.0726642Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/190426ed-7f2b-4f04-9e0b-5949db87fc3a/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T08:02:45.2943275Z Cache restored successfully
+2026-09-19T08:02:45.2956218Z Cache restored from key: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T08:02:45.3300490Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T08:02:45.3301884Z ##[group]Run actions/setup-python@v5
+2026-09-19T08:02:45.3302148Z with:
+2026-09-19T08:02:45.3302341Z   python-version: 3.11
+2026-09-19T08:02:45.3302553Z   cache: pip
+2026-09-19T08:02:45.3302769Z   cache-dependency-path: requirements.txt
+2026-09-19T08:02:45.3303045Z   check-latest: false
+2026-09-19T08:02:45.3305464Z   token: ***
+2026-09-19T08:02:45.3305675Z   update-environment: true
+2026-09-19T08:02:45.3305913Z   allow-prereleases: false
+2026-09-19T08:02:45.3306137Z   freethreaded: false
+2026-09-19T08:02:45.3306329Z env:
+2026-09-19T08:02:45.3306634Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:45.3307024Z ##[endgroup]
+2026-09-19T08:02:45.4928368Z ##[group]Installed versions
+2026-09-19T08:02:45.5222436Z (node:9708) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:02:45.5223473Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:02:45.5224054Z Successfully set up CPython (3.11.9)
+2026-09-19T08:02:45.5224543Z ##[endgroup]
+2026-09-19T08:02:48.5012365Z Cache hit for: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T08:02:48.5137021Z (node:9708) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:02:48.9383464Z Received 58149912 of 58149912 (100.0%), 144.0 MBs/sec
+2026-09-19T08:02:48.9385596Z Cache Size: ~55 MB (58149912 B)
+2026-09-19T08:02:48.9412919Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/65c99cfa-f62b-4046-8f79-802e0b8feca5/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T08:02:49.8732290Z Cache restored successfully
+2026-09-19T08:02:49.8775612Z Cache restored from key: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T08:02:49.9142844Z ##[group]Run npm ci
+2026-09-19T08:02:49.9143185Z npm ci
+2026-09-19T08:02:49.9926009Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T08:02:49.9926459Z env:
+2026-09-19T08:02:49.9926841Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:49.9927418Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:02:49.9928371Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T08:02:49.9929494Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:02:49.9930010Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:02:49.9930517Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:02:49.9930909Z ##[endgroup]
+2026-09-19T08:02:53.2217184Z 
+2026-09-19T08:02:53.2218062Z added 3 packages, and audited 4 packages in 2s
+2026-09-19T08:02:53.2227181Z 
+2026-09-19T08:02:53.2227848Z found 0 vulnerabilities
+2026-09-19T08:02:55.0801300Z ##[group]Run python -m pip install --upgrade pip
+2026-09-19T08:02:55.0802212Z python -m pip install --upgrade pip
+2026-09-19T08:02:55.0802775Z python -m pip install -r requirements.txt
+2026-09-19T08:02:55.0877316Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T08:02:55.0877720Z env:
+2026-09-19T08:02:55.0878068Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T08:02:55.0878582Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T08:04:08.0184421Z   ...
+2026-09-19T08:04:08.0185167Z # Subtest: idle-memory fixture uses the owner-approved shared local and CI limits
+2026-09-19T08:04:08.0185944Z ok 142 - idle-memory fixture uses the owner-approved shared local and CI limits
+2026-09-19T08:04:08.0186355Z   ---
+2026-09-19T08:04:08.0186579Z   duration_ms: 0.2698
+2026-09-19T08:04:08.0186812Z   type: 'test'
+2026-09-19T08:04:08.0187011Z   ...
+2026-09-19T08:04:08.0199789Z # Subtest: read-only inventory command reports complete discovery and ownership totals
+2026-09-19T08:04:08.0204309Z not ok 143 - read-only inventory command reports complete discovery and ownership totals
+2026-09-19T08:04:08.0205083Z   ---
+2026-09-19T08:04:08.0205363Z   duration_ms: 13711.9027
+2026-09-19T08:04:08.0205617Z   type: 'test'
+2026-09-19T08:04:08.0206085Z   location: 'D:\\a\\AlbumHaven\\AlbumHaven\\tests\\js\\ci-fixture-data-contracts.test.js:689:1'
+2026-09-19T08:04:08.0206603Z   failureType: 'testCodeFailure'
+2026-09-19T08:04:08.0206882Z   error: |-
+2026-09-19T08:04:08.0207150Z     Expected values to be strictly deep-equal:
+2026-09-19T08:04:08.0207491Z     + actual - expected
+2026-09-19T08:04:08.0207717Z     
+2026-09-19T08:04:08.0207900Z       {
+2026-09-19T08:04:08.0208131Z         browserFunctional: 113,
+2026-09-19T08:04:08.0208395Z     +   component: 68,
+2026-09-19T08:04:08.0208627Z     -   component: 67,
+2026-09-19T08:04:08.0208859Z         performance: 26,
+2026-09-19T08:04:08.0209101Z     +   total: 207
+2026-09-19T08:04:08.0209316Z     -   total: 206
+2026-09-19T08:04:08.0209573Z       }
+2026-09-19T08:04:08.0209898Z     
+2026-09-19T08:04:08.0210257Z   code: 'ERR_ASSERTION'
+2026-09-19T08:04:08.0210715Z   name: 'AssertionError'
+2026-09-19T08:04:08.0211152Z   expected:
+2026-09-19T08:04:08.0211535Z     browserFunctional: 113
+2026-09-19T08:04:08.0212000Z     component: 67
+2026-09-19T08:04:08.0212423Z     performance: 26
+2026-09-19T08:04:08.0212825Z     total: 206
+2026-09-19T08:04:08.0213211Z   actual:
+2026-09-19T08:04:08.0213596Z     browserFunctional: 113
+2026-09-19T08:04:08.0213970Z     component: 68
+2026-09-19T08:04:08.0214190Z     performance: 26
+2026-09-19T08:04:08.0214439Z     total: 207
+2026-09-19T08:04:08.0214664Z   operator: 'deepStrictEqual'
+2026-09-19T08:04:08.0214912Z   stack: |-
+2026-09-19T08:04:08.0215406Z     TestContext.<anonymous> (D:\a\AlbumHaven\AlbumHaven\tests\js\ci-fixture-data-contracts.test.js:697:10)
+2026-09-19T08:04:37.8860785Z   type: 'test'
+2026-09-19T08:04:37.8861309Z   ...
+2026-09-19T08:04:37.8862310Z # Subtest: notification text selection ends inside the final text glyph instead of the block boundary
+2026-09-19T08:04:37.8863112Z ok 222 - notification text selection ends inside the final text glyph instead of the block boundary
+2026-09-19T08:04:37.8863599Z   ---
+2026-09-19T08:04:37.8863810Z   duration_ms: 0.4471
+2026-09-19T08:04:37.8864036Z   type: 'test'
+2026-09-19T08:04:37.8864239Z   ...
+2026-09-19T08:04:38.2518768Z # (node:9820) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/ddt-studio-records-fixture.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:04:38.2520849Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:04:38.2522533Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:04:38.2523951Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:04:38.2547466Z # Subtest: restores renamed physical album tags together with the original mixed years and track numbers
+2026-09-19T08:04:38.2548992Z ok 223 - restores renamed physical album tags together with the original mixed years and track numbers
+2026-09-19T08:04:38.2550285Z   ---
+2026-09-19T08:04:38.2550674Z   duration_ms: 272.4359
+2026-09-19T08:04:38.2551104Z   type: 'test'
+2026-09-19T08:04:38.2551472Z   ...
+2026-09-19T08:04:38.2555663Z # Subtest: restores the exact mixed-year Studio Records fixture through guarded helpers
+2026-09-19T08:04:38.2557097Z ok 224 - restores the exact mixed-year Studio Records fixture through guarded helpers
+2026-09-19T08:04:38.2557897Z   ---
+2026-09-19T08:04:38.2558258Z   duration_ms: 3.5112
+2026-09-19T08:04:38.2558662Z   type: 'test'
+2026-09-19T08:04:38.2559017Z   ...
+2026-09-19T08:04:38.2562592Z # Subtest: rejects fixture ***s outside the managed E2E contract before spawning
+2026-09-19T08:04:38.2564163Z ok 225 - rejects fixture ***s outside the managed E2E contract before spawning
+2026-09-19T08:04:38.2564927Z   ---
+2026-09-19T08:04:38.2565297Z   duration_ms: 0.7813
+2026-09-19T08:04:38.2565700Z   type: 'test'
+2026-09-19T08:04:38.2566061Z   ...
+2026-09-19T08:04:38.2566787Z # Subtest: isolates the Studio Records scenario before and after its mutations
+2026-09-19T08:04:38.2567925Z ok 226 - isolates the Studio Records scenario before and after its mutations
+2026-09-19T08:04:38.2568614Z   ---
+2026-09-19T08:04:38.2568955Z   duration_ms: 0.5163
+2026-09-19T08:04:38.2569351Z   type: 'test'
+2026-09-19T08:04:38.2569712Z   ...
+2026-09-19T08:04:47.8803992Z   type: 'test'
+2026-09-19T08:04:47.8804344Z   ...
+2026-09-19T08:04:47.8805204Z # Subtest: restart promptly throws a matching failed acknowledgment instead of polling to timeout
+2026-09-19T08:04:47.8806583Z ok 486 - restart promptly throws a matching failed acknowledgment instead of polling to timeout
+2026-09-19T08:04:47.8807438Z   ---
+2026-09-19T08:04:47.8807804Z   duration_ms: 4.581
+2026-09-19T08:04:47.8808198Z   type: 'test'
+2026-09-19T08:04:47.8808545Z   ...
+2026-09-19T08:04:47.8809211Z # Subtest: reportFailure retains a pending restart error: acknowledged
+2026-09-19T08:04:47.8810250Z ok 487 - reportFailure retains a pending restart error: acknowledged
+2026-09-19T08:04:47.8810950Z   ---
+2026-09-19T08:04:47.8811302Z   duration_ms: 5.1695
+2026-09-19T08:04:47.8811717Z   type: 'test'
+2026-09-19T08:04:47.8812067Z   ...
+2026-09-19T08:04:47.8812757Z # Subtest: reportFailure retains a pending restart error: timeout-reported
+2026-09-19T08:04:47.8813914Z ok 488 - reportFailure retains a pending restart error: timeout-reported
+2026-09-19T08:04:47.8814637Z   ---
+2026-09-19T08:04:47.8815001Z   duration_ms: 7.7428
+2026-09-19T08:04:47.8815682Z   type: 'test'
+2026-09-19T08:04:47.8816087Z   ...
+2026-09-19T08:04:47.8816803Z # Subtest: reportFailure retains a pending restart error: timeout-unreported
+2026-09-19T08:04:47.8818332Z ok 489 - reportFailure retains a pending restart error: timeout-unreported
+2026-09-19T08:04:47.8819023Z   ---
+2026-09-19T08:04:47.8819348Z   duration_ms: 7.3301
+2026-09-19T08:04:47.8819989Z   type: 'test'
+2026-09-19T08:04:47.8820324Z   ...
+2026-09-19T08:04:48.1855071Z # Subtest: cloud E2E merger module exists
+2026-09-19T08:04:48.1856681Z ok 490 - cloud E2E merger module exists
+2026-09-19T08:04:48.1857192Z   ---
+2026-09-19T08:04:48.1861580Z   duration_ms: 1.5404
+2026-09-19T08:04:48.1862077Z   type: 'test'
+2026-09-19T08:04:48.1862383Z   ...
+2026-09-19T08:04:48.1868915Z # Subtest: expected child inventory is exactly four functional shards and 19 performance targets
+2026-09-19T08:04:48.1870491Z ok 491 - expected child inventory is exactly four functional shards and 19 performance targets
+2026-09-19T08:04:48.1871257Z   ---
+2026-09-19T08:04:48.1871620Z   duration_ms: 11.3376
+2026-09-19T08:04:48.1871996Z   type: 'test'
+2026-09-19T08:04:48.1872340Z   ...
+2026-09-19T08:04:48.1872812Z # Subtest: Playwright JSON materialization keeps steps and only the final failed PNG
+2026-09-19T08:04:48.1874942Z ok 492 - Playwright JSON materialization keeps steps and only the final failed PNG
+2026-09-19T08:04:48.1875881Z   ---
+2026-09-19T08:04:48.1876217Z   duration_ms: 2.8932
+2026-09-19T08:04:48.1876598Z   type: 'test'
+2026-09-19T08:04:48.1876813Z   ...
+2026-09-19T08:04:48.1877720Z # Subtest: Playwright top-level errors fail a functional shard even when it has no test cases
+2026-09-19T08:04:48.1878983Z ok 493 - Playwright top-level errors fail a functional shard even when it has no test cases
+2026-09-19T08:04:48.1879790Z   ---
+2026-09-19T08:04:48.1880292Z   duration_ms: 3.2242
+2026-09-19T08:04:48.1880678Z   type: 'test'
+2026-09-19T08:04:48.6352233Z   type: 'test'
+2026-09-19T08:04:48.6352463Z   ...
+2026-09-19T08:04:48.6356858Z # Subtest: fixture helper rejects missing, malformed, and contract-mismatched timing metrics
+2026-09-19T08:04:48.6358633Z ok 521 - fixture helper rejects missing, malformed, and contract-mismatched timing metrics
+2026-09-19T08:04:48.6359447Z   ---
+2026-09-19T08:04:48.6359831Z   duration_ms: 4.584
+2026-09-19T08:04:48.6360236Z   type: 'test'
+2026-09-19T08:04:48.6360594Z   ...
+2026-09-19T08:04:48.7150363Z # (node:8904) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/performance-authentication.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:04:48.7151834Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:04:48.7152764Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:04:48.7153532Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:04:48.7175566Z # Subtest: performance authentication submits the production browser login form
+2026-09-19T08:04:48.7176925Z ok 522 - performance authentication submits the production browser login form
+2026-09-19T08:04:48.7178150Z   ---
+2026-09-19T08:04:48.7178549Z   duration_ms: 2.2851
+2026-09-19T08:04:48.7178994Z   type: 'test'
+2026-09-19T08:04:48.7179463Z   ...
+2026-09-19T08:04:48.7190676Z # Subtest: production E2E authentication submits the same real login form
+2026-09-19T08:04:48.7191804Z ok 523 - production E2E authentication submits the same real login form
+2026-09-19T08:04:48.7192999Z   ---
+2026-09-19T08:04:48.7193806Z   duration_ms: 0.393
+2026-09-19T08:04:48.7194249Z   type: 'test'
+2026-09-19T08:04:48.7194630Z   ...
+2026-09-19T08:04:48.7195389Z # Subtest: performance authentication fails closed when login stays on the form
+2026-09-19T08:04:48.7196555Z ok 524 - performance authentication fails closed when login stays on the form
+2026-09-19T08:04:48.7197319Z   ---
+2026-09-19T08:04:48.7197693Z   duration_ms: 0.7444
+2026-09-19T08:04:48.7198114Z   type: 'test'
+2026-09-19T08:04:48.7198478Z   ...
+2026-09-19T08:04:48.8271100Z # Subtest: a shared CommonJS authority owns performance threshold classification
+2026-09-19T08:04:48.8272315Z ok 525 - a shared CommonJS authority owns performance threshold classification
+2026-09-19T08:04:48.8273023Z   ---
+2026-09-19T08:04:48.8273392Z   duration_ms: 2.0912
+2026-09-19T08:04:48.8273754Z   type: 'test'
+2026-09-19T08:04:48.8274087Z   ...
+2026-09-19T08:04:49.0106649Z   type: 'test'
+2026-09-19T08:04:49.0106981Z   ...
+2026-09-19T08:04:49.0819693Z # Subtest: Phase 7 Members roster becomes a bounded mobile card list
+2026-09-19T08:04:49.0823635Z ok 548 - Phase 7 Members roster becomes a bounded mobile card list
+2026-09-19T08:04:49.0824285Z   ---
+2026-09-19T08:04:49.0824619Z   duration_ms: 1.273
+2026-09-19T08:04:49.0824991Z   type: 'test'
+2026-09-19T08:04:49.0825327Z   ...
+2026-09-19T08:04:49.1620801Z # (node:3360) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/physical-tag-helpers.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:04:49.1624076Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:04:49.1625893Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:04:49.1627594Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:04:49.3278718Z # Subtest: returns each MP3 basename with every TALB text value
+2026-09-19T08:04:49.3282579Z ok 549 - returns each MP3 basename with every TALB text value
+2026-09-19T08:04:49.3283561Z   ---
+2026-09-19T08:04:49.3284329Z   duration_ms: 165.9667
+2026-09-19T08:04:49.3285537Z   type: 'test'
+2026-09-19T08:04:49.3285956Z   ...
+2026-09-19T08:04:49.4986465Z # Subtest: normalizes complete ID3 snapshots and reports only frames whose values changed
+2026-09-19T08:04:49.4987663Z ok 550 - normalizes complete ID3 snapshots and reports only frames whose values changed
+2026-09-19T08:04:49.4988523Z   ---
+2026-09-19T08:04:49.4988903Z   duration_ms: 171.7446
+2026-09-19T08:04:49.4989365Z   type: 'test'
+2026-09-19T08:04:49.4989747Z   ...
+2026-09-19T08:04:49.5099878Z # Subtest: temporarily replaces only a generated MP3 with an unwritable directory and restores it
+2026-09-19T08:04:49.5101365Z ok 551 - temporarily replaces only a generated MP3 with an unwritable directory and restores it
+2026-09-19T08:04:49.5101970Z   ---
+2026-09-19T08:04:49.5102200Z   duration_ms: 10.8051
+2026-09-19T08:04:49.5102441Z   type: 'test'
+2026-09-19T08:04:49.5102676Z   ...
+2026-09-19T08:04:49.5196414Z # Subtest: preloaded functional helpers mutate only the exact invocation-owned fixture media ***
+2026-09-19T08:04:49.5198422Z ok 552 - preloaded functional helpers mutate only the exact invocation-owned fixture media ***
+2026-09-19T08:04:49.5199347Z   ---
+2026-09-19T08:04:49.5199744Z   duration_ms: 9.9409
+2026-09-19T08:04:49.5200220Z   type: 'test'
+2026-09-19T08:04:49.5200584Z   ...
+2026-09-19T08:05:42.4211736Z   type: 'test'
+2026-09-19T08:05:42.4211938Z   ...
+2026-09-19T08:05:42.4218543Z # Subtest: rejects case-insensitive password query parameters before spawning psql
+2026-09-19T08:05:42.4221288Z ok 673 - rejects case-insensitive password query parameters before spawning psql
+2026-09-19T08:05:42.4222122Z   ---
+2026-09-19T08:05:42.4222498Z   duration_ms: 0.9397
+2026-09-19T08:05:42.4222929Z   type: 'test'
+2026-09-19T08:05:42.4223295Z   ...
+2026-09-19T08:05:42.5076946Z # (node:7160) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/postgres-client-command.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:05:42.5079447Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:05:42.5080829Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:05:42.5082371Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:05:42.5108555Z # Subtest: Postgres helpers prefer the CI-provided PGBIN client on Windows
+2026-09-19T08:05:42.5111828Z ok 674 - Postgres helpers prefer the CI-provided PGBIN client on Windows
+2026-09-19T08:05:42.5115839Z   ---
+2026-09-19T08:05:42.5117362Z   duration_ms: 1.9209
+2026-09-19T08:05:42.5118300Z   type: 'test'
+2026-09-19T08:05:42.5120648Z   ...
+2026-09-19T08:05:42.5122347Z # Subtest: Postgres helpers preserve the reviewed local fallback without PGBIN
+2026-09-19T08:05:42.5150045Z ok 675 - Postgres helpers preserve the reviewed local fallback without PGBIN
+2026-09-19T08:05:42.5154854Z   ---
+2026-09-19T08:05:42.5155233Z   duration_ms: 0.5221
+2026-09-19T08:05:42.5155626Z   type: 'test'
+2026-09-19T08:05:42.5155955Z   ...
+2026-09-19T08:05:43.0456412Z # warning: in the working copy of 'base.txt', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:43.3042723Z # warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:43.6978419Z # warning: in the working copy of 'runtime.js', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:45.8507297Z # warning: in the working copy of 'base.txt', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:47.1949976Z # warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:48.4295022Z # warning: in the working copy of 'runtime.js', LF will be replaced by CRLF the next time Git touches it
+2026-09-19T08:05:48.9980096Z # Subtest: forced full review classifies the complete PR delta
+2026-09-19T08:05:48.9981092Z ok 676 - forced full review classifies the complete PR delta
+2026-09-19T08:05:48.9981718Z   ---
+2026-09-19T08:05:48.9982088Z   duration_ms: 1.4647
+2026-09-19T08:05:48.9982500Z   type: 'test'
+2026-09-19T08:05:48.9982863Z   ...
+2026-09-19T08:06:04.2883757Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.2885503Z # ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.2886767Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.2939774Z # === Performance run 1/1 for idle-memory ===
+2026-09-19T08:06:04.2940929Z # [performance-runner] target=idle-memory | attempt=1 | mode=headless | browser=chrome
+2026-09-19T08:06:04.2995717Z # === Performance run 1/1 for artist-family ===
+2026-09-19T08:06:04.2996961Z # [performance-runner] target=artist-family | attempt=1 | mode=headless | browser=chrome | real_app_port=5001
+2026-09-19T08:06:04.3014722Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3016727Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3017920Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3021750Z # === Performance recovery run 2/3 for artist-family ===
+2026-09-19T08:06:04.3024904Z # [performance-runner] target=artist-family | attempt=2 | mode=headless | browser=chrome | real_app_port=5002
+2026-09-19T08:06:04.3037062Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3038743Z # ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3039763Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3069357Z # === Performance run 1/1 for artist-family ===
+2026-09-19T08:06:04.3070886Z # [performance-runner] target=artist-family | attempt=1 | mode=headless | browser=chrome | real_app_port=5001
+2026-09-19T08:06:04.3092000Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3094447Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3095533Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3107201Z # === Performance recovery run 2/3 for artist-family ===
+2026-09-19T08:06:04.3108494Z # [performance-runner] target=artist-family | attempt=2 | mode=headless | browser=chrome | real_app_port=5002
+2026-09-19T08:06:04.3120987Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3122695Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3124204Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3126775Z # === Performance recovery run 3/3 for artist-family ===
+2026-09-19T08:06:04.3128272Z # [performance-runner] target=artist-family | attempt=3 | mode=headless | browser=chrome | real_app_port=5003
+2026-09-19T08:06:04.3140774Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3142478Z # ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3143493Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3173247Z # === Performance run 1/1 for artist-family ===
+2026-09-19T08:06:04.3174267Z # [performance-runner] target=artist-family | attempt=1 | mode=headless | browser=chrome | real_app_port=5001
+2026-09-19T08:06:04.3191940Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3193634Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3194653Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3196412Z # === Performance recovery run 2/3 for artist-family ===
+2026-09-19T08:06:04.3197772Z # [performance-runner] target=artist-family | attempt=2 | mode=headless | browser=chrome | real_app_port=5002
+2026-09-19T08:06:04.3210594Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3212476Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3213583Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3215336Z # === Performance recovery run 3/3 for artist-family ===
+2026-09-19T08:06:04.3216634Z # [performance-runner] target=artist-family | attempt=3 | mode=headless | browser=chrome | real_app_port=5003
+2026-09-19T08:06:04.3229947Z # ok 1 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse scrolling keeps each displayed artist heading unique before and after filtering
+2026-09-19T08:06:04.3233798Z # not ok 2 [chromium] > tests/e2e/syntheticLargeLibrary/artistFamilyResponsiveness.spec.js:1:1 > policy fixture > Neal Morse family search, filters, details, settings, and clear-search flows stay responsive on synthetic data
+2026-09-19T08:06:04.3235844Z # [playwright-performance-reporter] flush-complete
+2026-09-19T08:06:04.3291868Z # Subtest: performance runner mirrors the reviewed target inventory and approved fixture profiles
+2026-09-19T08:06:04.3293575Z ok 860 - performance runner mirrors the reviewed target inventory and approved fixture profiles
+2026-09-19T08:06:04.3295226Z   ---
+2026-09-19T08:06:04.3295666Z   duration_ms: 2.0044
+2026-09-19T08:06:04.3296091Z   type: 'test'
+2026-09-19T08:06:04.3296466Z   ...
+2026-09-19T08:06:04.3298048Z # Subtest: every discovered performance case has reviewed ownership selected by its runner target
+2026-09-19T08:06:04.3299740Z ok 861 - every discovered performance case has reviewed ownership selected by its runner target
+2026-09-19T08:06:04.3300942Z   ---
+2026-09-19T08:06:04.3301587Z   duration_ms: 1.4033
+2026-09-19T08:06:04.3302059Z   type: 'test'
+2026-09-19T08:06:04.3302650Z   ...
+2026-09-19T08:06:04.3303610Z # Subtest: the default performance group contains every reviewed target
+2026-09-19T08:06:04.3306356Z ok 862 - the default performance group contains every reviewed target
+2026-09-19T08:06:04.3307272Z   ---
+2026-09-19T08:06:04.3307785Z   duration_ms: 0.294
+2026-09-19T08:06:04.3308339Z   type: 'test'
+2026-09-19T08:06:04.3308855Z   ...
+2026-09-19T08:06:04.3309778Z # Subtest: every reviewed performance target invokes Playwright with one worker
+2026-09-19T08:06:04.3311053Z ok 863 - every reviewed performance target invokes Playwright with one worker
+2026-09-19T08:06:04.3311897Z   ---
+2026-09-19T08:06:04.3312274Z   duration_ms: 0.5529
+2026-09-19T08:06:04.3313047Z   type: 'test'
+2026-09-19T08:06:04.3313432Z   ...
+2026-09-19T08:06:04.3314071Z # Subtest: a passing first performance run completes without recovery
+2026-09-19T08:06:04.3315501Z ok 864 - a passing first performance run completes without recovery
+2026-09-19T08:06:28.2414952Z #       url: 'https://images.example/unrelated.jpg'
+2026-09-19T08:06:28.2415269Z #     },
+2026-09-19T08:06:28.2415453Z #     {
+2026-09-19T08:06:28.2415704Z #       id: 'persisted-override-id',
+2026-09-19T08:06:28.2416048Z #       url: 'https://images.example/a.jpg'
+2026-09-19T08:06:28.2416328Z #     }
+2026-09-19T08:06:28.2416507Z #   ]
+2026-09-19T08:06:28.2416690Z # }
+2026-09-19T08:06:28.2417154Z # [AlbumHaven][CoverLookup] Failed to load lookup tasks. ReferenceError: document is not defined
+2026-09-19T08:06:28.2418133Z #     at stopCoverLookupPollingIfIdle (D:\\a\\AlbumHaven\\AlbumHaven\\music_app\\static\\js\\runtime\\cover-lookup-modal-and-drawer.js:1611:21)
+2026-09-19T08:06:28.2419200Z #     at Object.loadCoverLookupTasks (D:\\a\\AlbumHaven\\AlbumHaven\\music_app\\static\\js\\runtime\\cover-lookup-modal-and-drawer.js:1580:5)
+2026-09-19T08:06:28.2420038Z #     at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+2026-09-19T08:06:28.2420790Z #     at async D:\\a\\AlbumHaven\\AlbumHaven\\tests\\js\\runtime\\cover-lookup-modal-and-drawer.test.js:2261:3
+2026-09-19T08:06:28.2422125Z # [AlbumHaven][CoverLookup] Failed to clear completed tasks. Error: permission denied for table cover_lookup_tasks
+2026-09-19T08:06:28.2425379Z #     at Object.clearCompletedCoverLookupTasks (D:\\a\\AlbumHaven\\AlbumHaven\\music_app\\static\\js\\runtime\\cover-lookup-modal-and-drawer.js:1171:13)
+2026-09-19T08:06:28.2427131Z #     at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+2026-09-19T08:06:28.2428562Z #     at async D:\\a\\AlbumHaven\\AlbumHaven\\tests\\js\\runtime\\cover-lookup-modal-and-drawer.test.js:2430:3
+2026-09-19T08:06:28.2429727Z # [AlbumHaven][CoverLookup] Start lookup response. {
+2026-09-19T08:06:28.2431032Z #   ok: true,
+2026-09-19T08:06:28.2431752Z #   task: { id: 'flaming-row-lookup', progress_label: 'Searching...' }
+2026-09-19T08:06:28.2432456Z # }
+2026-09-19T08:06:28.2432971Z # [AlbumHaven][CoverLookup] Gallery response. {
+2026-09-19T08:06:28.2433553Z #   ok: true,
+2026-09-19T08:06:28.2433919Z #   task: {
+2026-09-19T08:06:28.2434419Z #     id: 'terminal-publication-generation',
+2026-09-19T08:06:28.2434998Z #     status: 'completed',
+2026-09-19T08:06:28.2435453Z #     progress: 100,
+2026-09-19T08:06:28.2435903Z #     candidate_revision: 7,
+2026-09-19T08:06:28.2436482Z #     best_candidate_id: 'discogs-primary',
+2026-09-19T08:06:28.2437190Z #     possible_matches: [ [Object], [Object], [Object] ]
+2026-09-19T08:06:28.2437788Z #   },
+2026-09-19T08:06:28.2439151Z #   local_covers: [],
+2026-09-19T08:06:28.2439669Z #   other_art: []
+2026-09-19T08:06:28.2440043Z # }
+2026-09-19T08:06:28.2440543Z # [AlbumHaven][CoverLookup] Gallery response. {
+2026-09-19T08:06:28.2441130Z #   ok: true,
+2026-09-19T08:06:39.9245933Z   type: 'test'
+2026-09-19T08:06:39.9246709Z   ...
+2026-09-19T08:06:39.9247493Z # Subtest: an export that completes after context invalidation cannot be delivered
+2026-09-19T08:06:39.9248641Z ok 2812 - an export that completes after context invalidation cannot be delivered
+2026-09-19T08:06:39.9249382Z   ---
+2026-09-19T08:06:39.9249716Z   duration_ms: 1.4761
+2026-09-19T08:06:39.9250116Z   type: 'test'
+2026-09-19T08:06:39.9250459Z   ...
+2026-09-19T08:06:40.0081467Z # [AlbumHaven][Loops] Failed to create loop from saved loop. ReferenceError: setSavedLoopEditMode is not defined
+2026-09-19T08:06:40.0083188Z #     at Object.createLoopFromSavedLoop (evalmachine.<anonymous>:49:5)
+2026-09-19T08:06:40.0085131Z #     at async TestContext.<anonymous> (D:\\a\\AlbumHaven\\AlbumHaven\\tests\\js\\runtime\\utility-loop-load-generation.test.js:69:28)
+2026-09-19T08:06:40.0086863Z #     at async Test.run (node:internal/test_runner/test:1054:7)
+2026-09-19T08:06:40.0088028Z #     at async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+2026-09-19T08:06:40.0148996Z # Subtest: fresh authorized load advances data generation so older reorder cannot replace cache
+2026-09-19T08:06:40.0150558Z ok 2813 - fresh authorized load advances data generation so older reorder cannot replace cache
+2026-09-19T08:06:40.0151441Z   ---
+2026-09-19T08:06:40.0151803Z   duration_ms: 2.5702
+2026-09-19T08:06:40.0152723Z   type: 'test'
+2026-09-19T08:06:40.0153180Z   ...
+2026-09-19T08:06:40.0157333Z # Subtest: loop projection preserves independently verified log grants and revokes omitted loop grants
+2026-09-19T08:06:40.0159964Z ok 2814 - loop projection preserves independently verified log grants and revokes omitted loop grants
+2026-09-19T08:06:40.0160525Z   ---
+2026-09-19T08:06:40.0161050Z   duration_ms: 0.8799
+2026-09-19T08:06:40.0161302Z   type: 'test'
+2026-09-19T08:06:40.0161506Z   ...
+2026-09-19T08:06:40.0164262Z # Subtest: late loop load cannot write into a replacement account utility state or render it
+2026-09-19T08:06:40.0165812Z ok 2815 - late loop load cannot write into a replacement account utility state or render it
+2026-09-19T08:06:40.0166663Z   ---
+2026-09-19T08:06:40.0166894Z   duration_ms: 2.2303
+2026-09-19T08:06:40.0167123Z   type: 'test'
+2026-09-19T08:06:40.0167325Z   ...
+2026-09-19T08:06:40.0171307Z # Subtest: load started before reorder cannot overwrite its newer cache or render stale rows
+2026-09-19T08:06:40.0172700Z ok 2816 - load started before reorder cannot overwrite its newer cache or render stale rows
+2026-09-19T08:06:40.0173517Z   ---
+2026-09-19T08:06:40.0173875Z   duration_ms: 1.0075
+2026-09-19T08:06:40.0174299Z   type: 'test'
+2026-09-19T08:06:42.1448824Z   type: 'test'
+2026-09-19T08:06:42.1449184Z   ...
+2026-09-19T08:06:42.1450382Z # Subtest: sanitizer rejects malformed, corrupt, oversized, and over-dimension PNG inputs
+2026-09-19T08:06:42.1452054Z ok 3110 - sanitizer rejects malformed, corrupt, oversized, and over-dimension PNG inputs
+2026-09-19T08:06:42.1452558Z   ---
+2026-09-19T08:06:42.1452776Z   duration_ms: 1.7022
+2026-09-19T08:06:42.1453006Z   type: 'test'
+2026-09-19T08:06:42.1453202Z   ...
+2026-09-19T08:06:42.6892850Z # (node:6208) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/scan-performance-helpers.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:06:42.6896785Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:06:42.6898280Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:06:42.6899450Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:06:42.6934778Z # Subtest: folder milestone text formats measured throughput and rejects incomplete samples
+2026-09-19T08:06:42.6937886Z ok 3111 - folder milestone text formats measured throughput and rejects incomplete samples
+2026-09-19T08:06:42.6938406Z   ---
+2026-09-19T08:06:42.6938622Z   duration_ms: 1.5613
+2026-09-19T08:06:42.6938859Z   type: 'test'
+2026-09-19T08:06:42.6939065Z   ...
+2026-09-19T08:06:42.6942853Z # Subtest: terminal scan status assertion enforces exact idle counts and an empty error
+2026-09-19T08:06:42.6944897Z ok 3112 - terminal scan status assertion enforces exact idle counts and an empty error
+2026-09-19T08:06:42.6945377Z   ---
+2026-09-19T08:06:42.6945600Z   duration_ms: 10.766
+2026-09-19T08:06:42.6945840Z   type: 'test'
+2026-09-19T08:06:42.6946053Z   ...
+2026-09-19T08:06:42.6946845Z # Subtest: scan sample metrics retain pre-epoch phase evidence while clamping time to zero
+2026-09-19T08:06:42.6949198Z ok 3113 - scan sample metrics retain pre-epoch phase evidence while clamping time to zero
+2026-09-19T08:06:42.6949758Z   ---
+2026-09-19T08:06:42.6949978Z   duration_ms: 0.6843
+2026-09-19T08:06:42.6950227Z   type: 'test'
+2026-09-19T08:06:42.6950430Z   ...
+2026-09-19T08:06:42.7028041Z # Subtest: scan status sampler reads launch-time production status JSONL without fabricated telemetry
+2026-09-19T08:06:42.7029577Z ok 3114 - scan status sampler reads launch-time production status JSONL without fabricated telemetry
+2026-09-19T08:06:42.7030518Z   ---
+2026-09-19T08:06:42.7030897Z   duration_ms: 15.0359
+2026-09-19T08:06:42.7031317Z   type: 'test'
+2026-09-19T08:06:42.7031672Z   ...
+2026-09-19T08:06:48.7615134Z   type: 'test'
+2026-09-19T08:06:48.7615334Z   ...
+2026-09-19T08:06:48.7615875Z # Subtest: functional shards and all-19 authenticated target artifacts remain present without report jobs
+2026-09-19T08:06:48.7616698Z ok 3241 - functional shards and all-19 authenticated target artifacts remain present without report jobs
+2026-09-19T08:06:48.7617496Z   ---
+2026-09-19T08:06:48.7617702Z   duration_ms: 0.4857
+2026-09-19T08:06:48.7617926Z   type: 'test'
+2026-09-19T08:06:48.7618121Z   ...
+2026-09-19T08:06:48.8412990Z # (node:10032) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///D:/a/AlbumHaven/AlbumHaven/tests/js/worker-authentication.test.js is not specified and it doesn't parse as CommonJS.
+2026-09-19T08:06:48.8414718Z # Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+2026-09-19T08:06:48.8415622Z # To eliminate this warning, add "type": "module" to D:\\a\\AlbumHaven\\AlbumHaven\\package.json.
+2026-09-19T08:06:48.8416369Z # (Use `node --trace-warnings ...` to show where the warning was created)
+2026-09-19T08:06:48.8448268Z # Subtest: runner authenticates once for concurrent and later context requests
+2026-09-19T08:06:48.8450372Z ok 3242 - runner authenticates once for concurrent and later context requests
+2026-09-19T08:06:48.8451209Z   ---
+2026-09-19T08:06:48.8451598Z   duration_ms: 3.3196
+2026-09-19T08:06:48.8452012Z   type: 'test'
+2026-09-19T08:06:48.8452375Z   ...
+2026-09-19T08:06:48.8454485Z # Subtest: runner restores only auth cookies and never carries application storage into tests
+2026-09-19T08:06:48.8457413Z ok 3243 - runner restores only auth cookies and never carries application storage into tests
+2026-09-19T08:06:48.8458206Z   ---
+2026-09-19T08:06:48.8458552Z   duration_ms: 0.2627
+2026-09-19T08:06:48.8458932Z   type: 'test'
+2026-09-19T08:06:48.8459255Z   ...
+2026-09-19T08:06:48.8467420Z # Subtest: separate runners authenticate independently
+2026-09-19T08:06:48.8469207Z ok 3244 - separate runners authenticate independently
+2026-09-19T08:06:48.8469854Z   ---
+2026-09-19T08:06:48.8470277Z   duration_ms: 0.4206
+2026-09-19T08:06:48.8470701Z   type: 'test'
+2026-09-19T08:06:48.8471083Z   ...
+2026-09-19T08:06:48.8472078Z # Subtest: failed authentication closes its context and fails all consumers without repeated login
+2026-09-19T08:06:48.8475117Z ok 3245 - failed authentication closes its context and fails all consumers without repeated login
+2026-09-19T08:06:48.8475677Z   ---
+2026-09-19T08:06:48.8476060Z   duration_ms: 0.5856
+2026-09-19T08:06:48.8476923Z   type: 'test'
+2026-09-19T08:06:48.8477327Z   ...
+2026-09-19T08:06:51.2583589Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2584182Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2585190Z   DATABASE_APP_URL: postgresql://album_haven_app_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2586283Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2587809Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2589317Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2590144Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_jsw_35430873883_2@127.0.0.1/album_haven_ci_jsw_35430873883_2
+2026-09-19T08:06:51.2590669Z ##[endgroup]
+2026-09-19T08:06:51.4773756Z (node:9996) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T08:06:51.4775215Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T08:06:51.4829205Z With the provided path, there will be 1 file uploaded
+2026-09-19T08:06:51.4834648Z Artifact name is valid!
+2026-09-19T08:06:51.4837387Z Root directory input is valid!
+2026-09-19T08:06:51.7202374Z Beginning upload of artifact content to blob storage
+2026-09-19T08:06:51.7485805Z (node:9996) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T08:06:51.7742773Z Uploaded bytes 511
+2026-09-19T08:06:51.7922012Z Finished uploading artifact content to blob storage!
+2026-09-19T08:06:51.7923343Z SHA256 digest of uploaded artifact zip is 41c5e4a26c1c2c92acd4c3e49c81edef61f75e711e06478d9f6e010d5cfd29dc
+2026-09-19T08:06:51.7926134Z Finalizing artifact upload
+2026-09-19T08:06:51.9751566Z Artifact foundation-versions-node-windows-2.zip successfully finalized. Artifact ID 10579904248
+2026-09-19T08:06:51.9753442Z Artifact foundation-versions-node-windows-2 has been successfully uploaded! Final size is 511 bytes. Artifact ID is 10579904248
+2026-09-19T08:06:51.9769924Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35430873883/artifacts/10579904248
+2026-09-19T08:06:52.0127066Z Post job cleanup.
+2026-09-19T08:06:52.2229622Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T08:06:52.2537339Z git version 2.55.0.windows.5
+2026-09-19T08:06:52.2613283Z Temporarily overriding HOME='D:\a\_temp\840bda43-d49a-47a8-9a78-c8c786742713' before making global git config changes
+2026-09-19T08:06:52.2615388Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T08:06:52.2628261Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven
+2026-09-19T08:06:52.2949900Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T08:06:52.3254195Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T08:06:52.8768634Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T08:06:52.9060273Z http.https://github.com/.extraheader
+2026-09-19T08:06:52.9108283Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-19T08:06:52.9442614Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T08:06:53.5724583Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T08:06:53.6012928Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T08:06:54.1403751Z Cleaning up orphan processes
+2026-09-19T08:06:54.2219061Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/setup-node@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

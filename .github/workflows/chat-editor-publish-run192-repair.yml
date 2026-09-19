@@ -1,0 +1,90 @@
+name: Publish complete run 192 E2E repair
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-publish-run192-repair.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-complete-batch-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: 18ea588e352c53c6ed6c705d5ccb1678023695f6
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify exact patch and sanitize bounded diagnostic preferences
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64,gzip,hashlib,json,os,subprocess
+          from pathlib import Path
+          root=Path('.chat-editor/e2e-run192-repair')
+          manifest=json.loads((root/'manifest.json').read_text())
+          assert manifest['base_head']==os.environ['EXPECTED_HEAD']
+          part=root/'part-0.b64'; encoded=part.read_text().strip()
+          # Correct the one-character transport transcription, then require the
+          # original local patch digest. No application hunk is generated here.
+          bad='FMMG/T2w+lZ1v0Yetb214Pma8cizZO5Jgn4DWHlotzHTaf003HX'
+          good='FMMG/T2w+lZ1v0Yetb214Pma8izZO5Jgn4DWHlotzHTaf003HX'
+          assert encoded.count(bad)==1
+          encoded=encoded.replace(bad,good);part.write_text(encoded)
+          patch=gzip.decompress(base64.b64decode(encoded))
+          assert len(patch)==28389==manifest['patch_bytes']
+          assert hashlib.sha256(patch).hexdigest()=='f16f3155eb614376c471b1bf6bc56d132de48e5c00bdb301868507cd9af68d5e'==manifest['patch_sha256']
+          tmp=Path(os.environ['RUNNER_TEMP']);(tmp/'run192.patch').write_bytes(patch);(tmp/'run192-manifest.json').write_text(json.dumps(manifest))
+          def sanitize(value):
+              if isinstance(value,dict): return {key:sanitize(item) for key,item in value.items() if key.lower() not in {'csrf_token','session_key','access_token','refresh_token','password','secret','authorization','cookie','set-cookie'}}
+              if isinstance(value,list): return [sanitize(item) for item in value]
+              return value
+          for path in Path('.chat-editor/e2e-run192-contexts').glob('appearance-network-*.json'):
+              path.write_text(json.dumps(sanitize(json.loads(path.read_text())),indent=2)+'\n')
+          subprocess.run(['git','add','--',str(part),'.chat-editor/e2e-run192-contexts'],check=True)
+          subprocess.run(['git','config','user.name','idanilovqa'],check=True)
+          subprocess.run(['git','config','user.email','39825960+idanilovqa@users.noreply.github.com'],check=True)
+          subprocess.run(['git','commit','-m','checkpoint: verify exact repair transport and remove transient anti-CSRF values from diagnostic preferences'],check=True)
+          subprocess.run(['git','push','origin','HEAD:refs/heads/2026-09-18-pr3-e2e-batch'],check=True)
+          PY
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git switch --detach "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/run192.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/run192.patch"
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Repeat complete focused verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 tests/js/e2e-run192-contracts.test.js tests/js/e2e-action-production-paths.test.js tests/js/e2e-settings-contracts.test.js tests/js/settings-menu-theme-measurement.test.js tests/js/track-modal-actions.test.js tests/js/runtime/appearance-workspace.test.js tests/js/runtime/utility-suggested-edits.test.js tests/js/runtime/library-loader-visibility.test.js
+          node scripts/check-e2e-production-parity.cjs
+          git diff --check
+      - name: Publish only the reviewed repair files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          manifest=json.loads(Path(os.environ['RUNNER_TEMP'],'run192-manifest.json').read_text())
+          files=manifest['files']
+          assert len(files)==13 and all(name.startswith(('tests/','docs/')) for name in files)
+          subprocess.run(['git','add','--',*files],check=True)
+          assert sorted(subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines())==sorted(files)
+          PY
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'test: repair complete run 192 E2E fixture and approved UI contracts'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Repair commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo 'All native PR suites remain mandatory; focused checks do not imply E2E success.' >> "$GITHUB_STEP_SUMMARY"

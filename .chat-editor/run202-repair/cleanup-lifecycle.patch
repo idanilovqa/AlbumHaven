@@ -1,0 +1,113 @@
+diff --git a/tests/py/conftest.py b/tests/py/conftest.py
+index bd556fe..d08a5bb 100644
+--- a/tests/py/conftest.py
++++ b/tests/py/conftest.py
+@@ -259,6 +259,10 @@ def pytest_configure(config: pytest.Config) -> None:
+         )
+     config._album_haven_generated_basetemp = not explicit_basetemp
+     config._album_haven_generated_basetemp_token = generated_token
++    if not explicit_basetemp:
++        # Resources registered later are released first (Config cleanup is LIFO).
++        # A Windows handle can otherwise keep this root alive through unconfigure.
++        config.add_cleanup(lambda: _cleanup_generated_pytest_root(config))
+     config._album_haven_test_appdata = _activate_pytest_app_paths(
+         Path(config.option.basetemp).resolve()
+     )
+@@ -283,27 +287,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:
+     _activate_pytest_session_temp(config)
+ 
+ 
+-@pytest.hookimpl(trylast=True)
+-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+-    config = session.config
++def _cleanup_generated_pytest_root(config: pytest.Config) -> None:
+     if not getattr(config, "_album_haven_generated_basetemp", False):
+         return
+-    base_temp = config._tmp_path_factory._basetemp
++    factory = getattr(config, "_tmp_path_factory", None)
++    base_temp = getattr(factory, "_basetemp", None)
+     token = getattr(config, "_album_haven_generated_basetemp_token", None)
+     if base_temp is None or not isinstance(token, str):
+         return
+     _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+ 
+ 
++@pytest.hookimpl(trylast=True)
++def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
++    _cleanup_generated_pytest_root(session.config)
++
++
+ @pytest.hookimpl(trylast=True)
+ def pytest_unconfigure(config: pytest.Config) -> None:
+-    if not getattr(config, "_album_haven_generated_basetemp", False):
+-        return
+-    base_temp = config._tmp_path_factory._basetemp
+-    token = getattr(config, "_album_haven_generated_basetemp_token", None)
+-    if base_temp is None or not isinstance(token, str):
+-        return
+-    _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
++    _cleanup_generated_pytest_root(config)
+ 
+ 
+ def _request_url(value: object) -> str:
+diff --git a/tests/py/test_pytest_harness_config.py b/tests/py/test_pytest_harness_config.py
+index 90f0c9b..1b1fc8b 100644
+--- a/tests/py/test_pytest_harness_config.py
++++ b/tests/py/test_pytest_harness_config.py
+@@ -406,3 +406,56 @@ def test_cleanup_revalidates_ownership_after_retry_backoff(tmp_path, monkeypatch
+     )
+     assert attempts == [owned_root]
+     assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"
++
++
++def test_generated_root_cleanup_runs_after_late_configuration_resources_close(tmp_path, monkeypatch):
++    """Config cleanups run after unconfigure and may still own Windows handles."""
++    callbacks = []
++    workspace = tmp_path / 'workspace-temp'
++    config = SimpleNamespace(
++        option=SimpleNamespace(basetemp=None),
++        addinivalue_line=lambda *_args: None,
++        add_cleanup=callbacks.append,
++    )
++    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace.resolve())
++    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda root: root / 'appdata')
++    pytest_harness.pytest_configure(config)
++    root = Path(config.option.basetemp)
++    token = config._album_haven_generated_basetemp_token
++    _write_owner_marker(root, pid=os.getpid(), token=token)
++    config._tmp_path_factory = SimpleNamespace(_basetemp=root)
++    held = [True]
++    callbacks.append(lambda: held.__setitem__(0, False))
++    real_rmtree = shutil.rmtree
++
++    def remove_after_handle_close(path):
++        if held[0]:
++            raise PermissionError('configuration cleanup still owns a Windows handle')
++        real_rmtree(path)
++
++    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', remove_after_handle_close)
++    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
++    pytest_harness.pytest_sessionfinish(SimpleNamespace(config=config), 0)
++    pytest_harness.pytest_unconfigure(config)
++    assert root.exists(), 'the resource stays open through unconfigure'
++    for callback in reversed(callbacks):
++        callback()
++    assert held == [False]
++    assert not root.exists(), 'the final config cleanup must remove its own root after resources close'
++
++
++def test_explicit_root_does_not_register_a_final_generated_cleanup(tmp_path, monkeypatch):
++    callbacks = []
++    root = tmp_path / 'explicit-root'
++    root.mkdir()
++    config = SimpleNamespace(
++        option=SimpleNamespace(basetemp=str(root)),
++        addinivalue_line=lambda *_args: None,
++        add_cleanup=callbacks.append,
++    )
++    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda base: base / 'appdata')
++    pytest_harness.pytest_configure(config)
++    for callback in reversed(callbacks):
++        callback()
++    assert callbacks == []
++    assert root.is_dir()

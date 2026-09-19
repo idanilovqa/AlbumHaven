@@ -178,15 +178,20 @@ test('playing spectra share the exact row outline path at opposite offsets and f
     path.join(repoRoot, 'music_app', 'static', 'css', 'runtime', 'album-track-table.css'),
     'utf8',
   );
-  assert.match(css, /conic-gradient\(/);
-  assert.match(css, /0\.5turn/);
-  assert.match(css, /mask:[^;]*linear-gradient/s);
-  assert.match(css, /border-radius:\s*inherit/);
+  const decoration = loadTrackTable().buildAlbumTrackPerimeterHtml();
+  assert.match(decoration, /<svg[^>]*aria-hidden="true"[^>]*focusable="false"/);
+  assert.equal((decoration.match(/<g class="album-track-spectrum/g) || []).length, 2);
+  assert.equal((decoration.match(/<rect[^>]*rx="7" pathLength="100"/g) || []).length, 6);
+  assert.match(css, /\.album-track-table__perimeter\s*\{[^}]*pointer-events:\s*none[^}]*position:\s*absolute[^}]*width:\s*100%[^}]*height:\s*100%/s);
   assert.match(css, /animation-duration:\s*var\(--album-track-playing-period/);
   assert.match(css, /\.album-track-table__row--playing\s*\{[^}]*outline:/s);
-  assert.match(css, /\.album-track-table__row--playing::before/);
-  assert.match(css, /\.album-track-table__row--playing::after/);
-  assert.match(css, /--album-track-spectrum-offset:\s*0\.5turn/);
+  assert.match(css, /--album-track-spectrum-offset:\s*-50/);
+  assert.match(css, /stroke-dasharray:\s*12 88/);
+  assert.match(css, /stroke-dasharray:\s*0 2 8 90/);
+  assert.match(css, /stroke-dasharray:\s*0 4 4 92/);
+  assert.match(css, /from\s*\{\s*stroke-dashoffset:\s*var\(--album-track-spectrum-offset\)/);
+  assert.match(css, /to\s*\{\s*stroke-dashoffset:\s*calc\(var\(--album-track-spectrum-offset\) - 100\)/);
+  assert.doesNotMatch(css, /--album-track-spectrum-angle|#track-modal \.album-track-table \.album-track-table__row--playing/);
   assert.match(css, /\.album-track-table__total\s*\{[^}]*border-left:\s*0[^}]*border-top:\s*0/s);
   assert.match(css, /linear-gradient\(to left/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
@@ -221,7 +226,7 @@ test('AlbumTrackTable uses theme text tokens, plain durations, and a subtly diss
   assert.match(css, /\.album-track-table \.compact-data-table\s*\{[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
   assert.match(css, /\.album-track-table \[role="columnheader"\][^}]*color:\s*var\(--appearance-muted,\s*var\(--muted\)\)/s);
   assert.match(css, /\.album-track-table \.track-duration\s*\{[^}]*margin-left:\s*0[^}]*color:\s*var\(--appearance-ink,\s*var\(--text\)\)/s);
-  assert.match(css, /album-track-table__row--animated::after\s*\{[^}]*opacity:\s*\.84/s);
+  assert.match(css, /album-track-table__row--animated \.album-track-spectrum\s*\{[^}]*opacity:\s*\.84/s);
 });
 
 test('play activation is transient and live playback refresh can own the component state classes', () => {

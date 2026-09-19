@@ -242,10 +242,11 @@ for (const scenario of [
     await expect(row).toHaveClass(/album-track-table__row--playing/);
     await expect(row).toHaveCSS('outline-style', 'solid');
     await expect(row).toHaveCSS('outline-width', '1px');
-    const spectra = await row.evaluate(element => ['::before', '::after'].map(pseudo => {
-      const style = getComputedStyle(element, pseudo);
+    const spectra = await row.evaluate(element => [...element.querySelectorAll('.album-track-spectrum')].map(spectrum => {
+      const style = getComputedStyle(spectrum);
       return { animation: style.animationName, display: style.display, opacity: style.opacity };
     }));
+    expect(spectra).toHaveLength(2);
     for (const spectrum of spectra) {
       if (scenario.setting && scenario.motion === 'no-preference') {
         expect(spectrum.animation).toContain('album-track-perimeter-spectrum');

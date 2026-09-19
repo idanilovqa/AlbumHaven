@@ -15287,6 +15287,13 @@ function buildAlbumTrackPlayButtonHtml(track = {}) {
   return `<button class="play-track-button album-track-table__play" data-src="/track?path=${encodeURIComponent(trackPath)}" data-track-path="${escapeHtml(trackPath)}" data-track-title="${escapeHtml(title)}" data-track-artist="${escapeHtml(artist)}" data-track-album-artist="${escapeHtml(albumArtist)}" data-track-album="${escapeHtml(album)}" data-track-cover="${escapeHtml(coverPath)}" data-track-duration-seconds="${durationSeconds}" type="button" aria-label="${isPlaying ? 'Pause track' : 'Play track'}">${icon}</button>`;
 }
 
+function buildAlbumTrackPerimeterHtml() {
+  const layers = ['tail', 'middle', 'core'].map(layer =>
+    `<rect class="album-track-spectrum__${layer}" x="1" y="1" rx="7" pathLength="100"/>`,
+  ).join('');
+  return `<svg class="album-track-table__perimeter" aria-hidden="true" focusable="false"><g class="album-track-spectrum">${layers}</g><g class="album-track-spectrum album-track-spectrum--opposite">${layers}</g></svg>`;
+}
+
 function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
   const trackPath = String(track.path || '');
   const classes = ['album-track-table__row'];
@@ -15309,7 +15316,7 @@ function buildAlbumTrackTableRow(track = {}, index = 0, config = {}) {
       'track-playing': track.isPlaying ? 'true' : '',
     },
     cells: {
-      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>` },
+      number: { content: `<span class="album-track-table__number-play"><span class="album-track-table__number">${escapeHtml(track.trackNumber || track.track_number || index + 1)}</span>${buildAlbumTrackPlayButtonHtml(track)}</span>${buildAlbumTrackPerimeterHtml()}` },
       title: { content: titleHtml },
       path: { content: `<span class="album-track-table__path" title="${escapeHtml(displayPath)}">${escapeHtml(displayPath)}</span>` },
       problem: { content: problemHtml },

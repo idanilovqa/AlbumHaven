@@ -362,3 +362,21 @@ for (const action of ['exclusion', 'suggestion']) {
     assert.equal(button.getAttribute('aria-disabled'), 'true');
   });
 }
+
+for (const allowed of [true, false]) {
+  test(`P08 album-only problems retain their ${allowed ? 'authorized' : 'unauthorized'} Create Exception action before selection`, () => {
+    const { context, album } = detailContext();
+    album.track_problem_rows = [];
+    album.suggested_edits = [];
+    album.allowed_actions = { 'library.rules.manage': allowed };
+    const html = context.buildDetectedProblemsHtml(album);
+    const button = html.match(/<button\b[^>]*data-open-exclusion-confirm="1"[^>]*>/u)?.[0];
+    assert.ok(button, 'Album-level problems must not require a track table to expose the shared action');
+    assert.match(button, /\bdisabled\b/u, 'Initial unselected action stays disabled');
+    assert.doesNotMatch(html, /role="table"/u);
+    assert.doesNotMatch(html, /data-apply-problem-suggestions/u);
+    context.state.utility.problemExclusionSelections = { 'cover-album': true };
+    const selected = context.buildDetectedProblemsHtml(album).match(/<button\b[^>]*data-open-exclusion-confirm="1"[^>]*>/u)[0];
+    assert.equal(/\bdisabled(?:\s|=|>)/u.test(selected), !allowed);
+  });
+}

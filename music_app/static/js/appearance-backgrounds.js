@@ -885,7 +885,7 @@
         warning.textContent = state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '';
         const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         footerFind('[data-background-reset]').disabled = disabled;
-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
+        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave; footerFind('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
         footerFind('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
@@ -946,7 +946,7 @@
         const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         const findFooter = selector => footerHost.querySelector(selector);
         findFooter('[data-background-reset]').disabled = disabled;
-        findFooter('[data-background-cancel]').disabled = state.loading || state.saving;
+        findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
         findFooter('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
@@ -989,7 +989,7 @@
         const failure = editor.querySelector('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         const findFooter = selector => footerHost.querySelector(selector);
         findFooter('[data-background-reset]').disabled = disabled;
-        findFooter('[data-background-cancel]').disabled = state.loading || state.saving;
+        findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = findFooter('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         findFooter('[data-background-retry]').hidden = !state.loadFailed;
         findFooter('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
@@ -1036,7 +1036,7 @@
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
         const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         footerFind('[data-background-reset]').disabled = disabled;
-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
+        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave;
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
         footerFind('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
@@ -1167,7 +1167,7 @@
         ].filter(Boolean).join(' ');
         const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
         footerFind('[data-background-reset]').disabled = disabled;
-        footerFind('[data-background-cancel]').disabled = state.loading || state.saving;
+        footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = footerFind('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
         footerFind('[data-background-retry]').hidden = !state.loadFailed; footerFind('[data-background-retry]').disabled = state.loading || state.saving;
         footerFind('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';

@@ -497,6 +497,35 @@ policy-blocked; these checks do not claim browser success. Native full PR CI mus
 verify the recovered and additional fixes, and all previously green suites remain
 mandatory. No task checkbox, manual acceptance, merge or release is authorized.
 
+### Run 192 product-correction follow-up — September 18, 2026
+
+The queued run-192 publication landed as `2e4221c6`, followed by CI inventory
+correction `2ba1b63c`. Preserve those exact helper and fixture fixes. This follow-up
+corrects two product defects rather than treating their prior assertions as
+obsolete: clean Appearance drafts disable Cancel, consistently across all five
+editors; and album-only Problems retain the initially disabled Create Exception
+control so authorized selection can enable it. The original Appearance clean-
+draft assertion is restored, while the added disabled Save and saved-status
+assertions remain. Dirty/invalid drafts remain cancellable and all permission
+checks remain enforced. The earlier statement that Cancel must remain enabled
+is superseded by this witnessed clean-draft correction, not a new owner UX choice.
+
+The shared AlbumTrackTable total and superseded empty modal footer are distinct
+contracts: disc-total presentation reads the former directly, while legacy
+footer absence remains independently asserted. The 100px B03 waveform height is
+also applied to the later expanded-loop checkpoint and its contract guard, with
+unchanged waveform size, centerline and one-pixel tolerance. Already published
+keyed search readiness, immutable rule-row identity, native No/Yes recovery,
+1280x720 off-screen prerequisite, exact rarity identity, measured Last.fm
+finalization, and the Space scenario inventory are retained without duplication.
+
+The focused Appearance and album-only regressions failed before their product
+corrections. The reconciled affected-node verification passes 843 tests, zero
+failures and zero skips; the repository runtime bundle builder and production
+parity check pass. Native PR E2E verification remains required. No timeout,
+retry policy, benchmark, fixture population, audio architecture, skip policy,
+permission, task checkbox, final manual acceptance or merge authority is changed.
+
 ## 6. Verification commands
 
 Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.

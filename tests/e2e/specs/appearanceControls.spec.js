@@ -375,8 +375,8 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.waveformHex('edge')).toHaveValue(PLAYER_COLORS.waveformEdge);
     await expect(appearance.playerStyleHex('handles.color')).toHaveValue(PLAYER_COLORS.handle);
     await expect(appearance.compactStyleButton('floating')).toHaveAttribute('aria-pressed', 'true');
-    // Cancel remains available; Save and the shared status own the dirty contract.
-    await expect(appearance.editorFooter.secondary.root).toBeEnabled();
+    // Restoring the saved aggregate leaves no pending work to cancel or save.
+    await expect(appearance.editorFooter.secondary.root).toBeDisabled();
     await expect(appearance.editorFooter.primary.root).toBeDisabled();
     await expect(appearance.editorFooter.status).toHaveText('Saved to your account');
   });

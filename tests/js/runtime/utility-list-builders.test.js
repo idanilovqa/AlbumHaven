@@ -6126,7 +6126,7 @@ test('detected problems do not promote track reasons into an empty album-level s
   assert.match(html, /Undecoded characters/);
 });
 
-test('album-only detected problems show explanatory text without an empty table or unused actions', () => {
+test('album-only detected problems retain their disabled exception action without an empty table or unused Apply action', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
   context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
@@ -6143,7 +6143,9 @@ test('album-only detected problems show explanatory text without an empty table 
   assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS/);
   assert.match(html, /Only album-level problems found\. No per-track problems\./);
   assert.doesNotMatch(html, /problematic-track-problems|utility-detected-table/);
-  assert.doesNotMatch(html, />Create Exception<|>Apply All</);
+  assert.match(html, /data-open-exclusion-confirm="1" disabled aria-disabled="true"/);
+  assert.match(html, />Create Exception</);
+  assert.doesNotMatch(html, />Apply All</);
 });
 
 test('problem exclusion selection stays independent from Suggested Edits Apply or ignore state', () => {

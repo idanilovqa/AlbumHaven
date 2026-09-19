@@ -91,14 +91,15 @@ test('disabled tag Apply follows the shared disabled Button cursor without weake
   }).expectPendingChanges([]);
 });
 
-test('Album Details reads the shared track table footer, not the superseded empty modal footer', async () => {
+test('Album Details keeps the legacy modal footer distinct from the shared table totals', async () => {
   const { TrackModal } = await import('../e2e/poms/trackModal.js');
   const locator = description => ({
     description, locator: selector => locator(`${description} ${selector}`),
     getByRole: role => locator(`${description} role:${role}`), nth: index => locator(`${description} nth:${index}`),
   });
   const modal = new TrackModal(locator('page'));
-  assert.equal(modal.footer, modal.albumTrackTable.total);
+  assert.notEqual(modal.footer, modal.albumTrackTable.total);
+  assert.equal(modal.footer.description, `page ${modal.footerSelector}`);
 });
 
 test('fresh-browser rename verification is scoped to the freshly opened album', () => {
@@ -165,4 +166,19 @@ test('restoring the saved recent player set leaves no dirty preference or pendin
   assert.deepEqual(state.draft, state.saved);
   assert.deepEqual(state.waveformColorUpdates, []);
   assert.equal(state.footer.status, 'Saved to your account');
+});
+
+
+test('disc presentation reads shared track totals while the superseded modal footer stays empty', async () => {
+  const { TrackModal } = await import('../e2e/poms/trackModal.js');
+  const modal = Object.create(TrackModal.prototype);
+  modal.discHeaders = { allTextContents: async () => [' Disc 1 '] };
+  modal.albumTrackTable = { total: { locator(selector) {
+    assert.equal(selector, ':scope > *');
+    return { allTextContents: async () => [' Total Length: 18m 00s ', ''] };
+  } } };
+  modal.readFooterLines = async () => assert.fail('Disc totals must not use the removed legacy footer');
+  assert.deepEqual(await modal.readDiscGroupPresentation(), {
+    headers: ['Disc 1'], totals: ['Total Length: 18m 00s'],
+  });
 });

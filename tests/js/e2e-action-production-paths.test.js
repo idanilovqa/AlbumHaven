@@ -5160,7 +5160,7 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
   assert.match(
     spec,
-    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
+    /Math\.abs\(opened\.playerHeight - 100\)\)\.toBeLessThanOrEqual\(1\)/,
   );
   assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);

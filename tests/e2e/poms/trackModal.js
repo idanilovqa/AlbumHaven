@@ -17,7 +17,7 @@ export class TrackModal extends BasePage {
     this.closeButton = page.locator(this.closeButtonSelector);
     this.title = page.locator(this.titleSelector);
     this.subtitle = page.locator(this.subtitleSelector);
-    this.footer = this.albumTrackTable.total;
+    this.footer = page.locator(this.footerSelector);
     this.discHeaders = this.dialog.locator('.album-track-table__disc-heading');
     this.discTotals = this.dialog.locator('.album-track-table__disc-total');
     this.coverImage = page.locator(this.coverImageSelector);
@@ -215,7 +215,7 @@ export class TrackModal extends BasePage {
       .filter(Boolean);
     return {
       headers: normalize(await this.discHeaders.allTextContents()),
-      totals: await this.readFooterLines(),
+      totals: normalize(await this.albumTrackTable.total.locator(':scope > *').allTextContents()),
     };
   }
 

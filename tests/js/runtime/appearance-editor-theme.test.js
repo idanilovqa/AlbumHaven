@@ -25,6 +25,7 @@ function element() {
       return children.get(selector);
     },
     querySelectorAll: () => [],
+    closest() { return this; },
   };
 }
 
@@ -48,8 +49,9 @@ async function mounted(method, initial = preference(), saveResponse) {
   assert.equal(await instance.load(), true);
   instance[method](host);
   assert.match(host.innerHTML, /class="appearance-background-editor /);
+  const editorSelector = { mountAlerts: '.appearance-alerts', mountAlbumPage: '.appearance-album-page' }[method] || '.appearance-background-editor';
   return {
-    instance, root, host, editor: host.querySelector('.appearance-background-editor'),
+    instance, root, host, editor: host.querySelector(editorSelector),
     preview: host.querySelector('.appearance-background-editor').querySelector(method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]'),
   };
 }
@@ -232,3 +234,33 @@ for (const field of ['fill', 'edge']) for (const replacement of ['theme', 'histo
     assert.equal(state.canSave, true);
   });
 }
+
+for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAlerts', 'mountAlbumPage']) {
+  test(`${method} disables Cancel for a clean draft and enables it for discardable changes`, async () => {
+    const { instance, editor } = await mounted(method);
+    const cancel = editor.querySelector('.background-actions').querySelector('[data-background-cancel]');
+    assert.equal(instance.controller.getState().dirty, false);
+    assert.equal(cancel.disabled, true, 'No changes means there is nothing to discard');
+    instance.controller.setPalette('paper');
+    assert.equal(cancel.disabled, false, 'A dirty draft remains cancellable');
+    instance.controller.cancel();
+    assert.equal(instance.controller.getState().dirty, false);
+    assert.equal(cancel.disabled, true);
+  });
+}
+
+test('restoring the saved recent player set leaves a clean disabled Cancel button', async () => {
+  const style = api.playerThemes[1].style;
+  const initial = preference({ revision: 2, player_style_override: style,
+    player_recent_sets: [style], waveform_recent_colors: ['#123456'],
+    interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null,
+      button_pressed: null, item_outline: { source: 'automatic', color: null } },
+    selection_accent: { enabled: true, color: '#34CA78' } });
+  const { instance, editor } = await mounted('mountSeekbar', initial);
+  instance.controller.setWaveformColor('fill', '#123456');
+  instance.controller.cancel();
+  instance.controller.setPlayerStyle(api.playerThemes[0].style);
+  instance.controller.restorePlayerSet(instance.controller.getState().playerRecentSets[0]);
+  assert.equal(instance.controller.getState().dirty, false);
+  assert.equal(editor.querySelector('.background-actions').querySelector('[data-background-cancel]').disabled, true);
+});

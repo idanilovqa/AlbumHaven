@@ -50,22 +50,30 @@ def main():
     harness.write_text(instrumented, encoding='utf-8', newline='\n')
     command = [sys.executable, '-m', 'pytest', '-q', '--tb=short',
                'tests/py/test_pytest_harness_config.py::test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_both']
+    probe = Path('tests/py/test_pytest_harness_config.py')
+    probe_original = probe.read_bytes()
+    probe_source = probe_original.decode('utf-8')
+    anchor = '    roots = [Path(str(result["basetemp"])) for result in results]'
+    assert probe_source.count(anchor) == 1
+    probe_source = probe_source.replace(anchor, '    print("PROBE_PAYLOADS=" + json.dumps(results, sort_keys=True), flush=True)\n' + anchor)
+    probe.write_text(probe_source, encoding='utf-8', newline='\n')
     results = []
     try:
-        for attempt in range(1, int(os.environ.get('DIAGNOSTIC_ATTEMPTS', '12')) + 1):
+        for attempt in range(1, int(os.environ.get('DIAGNOSTIC_ATTEMPTS', '20')) + 1):
             result = subprocess.run(command, capture_output=True, text=True, timeout=120)
             (folder / f'attempt-{attempt:02d}.log').write_text(result.stdout + '\n' + result.stderr, encoding='utf-8')
             results.append(result.returncode)
             print(f'DIAGNOSTIC attempt {attempt}: exit={result.returncode}', flush=True)
             if result.returncode:
-                print(result.stdout[-5000:] + result.stderr[-5000:])
+                print(result.stdout[-10000:] + result.stderr[-5000:])
                 break
     finally:
         harness.write_bytes(original)
+        probe.write_bytes(probe_original)
     print('Diagnostic exit codes:', results)
     for path in sorted(folder.glob('process-*.jsonl')):
         for line in path.read_text(encoding='utf-8').splitlines():
-            if '"result": false' in line or '"event": "rmtree-error"' in line:
+            if ('"result": false' in line and '"exists": true' in line and '"expected_owner": null' not in line) or '"event": "rmtree-error"' in line:
                 print(line)
 
 

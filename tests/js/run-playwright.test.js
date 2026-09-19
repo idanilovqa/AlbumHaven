@@ -2405,6 +2405,7 @@ for (const snapshotFailure of [false, true]) test(`tests-complete without run-fi
     {
       spawnFn: () => child,
       nowFn: () => elapsedClock,
+      processObject: { pid: process.pid, exitCode: null },
       readProcessTreeIdentitiesFn: (_pid, options) => {
         snapshotOptions.push(options);
         if (options && snapshotFailure) throw new Error('/private/snapshot --token=fixture-secret');

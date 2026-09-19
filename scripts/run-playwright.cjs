@@ -2296,6 +2296,13 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       })) {
         return;
       }
+      // Output chunks replay the last authenticated signal. Enumerate process
+      // owners and arm deadlines only for a new phase, not for every late
+      // provider log (Windows process snapshots synchronously block this loop).
+      const completionAlreadyObserved = completionSignal.phase === 'run-final'
+        ? authoritativeFinalObserved
+        : testsCompleteObserved || authoritativeFinalObserved;
+      if (completionAlreadyObserved) return;
       snapshotManagedRunProcessOwners();
       if (completionSignal.phase === 'tests-complete' && !testsCompleteObserved) {
         testsCompleteObserved = true;

@@ -358,6 +358,7 @@ export class UtilityLoopsActions {
 
   async activateCreateAnotherLoopByName(name) {
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
+    await this.hoverLoopActionByName(name, 'create');
     await this.utilityLoopsTab.loopEntryCard.loopCreateButtonForEntry(entry).click();
     return loopId;
   }
@@ -416,6 +417,7 @@ export class UtilityLoopsActions {
     this.utilityLoopsTab.page.on('request', observe);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
     try {
+      await this.hoverLoopActionByName(name, 'cancel');
       await entryCard.loopCancelButtonForEntry(entry).click();
       await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-state', 'idle');
       await expect(entryCard.savedLoopMainSurfaceForEntry(entry)).toBeVisible({ timeout: options.timeout || 60000 });

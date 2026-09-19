@@ -777,6 +777,12 @@
   white-space: nowrap;
 }
 
+@media (max-width: 720px) {
+  .utility-problem-exclusions-detail .compact-data-table[data-cdt-mobile="stack"] {
+    --cdt-row-padding: 10px;
+  }
+}
+
 .problematic-mutation-overlay {
   position: absolute;
   inset: 0;

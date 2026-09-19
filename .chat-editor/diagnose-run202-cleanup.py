@@ -8,7 +8,6 @@ s = p.read_text(encoding='utf-8')
 start = s.index('def _remove_owned_generated_pytest_root(')
 end = s.index('\ndef _cleanup_stale_generated_pytest_roots()', start)
 part = s[start:end]
-part = part.replace('except OSError:', 'except OSError as exc:\n            print("CLEANUP_OSERROR", repr(exc), getattr(exc, "winerror", None), str(path), flush=True)', 1)
 # Trace rmtree failures and revalidation separately without changing their handling.
 part = part.replace('        except OSError:\n            if not path.exists():', '        except OSError as exc:\n            print("CLEANUP_RMTREE", repr(exc), getattr(exc, "winerror", None), str(path), flush=True)\n            if not path.exists():')
 part = part.replace('            return False\n        try:\n            shutil.rmtree(path)', '            print("CLEANUP_IDENTITY_REJECT", str(path), directory_identity, (current.st_dev, current.st_ino), _owned_generated_pytest_root(path), owner, flush=True)\n            return False\n        try:\n            shutil.rmtree(path)')

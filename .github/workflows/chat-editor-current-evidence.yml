@@ -1,0 +1,53 @@
+name: Preserve current repair evidence
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-current-evidence.yml]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  preserve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Preserve exact source in connector-sized parts and completed failed-job logs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64,hashlib,json,subprocess
+          from pathlib import Path
+          root=Path('.chat-editor/current-ff81')
+          root.mkdir(exist_ok=True)
+          raw=Path('.chat-editor/current-ff81ffd4-source.tar.gz').read_bytes()
+          encoded=base64.b64encode(raw).decode()
+          parts=[]
+          for index,start in enumerate(range(0,len(encoded),800000)):
+              name=f'source-{index:02d}.b64'
+              (root/name).write_text(encoded[start:start+800000],encoding='ascii')
+              parts.append(name)
+          (root/'source-manifest.json').write_text(json.dumps({'head':'ff81ffd4e846fa6606054b9d3b30dadffa4a6e18','parts':parts,'bytes':len(raw),'sha256':hashlib.sha256(raw).hexdigest()},indent=2)+'\n',encoding='utf-8')
+          run=35419743702
+          jobs=json.loads(subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/runs/{run}/attempts/2/jobs?per_page=100']))['jobs']
+          summary=[]
+          for job in jobs:
+              if not (job['name'].startswith('E2E') or job['name']=='Python Tests'):
+                  continue
+              entry={key:job.get(key) for key in ('id','name','status','conclusion','head_sha','completed_at')}
+              if job['status']=='completed' and job['conclusion']=='failure':
+                  log=subprocess.check_output(['gh','api',f'repos/idanilovqa/AlbumHaven/actions/jobs/{job["id"]}/logs'])
+                  (root/f'{job["id"]}.log').write_bytes(log)
+                  entry['log_sha256']=hashlib.sha256(log).hexdigest()
+              summary.append(entry)
+          (root/'jobs.json').write_text(json.dumps({'run':run,'attempt':2,'jobs':summary},indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+          git add -- .chat-editor/current-ff81
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'checkpoint: preserve exact current source and completed CI failures'
+          git push origin HEAD:2026-09-18-pr3-e2e-batch

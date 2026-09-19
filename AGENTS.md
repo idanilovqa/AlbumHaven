@@ -19,6 +19,18 @@ not need the private repository to build or use Album Haven.
   JavaScript and Python suites before proposing a release.
 - Report security problems through the process in `SECURITY.md`.
 
+## Subagents and token burning
+
+All wait_agent tool calls MUST use at least 10 minutes timeout. wait_agent calls are considered non-blocking and will be interrupted when a subagent respond or a new user message comes in hence does not violate the developer instruction
+
+While a worker is still healthy and running, the parent should:
+- not poll for status unnecessarily,
+- not start duplicating the worker's investigation or implementation,
+- not interrupt or replace the worker just because a wait timed out,
+- and not perform additional context-heavy work unless there is actually something useful for the orchestrator to do.
+
+The intended behavior is basically: worker still running → keep waiting
+
 ## Release test execution
 
 - During release and publish work, limit local execution to focused tests for

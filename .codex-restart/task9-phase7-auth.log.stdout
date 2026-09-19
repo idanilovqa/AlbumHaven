@@ -1,0 +1,12 @@
+[WebServer] Phase 7 production E2E app listening on http://127.0.0.1:6200; SMTP capture control on http://127.0.0.1:6202; secondary worker on http://127.0.0.1:6203
+
+Running 6 tests using 1 worker
+
+  ok 1 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:23:1 › anonymous root redirects to the login page (2.0s)
+  ok 2 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:34:1 › FTC-PERMISSIONS-003 reconciles Rendref and signs in through a token-free safe return (2.5s)
+  ok 3 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:49:1 › FTC-PERMISSIONS-004 keeps failures generic and throttles durably (9.4s)
+  ok 4 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:88:1 › FTC-PERMISSIONS-006 completes a token-free, single-use reset and revokes prior sessions (8.8s)
+  ok 5 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:138:1 › FTC-PERMISSIONS-007 rejects expired sessions across HTML, API, and media without leaks (2.8s)
+  ok 6 [phase7-auth-lifecycle] › tests\e2e\phase7\auth-lifecycle\authLifecycle.spec.js:153:1 › FTC-PERMISSIONS-008 enforces session CSRF and makes logout revoke reuse (4.5s)
+
+  6 passed (36.0s)

@@ -3,13 +3,60 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { after, test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 
 import { restoreDdtStudioRecordsFixture } from '../e2e/helpers/ddtStudioRecordsFixture.js';
 
 const TEMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-e2e-contract-'));
 fs.mkdirSync(path.join(TEMP_ROOT, 'media'), { recursive: true });
+const { resolvePlaywrightPython } = createRequire(import.meta.url)('../../scripts/playwright-python.cjs');
 
 after(() => fs.rmSync(TEMP_ROOT, { recursive: true, force: true }));
+
+test('restores renamed physical album tags together with the original mixed years and track numbers', async () => {
+  const python = resolvePlaywrightPython(process.env);
+  const albumDirectory = path.join(TEMP_ROOT, 'media', 'ДДТ', 'Студийные записи');
+  fs.mkdirSync(albumDirectory, { recursive: true });
+  execFileSync(python, ['-c', `
+from pathlib import Path
+from mutagen.id3 import ID3, TALB, TDRC, TRCK
+import sys
+for number in range(1, 17):
+    tags = ID3()
+    tags.add(TALB(encoding=3, text=['temporary renamed release']))
+    tags.add(TDRC(encoding=3, text=['1988']))
+    tags.add(TRCK(encoding=3, text=['18']))
+    tags.save(Path(sys.argv[1]) / f'{number:02}. Студийная запись {number}.mp3')
+`, albumDirectory], { windowsHide: true });
+  await restoreDdtStudioRecordsFixture({
+    env: {
+      ALBUM_HAVEN_E2E_TEMP_ROOT: TEMP_ROOT,
+      ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL:
+        'postgresql://album_haven_migrator@127.0.0.1:5432/album_haven_fake_e2e',
+    },
+    pythonCommand: python,
+    execFileAsync: async (command, args, options) => args[0] === '-c'
+      ? { stdout: execFileSync(command, args, options) }
+      : { stdout: JSON.stringify({ album_rows: 1, track_rows: 16, track_file_rows: 16,
+        album_edition_rows: 0, file_edition_rows: 0 }) },
+  });
+  const snapshots = JSON.parse(execFileSync(python, ['-c', `
+from pathlib import Path
+from mutagen.id3 import ID3
+import json, sys
+print(json.dumps([{
+    key: str(ID3(track).get(key, '')) for key in ['TALB', 'TDRC', 'TRCK']
+} for track in sorted(Path(sys.argv[1]).glob('*.mp3'))]))
+`, albumDirectory], { encoding: 'utf8', windowsHide: true }));
+  assert.equal(snapshots.length, 16);
+  snapshots.forEach((tags, index) => {
+    const number = index + 1;
+    assert.equal(tags.TALB, 'Студийные записи');
+    assert.equal(tags.TRCK, String(number));
+    assert.equal(tags.TDRC, number <= 4 ? '1990' : [9, 10, 11, 16].includes(number) ? '' : '1999');
+  });
+});
 
 test('restores the exact mixed-year Studio Records fixture through guarded helpers', async () => {
   const calls = [];
@@ -157,6 +204,12 @@ test('isolates the Studio Records scenario before and after its mutations', () =
       new RegExp(`test\\.${hook}\\(async \\(\\{ managedAppLifecycle \\}\\) => \\{([\\s\\S]*?)\\n\\}\\);`),
     )?.[1];
     assert.ok(body, `${hook} must isolate the Studio Records fixture`);
+    assert.ok(
+      body.indexOf('await managedAppLifecycle.stop();') >= 0
+        && body.indexOf('await managedAppLifecycle.stop();')
+          < body.indexOf('await restoreDdtStudioRecordsFixture();'),
+      `${hook} must stop pending application writes before restoring fixture tags`,
+    );
     assert.ok(
       body.indexOf('await restoreDdtStudioRecordsFixture();')
         < body.indexOf('await managedAppLifecycle.restart();'),

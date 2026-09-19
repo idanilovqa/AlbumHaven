@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "profile": "windows",
+  "node": "22.22.2",
+  "chrome": "151.0.7922.138",
+  "chromePath": "C:\\Users\\Rendref\\.cache\\album-haven\\chrome-for-testing-151.0.7922.138\\chrome.exe",
+  "python": "3.11",
+  "postgresClient": "psql (PostgreSQL) 18.4",
+  "postgresServerVersionNumber": 180004,
+  "imageioFfmpeg": "0.6.0",
+  "ffmpeg": "7.1-essentials_build-www.gyan.dev",
+  "ffmpegExecutable": "C:\\Users\\Rendref\\.cache\\album-haven\\python-3.11\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v7.1.exe"
+}

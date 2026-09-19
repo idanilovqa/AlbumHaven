@@ -1038,6 +1038,7 @@ function handleStreamingWorkletMessage(message) {
           outgoingTrackPath,
           incomingTrackPath,
           outgoingPlaybackSnapshot,
+          incomingListenSession: continuity.measuredListenSession || null,
           renderedFrame: message.renderedFrame,
           continuityKind: promotedLoop?.kind || 'queued-next',
         }), 'boundary-facade-error');
@@ -1160,12 +1161,16 @@ function handleStreamingWorkletMessage(message) {
   }
   if (message.type === 'underrun') {
     engine.diagnostics.underruns += 1;
+    if (typeof breakMeasuredListenSegment === 'function') breakMeasuredListenSegment(roleState.measuredListenSession);
     return;
   }
   if (message.type === 'consumed' && streamingWireRoleAccepted(roleState, message.role)
       && Number.isInteger(message.frames) && message.frames >= 0
       && Number.isInteger(message.bufferedFrames) && message.bufferedFrames >= 0) {
     recordStreamingRenderedPcmEvidence(roleState, message);
+    if (typeof recordMeasuredStreamingFrames === 'function') {
+      recordMeasuredStreamingFrames(roleState, message, Number(engine.context?.sampleRate) || STREAMING_SAMPLE_RATE);
+    }
     const capacityFrames = streamingRoleCapacityFrames(roleState);
     const reconciledBufferedFrames = message.frames === 0
       ? message.bufferedFrames

@@ -284,6 +284,9 @@ def test_request_runtime_shutdown_is_idempotent(runtime_carrier, monkeypatch):
 
 
 def test_asgi_lifespan_awaits_peak_and_pcm_registry_shutdown_before_runtime_shutdown(monkeypatch):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, state as state_module
 
@@ -349,6 +352,9 @@ def test_asgi_lifespan_awaits_peak_and_pcm_registry_shutdown_before_runtime_shut
     ["waveform-shutdown", "pcm-shutdown", "runtime-shutdown"],
 )
 def test_asgi_lifespan_attempts_every_cleanup_stage_before_raising(monkeypatch, failure_stage):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
     from music_app import create_asgi_app
     from music_app.services import lastfm_retry, state as state_module
 

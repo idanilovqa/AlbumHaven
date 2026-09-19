@@ -1587,8 +1587,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
-    const operation = request.operation ?? 'restart';
-    if (!['restart', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    const operation = request.operation ?? request.action ?? 'restart';
+    if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
     if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
       throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
     }
@@ -1636,6 +1636,10 @@ function createManagedIsolatedAppRestartController(options = {}) {
               fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
             throw error;
           }
+        }
+        if (request.operation === 'stop') {
+          writeJsonAtomically(ackPath, { nonce: request.nonce, status: 'stopped' });
+          return true;
         }
 
         phase = 'start-replacement';
@@ -2292,6 +2296,13 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       })) {
         return;
       }
+      // Output chunks replay the last authenticated signal. Enumerate process
+      // owners and arm deadlines only for a new phase, not for every late
+      // provider log (Windows process snapshots synchronously block this loop).
+      const completionAlreadyObserved = completionSignal.phase === 'run-final'
+        ? authoritativeFinalObserved
+        : testsCompleteObserved || authoritativeFinalObserved;
+      if (completionAlreadyObserved) return;
       snapshotManagedRunProcessOwners();
       if (completionSignal.phase === 'tests-complete' && !testsCompleteObserved) {
         testsCompleteObserved = true;

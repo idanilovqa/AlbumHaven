@@ -1,0 +1,58 @@
+{
+    "root":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc",
+    "contexts":  {
+                     "destructive":  {
+                                         "Values":  {
+                                                        "PGPASSFILE":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\destructive\\album-haven-postgres-settings_repair_5e8df3dc_destructive.pgpass",
+                                                        "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL":  "postgresql://album_haven_migrator_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "DATABASE_MIGRATOR_URL":  "postgresql://album_haven_migrator_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "DATABASE_READONLY_URL":  "postgresql://album_haven_readonly_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "ALBUM_HAVEN_CI_DATABASE":  "album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "ALBUM_HAVEN_APP_DATABASE_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "DATABASE_APP_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive",
+                                                        "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_destructive@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_destructive"
+                                                    },
+                                         "Parameters":  {
+                                                            "Pgbin":  "C:\\PostgreSQL\\18\\bin",
+                                                            "AppPrivilegeMode":  "Inherited",
+                                                            "ServiceName":  "postgresql-x64-18",
+                                                            "DatabaseSuffix":  "settings_repair_5e8df3dc_destructive",
+                                                            "HostName":  "127.0.0.1",
+                                                            "StatePath":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\destructive\\postgres.state.json",
+                                                            "ExpectedMajorVersion":  "18",
+                                                            "GithubEnv":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\destructive\\postgres.env",
+                                                            "Port":  5432,
+                                                            "RepositoryRoot":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app",
+                                                            "PythonPath":  "C:\\Users\\Rendref\\.cache\\album-haven\\python-3.11\\python.exe",
+                                                            "RunnerTemp":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\destructive"
+                                                        }
+                                     },
+                     "contract":  {
+                                      "Values":  {
+                                                     "PGPASSFILE":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\contract\\album-haven-postgres-settings_repair_5e8df3dc_contract.pgpass",
+                                                     "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL":  "postgresql://album_haven_migrator_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "DATABASE_MIGRATOR_URL":  "postgresql://album_haven_migrator_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "DATABASE_READONLY_URL":  "postgresql://album_haven_readonly_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "ALBUM_HAVEN_CI_DATABASE":  "album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "ALBUM_HAVEN_APP_DATABASE_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "DATABASE_APP_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract",
+                                                     "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL":  "postgresql://album_haven_app_settings_repair_5e8df3dc_contract@127.0.0.1/album_haven_ci_settings_repair_5e8df3dc_contract"
+                                                 },
+                                      "Parameters":  {
+                                                         "Pgbin":  "C:\\PostgreSQL\\18\\bin",
+                                                         "AppPrivilegeMode":  "Inherited",
+                                                         "ServiceName":  "postgresql-x64-18",
+                                                         "DatabaseSuffix":  "settings_repair_5e8df3dc_contract",
+                                                         "HostName":  "127.0.0.1",
+                                                         "StatePath":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\contract\\postgres.state.json",
+                                                         "ExpectedMajorVersion":  "18",
+                                                         "GithubEnv":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\contract\\postgres.env",
+                                                         "Port":  5432,
+                                                         "RepositoryRoot":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app",
+                                                         "PythonPath":  "C:\\Users\\Rendref\\.cache\\album-haven\\python-3.11\\python.exe",
+                                                         "RunnerTemp":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\contract"
+                                                     }
+                                  }
+                 },
+    "envPath":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-repair-pg-5e8df3dc\\combined.env"
+}

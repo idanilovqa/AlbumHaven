@@ -332,6 +332,10 @@ export class AlbumCard extends BasePage {
     return this.cardByAlbumName(albumName).locator(this.subtitleWithinCardSelector).first();
   }
 
+  async readMetadataByAlbumName(albumName) {
+    return parseVisibleAlbumMetadata(await this.subtitleByAlbumName(albumName).textContent());
+  }
+
   trackCountByAlbumName(albumName) {
     return this.cardByAlbumName(albumName).locator(this.trackCountWithinCardSelector).first();
   }

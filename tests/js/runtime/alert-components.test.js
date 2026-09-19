@@ -107,8 +107,9 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
 
   assert.match(css, /\.small-alert,\s*\.alert-label,\s*\.on-page-alert\s*\{[^}]*--alert-edge:[^}]*--alert-tint:[^}]*--alert-ink:/s);
   assert.match(css, /\.alert-label\s*\{[^}]*border:[^;]*var\(--alert-edge\)[^}]*background:\s*var\(--alert-tint\)[^}]*color:\s*var\(--alert-ink\)/s);
-  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*2px solid color-mix\(in srgb, var\(--alert-edge\)/s);
+  assert.match(css, /button\.alert-label:is\(:hover,\s*:focus-visible[^}]*outline:\s*1px solid color-mix\(in srgb, var\(--alert-edge\)/s);
   assert.match(css, /button\.alert-label:is\(\.is-active,\s*\[aria-pressed="true"\]\)/s);
+  assert.match(css, /button\.alert-label:is\(:hover,[^}]*outline-offset:\s*-1px/s);
   const labelRules = css.match(/[^{}]*\.alert-label[^{}]*\{[^}]*\}/g)?.join('\n') || '';
   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });

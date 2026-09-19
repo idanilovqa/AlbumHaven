@@ -27,17 +27,9 @@ export class ArtistPageSettingsActions {
   }
 
   async waitForCombineState(expectedStateText, options = {}) {
-    await this.artistPageSettings.waitForPageCondition((selectors) => {
-      const button = document.querySelector(selectors.combineButtonSelector);
-      if (!(button instanceof HTMLElement)) return false;
-      const count = button.querySelector(selectors.combineStateCountSelector);
-      return (count?.textContent || '').trim() === selectors.expectedStateText;
-    }, {
+    await expect(this.artistPageSettings.combineSimilarArtistsButton).toHaveAttribute('aria-checked',
+      String(String(expectedStateText).toLowerCase() === 'on'), {
       timeout: options.timeout || 10000,
-    }, {
-      combineButtonSelector: this.artistPageSettings.combineSimilarArtistsButtonSelector,
-      combineStateCountSelector: this.artistPageSettings.combineStateCountSelector,
-      expectedStateText,
     });
   }
 

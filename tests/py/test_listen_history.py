@@ -11,6 +11,7 @@ from music_app.services.listen_history import (
     update_listen_history_entry,
 )
 from music_app.services import listen_history
+from music_app.services.listen_history_postgres import PendingListenEntry
 
 
 @pytest.fixture
@@ -29,6 +30,12 @@ def fake_listen_history_adapter(monkeypatch):
 
         def save_items(self, items):
             stored[:] = [dict(item) for item in items]
+
+        def load_pending_entries(self, *, limit):
+            entries = [PendingListenEntry(dict(item), account_id=7, library_id=9, row_id=index + 1)
+                       for index, item in enumerate(stored)
+                       if listen_history.is_pending_scrobble_entry(item)]
+            return entries[:max(1, int(limit))]
 
     monkeypatch.setattr(
         listen_history,
@@ -108,10 +115,10 @@ def test_update_listen_history_entry_and_pending_scrobble_filter(
     assert updated is not None
     assert updated["scrobble_retry_count"] == 2
     assert update_listen_history_entry(config, "", {"x": 1}) is None
-    assert [item["track_ref"] for item in load_pending_scrobble_entries(config)] == [
+    assert [item.entry["track_ref"] for item in load_pending_scrobble_entries(config)] == [
         "first"
     ]
-    assert load_pending_scrobble_entries(config, limit=0)[0]["track_ref"] == "first"
+    assert load_pending_scrobble_entries(config, limit=0)[0].entry["track_ref"] == "first"
 
 
 def test_build_listen_history_status_counts_uses_one_history_snapshot(monkeypatch):
@@ -165,6 +172,12 @@ def test_selected_postgres_listen_history_append_update_pending_leaves_stale_jso
         def save_items(self, items):
             stored[:] = [dict(item) for item in items]
 
+        def load_pending_entries(self, *, limit):
+            entries = [PendingListenEntry(dict(item), account_id=7, library_id=9, row_id=index + 1)
+                       for index, item in enumerate(stored)
+                       if listen_history.is_pending_scrobble_entry(item)]
+            return entries[:max(1, int(limit))]
+
     class FakePsycopg:
         def connect(self):
             raise AssertionError("sentinel test should use the fake adapter")
@@ -189,7 +202,7 @@ def test_selected_postgres_listen_history_append_update_pending_leaves_stale_jso
 
     assert updated is not None
     assert updated["scrobbled"] is True
-    assert [item["track_ref"] for item in load_pending_scrobble_entries(config)] == [
+    assert [item.entry["track_ref"] for item in load_pending_scrobble_entries(config)] == [
         "existing-track"
     ]
     assert history_path.read_text(encoding="utf-8") == '{"items":[{"id":"stale","track_ref":"old"}]}'

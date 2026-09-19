@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from music_app.routes.auth_asgi import _policy_config
 from music_app.routes.bounded_json import JSONBodyTooLarge, read_bounded_json_object
 from music_app.services.appearance_preferences_postgres import (
+    AppearanceLoopStyleForbidden,
     AppearanceRevisionConflict,
     PostgresAppearancePreferencesRepository,
     appearance_client_profile,
@@ -16,6 +17,7 @@ from music_app.services.appearance_preferences_postgres import (
     normalize_appearance_preferences,
 )
 from music_app.services.auth_session_csrf import issue_session_csrf
+from music_app.services.policy_asgi import allowed_actions_for_request
 
 
 router = APIRouter()
@@ -78,6 +80,8 @@ async def put_appearance(request: Request) -> JSONResponse:
         expected_revision = payload.pop("expected_revision", None)
         colors = normalize_appearance_preferences(payload)
         aggregate = "interaction_overrides" in colors
+        if "loop_control_style" in colors and not aggregate:
+            raise ValueError("Loop style writes require a revision-controlled aggregate.")
         if aggregate and (type(expected_revision) is not int or expected_revision < 0):
             raise ValueError("Invalid expected revision.")
         if not aggregate and expected_revision is not None:
@@ -98,9 +102,15 @@ async def put_appearance(request: Request) -> JSONResponse:
         }
         if aggregate:
             kwargs["expected_revision"] = expected_revision
+        if "loop_control_style" in colors:
+            kwargs["allow_loop_control_style"] = allowed_actions_for_request(
+                request, ("library.loops.create",),
+            ).as_payload().get("library.loops.create") is True
         saved = expand_appearance_preferences(await run_in_threadpool(
             _repository(request).save_preferences, **kwargs,
         ))
+    except AppearanceLoopStyleForbidden:
+        return JSONResponse({"error": "loop_style_forbidden"}, status_code=403, headers=_NO_STORE)
     except AppearanceRevisionConflict as conflict:
         return JSONResponse({"error": "appearance_conflict", "appearance": expand_appearance_preferences(conflict.current)}, status_code=409, headers=_NO_STORE)
     except Exception:

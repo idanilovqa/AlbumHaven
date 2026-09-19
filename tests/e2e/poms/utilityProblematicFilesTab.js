@@ -33,35 +33,34 @@ export class UtilityProblematicFilesTab extends BasePage {
     this.detailArtist = page.locator('#utility-problematic-detail .utility-detail-meta').first();
     this.detailProblemChips = page.locator('#utility-problematic-detail .alert-label[data-problem-exclusion-scope="file"]');
     this.detailProblemReasons = page.locator(
-      '#utility-problematic-detail .alert-label[data-problem-exclusion-scope]',
+      '#utility-problematic-detail .alert-label[data-problem-exclusion-reason], '
+      + '#utility-problematic-detail .utility-album-problem-content .alert-label',
     );
     this.detailTrackRows = page.locator(this.problematicTrackRowSelector);
     this.detailFileTypeChips = page.locator('#utility-problematic-detail .utility-file-type-chip');
-    this.detailDetectedProblemsSection = page.locator('[data-utility-section-toggle="detected"]').first();
-    this.detailSuggestedEditsSection = page.locator('[data-utility-section-toggle="suggested"]').first();
-    this.suggestedEditChoices = page.locator('#utility-problematic-detail [data-repair-choice]');
-    this.suggestedEditRows = page.locator('#utility-problematic-detail .utility-repair-preview-item');
-    this.suggestedEditsApplyButton = page.locator('#utility-problematic-detail [data-open-repair-confirm="1"]');
+    this.noTrackProblems = page.locator('#utility-problematic-detail .utility-detail-meta').filter({
+      hasText: /^(Only album-level problems found\. )?No per-track problems( found| match the selected filters)?\.$/u,
+    });
+    this.suggestedEditChoices = page.locator('#utility-problematic-detail [data-problem-suggestion-id]');
+    this.suggestedEditRows = this.suggestedEditChoices;
+    this.suggestedEditsApplyButton = page.locator('#utility-problematic-detail [data-apply-problem-suggestions]');
     this.detailOpenInExplorerButton = page.locator('[data-open-problematic-album-folder="1"]').first();
     this.detailEditTagsButton = page.locator('[data-open-tag-editor="1"]').first();
     this.detailDiscogsButton = page.locator('[data-find-on-discogs="1"]').first();
-    this.detectedProblemsHeading = page.getByText('DETECTED PROBLEMS', { exact: true }).first();
-    this.albumProblemsHeading = page.getByText('ALBUM-LEVEL PROBLEMS', { exact: true }).first();
-    this.trackProblemsHeading = page.getByText('TRACK-LEVEL PROBLEMS', { exact: true }).first();
-    this.trackProblemsTable = page.locator('#utility-problematic-detail [data-cdt-frame="inset"][role="table"]').first();
+    this.detectedProblemsHeading = page.getByRole('heading', { name: 'Detected problems', exact: true });
+    this.trackProblemsTable = page.locator('#utility-problematic-detail [data-cdt-frame="outline"][role="table"]');
     this.trackProblemHeaders = this.trackProblemsTable.locator('[role="columnheader"]');
     this.trackProblemReasonCells = this.trackProblemsTable.locator('[role="cell"][data-cdt-column="reason"]');
     this.trackProblemRows = this.trackProblemsTable.locator('[role="row"][data-cdt-row-key]');
     this.albumProblemPills = page.locator(this.albumProblemPillSelector);
     this.selectedProblemPills = page.locator(this.selectedProblemPillSelector);
-    this.problemReasonCount = page.locator(this.problemReasonCountSelector).first();
     this.forbiddenDetectedProblemElements = page.locator(this.forbiddenDetectedProblemSelector);
-    this.excludeProblemButton = page.getByRole('button', { name: 'Exclude the problem', exact: true });
+    this.excludeProblemButton = page.locator('#utility-problematic-detail').getByRole('button', { name: 'Create Exception', exact: true });
     this.exclusionConfirmDialog = page.locator('#repair-confirm-modal');
     this.exclusionConfirmText = page.locator('#repair-confirm-text');
     this.exclusionCancelButton = this.exclusionConfirmDialog.getByRole('button', { name: 'Cancel', exact: true });
-    this.exclusionAcceptButton = this.exclusionConfirmDialog.getByRole('button', { name: 'Exclude', exact: true });
-    this.repairConfirmDialog = page.getByRole('dialog', { name: 'Repair local files', exact: true });
+    this.exclusionAcceptButton = this.exclusionConfirmDialog.getByRole('button', { name: 'Create Exception', exact: true });
+    this.repairConfirmDialog = page.getByRole('dialog', { name: 'Apply suggested edits?', exact: true });
     this.repairConfirmAcceptButton = page.locator('#repair-confirm-accept');
     this.repairProgressOverlay = page.locator('#repair-progress-overlay');
     this.mutationOverlay = page.locator('#utility-problematic-detail .problematic-mutation-overlay');
@@ -164,11 +163,15 @@ export class UtilityProblematicFilesTab extends BasePage {
   }
 
   get albumProblemPillSelector() {
-    return '[data-problem-exclusion-scope="album"]';
+    return '[data-album-problem-type]';
   }
 
   get albumProblemSectionSelector() {
-    return '.utility-album-problem-list';
+    return '.utility-album-problem-labels';
+  }
+
+  get sectionHeadingSelector() {
+    return 'h4';
   }
 
   get detectedProblemActionsSelector() {
@@ -176,15 +179,11 @@ export class UtilityProblematicFilesTab extends BasePage {
   }
 
   get trackProblemSectionSelector() {
-    return '.utility-track-problem-table';
+    return '.utility-detected-table';
   }
 
   get selectedProblemPillSelector() {
-    return '[data-problem-exclusion-scope][aria-pressed="true"]';
-  }
-
-  get problemReasonCountSelector() {
-    return '.utility-problem-count';
+    return '.utility-problem-exclusion-pill[aria-pressed="true"]';
   }
 
   get mutationOverlaySelector() {
@@ -196,7 +195,7 @@ export class UtilityProblematicFilesTab extends BasePage {
   }
 
   get trackProblemTableSelector() {
-    return '[data-cdt-frame="inset"][role="table"]';
+    return '[data-cdt-frame="outline"][role="table"]';
   }
 
   get columnHeaderSelector() {
@@ -221,7 +220,7 @@ export class UtilityProblematicFilesTab extends BasePage {
 
   albumProblemPill(reason) {
     const canonicalReason = this.page.locator(
-      `[data-problem-exclusion-scope="album"][data-problem-exclusion-reason="${cssAttributeValue(reason)}"]`,
+      `[data-album-problem-type][data-problem-exclusion-reason="${cssAttributeValue(reason)}"]`,
     );
     const visibleReason = this.page.locator(this.albumProblemPillSelector).filter({
       hasText: exactNormalizedText(reason),
@@ -230,36 +229,24 @@ export class UtilityProblematicFilesTab extends BasePage {
   }
 
   fileProblemPill(filename, reason) {
-    return this.problematicTrackRowByTitle(filename)
+    return this.page.locator(`${this.problematicTrackRowSelector}[data-problematic-track-path$="${cssAttributeValue(filename)}"]`)
       .locator('[data-problem-exclusion-scope="file"]')
       .filter({ hasText: exactNormalizedText(reason) })
       .first();
   }
 
   suggestedEditRowByKey(rowKey) {
-    return this.suggestedEditRows.filter({
-      has: this.page.locator(`[data-repair-row-key="${cssAttributeValue(rowKey)}"]`),
-    }).first();
+    return this.page.locator(`#utility-problematic-detail [data-problem-suggestion-id="${cssAttributeValue(rowKey)}"]`);
   }
 
-  suggestedEditChoice(row, choice) {
-    return row.locator(`[data-repair-choice="${cssAttributeValue(choice)}"]`);
-  }
-
-  suggestedEditRowKey(row) {
-    return row.locator('[data-repair-row-key]').first();
-  }
-
-  suggestedEditOriginal(row) {
-    return row.locator('.utility-repair-preview-original').first();
-  }
-
-  suggestedEditRepaired(row) {
-    return row.locator('.utility-repair-preview-repaired').first();
-  }
-
-  activeSuggestedEditChoice(row) {
-    return row.locator('[data-repair-choice].is-active').first();
+  async readRenderedSuggestions() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe actual proposal labels and their owning track rows
+    return this.suggestedEditRows.evaluateAll(labels => labels.map(label => ({
+      rowKey: label.getAttribute('data-problem-suggestion-id'),
+      path: label.closest('[data-cdt-row-key]')?.getAttribute('data-problematic-track-path') || '',
+      label: String(label.textContent || '').trim(),
+      selected: label.getAttribute('aria-pressed') === 'true',
+    })));
   }
 
   listItemByTitle(albumTitle) {

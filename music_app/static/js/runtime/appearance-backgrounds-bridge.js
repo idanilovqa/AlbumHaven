@@ -33,9 +33,19 @@ function mountBackgroundAppearanceEditor(detail) {
 function getSavedAppearancePlayerColors() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
 }
+function getSavedAppearanceLoopControlStyle() {
+  return getBackgroundAppearanceEditor()?.getSavedLoopControlStyle?.() === 'companion' ? 'companion' : 'capsule';
+}
+function syncSavedAppearanceLoopControlStyle() {
+  const style = getSavedAppearanceLoopControlStyle();
+  document.querySelectorAll?.('[data-playback-control-cluster][data-loop-control-style]').forEach(node => {
+    node.setAttribute('data-loop-control-style', style);
+  });
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+    syncSavedAppearanceLoopControlStyle();
   });
 }
 
@@ -60,6 +70,11 @@ function mountSeekbarAppearanceEditor(detail) {
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
     getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: seekbarMode => {
+      state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
+      persistPlayerAppearance();
+      updateWaveformAppearance(true);
+    },
   });
   else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
 }

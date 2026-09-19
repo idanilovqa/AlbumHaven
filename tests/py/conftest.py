@@ -140,6 +140,28 @@ def _owned_generated_pytest_root(path: Path) -> dict[str, object] | None:
     return payload
 
 
+def _preserve_pytest_owner_after_partial_removal(
+    path: Path,
+    owner: dict[str, object],
+    directory_identity: tuple[int, int],
+) -> bool:
+    """Keep a failed deletion recoverable without claiming a replacement root."""
+    try:
+        stat = path.stat()
+        if not stat.st_ino or path.is_symlink() or (stat.st_dev, stat.st_ino) != directory_identity:
+            return False
+        marker = path / _PYTEST_BASETEMP_OWNER_FILE
+        try:
+            with marker.open("x", encoding="utf-8") as stream:
+                json.dump(owner, stream, sort_keys=True)
+        except FileExistsError:
+            # Never replace a marker written by another owner.
+            return _owned_generated_pytest_root(path) == owner
+    except OSError:
+        return False
+    return True
+
+
 def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int, str] | None = None) -> bool:
     owner = _owned_generated_pytest_root(path)
     if owner is None:
@@ -150,10 +172,30 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
             return False
     elif _process_is_running(owner_identity[0]):
         return False
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    directory_identity = (stat.st_dev, stat.st_ino)
     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
+        try:
+            current = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if (path.is_symlink() or (current.st_dev, current.st_ino) != directory_identity
+                or _owned_generated_pytest_root(path) != owner):
+            return False
         try:
             shutil.rmtree(path)
         except OSError:
+            if not path.exists():
+                return True
+            # rmtree can remove our marker before an open Windows log blocks the
+            # rest. Preserve ownership so final teardown can retry after closure.
+            if not _preserve_pytest_owner_after_partial_removal(path, owner, directory_identity):
+                return False
             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
                 return False
         if not path.exists():
@@ -217,6 +259,15 @@ def pytest_configure(config: pytest.Config) -> None:
         )
     config._album_haven_generated_basetemp = not explicit_basetemp
     config._album_haven_generated_basetemp_token = generated_token
+    if not explicit_basetemp:
+        # Config cleanup is LIFO: later resource owners close their handles first.
+        # Capture our identity now; pytest can remove _tmp_path_factory before
+        # this final callback runs. The removal helper still revalidates ownership.
+        generated_root = Path(config.option.basetemp).resolve()
+        owner_identity = (os.getpid(), generated_token)
+        config.add_cleanup(lambda: _remove_owned_generated_pytest_root(
+            generated_root, expected_owner=owner_identity,
+        ))
     config._album_haven_test_appdata = _activate_pytest_app_paths(
         Path(config.option.basetemp).resolve()
     )
@@ -241,27 +292,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     _activate_pytest_session_temp(config)
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    config = session.config
+def _cleanup_generated_pytest_root(config: pytest.Config) -> None:
     if not getattr(config, "_album_haven_generated_basetemp", False):
         return
-    base_temp = config._tmp_path_factory._basetemp
+    factory = getattr(config, "_tmp_path_factory", None)
+    base_temp = getattr(factory, "_basetemp", None)
     token = getattr(config, "_album_haven_generated_basetemp_token", None)
     if base_temp is None or not isinstance(token, str):
         return
     _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    _cleanup_generated_pytest_root(session.config)
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_unconfigure(config: pytest.Config) -> None:
-    if not getattr(config, "_album_haven_generated_basetemp", False):
-        return
-    base_temp = config._tmp_path_factory._basetemp
-    token = getattr(config, "_album_haven_generated_basetemp_token", None)
-    if base_temp is None or not isinstance(token, str):
-        return
-    _remove_owned_generated_pytest_root(base_temp, expected_owner=(os.getpid(), token))
+    _cleanup_generated_pytest_root(config)
 
 
 def _request_url(value: object) -> str:

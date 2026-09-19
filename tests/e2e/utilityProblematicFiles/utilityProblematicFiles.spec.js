@@ -77,9 +77,8 @@ test.describe(`${CASE_ID} production-path utility problematic-files UI`, () => {
       const detailSummary = await utilityProblematicFilesActions.readSelectedDetailSummary();
       expect(detail.key).toBe(activeItem.key);
       expect(detail.name).toBe(detailSummary.title);
-      expect(activeItem.title).toBe(
-        detail.year ? `${detailSummary.title} / ${detail.year}` : detailSummary.title,
-      );
+      expect(activeItem.title).toBe(detailSummary.title);
+      expect(activeItem.meta).toBe([detailSummary.artist, detail.year].filter(Boolean).join(' · '));
       readinessOutcome = evaluateTimingBudget(readyMs, READY_BUDGET);
       expect(await utilityProblematicFilesActions.readErrorToastCount()).toBe(0);
     });

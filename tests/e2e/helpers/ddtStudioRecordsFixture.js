@@ -26,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-from mutagen.id3 import ID3, TDRC, TRCK
+from mutagen.id3 import ID3, TALB, TDRC, TRCK
 
 album_dir = Path(sys.argv[1]).resolve(strict=True)
 fixture = json.loads(sys.argv[2])
@@ -52,6 +52,8 @@ for filename in sorted(expected):
         raise RuntimeError(
             f"Studio Records fixture must not contain an Album Edition tag: {filename}"
         )
+    tags.delall("TALB")
+    tags.add(TALB(encoding=3, text=[row["album"]]))
     tags.delall("TDRC")
     tags.delall("TRCK")
     if row["year"] is not None:
@@ -79,6 +81,7 @@ function expectedFixtureRows() {
         : 1999;
     return {
       filename: `${String(trackNumber).padStart(2, '0')}. Студийная запись ${trackNumber}.mp3`,
+      album: ALBUM,
       track_number: trackNumber,
       year,
       release_date: year === null ? null : `${year}-01-01`,

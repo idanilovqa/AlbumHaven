@@ -21,7 +21,7 @@ function buildSmallAlertHtml(config = {}) {
 function buildAlertLabelAttributes(attributes = {}) {
   if (!attributes || typeof attributes !== 'object') return '';
   return Object.entries(attributes).map(([name, value]) => {
-    const allowed = /^(?:id|title|aria-label|data-problem-exclusion-(?:scope|row-key|reason|row-index))$/.test(name);
+    const allowed = /^(?:id|title|aria-label|data-album-problem-type|data-problem-suggestion-id|data-label-intent|data-problem-exclusion-(?:scope|row-key|reason|row-index))$/.test(name);
     if (!allowed || value == null || value === false) return '';
     return ` ${name}="${escapeHtml(value)}"`;
   }).join('');

@@ -9,11 +9,13 @@ from types import SimpleNamespace
 import pytest
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import run_asgi_request_async as _run_asgi_request_async
 from tests.py.asgi_testing import runtime_app_from_asgi_app
 from music_app.services.library_roots import normalize_library_root_settings
+from tests.py.test_settings_measured_listen_ledger import ledger
 
 
 @pytest.fixture
@@ -64,7 +66,62 @@ def app(tmp_path, monkeypatch):
 def _make_asgi_app():
     from music_app import create_asgi_app
 
-    return create_asgi_app()
+    asgi_app = create_asgi_app()
+    configure_test_bootstrap_actor(asgi_app)
+    return asgi_app
+
+
+@pytest.mark.parametrize('scenario', ['foreign', 'stale', 'forged-values', 'revoked-proposal'])
+def test_suggested_tag_apply_revalidates_scoped_target_and_physical_tags_before_io(app, asgi_app, monkeypatch, tmp_path, scenario):
+    from music_app.routes import api_wave_a_asgi_routes as routes
+    from music_app.services import metadata
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
+    source = tmp_path / 'proposal-track.flac'
+    source.write_bytes(b'fixture metadata source')
+    track_path = str(source)
+    stat = source.stat()
+    entry = {'path': track_path, 'mtime': stat.st_mtime, 'size': stat.st_size, 'artist': 'JosÃ©', 'album': 'Album', 'album_artist': 'Artist', 'title': 'Song', 'disc_number': 1, 'track_number': 1, 'year': 2008}
+    proposal = next(item for item in build_problem_suggestions(track_path, entry) if item['field'] == 'artist')
+    app.config['ALBUM_HAVEN_APP_DATABASE_URL'] = 'postgresql://album_haven_app@localhost/app'
+    app.config['PERSISTENCE_BACKENDS'] = {'library_browse': 'postgres'}
+    reads = []
+
+    class Repository:
+        def __init__(self, config):
+            pass
+
+        def build_problem_suggestion_entries_by_paths(self, paths):
+            assert paths == {track_path}
+            return {} if scenario == 'foreign' else {track_path: entry}
+
+        def _load_relation_alias_maps(self):
+            return {'alias_to_canonical': {}}
+
+        def build_problematic_file_detail_payload(self, album_key):
+            assert album_key == 'album-alpha'
+            return {'key': album_key, 'suggested_edits': [] if scenario == 'revoked-proposal' else [proposal]}
+
+    def read_physical(path, fields):
+        reads.append(str(path))
+        assert scenario != 'foreign', 'foreign target must not read physical media'
+        return {**entry, 'artist': 'Changed externally' if scenario == 'stale' else entry['artist']}
+
+    monkeypatch.setattr(routes, 'PostgresLibraryBrowseRepository', Repository)
+    monkeypatch.setattr(metadata, 'read_editable_tag_values', read_physical)
+    monkeypatch.setattr(routes, '_apply_repairs_worker', lambda *_args: pytest.fail('invalid proposal cannot write'))
+    monkeypatch.setattr(routes, 'create_save_task', lambda *_args: pytest.fail('invalid proposal cannot queue save'))
+    monkeypatch.setattr(routes, 'validate_structural_tag_edit_for_config', lambda **_kwargs: None)
+    status, _, body = _run_asgi_request(asgi_app, 'POST', '/utilities/edit-tags', json_body={
+        'confirmed': True, 'proposal_ids': [proposal['id']],
+        'album': {'key': 'album-alpha', 'name': 'Album', 'album_artist': 'Artist', 'tracks': [{'path': track_path}]},
+        'updates': {track_path: {'artist': 'Forged desired value' if scenario == 'forged-values' else 'José'}},
+    })
+    payload = _decode_json(body)
+    assert status == 409
+    assert payload['ok'] is False
+    assert payload['proposal_status'] == 'stale'
+    assert reads == ([] if scenario == 'foreign' else [track_path])
 
 
 def _complete_mocked_edit_tags_save_task(**kwargs):
@@ -132,15 +189,16 @@ def test_asgi_wave_a_routes_register_natively(asgi_app):
 def test_asgi_library_settings_routes_preserve_read_and_validation_payloads(app, monkeypatch):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "load_library_root_settings",
-        lambda _config: {
+    def load_root_settings(config, *, library_id, media_host_library_id):
+        assert config is asgi_app.state.config
+        assert (library_id, media_host_library_id) == (1, 1)
+        return {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
             "new_arrivals_roots": [],
             "hoard_roots": [],
-        },
-    )
+        }
+
+    monkeypatch.setattr(asgi_routes, "load_library_root_settings", load_root_settings)
     asgi_app = _make_asgi_app()
 
     read_status, _read_headers, read_body = _run_asgi_request(
@@ -172,8 +230,9 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
     def fail_flask_app(_request):
         raise AssertionError("GET /library-settings must not read through the Flask bridge")
 
-    def fake_load_library_root_settings(config):
+    def fake_load_library_root_settings(config, *, library_id, media_host_library_id):
         assert config is asgi_app.state.config
+        assert (library_id, media_host_library_id) == (1, 1)
         return {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
             "new_arrivals_roots": [],
@@ -193,6 +252,11 @@ def test_asgi_library_settings_read_uses_asgi_config_without_flask_bridge(app, a
     assert status == 200
     assert payload == {
         "ok": True,
+        "allowed_actions": {
+            "library.settings.manage": True,
+            "library.filesystem.browse": True,
+            "library.paths.read": True,
+        },
         "settings": {
             "main_library_roots": [{"path": str(app.config["MUSIC_DIR"])}],
             "new_arrivals_roots": [],
@@ -463,35 +527,39 @@ def test_asgi_library_settings_write_uses_asgi_state_without_bridge_context(app,
     ]]
 
 
-def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch):
+def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, asgi_app, monkeypatch, ledger):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
-    from music_app.services import library_roots as library_roots_module
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
-    app.config["ALBUM_HAVEN_APP_DATABASE_URL"] = "postgresql://album_haven_app@localhost/app"
+    # Exercise the scoped production repository with uniquely owned PostgreSQL
+    # rows; the former fake only implemented the unscoped bootstrap interface.
+    owner = ledger["own"]
+    app.config.update(ledger["config"])
     app.config["PERSISTENCE_BACKENDS"] = {"library_roots": "postgres"}
-    saved_settings: dict[str, object] = {}
+    asgi_app.state.config = app.config
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=owner["account_id"],
+        session_id=1,
+        username_display="fixture-library-owner",
+        is_bootstrap_owner=True,
+        current_library_id=owner["library_id"],
+        library_relationships=(LibraryRelationship(owner["library_id"], "owner", True),),
+    )
+
+    class Resolver:
+        def resolve(self, _raw_token):
+            return actor
+
+    asgi_app.state.current_actor_resolver = Resolver()
+    asgi_app.state.media_host_library_id = owner["library_id"]
+    root_path = str(Path(app.config["MUSIC_DIR"]).resolve())
+    assert Path(root_path).is_dir()
+    saved_settings = normalize_library_root_settings(
+        {"main_library_roots": [{"id": "main-1", "path": root_path, "layout_mode": "artist"}]},
+        fallback_main_root=Path(root_path),
+    )
     refresh_calls: list[dict[str, object]] = []
-
-    class FakeLibraryRootSettingsStore:
-        def __init__(self, config):
-            assert config is asgi_app.state.config
-            self._config = config
-
-        def load_settings(self):
-            return dict(saved_settings)
-
-        def save_settings(self, raw_payload):
-            normalized = normalize_library_root_settings(
-                raw_payload,
-                fallback_main_root=Path(self._config["MUSIC_DIR"]).resolve(strict=False),
-            )
-            saved_settings.clear()
-            saved_settings.update(normalized)
-            return dict(saved_settings)
-
-    class FakeLibraryRootsPsycopg:
-        def connect(self, *_args, **_kwargs):
-            raise AssertionError("library settings ASGI route test should not open a real database connection")
 
     def fake_start_background_refresh_for_state(library_state, config, logger, **kwargs):
         refresh_calls.append(
@@ -506,8 +574,6 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
         library_state["scan_in_progress"] = True
         library_state["scan_mode"] = kwargs["scan_mode"]
 
-    monkeypatch.setattr("music_app.services.library_roots_postgres.psycopg", FakeLibraryRootsPsycopg())
-    monkeypatch.setattr(library_roots_module, "PostgresLibraryRootSettingsStore", FakeLibraryRootSettingsStore)
     monkeypatch.setattr(
         asgi_routes,
         "start_background_refresh_for_state",
@@ -523,7 +589,7 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
                 "main_library_roots": [
                     {
                         "id": "main-1",
-                        "path": str(app.config["MUSIC_DIR"]),
+                        "path": root_path,
                         "layout_mode": "artist",
                     }
                 ],
@@ -556,8 +622,35 @@ def test_asgi_library_settings_post_persists_settings_and_starts_refresh(app, as
     assert get_status == 200
     assert _decode_json(get_body) == {
         "ok": True,
+        "allowed_actions": {
+            "library.settings.manage": True,
+            "library.filesystem.browse": True,
+            "library.paths.read": True,
+        },
         "settings": saved_settings,
     }
+    with ledger["connect"]() as connection:
+        persisted = connection.execute(
+            "select settings_payload from library.library_root_settings where library_id=%s",
+            (owner["library_id"],),
+        ).fetchone()
+        roots = connection.execute(
+            "select root_path, root_kind, is_active, metadata from library.library_roots where library_id=%s",
+            (owner["library_id"],),
+        ).fetchall()
+        other_settings = connection.execute(
+            "select settings_payload from library.library_root_settings where library_id=%s",
+            (ledger["other"]["library_id"],),
+        ).fetchall()
+    assert persisted["settings_payload"] == {
+        **saved_settings, "source": "library_root_settings_runtime",
+    }
+    assert len(roots) == 1
+    assert roots[0]["root_path"] == root_path
+    assert roots[0]["root_kind"] == "main_library"
+    assert roots[0]["is_active"] is True
+    assert roots[0]["metadata"]["root_id"] == "main-1"
+    assert other_settings == []
 
 
 @pytest.mark.parametrize("concurrent_save", [False, True])
@@ -572,7 +665,9 @@ def test_library_settings_watcher_replacement_keeps_loop_responsive_and_saves_se
     saved = []
     replacements = []
 
-    def save_roots(_config, settings):
+    def save_roots(config, settings, *, library_id, media_host_library_id):
+        assert config is asgi_app.state.config
+        assert (library_id, media_host_library_id) == (1, 1)
         saved.append(settings["main_library_roots"][0]["id"])
         return settings
 
@@ -856,6 +951,7 @@ def test_asgi_ignore_album_version_uses_asgi_dependencies_without_flask_context(
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
 
     class FailingAppContext:
         def __enter__(self):
@@ -925,7 +1021,8 @@ def test_asgi_ignore_album_version_uses_asgi_dependencies_without_flask_context(
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Version exception created",
-            "kwargs": {"level": "info", "album_key": "album-new"},
+            "kwargs": {"level": "info", "album_key": "album-new",
+                       "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request")},
         }
     ]
 
@@ -997,6 +1094,7 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
     from music_app.services import state as state_service
 
     class FailingAppContext:
@@ -1076,7 +1174,8 @@ def test_asgi_mark_album_version_uses_asgi_state_aliases_and_logging_without_fla
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Manual version link created",
-            "kwargs": {"level": "info", "album_key": "child", "parent_album_key": "parent"},
+            "kwargs": {
+                "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request"),"level": "info", "album_key": "child", "parent_album_key": "parent"},
         }
     ]
 
@@ -1183,6 +1282,7 @@ def test_asgi_unmark_album_version_uses_asgi_config_and_logging_without_flask_co
     app, asgi_app, monkeypatch
 ):
     from music_app.routes import api_wave_a_asgi_routes as asgi_routes
+    from music_app.services.log_history import HistoryScope
 
     class FailingAppContext:
         def __enter__(self):
@@ -1243,7 +1343,8 @@ def test_asgi_unmark_album_version_uses_asgi_config_and_logging_without_flask_co
             "config": asgi_app.state.config,
             "logger": asgi_logger,
             "action": "Manual version link removed",
-            "kwargs": {"level": "info", "album_key": "child"},
+            "kwargs": {
+                "history_scope": HistoryScope(library_id=1, account_id=1, origin_kind="request"),"level": "info", "album_key": "child"},
         }
     ]
 
@@ -3914,7 +4015,7 @@ def test_postgres_exception_edit_state_hydrates_requested_paths_without_replacin
     )
 
     state = asgi_routes._postgres_exception_only_edit_state(
-        SimpleNamespace(app=asgi_app),
+        SimpleNamespace(app=asgi_app, state=SimpleNamespace()),
         {"updates": {selected_path: {"exception_type": ""}}},
     )
 
@@ -4468,7 +4569,7 @@ def test_selected_postgres_media_compensation_is_path_scoped_and_restores_except
 
     callback = (
         asgi_routes._asgi_selected_postgres_media_write_queue_finalize_save_task_builder(
-            SimpleNamespace(app=asgi_app)
+            SimpleNamespace(app=asgi_app, state=SimpleNamespace())
         )
     )
     callback(config=asgi_app.state.config)
@@ -4546,7 +4647,7 @@ def test_selected_postgres_album_edit_skips_unrelated_relation_projection_rebuil
 
     callback = (
         asgi_routes._asgi_selected_postgres_structural_tag_edit_queue_finalize_save_task_builder(
-            SimpleNamespace(app=asgi_app)
+            SimpleNamespace(app=asgi_app, state=SimpleNamespace())
         )
     )
     callback(config=asgi_app.state.config)

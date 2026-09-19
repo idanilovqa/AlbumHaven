@@ -45,6 +45,8 @@ function loadHelpers(overrides = {}) {
       wasCoverPollingBusy: false,
       status: {},
       utility: {
+        activeTab: 'integrations',
+        selectedIntegrationKey: 'library',
         loaded: true,
         problematicFiles: [{ key: 'old-problem' }],
         integrations: [{
@@ -64,6 +66,7 @@ function loadHelpers(overrides = {}) {
           albumRatingImportBusy: false,
           albumRatingImportResult: null,
           error: '',
+          allowedActions: {'library.settings.manage':true,'library.filesystem.browse':true,'library.paths.read':true},
         },
       },
       view: {
@@ -79,6 +82,7 @@ function loadHelpers(overrides = {}) {
     showToast(message, tone, duration) {
       calls.toasts.push([message, tone, duration]);
     },
+    getUtilityModalElements: () => ({ overlay: { hidden: false } }),
     renderUtilityModalContent() {
       calls.renders += 1;
     },
@@ -141,7 +145,9 @@ function loadHelpers(overrides = {}) {
     },
   };
   Object.assign(context, overrides);
+  context.window = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -412,7 +418,7 @@ test('buildUtilityLibrarySettingsDetail exposes the explicit album-rating import
   const markup = context.buildUtilityLibrarySettingsDetail();
 
   assert.match(markup, /data-import-album-ratings="1"/);
-  assert.match(markup, />Import ratings from file tags<\/button>/);
+  assert.match(markup, /<button\b[^>]*data-import-album-ratings="1"[^>]*>Import ratings<\/button>/);
   assert.doesNotMatch(markup, /data-album-rating-import-result="1"/);
 });
 

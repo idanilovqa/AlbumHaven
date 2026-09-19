@@ -186,7 +186,7 @@ async function loadProblematicAlbumDetail(albumKey, force = false, options = {})
         && String(state.utility.selectedProblematicKey || '') === normalizedKey
       ) {
         const renderStartedAt = getProblematicUtilityNow();
-        renderUtilityModalContent();
+        renderUtilityModalContent({ preserveProblematicTree: true });
         await waitForProblematicUtilityRenderFrame();
         renderMs = roundProblematicUtilityMs(getProblematicUtilityNow() - renderStartedAt);
       }
@@ -630,35 +630,59 @@ async function loadUtilityRules(force = false) {
 }
 
 async function loadUtilityLoops(force = false) {
-  if (state.utility.loopsLoading) return state.utility.loopsLoadPromise;
-  if (state.utility.loopsLoaded && !force) {
+  const utility = state.utility;
+  if (utility.loopsLoading) return utility.loopsLoadPromise;
+  if (utility.loopsLoaded && utility.loopsActionProjectionLoaded === true && !force) {
     renderUtilityModalContent();
     return;
   }
-  state.utility.loopsLoading = true;
+  const generation = Number(utility.loopDataGeneration || 0) + 1;
+  utility.loopDataGeneration = generation;
+  const mutationGeneration = Number(utility.loopMutationGeneration || 0);
+  const isCurrent = () => state.utility === utility
+    && Number(utility.loopDataGeneration || 0) === generation
+    && Number(utility.loopMutationGeneration || 0) === mutationGeneration;
+  utility.loopsLoading = true;
+  utility.loopsLoadError = '';
   renderUtilityModalContent();
-  state.utility.loopsLoadPromise = (async () => {
+  const loadPromise = (async () => {
     try {
       const response = await fetch('/utilities/loops', { headers: { Accept: 'application/json' } });
       const data = await response.json();
-      state.utility.loops = Array.isArray(data.loops) ? data.loops : [];
-      state.utility.loopsLoaded = true;
-      const groupedLoops = groupUtilityLoops(state.utility.loops || []);
+      if (!isCurrent()) return;
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to load saved loops');
+      utility.allowedActions = { ...(utility.allowedActions || {}) };
+      for (const action of ['library.loops.read', 'library.loops.create', 'library.loops.delete', 'library.loops.reorder']) {
+        utility.allowedActions[action] = data.allowed_actions?.[action] === true;
+      }
+      utility.loopsActionProjectionLoaded = true;
+      state.loopCreateAllowed = utility.allowedActions['library.loops.create'] === true;
+      if (typeof syncLoopCreateCapability === 'function') syncLoopCreateCapability();
+      utility.loops = Array.isArray(data.loops) ? data.loops : [];
+      utility.loopsLoaded = true;
+      const groupedLoops = groupUtilityLoops(utility.loops || []);
       collapseAllUtilityLoopGroups();
-      state.utility.selectedLoopGroupKey = String(groupedLoops[0]?.key || '');
-      state.utility.selectedLoopId = String(groupedLoops[0]?.loops?.[0]?.id || '');
-      state.utility.selectedLoopDetailMode = 'group';
+      const selectedGroup = groupedLoops.find(group => String(group.key || '') === String(utility.selectedLoopGroupKey || '')) || groupedLoops[0];
+      utility.selectedLoopGroupKey = String(selectedGroup?.key || '');
+      if (!(selectedGroup?.loops || []).some(loop => String(loop.id || '') === String(utility.selectedLoopId || ''))) {
+        utility.selectedLoopId = String(selectedGroup?.loops?.[0]?.id || '');
+      }
+      utility.selectedLoopDetailMode = 'group';
     } catch (error) {
+      if (!isCurrent()) return;
       console.error('[AlbumHaven][Loops] Failed to load loops.', error);
-      state.utility.loops = [];
+      utility.loopsLoadError = 'Unable to load saved loops. Reopen the Loops tab to retry.';
       showToast('Unable to load saved loops.', 'error', 3200);
     } finally {
-      state.utility.loopsLoading = false;
-      state.utility.loopsLoadPromise = null;
-      renderUtilityModalContent();
+      if (utility.loopsLoadPromise === loadPromise) {
+        utility.loopsLoading = false;
+        utility.loopsLoadPromise = null;
+      }
+      if (isCurrent() && utility.activeTab === 'loops') renderUtilityModalContent();
     }
   })();
-  return state.utility.loopsLoadPromise;
+  utility.loopsLoadPromise = loadPromise;
+  return loadPromise;
 }
 
 function normalizeUtilityLogHistoryRevision(value) {
@@ -666,117 +690,20 @@ function normalizeUtilityLogHistoryRevision(value) {
 }
 
 async function loadUtilityLogHistory(force = false) {
-  if (state.utility.logHistoryLoading) return state.utility.logHistoryLoadPromise;
-  if (state.utility.logHistoryLoaded && !force) {
-    if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  }
-  state.utility.logHistoryLoading = true;
-  if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-  state.utility.logHistoryLoadPromise = (async () => {
-    try {
-      await requestBrowserLogHistoryPersistentStorage();
-    } catch (_error) {
-      // The browser may deny or omit persistent-storage requests; IndexedDB still remains usable.
-    }
-    try {
-      const response = await fetch('/utilities/log-history', {
-        cache: 'no-store',
-        headers: { Accept: 'application/json' },
-      });
-      const data = await response.json();
-      if (!response.ok || data.ok === false) {
-        throw new Error(data.error || 'Unable to load transient log history.');
-      }
-      const stored = await persistBrowserLogHistoryEntries(
-        Array.isArray(data.items) ? data.items : [],
-      );
-      const revision = normalizeUtilityLogHistoryRevision(data.revision);
-      state.utility.logHistory = Array.isArray(stored?.items) ? stored.items : [];
-      state.utility.logHistoryRevision = revision;
-      if (!state.utility.logHistorySyncPromise) {
-        state.utility.logHistoryTargetRevision = revision;
-      }
-      if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-      state.utility.logHistoryLoaded = true;
-      return { revision };
-    } catch (error) {
-      console.error('[AlbumHaven][History] Failed to load the transient history snapshot.', error);
-      try {
-        const stored = await readBrowserLogHistoryEntries();
-        state.utility.logHistory = Array.isArray(stored?.items)
-          ? stored.items
-          : (Array.isArray(state.utility.logHistory) ? state.utility.logHistory : []);
-        if (stored?.status) state.utility.logHistoryStorageStatus = stored.status;
-        state.utility.logHistoryLoaded = true;
-      } catch (storageError) {
-        console.error('[AlbumHaven][History] Failed to read browser-owned history.', storageError);
-        state.utility.logHistory = Array.isArray(state.utility.logHistory) ? state.utility.logHistory : [];
-        state.utility.logHistoryLoaded = true;
-        state.utility.logHistoryStorageStatus = {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        };
-      }
-      return null;
-    } finally {
-      state.utility.logHistoryLoading = false;
-      state.utility.logHistoryLoadPromise = null;
-      if (state.utility.activeTab === 'log-history') renderUtilityModalContent();
-    }
-  })();
-  return state.utility.logHistoryLoadPromise;
+  const controller = getUtilityLogHistoryController();
+  if (state.utility.logHistoryLoaded && !force) { renderUtilityLogHistory(); return { revision: controller.getState().revision }; }
+  if (controller.getState().loading) return state.utility.logHistoryLoadPromise;
+  const owner = state.utility;
+  owner.logHistoryLoadPromise = controller.refresh().then(() => ({ revision: controller.getState().revision })).catch(() => null).finally(() => { owner.logHistoryLoadPromise = null; });
+  return owner.logHistoryLoadPromise;
 }
 
 async function syncUtilityLogHistoryRevision(revision) {
-  const targetRevision = normalizeUtilityLogHistoryRevision(revision);
-  if (!targetRevision) return null;
-  state.utility.logHistoryTargetRevision = targetRevision;
-  if (
-    normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision) === targetRevision
-    && !state.utility.logHistorySyncPromise
-  ) {
-    return { revision: targetRevision };
-  }
-  if (state.utility.logHistorySyncPromise) {
-    return state.utility.logHistorySyncPromise;
-  }
-
-  const syncPromise = (async () => {
-    while (
-      normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision)
-      !== normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-    ) {
-      const requestedRevision = normalizeUtilityLogHistoryRevision(
-        state.utility.logHistoryTargetRevision,
-      );
-      const result = await loadUtilityLogHistory(true);
-      if (!result) break;
-      const loadedRevision = normalizeUtilityLogHistoryRevision(result.revision);
-      if (
-        normalizeUtilityLogHistoryRevision(state.utility.logHistoryTargetRevision)
-          === requestedRevision
-        && loadedRevision !== requestedRevision
-      ) {
-        state.utility.logHistoryTargetRevision = loadedRevision;
-      }
-    }
-    return {
-      revision: normalizeUtilityLogHistoryRevision(state.utility.logHistoryRevision),
-    };
-  })();
-  state.utility.logHistorySyncPromise = syncPromise;
-  try {
-    return await syncPromise;
-  } finally {
-    if (state.utility.logHistorySyncPromise === syncPromise) {
-      state.utility.logHistorySyncPromise = null;
-    }
-  }
+  state.utility.logHistoryTargetRevision = normalizeUtilityLogHistoryRevision(revision);
+  state.utility.logHistoryController?.markStale(revision);
+  return { revision: state.utility.logHistoryRevision };
 }
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
@@ -1104,6 +1031,8 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   if (resetSelection) {
     state.utility.selectedProblematicKey = '';
     state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
     state.utility.pendingRepairAction = '';
     state.utility.focusedTrackPath = '';
     state.utility.showRepairedDisplay = true;
@@ -1131,9 +1060,22 @@ function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad
   }
 }
 
-function openUtilityLogHistoryTab() {
-  setUtilityActiveTab('log-history');
-  openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: true });
+function openUtilityLogHistoryTab(entryId = '') {
+  const owner = state.utility;
+  const open = () => {
+    if (state.utility !== owner) return;
+    setUtilityActiveTab('log-history', true);
+    openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: !entryId });
+    if (!entryId) return;
+    const controller = getUtilityLogHistoryController();
+    // Base navigation has its own ownership generation; it cannot replace this
+    // explicitly requested event's console/export capture.
+    if (!owner.logHistory?.length) controller.refreshNavigation().catch(() => {});
+    return controller.selectEvent(entryId).catch(() => null);
+  };
+  if (owner.activeTab !== 'log-history' && typeof confirmBackgroundAppearanceLeave === 'function'
+      && !confirmBackgroundAppearanceLeave(open)) return;
+  return open();
 }
 
 async function saveLastfmIntegration() {
@@ -1242,8 +1184,16 @@ async function disconnectLastfmIntegration() {
 function closeUtilityModal(skipAppearanceGuard = false) {
   if (skipAppearanceGuard !== true && typeof confirmBackgroundAppearanceLeave === 'function' && !confirmBackgroundAppearanceLeave(() => closeUtilityModal(true))) return;
   if (typeof unmountAppearanceEditors === 'function') unmountAppearanceEditors();
+  if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  if (typeof disposeUtilityTabAlignment === 'function') disposeUtilityTabAlignment(els);
+  state.utility.problemDropdownOpen = false;
+  if (els.problemFilterMenu) {
+    els.problemFilterMenu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(els.problemFilterMenu);
+  }
+  els.problemFilterButton?.setAttribute?.('aria-expanded', 'false');
   state.utility.problematicNavigationToken = Number(state.utility.problematicNavigationToken || 0) + 1;
   state.utility.problematicNavigationActiveToken = 0;
   if (typeof clearUtilityLoopSpaceOwner === 'function') {
@@ -1273,10 +1223,69 @@ function closeUtilityModal(skipAppearanceGuard = false) {
 
 let repairConfirmReturnFocus = null;
 
+function openSavedLoopDeleteConfirm(loopId) {
+  const loop = (state.utility.loops || []).find(item => String(item.id || '') === String(loopId || ''));
+  if (!loop || state.utility.allowedActions?.['library.loops.delete'] !== true) return false;
+  const els = getRepairConfirmElements();
+  if (!els.overlay) return false;
+  state.utility.pendingSavedLoopDeleteId = String(loop.id);
+  state.utility.pendingRepairAction = 'saved-loop-delete';
+  els.overlay.removeAttribute?.('data-confirm-mode');
+  els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+  els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+  if (els.title) { els.title.hidden = false; els.title.textContent = 'Delete saved loop?'; }
+  if (els.text) els.text.textContent = `Delete “${loop.name || 'Saved loop'}”? The saved loop will be removed.`;
+  if (els.cancel) { els.cancel.textContent = 'No'; els.cancel.disabled = false; }
+  if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+  repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+  els.overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  els.cancel?.focus?.();
+  return true;
+}
+
 function openRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   const action = state.utility.pendingRepairAction || 'repair';
+  if (action === 'suggestions') {
+    const pending = state.utility.pendingProblemSuggestions;
+    if (!pending?.proposals?.length) return;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Apply suggested edits?'; }
+    if (els.text) els.text.textContent = pending.proposals.map(proposal => {
+      const track = (getSelectedProblematicAlbum()?.tracks || []).find(item => item.path === proposal.path);
+      return `${track?.title || getFilenameFromPath(proposal.path)} — ${formatProblemSuggestionLabel(proposal)}`;
+    }).join('\n');
+    if (els.cancel) { els.cancel.textContent = 'Cancel'; els.cancel.disabled = false; }
+    if (els.accept) { els.accept.textContent = 'Apply'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
+  if (action === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending) return;
+    const rule = (state.utility.rules || []).find(item => item.key === 'version-exceptions');
+    const target = pending.item || (rule?.albums || []).find(item => item.key === pending.key) || {};
+    const label = target.target_label || target.filename || target.album || target.name || pending.key;
+    els.overlay.removeAttribute?.('data-confirm-mode');
+    els.dialog?.setAttribute?.('aria-labelledby', 'repair-confirm-title');
+    els.dialog?.setAttribute?.('aria-describedby', 'repair-confirm-text');
+    if (els.title) { els.title.hidden = false; els.title.textContent = 'Revert rule?'; }
+    if (els.text) els.text.textContent = `Revert the rule for ${label}? ${pending.kind === 'problem-exclusion' ? 'This problem can appear again in Problems.' : 'This album can appear in version groups again.'}`;
+    if (els.cancel) els.cancel.textContent = 'No';
+    if (els.accept) { els.accept.textContent = 'Yes'; els.accept.disabled = false; }
+    repairConfirmReturnFocus = document.activeElement?.focus ? document.activeElement : null;
+    els.overlay.hidden = false;
+    document.body.classList.add('modal-open');
+    els.cancel?.focus?.();
+    return;
+  }
   const selectedRows = action === 'repair' ? getSelectedRepairRowKeys() : [];
   const ignoredRows = action === 'detected' ? getIgnoredRepairRowKeys() : [];
   const separateRows = action === 'separate-release' ? getSelectedSeparateReleaseKeys() : [];
@@ -1310,8 +1319,13 @@ function openRepairConfirmModal() {
       els.text.textContent = 'This will treat the selected year mismatch as separate releases and rebuild the album list. Are you sure?';
       if (els.accept) els.accept.textContent = 'Yes, apply';
     } else if (isExclusionConfirmation) {
-      els.text.textContent = 'Are you sure? This will create an exclusion rule';
-      if (els.accept) els.accept.textContent = 'Exclude';
+      const album = getSelectedProblematicAlbum();
+      const selected = new Set(ignoredRows);
+      const targets = [];
+      (album?.album_problem_rows || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${album.name || 'Album'} — ${item.display_reason || item.reason}`));
+      (album?.track_problem_rows || []).forEach(row => (row.ignorable_reasons || []).filter(item => selected.has(item.row_key)).forEach(item => targets.push(`${row.filename || getFilenameFromPath(row.path)} — ${item.reason}`)));
+      els.text.textContent = `Create an exclusion rule for ${targets.join('; ')}? These problems will be hidden. You can revert this rule in Rules.`;
+      if (els.accept) els.accept.textContent = 'Create Exception';
     } else {
       els.text.textContent = 'No problem exclusions are selected.';
       if (els.accept) els.accept.textContent = 'Yes, apply';
@@ -1328,7 +1342,10 @@ function closeRepairConfirmModal() {
   const els = getRepairConfirmElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  state.utility.pendingSavedLoopDeleteId = '';
   state.utility.pendingRepairKey = '';
+  state.utility.pendingProblemSuggestions = null;
+  state.utility.pendingRuleRevert = null;
   state.utility.pendingRepairAction = '';
   const trackModalOpen = !document.getElementById('track-modal')?.hidden;
   const lightboxOpen = !document.getElementById('image-lightbox')?.hidden;

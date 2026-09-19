@@ -93,7 +93,7 @@ def test_api_returns_authoritative_complete_sets_and_accepts_only_an_applied_set
     status, _, body = _request(app, "PUT", submitted)
 
     assert status == 200
-    assert decode_json(body) == saved
+    assert decode_json(body) == {**saved, "loop_control_style": "capsule"}
     assert captured == [(41, "desktop", 7, aggregate_write(
         applied_player_set=CLASSIC_GREEN_PLAYER_STYLE,
     ))]
@@ -131,7 +131,7 @@ def test_repository_merges_one_complete_applied_set_inside_the_revision_checked_
         expected_revision=7,
     )
 
-    assert result == row
+    assert result == {**row, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "merge_player_recent_sets" in sql

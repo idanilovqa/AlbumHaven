@@ -184,7 +184,9 @@ def _run_edit_jobs(
             if not reverse_repairs:
                 continue
             try:
-                apply_repairs_worker(raw_path, reverse_repairs)
+                _reversed_path, reversed_changed, reversed_fields = apply_repairs_worker(raw_path, reverse_repairs)
+                if not reversed_changed or set(reversed_fields) != set(reverse_repairs):
+                    compensation_failures.append(f"{raw_path}: compensation did not verify every requested field")
             except Exception as exc:
                 compensation_failures.append(f"{raw_path}: {exc}")
 
@@ -204,6 +206,7 @@ def _run_edit_jobs(
             append_log_history=append_log_history,
             log_app_event=log_app_event,
         )
+        failure_payload["edit_outcome"] = "recovery_pending" if compensation_failures else "failed_rolled_back"
         return [], [], failure_payload
 
     for _job_index, raw_path, entry, repairs, changed_fields in sorted(
@@ -487,8 +490,14 @@ def _handle_edit_tags_request_after_reservation(
     structural_tag_edit_reservation: object | None = None,
     prepare_tag_edit_intent: TagEditIntentPreparer | None = None,
     mark_tag_edit_files_verified: TagEditIntentCheckpoint | None = None,
+    validate_proposals: Callable | None = None,
 ) -> JsonDict | tuple[JsonDict, int]:
     st = get_state()
+    if validate_proposals is not None:
+        try:
+            updates = validate_proposals(st, updates)
+        except (ValueError, OSError, RuntimeError):
+            return {"ok": False, "error": "Suggestions changed or could not be verified. Refresh and try again.", "proposal_status": "stale"}, 409
     file_cache = st.get("file_cache", {}) or {}
     updated_file_cache = dict(file_cache)
     repair_jobs: list[tuple[str, JsonDict, dict[str, str]]] = []
@@ -728,7 +737,9 @@ def _handle_edit_tags_request_after_reservation(
             if not reverse_repairs:
                 continue
             try:
-                apply_repairs_worker(path, reverse_repairs)
+                _reversed_path, reversed_changed, reversed_fields = apply_repairs_worker(path, reverse_repairs)
+                if not reversed_changed or set(reversed_fields) != set(reverse_repairs):
+                    compensation_failures.append(f"{path}: compensation did not verify every requested field")
             except Exception as compensation_exc:
                 compensation_failures.append(f"{path}: {compensation_exc}")
         error_text = f"Failed to save track exceptions: {exc}"
@@ -746,6 +757,7 @@ def _handle_edit_tags_request_after_reservation(
             append_log_history=append_log_history,
             log_app_event=log_app_event,
         )
+        failure_payload["edit_outcome"] = "recovery_pending" if compensation_failures else "failed_rolled_back"
         return failure_payload, 500
     for path, entry, exception_value in exception_updates:
         normalized_value = (

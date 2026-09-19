@@ -1,0 +1,229 @@
+[WebServer] Phase 7 production E2E app listening on http://127.0.0.1:6210; SMTP capture control on http://127.0.0.1:6212
+
+Running 8 tests using 1 worker
+
+  x  1 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:38:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu (14.1s)
+  ok 2 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:84:1 › FTC-PERMISSIONS-012 limited member sees no Admin Panel and signs out through the shared menu (7.5s)
+  ok 3 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:133:1 › creates, rotates, accepts, and signs in through a copied invitation (6.9s)
+  ok 4 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:172:1 › delivers a usable invitation through the local SMTP capture server (5.7s)
+  x  5 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:192:1 › FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority (16.8s)
+  x  6 [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:299:1 › Owner save preserves inherited capabilities and membership (16.2s)
+  x  7 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:6:1 › FTC-PERMISSIONS-013 Settings keeps one sidebar through account, editor, save and browser history (2.9s)
+  x  8 [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:58:1 › FTC-PERMISSIONS-013 music keeps the same audible stream while Settings navigation changes content (7.5s)
+
+
+  1) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:38:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  getByRole('menu', { name: 'Account actions' }).getByRole('menuitem', { name: 'Admin Panel', exact: true })
+    Expected: "rgb(23, 45, 67)"
+    Received: "color(srgb 0.164314 0.201765 0.254118)"
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCSS" with timeout 10000ms
+      - waiting for getByRole('menu', { name: 'Account actions' }).getByRole('menuitem', { name: 'Admin Panel', exact: true })
+        - locator resolved to <a tabindex="-1" role="menuitem" href="/admin/members" class="account-menu-item" data-account-menu-admin="">…</a>
+        - unexpected value "oklab(0.31981 -0.00621782 -0.0265559 / 0.346015)"
+        - locator resolved to <a tabindex="-1" role="menuitem" href="/admin/members" class="account-menu-item" data-account-menu-admin="">…</a>
+        - unexpected value "oklab(0.31981 -0.00621782 -0.0265559 / 0.78858)"
+        - locator resolved to <a tabindex="-1" role="menuitem" href="/admin/members" class="account-menu-item" data-account-menu-admin="">…</a>
+        - unexpected value "oklab(0.31981 -0.00621782 -0.0265559 / 0.984707)"
+        20 × locator resolved to <a tabindex="-1" role="menuitem" href="/admin/members" class="account-menu-item" data-account-menu-admin="">…</a>
+           - unexpected value "color(srgb 0.164314 0.201765 0.254118)"
+
+
+      51 |   await menu.adminPanelMenuItem.hover();
+      52 |   await expect(menu.adminPanelMenuItem).toHaveCSS('border-radius', '9px');
+    > 53 |   await expect(menu.adminPanelMenuItem).toHaveCSS('background-color', 'rgb(23, 45, 67)');
+         |                                         ^
+      54 |   await menu.settingsMenuItem.press('Escape');
+      55 |   await expect(menu.accountMenu).toBeHidden();
+      56 |   await expect(menu.settingsButton).toBeFocused();
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:53:41
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-efda2-ugh-the-shared-rounded-menu-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:192:1 › FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByRole('group', { name: /^(Individual|Explicit) permissions$/ }).getByRole('checkbox')
+    Expected: 12
+    Received: 14
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 10000ms
+      - waiting for getByRole('group', { name: /^(Individual|Explicit) permissions$/ }).getByRole('checkbox')
+        23 × locator resolved to 14 elements
+           - unexpected value "14"
+
+
+      227 |   await expect(members.libraryAccess).toBeChecked();
+      228 |   await expect(members.libraryAccess).toBeDisabled();
+    > 229 |   await expect(members.capabilitySwitches).toHaveCount(12);
+          |                                            ^
+      230 |   for (let index = 0; index < 12; index += 1) {
+      231 |     await expect(members.capabilitySwitches.nth(index)).toBeChecked();
+      232 |     await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:229:44
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-5014c-serves-owner-only-authority-phase7-admin-management\test-failed-2.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-5014c-serves-owner-only-authority-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: fresh-browser-session-runtime-log.txt (text/plain) ──────────────────────────────
+    [2026-09-10T09:51:05.500Z] console/verbose: [DOM] Password forms should have (optionally hidden) username fields for accessibility: (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:6210/accept-invitation:0:0
+    [2026-09-10T09:51:06.783Z] console/verbose: [DOM] Password forms should have (option...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #5: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+    Error 1
+    Error: expect(locator).toHaveCount(expected) failed
+    
+    Locator:  getByRole('group', { name: /^(Individual|Explicit) permissions$/ }).getByRole('checkbox')
+    Expected: 12
+    Received: 14
+    Timeout:  10000ms
+    
+    Call log:
+      - ...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #6: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+    [2026-09-10T09:51:03.418Z] console/warning: WebSocket connection to 'ws://127.0.0.1:6210/playback/pcm' failed: WebSocket is closed before the connection is established. @ http://127.0.0.1:6210/static/js/runtime-bundle.js?v=65bc5f11d634fbeee333:7426:0
+    [2026-09-10T09:51:03.421Z] requestfailed/net::ERR...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-5014c-serves-owner-only-authority-phase7-admin-management\error-context.md
+
+    attachment #9: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-5014c-serves-owner-only-authority-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-FTC-PERMIS-5014c-serves-owner-only-authority-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:299:1 › Owner save preserves inherited capabilities and membership 
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByRole('group', { name: /^(Individual|Explicit) permissions$/ }).getByRole('checkbox')
+    Expected: 12
+    Received: 14
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 10000ms
+      - waiting for getByRole('group', { name: /^(Individual|Explicit) permissions$/ }).getByRole('checkbox')
+        23 × locator resolved to 14 elements
+           - unexpected value "14"
+
+
+      316 |   await expect(members.libraryAccess).toBeChecked();
+      317 |   await expect(members.libraryAccess).toBeDisabled();
+    > 318 |   await expect(members.capabilitySwitches).toHaveCount(12);
+          |                                            ^
+      319 |   for (let index = 0; index < 12; index += 1) {
+      320 |     await expect(members.capabilitySwitches.nth(index)).toBeChecked();
+      321 |     await expect(members.capabilitySwitches.nth(index)).toBeDisabled();
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\adminManagement.spec.js:318:44
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-Owner-save-32838-capabilities-and-membership-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\adminManagement-Owner-save-32838-capabilities-and-membership-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\adminManagement-Owner-save-32838-capabilities-and-membership-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\adminManagement-Owner-save-32838-capabilities-and-membership-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:6:1 › FTC-PERMISSIONS-013 Settings keeps one sidebar through account, editor, save and browser history 
+
+    Error: locator.evaluate: TypeError: Cannot read properties of null (reading 'getBoundingClientRect')
+        at rect (eval at evaluate (:303:30), <anonymous>:8:18)
+        at eval (eval at evaluate (:303:30), <anonymous>:19:15)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at rect (eval at evaluate (:303:30), <anonymous>:8:18)
+        at eval (eval at evaluate (:303:30), <anonymous>:19:15)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at SettingsShell.geometry (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\poms\settingsShell.js:30:28)
+        at SettingsShell.retain (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\poms\settingsShell.js:51:33)
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\persistentSettings.spec.js:11:20
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-fa50d-or-save-and-browser-history-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-fa50d-or-save-and-browser-history-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-fa50d-or-save-and-browser-history-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-fa50d-or-save-and-browser-history-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5) [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:58:1 › FTC-PERMISSIONS-013 music keeps the same audible stream while Settings navigation changes content 
+
+    Error: locator.evaluate: TypeError: Cannot read properties of null (reading 'getBoundingClientRect')
+        at rect (eval at evaluate (:303:30), <anonymous>:8:18)
+        at eval (eval at evaluate (:303:30), <anonymous>:19:15)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at rect (eval at evaluate (:303:30), <anonymous>:8:18)
+        at eval (eval at evaluate (:303:30), <anonymous>:19:15)
+        at UtilityScript.evaluate (<anonymous>:305:16)
+        at UtilityScript.<anonymous> (<anonymous>:1:44)
+        at SettingsShell.geometry (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\poms\settingsShell.js:30:28)
+        at SettingsShell.retain (C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\poms\settingsShell.js:51:33)
+        at C:\Users\Rendref\.codex\worktrees\b14c\album-haven-app\tests\e2e\phase7\admin-management\persistentSettings.spec.js:89:23
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-57e5f--navigation-changes-content-phase7-admin-management\test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-57e5f--navigation-changes-content-phase7-admin-management\error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-57e5f--navigation-changes-content-phase7-admin-management\trace.zip
+    Usage:
+
+        npx playwright show-trace test-results\playwright-artifacts\phase7-admin\persistentSettings-FTC-PER-57e5f--navigation-changes-content-phase7-admin-management\trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  5 failed
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:38:1 › FTC-PERMISSIONS-011 owner discovers Settings and Users through the shared rounded menu 
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:192:1 › FTC-PERMISSIONS-009 denies limited administration and preserves owner-only authority 
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\adminManagement.spec.js:299:1 › Owner save preserves inherited capabilities and membership 
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:6:1 › FTC-PERMISSIONS-013 Settings keeps one sidebar through account, editor, save and browser history 
+    [phase7-admin-management] › tests\e2e\phase7\admin-management\persistentSettings.spec.js:58:1 › FTC-PERMISSIONS-013 music keeps the same audible stream while Settings navigation changes content 
+  3 passed (1.5m)

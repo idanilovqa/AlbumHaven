@@ -85,7 +85,8 @@ def test_build_lastfm_status_loads_settings_once_and_preserves_session_timezone(
     config = {"LASTFM_API_ENABLED": True}
     load_calls: list[object] = []
 
-    def fake_load_lastfm_settings(received_config):
+    def fake_load_lastfm_settings(received_config, *, account_id=None):
+        assert account_id is None
         load_calls.append(received_config)
         return {
             "username": "demo-user",

@@ -17,6 +17,7 @@ function element() {
     },
     setAttribute: (key, value) => attributes.set(key, value),
     getAttribute: key => attributes.get(key) ?? null,
+    hasAttribute: key => attributes.has(key),
     removeAttribute: key => attributes.delete(key),
     addEventListener: (name, listener) => listeners.set(name, listener),
     querySelector(selector) {
@@ -24,6 +25,7 @@ function element() {
       return children.get(selector);
     },
     querySelectorAll: () => [],
+    closest() { return this; },
   };
 }
 
@@ -47,12 +49,14 @@ async function mounted(method, initial = preference(), saveResponse) {
   assert.equal(await instance.load(), true);
   instance[method](host);
   assert.match(host.innerHTML, /class="appearance-background-editor /);
-  const editor = host.querySelector('.appearance-background-editor');
-  const previewSelector = method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]';
-  return { instance, root, host, editor, preview: editor.querySelector(previewSelector) };
+  const editorSelector = { mountAlerts: '.appearance-alerts', mountAlbumPage: '.appearance-album-page' }[method] || '.appearance-background-editor';
+  return {
+    instance, root, host, editor: host.querySelector(editorSelector),
+    preview: host.querySelector('.appearance-background-editor').querySelector(method === 'mount' ? '[data-background-preview]' : '[data-player-live-preview]'),
+  };
 }
 
-function assertPreviewTheme(preview, draft) {
+function assertEditorTheme(preview, draft) {
   const effective = api.resolveAppearance(draft);
   assert.equal(preview.styles.get('--appearance-main-surface'), effective.main, 'Preview main must follow its draft');
   assert.equal(preview.styles.get('--appearance-panel-background'), effective.panel, 'Preview panels must follow its draft');
@@ -63,19 +67,27 @@ function assertPreviewTheme(preview, draft) {
   assert.equal(preview.getAttribute('data-appearance-palette'), draft.palette_id);
 }
 
+function assertSavedEditor(editor) {
+  assert.deepEqual([...editor.styles], [], 'The editor inherits the saved app theme without local draft overrides');
+  assert.equal(editor.getAttribute('data-appearance-palette'), null);
+  assert.equal(editor.getAttribute('data-appearance-mode'), null);
+}
+
 for (const method of ['mount', 'mountSeekbar']) {
   const name = method === 'mount' ? 'Backgrounds' : 'Seekbar';
 
-  test(`${name} editor follows black and light draft palettes and panel companions`, async () => {
-    const { instance, root, preview } = await mounted(method);
+  test(`${name} preview follows draft palettes while the editor inherits the saved app`, async () => {
+    const { instance, root, editor, preview } = await mounted(method);
     const savedRoot = [...root.styles];
-    assertPreviewTheme(preview, preference());
+    assertEditorTheme(preview, preference());
+    assertSavedEditor(editor);
     for (const palette_id of ['black', 'paper']) {
       instance.controller.setPalette(palette_id);
       for (const panel_index of [0, 1, 2]) {
         instance.controller.setPanelIndex(panel_index);
         const draft = preference({ palette_id, panel_index });
-        assertPreviewTheme(preview, draft);
+        assertEditorTheme(preview, draft);
+        assertSavedEditor(editor);
         assert.ok(api.contrastRatio(preview.styles.get('--appearance-ink'), preview.styles.get('--appearance-main-surface')) >= 4.5);
         assert.deepEqual([...root.styles], savedRoot, 'Draft editor theme must not recolor the saved app');
         assert.equal(root.getAttribute('data-appearance-palette'), 'steelblue');
@@ -83,36 +95,40 @@ for (const method of ['mount', 'mountSeekbar']) {
     }
   });
 
-  test(`${name} Cancel restores saved editor colors and mode without changing the app`, async () => {
+  test(`${name} Cancel restores saved preview colors and mode without changing the app`, async () => {
     const saved = preference({ palette_id: 'black', panel_index: 2 });
-    const { instance, root, preview } = await mounted(method, saved);
+    const { instance, root, editor, preview } = await mounted(method, saved);
     const savedRoot = [...root.styles];
     instance.controller.setPalette('paper');
     assert.equal(preview.getAttribute('data-appearance-mode'), 'light');
     instance.controller.cancel();
-    assertPreviewTheme(preview, saved);
+    assertEditorTheme(preview, saved);
+    assertSavedEditor(editor);
     assert.equal(preview.getAttribute('data-appearance-mode'), 'dark');
     assert.deepEqual([...root.styles], savedRoot);
   });
 
-  test(`${name} Reset pins default editor tokens and successful Save alone updates the app`, async () => {
+  test(`${name} Reset pins default preview tokens and successful Save alone updates the app`, async () => {
     let finishSave;
     const pending = new Promise(resolve => { finishSave = resolve; });
     const saved = preference({ palette_id: 'paper', panel_index: 1 });
-    const { instance, root, preview } = await mounted(method, saved, () => pending);
+    const { instance, root, editor, preview } = await mounted(method, saved, () => pending);
     const savedRoot = [...root.styles];
     instance.controller.reset();
-    assertPreviewTheme(preview, preference({ palette_id: null }));
+    assertEditorTheme(preview, preference({ palette_id: null }));
+    assertSavedEditor(editor);
     assert.deepEqual([...root.styles], savedRoot, 'Default draft must override inherited saved light tokens locally');
     instance.controller.setPalette('black');
     instance.controller.setPanelIndex(2);
     const draft = preference({ palette_id: 'black', panel_index: 2 });
     const saving = instance.controller.save();
-    assertPreviewTheme(preview, draft);
+    assertEditorTheme(preview, draft);
+    assertSavedEditor(editor);
     assert.deepEqual([...root.styles], savedRoot, 'Pending Save cannot apply draft tokens to the app');
     finishSave(draft);
     assert.equal(await saving, true);
-    assertPreviewTheme(preview, draft);
+    assertEditorTheme(preview, draft);
+    assertSavedEditor(editor);
     assert.equal(root.styles.get('--appearance-main-surface'), api.resolveAppearance(draft).main);
     assert.equal(root.styles.get('--appearance-panel-background'), api.resolveAppearance(draft).panel);
     assert.equal(root.getAttribute('data-appearance-palette'), 'black');
@@ -218,3 +234,33 @@ for (const field of ['fill', 'edge']) for (const replacement of ['theme', 'histo
     assert.equal(state.canSave, true);
   });
 }
+
+for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAlerts', 'mountAlbumPage']) {
+  test(`${method} disables Cancel for a clean draft and enables it for discardable changes`, async () => {
+    const { instance, editor } = await mounted(method);
+    const cancel = editor.querySelector('.background-actions').querySelector('[data-background-cancel]');
+    assert.equal(instance.controller.getState().dirty, false);
+    assert.equal(cancel.disabled, true, 'No changes means there is nothing to discard');
+    instance.controller.setPalette('paper');
+    assert.equal(cancel.disabled, false, 'A dirty draft remains cancellable');
+    instance.controller.cancel();
+    assert.equal(instance.controller.getState().dirty, false);
+    assert.equal(cancel.disabled, true);
+  });
+}
+
+test('restoring the saved recent player set leaves a clean disabled Cancel button', async () => {
+  const style = api.playerThemes[1].style;
+  const initial = preference({ revision: 2, player_style_override: style,
+    player_recent_sets: [style], waveform_recent_colors: ['#123456'],
+    interaction_overrides: { item_hover: null, item_selected: null, button_hover_background: null,
+      button_pressed: null, item_outline: { source: 'automatic', color: null } },
+    selection_accent: { enabled: true, color: '#34CA78' } });
+  const { instance, editor } = await mounted('mountSeekbar', initial);
+  instance.controller.setWaveformColor('fill', '#123456');
+  instance.controller.cancel();
+  instance.controller.setPlayerStyle(api.playerThemes[0].style);
+  instance.controller.restorePlayerSet(instance.controller.getState().playerRecentSets[0]);
+  assert.equal(instance.controller.getState().dirty, false);
+  assert.equal(editor.querySelector('.background-actions').querySelector('[data-background-cancel]').disabled, true);
+});

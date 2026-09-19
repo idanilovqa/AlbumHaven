@@ -32,6 +32,41 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S01 six tabs preserve keyboard wrapping and joined Close hit testing",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard anchor focus",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S03 deep Problems selection retains the mounted tree scroll and focused row",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S04 ready and missing Problems artwork preserve selection through the real lightbox lifecycle",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/settingsRefactorShell.spec.js",
+              "case": "FTC-SETTINGS-S05 an open Filters surface remains inside Settings after narrow resize and reopen",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/artistCompilationFamily.spec.js",
               "case": "FTC-ALBUM-DETAILS-021 and FTC-ARTIST-FAMILY-019 and FTC-NON-ALBUM-015 preserve featured credits and exclude guest and Interview albums from family galleries",
               "area": "gallery-search"
@@ -610,6 +645,20 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/settingsIntegrations.functional.spec.js",
+              "case": "FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved root membership",
+              "area": "integrations"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/settingsIntegrations.functional.spec.js",
+              "case": "FTC-SETTINGS-I02 Scrobbling statistics and readable Foobar help retain disabled playlist import",
+              "area": "integrations"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/loop-edit-expiry.functional.spec.js",
               "case": "FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller",
               "area": "loops"
@@ -634,6 +683,20 @@
               "test": "tests/e2e/specs/loops.functional.spec.js",
               "case": "FTC-UTIL-LOOPS-021 / FTC-UTIL-LOOPS-023 / FTC-UTIL-LOOPS-024 / FTC-UTIL-LOOPS-026 / FTC-PLAYER-017 / FTC-PLAYER-011 fake-data bottom-player loop save and Utility Loops playback stay grouped under one track",
               "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range",
+              "area": "loops"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/loops.functional.spec.js",
+              "case": "FTC-SETTINGS-H03 real log download matches the displayed captured snapshot",
+              "area": "log-history"
             },
             {
               "config": "playwright.config.js",
@@ -743,6 +806,13 @@
             {
               "config": "playwright.config.js",
               "project": "functional",
+              "test": "tests/e2e/specs/appearanceControls.spec.js",
+              "case": "FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hydrates it before Settings opens",
+              "area": "settings"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
               "test": "tests/e2e/specs/libraryFilesystemWatcher.functional.spec.js",
               "case": "FTC-LIBROOTS-016 / 017 / 018 reconciles filesystem changes and confirms missing-album removal",
               "area": "album-details"
@@ -765,7 +835,7 @@
               "config": "playwright.config.js",
               "project": "functional",
               "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
-              "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings",
+              "case": "FTC-PLAYER-014 Space preserves native overlay actions and range playback across Album Details, notifications, and Settings",
               "area": "playback"
             },
             {

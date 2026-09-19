@@ -1,6 +1,24 @@
 const PRODUCTION_BOOTSTRAP_ASSIGNMENT_PATTERN = (
-  /(?:^|[;\r\n])\s*window\.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__\s*=\s*([\s\S]*?)\s*;\s*$/u
+  /(?:^|[;\r\n])\s*window\.__ALBUM_HAVEN_BOOTSTRAP_PAYLOAD__\s*=\s*/u
 );
+
+function readBootstrapJsonAssignment(source, start) {
+  let quoted = false;
+  let escaped = false;
+  for (let index = start; index < source.length; index += 1) {
+    const character = source[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') {
+      quoted = true;
+    } else if (character === ';') {
+      return JSON.parse(source.slice(start, index));
+    }
+  }
+  throw new SyntaxError('Expected a terminated JSON assignment.');
+}
 
 export function parseProductionBootstrapPayloadScriptSources(scriptSources = []) {
   for (let index = scriptSources.length - 1; index >= 0; index -= 1) {
@@ -8,7 +26,7 @@ export function parseProductionBootstrapPayloadScriptSources(scriptSources = [])
     const match = source.match(PRODUCTION_BOOTSTRAP_ASSIGNMENT_PATTERN);
     if (!match) continue;
     try {
-      return JSON.parse(match[1]);
+      return readBootstrapJsonAssignment(source, match.index + match[0].length);
     } catch (error) {
       throw new Error(
         `Production bootstrap payload script contained invalid JSON: ${error.message}`,

@@ -752,27 +752,27 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerOpener\([\s\S]*openDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerOpener\([\s\S]*closeDrawer\([\s\S]*drawerButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
   );
   assert.match(
     coverLookupActions,
-    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(true/,
+    /pressSpaceOnFocusedDrawerClose\([\s\S]*drawerCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*drawerCloseButton\.press\('Space'\)[\s\S]*waitForDrawerState\(false/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsOpener\([\s\S]*openSettings\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsOpener\([\s\S]*waitForClosed\([\s\S]*settingsButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*settingsButton\.press\('Space'\)[\s\S]*accountMenu\)\.toBeVisible[\s\S]*settingsMenuItem\)\.toBeFocused[\s\S]*settingsMenuItem\.press\('Space'\)[\s\S]*waitForOpen/,
   );
   assert.match(
     settingsActions,
-    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForOpen/,
+    /pressSpaceOnFocusedSettingsClose\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForLoadedSummary/,
+    /pressSpaceOnFocusedCloseControl\([\s\S]*closeButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*closeButton\.press\('Space'\)[\s\S]*waitForClosed/,
   );
   assert.match(
     spec,
-    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*closeCoverLightbox\(\)/,
+    /openCoverLightbox\(\)[\s\S]*expectFullCoverAbovePlayer\(\)[\s\S]*pressSpaceOnFocusedLightboxClose\([\s\S]*expectedPlayback\(false\)/,
   );
   assert.match(
     trackModal,
@@ -784,8 +784,9 @@ test('Space playback E2E requires a foreground player and POM-owned focused-cont
   );
   assert.match(
     trackModalActions,
-    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*afterSpace[\s\S]*lightbox\)\.toBeVisible[\s\S]*lightboxCloseButton\)\.toBeFocused/,
+    /pressSpaceOnFocusedLightboxClose\([\s\S]*lightboxCloseButton\.focus\(\)[\s\S]*toBeFocused\(\)[\s\S]*lightboxCloseButton\.press\('Space'\)[\s\S]*lightbox\)\.toBeHidden[\s\S]*afterSpace/,
   );
+  assert.match(globalPlayerActions, /timeline\.focus\(\)[\s\S]*timeline\)\.toBeFocused\(\)[\s\S]*timeline\.press\('Space'\)/);
   assert.doesNotMatch(spec, /\.locator\s*\(|\.evaluate\s*\(|page\.keyboard|\.press\(['"]Space['"]\)/);
 });
 
@@ -2105,7 +2106,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   assert.equal(
     typeof parseArtistAlbumCount,
     'function',
-    'Expected a visible artist-meta count reader that does not depend on the mounted virtual window.',
+    'Expected a visible artist-header count reader that does not depend on the mounted virtual window.',
   );
   assert.equal(parseArtistAlbumCount('14 albums'), 14);
   assert.equal(parseArtistAlbumCount('1 album'), 1);
@@ -2116,7 +2117,7 @@ test('sparse optimistic POM observation atomically reads visible section count a
   )?.[0] || '';
   assert.match(
     observationMethod,
-    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.artist-meta[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
+    /sectionByArtistHeading\(artistName\)[\s\S]*await section\.evaluate[\s\S]*artistMetaText[\s\S]*\.family-artist-header > span:last-child[\s\S]*renderedIdentities[\s\S]*albumCount:\s*parseArtistAlbumCount\(observation\.artistMetaText\)/,
   );
   assert.doesNotMatch(
     observationMethod,
@@ -4610,7 +4611,7 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(spec, /FTC-UTIL-LOOPS-021 \/ FTC-UTIL-LOOPS-023 \/ FTC-UTIL-LOOPS-024/);
   assert.match(
     spec,
-    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.selectSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
+    /openTab\('appearance'\)[\s\S]*utilityAppearanceActions\.waitForReady\(\)[\s\S]*utilityAppearanceActions\.saveSeekbarMode\('waveform'\)[\s\S]*settingsModalAppBarActions\.closeSettings\(\)[\s\S]*waitForRenderedWaveform/,
   );
   assert.match(
     spec,
@@ -4638,6 +4639,9 @@ test('loop functional coverage proves progress, repeat, and both live control or
   assert.match(actions, /return \{ requested, restored, progressed \}/);
   assert.match(actions, /readRepeatPressedByName\(name\)/);
   assert.match(actions, /readLoopContinuity\(previousHandle, loopId\)/);
+  const loopsTab = read('tests/e2e/poms/utilityLoopsTab.js');
+  assert.match(loopsTab, /this\.neutralKeyboardTarget = page\.locator\('body'\)/);
+  assert.match(actions, /detailTitle\.click\(\)[\s\S]*neutralControl = this\.utilityLoopsTab\.neutralKeyboardTarget/);
   assert.match(actions, /pressSpaceBeforeLoopOwnership\(groupTitle[\s\S]*neutralControl\.focus\(\)[\s\S]*neutralControl\.press\('Space'\)/);
   assert.match(actions, /pressSpaceForOwnedLoopByName\(name, expected[\s\S]*playButton\.focus\(\)[\s\S]*playButton\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);
   assert.match(actions, /pressNeutralSpaceForOwnedLoop\(groupTitle, loopId, expected[\s\S]*neutralControl\.press\('Space'\)[\s\S]*waitForLoopPlaybackState/);
@@ -4734,10 +4738,12 @@ test('loop hover evidence moves the real mouse to target geometry without locato
   assert.ok(savedHelperStart >= 0 && savedHelperEnd > savedHelperStart, 'Expected the saved-loop hover action helper.');
   const savedHelper = savedActions.slice(savedHelperStart, savedHelperEnd);
   assert.match(savedHelper, /page\.mouse\.move\(/);
+  assert.match(savedHelper, /controlStyleForEntry\(entry\)\.getAttribute\('data-loop-control-style'\)/);
+  assert.match(savedHelper, /getAttribute\('data-loop-action-state'\) === 'editing'/);
   assert.match(
     savedHelper,
-    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', '55px'\)[\s\S]*readLoopActionVisualSnapshot/,
-    'saved-loop hover must settle the production expansion before measuring its geometry',
+    /toHaveAttribute\('data-loop-action-engaged', 'true'\)[\s\S]*toHaveCSS\('width', `\$\{style === 'companion' \? \(editing \? 88 : 58\) : \(editing \? 65 : 34\)\}px`\)[\s\S]*readLoopActionVisualSnapshot/,
+    'saved-loop hover must settle the approved style and edit-state pod width before measuring geometry',
   );
   assert.doesNotMatch(savedHelper, /waitForTimeout|timeout\s*:/);
 });
@@ -4938,6 +4944,10 @@ test('Problematic Files mutation completion ignores matching identities outside 
         assert.equal(item, activeListItem);
         return { async textContent() { return 'Album Previous'; } };
       },
+      metaForListItem(item) {
+        assert.equal(item, activeListItem);
+        return { async textContent() { return 'Artist · 2009'; } };
+      },
       async waitForMutationRemovalAndPreviousSelection(expected, options) {
         delegated = { expected, options };
       },
@@ -4953,6 +4963,7 @@ test('Problematic Files mutation completion ignores matching identities outside 
     }, { timeout: 4321 }), {
       key: 'album-previous',
       title: 'Album Previous',
+      meta: 'Artist · 2009',
     });
     assert.deepEqual(delegated, {
       expected: {
@@ -4981,7 +4992,7 @@ test('Settings measurement prepares the real button action and observes the moda
     const visibleElement = { offsetWidth: 1, offsetHeight: 0, getClientRects: () => [] };
     global.document = {
       querySelector(selector) {
-        return ['#utility-modal', '#utility-modal-title', '.utility-modal-body'].includes(selector)
+        return ['#utility-modal', '#utility-modal [role="dialog"][aria-label="Settings"]', '#utility-modal [role="tablist"][aria-label="Settings sections"]', '.utility-modal-body'].includes(selector)
           ? visibleElement
           : null;
       },
@@ -5152,7 +5163,7 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   assert.match(spec, /cursors\.surface\)\.toBe\('default'\)/);
   assert.match(
     spec,
-    /Math\.abs\(opened\.playerHeight - 92\)\)\.toBeLessThanOrEqual\(1\)/,
+    /Math\.abs\(opened\.playerHeight - 100\)\)\.toBeLessThanOrEqual\(1\)/,
   );
   assert.match(spec, /opened\.waveformHeight\)\.toBe\(56\)/);
   assert.doesNotMatch(spec, /opened\.playerHeight\)\.toBe\(78\)/);
@@ -5164,8 +5175,8 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
   );
   assert.match(
     spec,
-    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.mainLeftGapFromPlay - 8[\s\S]*toBeLessThanOrEqual\(1\)/,
-    'the no-track placeholder keeps its cover, controls, and timeline centered',
+    /unavailable\.visual\.coverCenterY\)\.not\.toBeNull\(\)[\s\S]*unavailable\.visual\.coverCenterY - unavailable\.visual\.playCenterY[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*unavailable\.visual\.timelineCenterY - unavailable\.visual\.playCenterY\)[\s\S]*toBeLessThanOrEqual\(1\)[\s\S]*expectApprovedCapsuleSpacing\(unavailable\.visual\)/,
+    'the no-track placeholder keeps controls and timeline on their shared centerline',
   );
   assert.match(
     spec,
@@ -5179,7 +5190,13 @@ test('loop range E2E coverage measures rendered geometry and preserves in-drag s
     spec,
     /idle\.mainAreaBounds\.x - playingPlayerLayout\.mainAreaBounds\.x[\s\S]*toBeLessThanOrEqual\(1\)/,
   );
-  assert.match(spec, /mainLeftGapFromPlay - 8\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /approvedCapsulePlayGap = 8 \+ \(\(56 - 48\) \/ 2\)/);
+  assert.match(spec, /visual\.playBounds\.width - 48\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /visual\.clusterBounds\.width - 56\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /timelineLeftGapFromPlay - approvedCapsulePlayGap\)\)\.toBeLessThanOrEqual\(1\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(playingPlayerLayout\)/);
+  assert.match(spec, /expectApprovedCapsuleSpacing\(idle\)/);
+  assert.match(actionVisualHelper, /this\.expandedPlaybackControls\.root\.boundingBox\(\)/);
   assert.match(spec, /cursors\.startHandle\)\.toBe\('grab'\)/);
   assert.match(spec, /dragSnapshot\.cursors\.startHandle\)\.toBe\('grabbing'\)/);
   assert.match(spec, /pitchVisible\)\.toBe\(false\)/);

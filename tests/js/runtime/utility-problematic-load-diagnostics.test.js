@@ -57,8 +57,11 @@ test('loading saved loops collapses every returned group before selecting the fi
     },
     async fetch() {
       return {
+        ok: true,
         async json() {
           return {
+            ok: true,
+            allowed_actions: {},
             loops: [
               { id: 'loop-1', artist: 'Artist', title: 'Song' },
               { id: 'loop-2', artist: 'Artist', title: 'Other Song' },

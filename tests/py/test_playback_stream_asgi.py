@@ -91,6 +91,9 @@ class DecoderFactoryDouble:
 
 @pytest.fixture
 def playback_app(tmp_path, monkeypatch):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
     class FakePostgresLibraryRootSettingsStore:
         def __init__(self, config):
             self._config = config
@@ -373,6 +376,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
     tmp_path,
     monkeypatch,
 ):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.services.waveform_peaks import WaveformPeaks
 
     saved_loop_path = (tmp_path / "loops" / "saved-loop.wav").resolve()
@@ -380,7 +384,7 @@ def test_waveform_route_resolves_saved_loop_id_through_media_authority_and_bound
     saved_loop_path.write_bytes(b"saved-loop-waveform-fixture")
     resolved_ids: list[str] = []
 
-    def resolve_saved_loop(_config, loop_id: str):
+    def resolve_saved_loop(_config, loop_id: str, **scope):
         resolved_ids.append(loop_id)
         return saved_loop_path if loop_id == "saved-loop-42" else None
 
@@ -470,6 +474,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
     monkeypatch,
     loop_id,
 ):
+    _authorize_loop_fixture(monkeypatch)
     class RegistryDouble:
         def __init__(self) -> None:
             self.run_calls = 0
@@ -480,7 +485,7 @@ def test_waveform_route_rejects_missing_or_invalid_saved_loop_id_without_startin
 
     resolved_ids: list[str] = []
 
-    def reject_saved_loop(_config, requested_id: str):
+    def reject_saved_loop(_config, requested_id: str, **scope):
         resolved_ids.append(requested_id)
         return None
 
@@ -2450,7 +2455,12 @@ def test_lifespan_shutdown_closes_live_socket_with_1001_and_leaves_zero_decoders
     playback_app,
     media_path,
     decoder_factory,
+    monkeypatch,
 ):
+    from tests.py.runtime_testing import stub_targeted_reconciliation_repository
+
+    stub_targeted_reconciliation_repository(monkeypatch)
+
     async def scenario() -> None:
         manager = websocket_session(playback_app, "/playback/pcm")
         socket = await manager.__aenter__()
@@ -2763,3 +2773,11 @@ def test_registry_shutdown_reports_cancelled_connection_shutdown_task():
         assert shutdown_calls == 1
 
     asyncio.run(scenario())
+
+def _authorize_loop_fixture(monkeypatch):
+    from music_app.services import current_actor_asgi
+    from types import SimpleNamespace
+    actor = SimpleNamespace(account_id=7, current_library_id=9, is_authenticated=True,
+        library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
+    async def resolve_actor(_request): return actor
+    monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)

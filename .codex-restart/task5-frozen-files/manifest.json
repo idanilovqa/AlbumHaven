@@ -1,0 +1,197 @@
+{
+  "base": "c0821b605f7465af851e5957d1f24fb34c2d03f7",
+  "branch": "2026-09-08-settings-refactor",
+  "status": "focused verification passed; native drag manual acceptance OPEN; no commit; Task6 independent",
+  "files": [
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor.md",
+      "sha256": "1705CCEF0A53C4312455BDCF5F82C2E28226D4E502AE47F50A29D982CA7E7F7A"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-checkpoint.md",
+      "sha256": "D7DBFA01E4F8BD978EA44FB4817B6CF5E2602CF94453EED3A524338A97883224"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-later-intake.md",
+      "sha256": "5B6635C2C8CAE5469F93CD7674256930EC719DD26F2C51EF1A76B70E165D587A"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task5-validation.md",
+      "sha256": "F94DD0B8222D0CB98D61A4567100ED29824B67B5502F28E89940B8A9BE2B8E07"
+    },
+    {
+      "path": "migrations/postgres/0063_scoped_saved_loop_orders.sql",
+      "sha256": "D695F8396915C3CDBE65ED206FDD03384659031D2E68B0399CA99AED88639C9E"
+    },
+    {
+      "path": "music_app/services/loop_request_scope.py",
+      "sha256": "3B1FDD44A2A451A4D04BC4EE0A3CB7B026A0F08984516331375985FC7D5EA4A0"
+    },
+    {
+      "path": "music_app/services/loops.py",
+      "sha256": "2FA1AA88D86FE36C2DC6688F6CAE64841A37D63C33CDB835C9706BBBE9480DBC"
+    },
+    {
+      "path": "music_app/services/saved_loops_postgres.py",
+      "sha256": "1CB051EE07A52EE8A561FC4344DB142FD5CDE431BE96A2F6AA43DA8C88BD4485"
+    },
+    {
+      "path": "music_app/routes/api_loop_helpers.py",
+      "sha256": "7B1FFA4BE17730F88C3C9546C7196B8EEE5574A72A00EF4948C41AC07B079943"
+    },
+    {
+      "path": "music_app/routes/api_read_asgi_routes.py",
+      "sha256": "119D86D91F187A69609CD58B80940A66A1B0F3EFF4849154E850C771135C2909"
+    },
+    {
+      "path": "music_app/routes/api_wave_b_asgi_routes.py",
+      "sha256": "47D7003B1814D1E9794309E3DB4609352DC50ED86BE909032BD252EEAD0E495C"
+    },
+    {
+      "path": "music_app/routes/playback_stream_asgi.py",
+      "sha256": "5962C9FFEECC265D1B44002590561BF6FC562ECE1907AF18C46F8C847671F356"
+    },
+    {
+      "path": "music_app/routes/web_asgi.py",
+      "sha256": "760498DBA24699C51E465F598B1DAD210FC7020A05806612CACCE77E2389D912"
+    },
+    {
+      "path": "music_app/static/css/runtime/non-album-and-player.css",
+      "sha256": "64D84560F9BFAAF0BDD16FD48F5B014B016098C7731DA29EBE7BB2AB855A731F"
+    },
+    {
+      "path": "music_app/static/js/runtime-bundle.js",
+      "sha256": "F41991A3C307F7471E26662509AC0D4F1C1196A625602C1D126039A088EFC9E4"
+    },
+    {
+      "path": "music_app/static/js/runtime/album-artbox.js",
+      "sha256": "9D3768043FE0973B8C50EBC27ED5EB3931B3C2BA9D7591E26D46FCFB00BD1671"
+    },
+    {
+      "path": "music_app/static/js/runtime/core-state-and-helpers.js",
+      "sha256": "32A816FF9AF14D9D507E583026E2FFD571CAAF8DB5C9FF602CB10E91F46B8FC5"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-and-waveform.js",
+      "sha256": "D8EAECA8E972088E119543F694E967DBEF30FFED14448F1E82C405600C2692EC"
+    },
+    {
+      "path": "music_app/static/js/runtime/track-modal-and-gallery.js",
+      "sha256": "3A4D7779A443DC351F1562312B19E4D8E1E5D0CBB0F53F099A0235B5DA151ED4"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-list-builders.js",
+      "sha256": "F7E6BBE45BB503B28EC57B2EB7FB91F5948D938F19C5B71F4ADC9701DC16D912"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loaders-and-cover-lookup.js",
+      "sha256": "4BD963CC33271D6B112FECD5EC6B4D3F53A0214A1A7EBDFB59B174D691F8B096"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-loop-playback.js",
+      "sha256": "F91BB23C37698E2B23768CDDA18CAD1D5563937622AE9BACD5A3D4D14551C929"
+    },
+    {
+      "path": "music_app/static/js/runtime/utility-renderers-and-actions.js",
+      "sha256": "687DA4A5E4EFC6EE9A948D6327366A6DF1C1C619B470F107C8112D84B7555562"
+    },
+    {
+      "path": "tests/js/runtime/album-artbox.test.js",
+      "sha256": "3230C7430729C3898E9D80A31DC1C30FC8ED6E27D041C243FDE82FE193C3CEC2"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-reorder.test.js",
+      "sha256": "53DF3BE008D2B1E971512C6BE141CE04B5F3052BD519ABFA4D04A69A6EF73ECD"
+    },
+    {
+      "path": "tests/py/test_api_wave_b_asgi_routes.py",
+      "sha256": "FB6CE36865D3D4F0CB1CE4F9FF69EA82DCCDF78380CD59083B20A1A5EA6D6B1D"
+    },
+    {
+      "path": "tests/py/test_playback_stream_asgi.py",
+      "sha256": "A42A14EE39536DD870FC28A24EE2BED1FB49634D6C4E9CDFB83684F00A3E82EF"
+    },
+    {
+      "path": "tests/py/test_web_asgi_routes.py",
+      "sha256": "B3718D07820BCC91B4CE07AA24B270FABA0D1F62D834608142F7A00B9AE01FD3"
+    },
+    {
+      "path": "tests/py/test_loop_error_projection.py",
+      "sha256": "2E9185CAA01734B0E86144639D811E9DF68CA313D162389C70AD99EFED93FCD5"
+    },
+    {
+      "path": "tests/py/test_loop_public_projection.py",
+      "sha256": "0FC42C6A8A47EC5D68CFF83F80E5E757E208EEAC54259FEFFC4CF03B8B70C064"
+    },
+    {
+      "path": "tests/py/test_loop_reorder.py",
+      "sha256": "0C5D7724F47D89F3C85285ACF77DF4A3FABE09788B99D538908BB97D69DEBDD9"
+    },
+    {
+      "path": "tests/py/test_loop_review_boundaries.py",
+      "sha256": "DCB6299559F738BE62C8B800CFC8B47A09BBDA8BD92C28B8E4543EDF9CF1300D"
+    },
+    {
+      "path": "tests/py/test_loop_scope_boundaries.py",
+      "sha256": "C24FB8983B1F985675ED5B5C2B8E38ED751F871CBBB54C4847CAAD501ED849A2"
+    },
+    {
+      "path": "tests/py/test_loop_source_duration_authority.py",
+      "sha256": "4EB0035B4656B1CFC0848A71813B202217EA97EFCC4CD24245E356A10A362583"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-load-generation.test.js",
+      "sha256": "E094F35C5BC06E6B112B0AB88BB1A757B04826445BACD2E555B2387BCA16B16A"
+    },
+    {
+      "path": "music_app/static/js/runtime/player-loop-playback.js",
+      "sha256": "C673831AFA9985287B3ED80757A057DA35DDB012A0B0F63D2ED2FE54C5E2530F"
+    },
+    {
+      "path": "tests/js/runtime/utility-loop-playback.test.js",
+      "sha256": "E756C9ECBDF69EB823BA4FA38A3376E69124ECDC67FF1674D0834EEA7D8EAE3C"
+    }
+  ],
+  "protected": [
+    {
+      "sha256": "76D3B12924F5E35E613148F590335AF75EACAB9BF66F888E1D0C5D8FB1989FA6",
+      "path": "music_app/services/appearance_preferences_postgres.py"
+    },
+    {
+      "sha256": "2DBC4E45755939B47709F0337B88643FF89BC4576630D34D6D5E657D576C2350",
+      "path": "music_app/static/js/appearance-palettes.js"
+    },
+    {
+      "sha256": "82C13073B26372A745DC7C182F576AC5370840A56D1DEC3C0806D0F6A1F13717",
+      "path": "tests/js/runtime/appearance-palettes.test.js"
+    },
+    {
+      "sha256": "B08F5CFB32573C2E84B05AD2758466300852FE70FFC718A7D6DCDDC587B2DA70",
+      "path": "tests/py/test_appearance_palettes.py"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-09-09-settings-refactor-task6-validation.md",
+      "sha256": "D1FFE6227581B7AD52F8C94A23B4F496D1EE680F28FD28A8285F3A537DB6AB09"
+    },
+    {
+      "path": "tests/js/runtime/utility-log-history-query.test.js",
+      "sha256": "162A36DB95C97E9C2FFBD5E9E02A5BA4D5F0859BED5DBD56D4C9FEF1F6A951FC"
+    },
+    {
+      "path": "tests/py/test_log_history_postgres.py",
+      "sha256": "2ADE2218603A2DEAD3D0A1ECF9357E97F5837247ECCFA917D64525CBBB096FC9"
+    },
+    {
+      "path": "tests/py/test_log_history_scoped_queries.py",
+      "sha256": "1923BBDB83099323ED93EE271C665477EB13F069EDB230A95FBC7AE5E99C1AAF"
+    },
+    {
+      "path": "tests/py/test_log_history_route_scope.py",
+      "sha256": "52BF688393D61F24413D907977D290ABB1E3D7C20C61EDE18B4FB8D4A87F5F54"
+    },
+    {
+      "path": "tests/py/test_log_history_finalizer_scope.py",
+      "sha256": "E4E812FDC170F5F77D8989589017CDEE510E7180AE4C4F8298AE3B656F977A59"
+    }
+  ]
+}

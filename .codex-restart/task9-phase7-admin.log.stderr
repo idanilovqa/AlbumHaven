@@ -1,0 +1,20 @@
+[WebServer] 2026-09-10 03:50:22,864 [INFO] music_app: Startup scan-cache hydration completed files=1 albums=1
+[WebServer] 2026-09-10 03:50:23,319 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=2 duration_ms=408.73 source_load=30.63 fingerprint=0.07 pure_build=0.39 family_link_replacement=8.81 snapshot_publication=0.90
+(node:37144) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] 2026-09-10 03:50:28,190 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 299.57, "hydrate_in_progress": false, "payload_elapsed_ms": 105.96, "query": "", "scan_in_progress": false, "selected_artist": ""}
+(node:26560) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] 2026-09-10 03:50:42,980 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 176.05, "hydrate_in_progress": false, "payload_elapsed_ms": 113.7, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[WebServer] 2026-09-10 03:50:46,867 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 163.59, "hydrate_in_progress": false, "payload_elapsed_ms": 102.83, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[WebServer] 2026-09-10 03:50:50,563 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 172.03, "hydrate_in_progress": false, "payload_elapsed_ms": 108.38, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[WebServer] 2026-09-10 03:50:57,259 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 160.98, "hydrate_in_progress": false, "payload_elapsed_ms": 104.36, "query": "", "scan_in_progress": false, "selected_artist": ""}
+[WebServer] 2026-09-10 03:51:03,056 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 164.04, "hydrate_in_progress": false, "payload_elapsed_ms": 105.62, "query": "", "scan_in_progress": false, "selected_artist": ""}
+(node:38800) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] 2026-09-10 03:51:21,924 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 288.19, "hydrate_in_progress": false, "payload_elapsed_ms": 221.1, "query": "", "scan_in_progress": false, "selected_artist": ""}
+(node:8844) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:35148) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] 2026-09-10 03:51:43,298 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 172.05, "hydrate_in_progress": false, "payload_elapsed_ms": 114.92, "query": "", "scan_in_progress": false, "selected_artist": ""}

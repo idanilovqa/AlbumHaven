@@ -1,0 +1,92 @@
+function loopStyleRules(style, predicate = () => true) {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  return Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => match[1].includes(`data-loop-control-style="${style}"`) && predicate(match[1]))
+    .map(match => match[2]).join('\n');
+}
+
+// B01/B02 replace the superseded 39/55px component geometry with the approved
+// Settings variants. Behavioral timer tests above and browser layout checks
+// independently cover the component's interaction and computed positioning.
+test('capsule uses a 56px stationary shell with 48px Play and 90/123px revealed outlines', () => {
+  const css = loopStyleRules('capsule');
+  assert.match(css, /(?:width|--[\w-]*(?:shell|cluster)[\w-]*):\s*56px/);
+  assert.match(css, /(?:--loop-play-control-size|--[\w-]*play[\w-]*|width):\s*48px/);
+  assert.match(css, /width:\s*90px/);
+  assert.match(css, /width:\s*123px/);
+  const reveal = loopStyleRules('capsule', selector => /engaged|revealed/.test(selector));
+  assert.match(reveal, /width:\s*90px/);
+  assert.match(reveal, /width:\s*123px/);
+});
+
+test('companion uses 52px Play and a 26px-high pod at 26px with 58/88px widths', () => {
+  const css = loopStyleRules('companion');
+  assert.match(css, /(?:--loop-play-control-size|--[\w-]*play[\w-]*|width):\s*52px/);
+  const mount = loopStyleRules('companion', selector => /\.loop-play-control-actions\s*$/.test(selector.trim()));
+  assert.match(mount, /left:\s*26px/);
+  assert.match(mount, /top:\s*26px/);
+  const pod = loopStyleRules('companion', selector => /\.loop-edit-action-pod(?:\s|:|$)/.test(selector));
+  assert.match(pod, /height:\s*26px/);
+  assert.match(pod, /width:\s*58px/);
+  assert.match(pod, /width:\s*88px/);
+});
+
+test('both styles center full-size glyphs in shared action slots', () => {
+  const capsule = loopStyleRules('capsule', selector => /\.loop-edit-action(?:\s|$)/.test(selector));
+  const capsuleIcons = loopStyleRules('capsule', selector => selector.includes('.loop-edit-action-icon'));
+  const companionIcons = loopStyleRules('companion', selector => selector.includes('.loop-edit-action-icon'));
+  assert.match(capsule, /width:\s*32px/);
+  assert.match(capsuleIcons, /width:\s*26px/);
+  assert.match(capsuleIcons, /height:\s*26px/);
+  assert.match(companionIcons, /width:\s*22px/);
+  assert.match(companionIcons, /height:\s*22px/);
+  const cancel = loopStyleRules('companion', selector => /is-cancel|loop-edit-action-cancel/.test(selector));
+  assert.match(cancel, /width:\s*18px/);
+  assert.match(cancel, /height:\s*18px/);
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /\.loop-edit-action\s*\{[^}]*place-items:\s*center/s);
+  assert.match(css, /\.loop-edit-action-icon\s*\{[^}]*mask-size:\s*contain/s);
+  assert.doesNotMatch(loopStyleRules('capsule') + loopStyleRules('companion'), /transform:\s*translateX\((?:5|7|-2)px\)/);
+});
+
+test('active hover uses semantic glyph color and soft outward glow without filled action surfaces', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /--loop-action-save-color:\s*var\(/);
+  assert.match(css, /--loop-action-cancel-color:\s*var\(/);
+  for (const semantic of ['save', 'cancel']) {
+    assert.match(css, new RegExp(`color:\\s*var\\(--loop-action-${semantic}-color\\)`));
+    const glowRules = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+      .filter(match => /:hover|:focus-visible/.test(match[1]) && match[1].includes('loop-edit-action') && match[2].includes(`--loop-action-${semantic}-glow`))
+      .map(match => match[2]).join('\n');
+    for (const blur of [2, 5, 10, 16]) assert.match(glowRules, new RegExp(`drop-shadow\\(0\\s+0\\s+${blur}px`));
+  }
+  const active = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => match[1].includes('.is-active') && /:hover|:focus-visible/.test(match[1]) && !match[1].includes('icon'))
+    .map(match => match[2]).join('\n');
+  assert.match(active, /background:\s*transparent/);
+  assert.match(active, /box-shadow:\s*none/);
+});
+
+test('cancel is neutral at rest and active glyph halos remain unclipped', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const baseline = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /\.loop-edit-action-cancel\s*$/.test(match[1].trim()) && !/:hover|:focus|:active/.test(match[1]))
+    .map(match => match[2]).join('\n');
+  assert.match(baseline, /color:\s*var\(/);
+  assert.doesNotMatch(baseline, /color:\s*var\(--loop-action-cancel-color\)|color:\s*#(?:ff3030|ef4444)/i);
+  const activePod = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => match[1].includes('.is-active') && /\.loop-edit-action-pod\s*$/.test(match[1].trim()))
+    .map(match => match[2]).join('\n');
+  assert.match(activePod, /overflow:\s*visible/);
+  const companionPod = loopStyleRules('companion', selector => selector.includes('.is-active') && /\.loop-edit-action-pod\s*$/.test(selector.trim()));
+  assert.match(companionPod, /clip-path:\s*none/);
+});
+
+test('companion idle hover fills the full curved pod while active contour leaves glyph overflow free', () => {
+  const idlePod = loopStyleRules('companion', selector => selector.includes('.loop-edit-action-pod') && /:has|:hover|:focus-visible/.test(selector) && /:not\(\.is-active\)/.test(selector));
+  assert.match(idlePod, /background:\s*(?:var\(|color-mix\()/);
+  const contour = loopStyleRules('companion', selector => /\.loop-edit-action-pod(?:::before|::after)?/.test(selector));
+  assert.match(contour, /(?:clip-path:\s*path\(|mask:\s*radial-gradient\()/);
+  assert.match(contour, /border-radius:/);
+});
+

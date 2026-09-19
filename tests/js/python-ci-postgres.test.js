@@ -30,7 +30,7 @@ test('Python CI provisions and tears down an exact disposable PostgreSQL 17 data
   assert.match(job, /-DatabaseSuffix\s+["']py_\$\{\{\s*github\.run_id\s*\}\}_\$\{\{\s*github\.run_attempt\s*\}\}["']/);
   assert.match(job, /-ExpectedMajorVersion\s+17/);
   assert.match(job, /-Pgbin\s+\$env:PGBIN/);
-  assert.equal((job.match(/-HostName\s+127\.0\.0\.1/g) || []).length, 2);
+  assert.equal((job.match(/-HostName\s+127\.0\.0\.1/g) || []).length, 4);
   assert.match(job, /-SkipFixtureLoad/);
   assert.match(job, /if:\s*\$\{\{\s*always\(\)\s*\}\}/);
   assert.ok(job.indexOf('-Mode Provision') < job.indexOf('python -m pytest -q'));

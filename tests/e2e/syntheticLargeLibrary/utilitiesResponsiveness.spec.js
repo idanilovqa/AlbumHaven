@@ -71,7 +71,9 @@ test.describe(`${RULES_CASE_ID} synthetic-large utilities rules and sibling-tab 
       const summary = await utilityRulesActions.readSelectedRuleSummary();
       expect(summary.title, 'Expected the Rules detail title to render.').not.toBe('');
       expect(summary.description, 'Expected the Rules detail description to render.').not.toBe('');
-      return summary;
+      const count = await utilityRulesActions.utilityRulesTab.listItems.count();
+      expect(count).toBe(rulesPayload.rules.length);
+      return { ...summary, count };
     });
 
     const rulesMemory = await stepLogger.step('Sample idle memory after Rules becomes ready', async () => (
@@ -196,7 +198,7 @@ test.describe(`${RULES_CASE_ID} synthetic-large utilities rules and sibling-tab 
     const rawMetrics = {
       rulesReadyMs,
       rulesSummary,
-      rulesCount: Number(await utilityRulesActions.utilityRulesTab.sidebar.count.textContent() || 0),
+      rulesCount: rulesSummary.count,
       rulesMemory,
       loopsReadyMs: secondaryTabResults.find((result) => result.key === 'loops')?.readyMs || 0,
       logHistoryReadyMs: secondaryTabResults.find((result) => result.key === 'log-history')?.readyMs || 0,

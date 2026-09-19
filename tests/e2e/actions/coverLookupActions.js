@@ -650,7 +650,7 @@ export class CoverLookupActions {
   }
 
   async pressSpaceOnFocusedDrawerOpener(options = {}) {
-    await this.openDrawer(options);
+    await this.closeDrawer(options);
     await this.coverLookup.drawerButton.focus();
     await expect(this.coverLookup.drawerButton).toBeFocused();
     await this.coverLookup.drawerButton.press('Space');
@@ -670,9 +670,8 @@ export class CoverLookupActions {
     await this.coverLookup.drawerCloseButton.focus();
     await expect(this.coverLookup.drawerCloseButton).toBeFocused();
     await this.coverLookup.drawerCloseButton.press('Space');
-    await this.coverLookup.waitForDrawerState(true, { timeout: options.timeout || 30000 });
+    await this.coverLookup.waitForDrawerState(false, { timeout: options.timeout || 30000 });
     await options.afterSpace?.();
-    await expect(this.coverLookup.drawerCloseButton).toBeFocused();
   }
 
   async waitForDrawerOpen(options = {}) {

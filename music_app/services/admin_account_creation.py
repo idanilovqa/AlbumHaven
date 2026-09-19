@@ -24,6 +24,7 @@ MANAGED_CAPABILITY_KEYS = frozenset(
         "library.inventory.manage",
         "library.rules.read",
         "library.logs.read",
+        "library.logs.export",
         "library.loops.read",
         "library.loops.media.read",
         "library.discovery.read",

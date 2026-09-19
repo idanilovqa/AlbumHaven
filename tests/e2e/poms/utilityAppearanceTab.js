@@ -8,6 +8,11 @@ import { UtilityMainBody } from './utilityMainBody.js';
 import { UtilitySidebarSection } from './utilitySidebarSection.js';
 
 export class UtilityAppearanceTab extends BasePage {
+  async isRetainedEditor(handle) {
+    // parity-check: allow-read-only-measurement-evaluate -- compare the mounted draft editor after shared search
+    return handle.evaluate(node => node.isConnected && node === document.querySelector('.appearance-background-editor'));
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.sidebar = new UtilitySidebarSection(page, testInfo);
@@ -63,6 +68,14 @@ export class UtilityAppearanceTab extends BasePage {
 
   compactStyleButton(style) {
     return this.compactPlayerStyle.button(style);
+  }
+
+  loopStyleButton(style) {
+    return this.editor.locator(`[data-loop-control-style-choice="${style}"]`);
+  }
+
+  get liveLoopCluster() {
+    return this.globalPlayer.locator('[data-playback-control-cluster][data-loop-control-style]');
   }
 
   sectionButton(key) {

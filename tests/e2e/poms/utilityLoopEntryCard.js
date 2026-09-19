@@ -5,6 +5,10 @@ function escapeRegExp(value) {
 }
 
 export class UtilityLoopEntryCard extends BasePage {
+  controlStyleForEntry(entry) {
+    return entry.locator('[data-loop-control-style]');
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.entries = page.locator('[data-utility-loop-entry]');
@@ -15,12 +19,12 @@ export class UtilityLoopEntryCard extends BasePage {
     this.playButtons = page.locator('[data-loop-play]');
     this.repeatButtons = page.locator('[data-toggle-loop-repeat]');
     this.timelines = page.locator('[data-loop-timeline]');
-    this.deleteConfirmOverlay = page.locator('#loop-delete-confirm-modal');
+    this.deleteConfirmOverlay = page.locator('#repair-confirm-modal');
     this.deleteConfirmDialog = this.deleteConfirmOverlay.getByRole('dialog', {
-      name: 'Delete saved loop',
+      name: 'Delete saved loop?',
       exact: true,
     });
-    this.deleteConfirmText = this.deleteConfirmDialog.locator('#loop-delete-confirm-text');
+    this.deleteConfirmText = this.deleteConfirmDialog.locator('#repair-confirm-text');
     this.deleteConfirmNo = this.deleteConfirmDialog.getByRole('button', { name: 'No', exact: true });
     this.deleteConfirmYes = this.deleteConfirmDialog.getByRole('button', { name: 'Yes', exact: true });
   }
@@ -58,6 +62,15 @@ export class UtilityLoopEntryCard extends BasePage {
     return entry.locator('[data-loop-audio]');
   }
 
+  dragHandleForEntry(entry) {
+    return entry.locator('.utility-loop-drag-handle');
+  }
+
+  async readPanelOrder() {
+    // parity-check: allow-read-only-measurement-evaluate -- read rendered saved-loop membership and order
+    return this.detailEntries.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-utility-loop-entry')));
+  }
+
   repeatButtonForEntry(entry) {
     return entry.locator('[data-toggle-loop-repeat]');
   }
@@ -77,7 +90,7 @@ export class UtilityLoopEntryCard extends BasePage {
   async readDeleteConfirmationStack() {
     // parity-check: allow-read-only-measurement-evaluate -- measure modal stacking and hit-testing only
     return this.deleteConfirmDialog.evaluate((dialog) => {
-      const overlay = document.getElementById('loop-delete-confirm-modal');
+      const overlay = document.getElementById('repair-confirm-modal');
       const utility = document.getElementById('utility-modal');
       const bounds = dialog.getBoundingClientRect();
       const centerX = bounds.left + (bounds.width / 2);
@@ -86,7 +99,7 @@ export class UtilityLoopEntryCard extends BasePage {
       return {
         deleteZIndex: Number(getComputedStyle(overlay).zIndex) || 0,
         utilityZIndex: Number(getComputedStyle(utility).zIndex) || 0,
-        deleteOwnsTopElement: Boolean(topElement?.closest?.('#loop-delete-confirm-modal')),
+        deleteOwnsTopElement: Boolean(topElement?.closest?.('#repair-confirm-modal')),
       };
     });
   }
@@ -346,7 +359,7 @@ export class UtilityLoopEntryCard extends BasePage {
   }
 
   async readCompactLayoutSnapshot(entry) {
-    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds] = await Promise.all([
+    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds, headingBounds, shellBounds] = await Promise.all([
       entry.boundingBox(),
       this.playButtonForEntry(entry).boundingBox(),
       this.loopActionForEntry(entry).boundingBox(),
@@ -358,12 +371,26 @@ export class UtilityLoopEntryCard extends BasePage {
       this.repeatButtonForEntry(entry).boundingBox(),
       this.speedControlForEntry(entry).boundingBox(),
       this.detailHeader.boundingBox(),
+      entry.locator('.utility-loop-heading').boundingBox(),
+      entry.locator('.utility-loop-shell').boundingBox(),
     ]);
-    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds) {
+    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds || !headingBounds || !shellBounds) {
       throw new Error('Expected rendered compact saved-loop controls and top row.');
     }
+    // parity-check: allow-read-only-measurement-evaluate -- read approved L03/L04 card insets independently of painted control bounds
+    const cardInsets = await entry.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        top: Number.parseFloat(style.paddingTop), right: Number.parseFloat(style.paddingRight),
+        bottom: Number.parseFloat(style.paddingBottom), left: Number.parseFloat(style.paddingLeft),
+        rowGap: Number.parseFloat(style.rowGap), border: Number.parseFloat(style.borderTopWidth),
+      };
+    });
     return {
       entryBounds,
+      headingBounds,
+      shellBounds,
+      cardInsets,
       playBounds,
       scissorsBounds: actionBounds,
       mainBounds,

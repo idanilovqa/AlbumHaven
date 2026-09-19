@@ -728,3 +728,57 @@ test('stale Problematic Files GET cannot defeat acknowledged revert invalidation
 
   assert.equal(context.state.utility.loaded, false);
 });
+
+for (const selectAlbum of [false, true]) {
+  test(`bulk matching-file selection ${selectAlbum ? 'under an album exclusion persists no redundant child rules' : 'without an album exclusion preserves every file rule'}`, async () => {
+    const album = albumFixture();
+    const reason = 'Undecoded characters';
+    album.track_problem_rows = Array.from({ length: 18 }, (_, index) => ({
+      path: `C:\\Music\\fixture\\${index}.flac`, filename: `${index}.flac`,
+      reasons: [reason], ignorable_reasons: [{ row_key: `file::${index}::undecoded`, reason }],
+    }));
+    album.track_problem_rows[0].reasons.push('Missing year');
+    album.track_problem_rows[0].ignorable_reasons.push({ row_key: 'file::0::year', reason: 'Missing year' });
+    const persisted = new Map();
+    const requests = [];
+    const { context } = loadMutationHelpers({
+      async fetch(url, options) {
+        const payload = JSON.parse(options.body);
+        requests.push({ url, payload });
+        if (url.endsWith('/revert')) persisted.delete(payload.row_key);
+        else for (const item of payload.items) persisted.set(item.row_key, item);
+        return { ok: true, async json() { return { ok: true, applied_items: payload.items || [] }; } };
+      },
+    });
+    context.state.utility.problematicFiles = [album];
+    context.state.utility.selectedProblematicKey = album.key;
+    const rowKeys = [
+      ...(selectAlbum ? [album.album_problem_rows[0].row_key] : []),
+      ...album.track_problem_rows.flatMap(row => row.ignorable_reasons.map(item => item.row_key)),
+    ];
+    const items = rowKeys.map(rowKey => context.buildProblemExclusionItemFromAlbum(album, rowKey));
+    await context.queueProblemExclusionCreate({ album, items });
+    assert.equal(requests[0].payload.items.length, selectAlbum ? 2 : 19);
+    assert.equal(problemIgnoreRule(context).count, selectAlbum ? 2 : 19);
+    assert.equal(persisted.has('file::0::year'), true, 'different file-level reasons remain independently selected');
+    if (selectAlbum) {
+      await context.queueProblemExclusionRevert(items[0]);
+      assert.deepEqual([...persisted.keys()], ['file::0::year'],
+        'reverting the single album exclusion restores all 18 undecoded-file problems');
+      assert.equal(problemIgnoreRule(context).count, 1);
+    } else {
+      assert.equal([...persisted.keys()].filter(key => key.endsWith('::undecoded')).length, 18);
+    }
+  });
+}
+
+test('album selection canonicalization retains foreign or unknown file identities for server validation', () => {
+  const album = albumFixture();
+  const { context } = loadMutationHelpers();
+  const ownedKey = album.track_problem_rows[0].ignorable_reasons[0].row_key;
+  const foreign = { row_key: ownedKey, scope: 'file', path: 'C:\\Other\\foreign.flac', problem_reason: 'Undecoded characters' };
+  const unknown = { row_key: 'unknown::undecoded', scope: 'file', path: album.track_problem_rows[0].path, problem_reason: 'Undecoded characters' };
+  const missingPath = { row_key: 'unknown::without-path', scope: 'file', problem_reason: 'Undecoded characters' };
+  const selected = [albumItem(), foreign, unknown, missingPath];
+  assert.deepEqual(clone(context.effectiveProblemExclusionItems(album, selected)), selected);
+});

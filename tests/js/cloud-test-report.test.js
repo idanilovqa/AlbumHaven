@@ -184,8 +184,10 @@ test('retained public index keeps at most 20 runs and no entry older than 14 day
 test('public run index links retained prior runs to authenticated Actions evidence', () => {
   const { buildCloudTestReport } = require(builderPath);
   const input = sampleInput();
+  const now = Date.now();
+  input.run.generatedAt = new Date(now).toISOString();
   input.previousRunIndex = [{
-    runId: '32837430000', runAttempt: '1', generatedAt: '2026-08-24T19:00:00.000Z', overallConclusion: 'success',
+    runId: '32837430000', runAttempt: '1', generatedAt: new Date(now - 86400000).toISOString(), overallConclusion: 'success',
   }];
   const report = buildCloudTestReport(input);
   assert.match(report.pagesFiles['index.html'], /actions\/runs\/32837430000/);

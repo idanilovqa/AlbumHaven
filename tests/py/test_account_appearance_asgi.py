@@ -125,7 +125,7 @@ def test_ordinary_active_member_can_read_defaults_without_library_grants(deploym
 
     assert status == 200
     assert decode_json(body) == {
-        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule", "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     assert "no-store" in headers["cache-control"]
     assert repository.reads == [41]
@@ -139,12 +139,12 @@ def test_save_normalizes_any_rgb_and_reset_is_scoped_to_the_authenticated_accoun
     status, headers, body = _request(app, "PUT", lower)
 
     assert status == 200
-    assert decode_json(body) == {**CUSTOM, **EXTENDED_DEFAULTS}
+    assert decode_json(body) == {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}
     assert "no-store" in headers["cache-control"]
     assert repository.rows == {41: CUSTOM}
     resolver.actor = _actor(52)
     assert decode_json(_request(app)[2]) == {
-        **DEFAULTS, **EXTENDED_DEFAULTS, "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
+        **DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule", "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     black_white = {"main_surface_color": "#000000", "panel_background_color": "#FFFFFF"}
     assert _request(app, "PUT", black_white)[0] == 200
@@ -287,8 +287,8 @@ def test_shell_hydration_uses_each_requests_actor_and_does_not_reuse_another_the
     first = asyncio.run(load_appearance_context(_shell_request(app, _actor(41))))
     second = asyncio.run(load_appearance_context(_shell_request(app, _actor(52))))
 
-    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
-    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
+    assert first == {"appearance_preferences": {**CUSTOM, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
+    assert second == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == [41, 52]
 
 
@@ -301,7 +301,7 @@ def test_public_or_expired_session_hydration_returns_defaults_without_loading_ac
 
     context = asyncio.run(load_appearance_context(_shell_request(app, actor)))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": False}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": False}
     assert repository.reads == []
 
 
@@ -313,7 +313,7 @@ def test_shell_storage_failure_returns_explicit_retry_state_and_defaults():
 
     context = asyncio.run(load_appearance_context(_shell_request(app, _actor())))
 
-    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS}, "appearance_load_error": True}
+    assert context == {"appearance_preferences": {**DEFAULTS, **EXTENDED_DEFAULTS, "loop_control_style": "capsule"}, "appearance_load_error": True}
 
 
 def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rendering():
@@ -339,6 +339,7 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
         **CUSTOM,
         **EXTENDED_DEFAULTS,
         "revision": 0,
+        "loop_control_style": "capsule",
         "interaction_overrides": {
             "item_hover": None,
             "item_selected": None,
@@ -356,13 +357,14 @@ def test_direct_account_settings_embeds_its_authenticated_theme_before_body_rend
     assert repository.reads == [41]
 
 
-def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor_can_save():
+@pytest.mark.parametrize("style", ["capsule", "companion"])
+def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor_can_save(style):
     from music_app.routes.account_asgi import router as account_router
     from music_app.services.auth_profile_password_postgres import ProfileAccountView
 
     app, repository, _resolver = _app()
     app.include_router(account_router)
-    repository.rows[41] = AGGREGATE_APPEARANCE
+    repository.rows[41] = {**AGGREGATE_APPEARANCE, "loop_control_style": style}
     app.state.profile_password_service = SimpleNamespace(load_profile=lambda **_kwargs: ProfileAccountView(
         username="appearance.member", administrator_set_suggestion=False, sessions=(),
     ))
@@ -375,7 +377,7 @@ def test_shell_bootstrap_embeds_the_current_aggregate_revision_before_the_editor
     html = body.decode("utf-8")
     bootstrap = re.search(r'<script\b[^>]*\bid="appearance-bootstrap"[^>]*>(.*?)</script>', html, re.S)
     assert bootstrap is not None
-    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "load_error": False}
+    assert json.loads(bootstrap.group(1)) == {**AGGREGATE_APPEARANCE, "loop_control_style": style, "load_error": False}
 
 
 def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
@@ -387,6 +389,7 @@ def test_get_returns_one_complete_revisioned_appearance_snapshot_and_csrf():
     assert status == 200
     assert decode_json(body) == {
         **AGGREGATE_APPEARANCE,
+        "loop_control_style": "capsule",
         "csrf_token": issue_session_csrf(SESSION, app.state.auth_policy_config),
     }
     assert "no-store" in headers["cache-control"]
@@ -413,7 +416,7 @@ def test_put_accepts_one_complete_snapshot_and_forwards_expected_revision_atomic
     status, headers, body = _request(app, "PUT", submitted)
 
     assert status == 200
-    assert decode_json(body) == saved
+    assert decode_json(body) == {**saved, "loop_control_style": "capsule"}
     assert "no-store" in headers["cache-control"]
     assert captured == [(41, "desktop", 7, {
         key: value for key, value in submitted.items() if key != "expected_revision"
@@ -440,7 +443,7 @@ def test_stale_put_returns_authoritative_snapshot_without_mutating_any_section()
     status, headers, body = _request(app, "PUT", submitted)
 
     assert status == 409
-    assert decode_json(body) == {"error": "appearance_conflict", "appearance": current}
+    assert decode_json(body) == {"error": "appearance_conflict", "appearance": {**current, "loop_control_style": "capsule"}}
     assert "no-store" in headers["cache-control"]
     assert repository.rows == {}
 

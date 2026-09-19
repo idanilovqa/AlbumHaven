@@ -80,6 +80,7 @@ _CAPABILITY_GROUPS = (
         (
             ("library.rules.read", "View library rules"),
             ("library.logs.read", "View operational logs"),
+            ("library.logs.export", "Export operational logs"),
             ("library.virtual_discography.read", "View virtual discography"),
         ),
     ),

@@ -139,6 +139,7 @@ test('AlbumDetails playback establishes animation through Appearance before asse
   const calls = [], reachedScenario = new Error('the original playback scenario begins');
   const media = [];
   await assert.rejects(callback({
+    appearancePreferenceIsolation: { async capture() { calls.push(['capture']); } },
     page: { async emulateMedia(options) { media.push({ ...options }); } },
     galleryActions: { async goto() {}, async waitForGalleryReady() {} },
     settingsModalAppBarActions: { async openSettings() {}, async closeSettings() {} },
@@ -154,7 +155,7 @@ test('AlbumDetails playback establishes animation through Appearance before asse
       else throw reachedScenario;
     } },
   }), error => error === reachedScenario);
-  assert.deepEqual(calls, [['animation', true], ['save']]);
+  assert.deepEqual(calls, [['capture'], ['animation', true], ['save']]);
   assert.deepEqual(media, [{ reducedMotion: 'no-preference' }]);
 });
 

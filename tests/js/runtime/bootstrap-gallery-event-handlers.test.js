@@ -2092,7 +2092,7 @@ test('edited search draft invalidates cached selected-artist reconcile before de
 
   assert.equal(staleReconcile.cleared, true);
   assert.equal(context.state.ui.pendingSelectedArtistReconcileTimer, 0);
-  assert.equal(calls.fetchAndRender.length, 0);
+  assert.equal(calls.fetchAndRender.length, 1);
 });
 
 test('search focus cancels cached selected-artist reconcile before browser input dispatch can race it', () => {
@@ -2817,7 +2817,6 @@ test('direct artist category search captures its origin but an unselected result
     }],
   };
   context.handleGalleryBootstrapSearchInput('');
-  calls.scheduledSearchCommits.at(-1).callback();
 
   assert.equal(calls.buildApiUrl.length, 2);
   assert.deepEqual(
@@ -3092,10 +3091,10 @@ test('handleGalleryBootstrapSearchInput does not capture a blank query when its 
 
   context.handleGalleryBootstrapSearchInput('   ');
 
-  assert.equal(calls.scheduledSearchCommits.length, 1);
+  assert.equal(calls.scheduledSearchCommits.length, 0);
   assert.deepEqual(calls.setSessionStorageItem, []);
 
-  calls.scheduledSearchCommits[0].callback();
+
 
   assert.deepEqual(calls.setSessionStorageItem, []);
 });
@@ -3151,8 +3150,8 @@ test('debounced interactive-origin no-match clear restores the cached root and r
   context.handleGalleryBootstrapSearchInput('');
 
   assert.equal(context.state.ui.recentSearchPopoverOpen, false);
-  assert.equal(calls.scheduledSearchCommits.length, 1);
-  calls.scheduledSearchCommits[0].callback();
+  assert.equal(calls.scheduledSearchCommits.length, 0);
+
 
   assert.equal(calls.applyViewPayload.length, 1);
   assert.equal(context.state.view.query, '');

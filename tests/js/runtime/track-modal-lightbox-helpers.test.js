@@ -426,6 +426,64 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+function lightboxFocusHarness() {
+  const result = loadHelper();
+  const { context, lightboxOverlay } = result;
+  const close = new FakeHtmlElement('image-lightbox-close');
+  const next = new FakeHtmlElement('image-lightbox-next');
+  const trigger = new FakeHtmlElement('settings-artwork');
+  for (const element of [close, next, trigger]) {
+    element.hidden = false;
+    element.disabled = false;
+    element.isConnected = true;
+    element.tabIndex = 0;
+    element.focus = () => { context.document.activeElement = element; };
+    element.getClientRects = () => [{}];
+  }
+  context.document.activeElement = trigger;
+  context.document.removeEventListener = (type, listener) => {
+    result.documentListeners.set(type, (result.documentListeners.get(type) || []).filter(item => item !== listener));
+  };
+  const getLightboxElements = context.getLightboxElements;
+  context.getLightboxElements = () => ({ ...getLightboxElements(), close, next });
+  lightboxOverlay.querySelectorAll = () => [next, close];
+  lightboxOverlay.contains = (element) => [close, next].includes(element);
+  context.attachModalEvents();
+  const keydown = (properties) => {
+    let prevented = false;
+    const event = { target: context.document.activeElement, ...properties, preventDefault() { prevented = true; }, stopPropagation() {} };
+    for (const listener of result.documentListeners.get('keydown') || []) listener(event);
+    return prevented;
+  };
+  return { ...result, close, next, trigger, keydown };
+}
+
+test('S05 opening artwork focuses lightbox Close and closing restores its original trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  assert.equal(context.document.activeElement, close);
+  context.closeImageLightbox();
+  assert.equal(context.document.activeElement, trigger);
+});
+
+test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
+  const { context, close, next, keydown } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  close.focus();
+  assert.equal(keydown({ key: 'Tab' }), true);
+  assert.equal(context.document.activeElement, next);
+  assert.equal(keydown({ key: 'Tab', shiftKey: true }), true);
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S05 closing artwork never restores focus to a detached trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  assert.doesNotThrow(() => context.closeImageLightbox());
+});
+
 async function flushAlbumDetailsHydration() {
   await Promise.resolve();
   await Promise.resolve();

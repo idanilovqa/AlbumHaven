@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 from hashlib import sha256
+import hashlib
 import json
 import os
 import re
@@ -485,8 +486,33 @@ def apply_all_migrations(setup_database_url: str) -> None:
         raise RuntimeError(f"No Postgres migrations found under {migrations_root}.")
     with _connect(setup_database_url) as connection:
         _assert_connected_role(connection, SETUP_ROLE)
+        ledger = connection.execute(
+            "select to_regclass('ops.schema_migrations') as migration_table"
+        ).fetchone()
+        if not ledger["migration_table"]:
+            bootstrap = migration_paths[0]
+            connection.execute(bootstrap.read_text(encoding="utf-8"))
+            connection.execute(
+                "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                (bootstrap.name, hashlib.sha256(bootstrap.read_bytes()).hexdigest()),
+            )
+        applied = {
+            row["migration_name"]: row["checksum"]
+            for row in connection.execute(
+                "select migration_name, checksum from ops.schema_migrations"
+            ).fetchall()
+        }
         for migration_path in migration_paths:
+            checksum = hashlib.sha256(migration_path.read_bytes()).hexdigest()
+            if migration_path.name in applied:
+                if applied[migration_path.name] != checksum:
+                    raise RuntimeError(f"Migration checksum mismatch: {migration_path.name}")
+                continue
             connection.execute(migration_path.read_text(encoding="utf-8"))
+            connection.execute(
+                "insert into ops.schema_migrations (migration_name, checksum) values (%s, %s)",
+                (migration_path.name, checksum),
+            )
 
 
 def grant_runtime_role_privileges(

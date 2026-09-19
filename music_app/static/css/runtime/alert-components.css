@@ -89,13 +89,24 @@ button.alert-label { cursor: pointer; }
 :root button.alert-label:is(:hover, :focus-visible):not(:disabled),
 :root button.alert-label:is(.is-active, [aria-pressed="true"]) {
   border-color: color-mix(in srgb, var(--alert-edge) 88%, white 12%) !important;
-  outline: 2px solid color-mix(in srgb, var(--alert-edge) 76%, transparent) !important;
-  outline-offset: 2px;
+  outline: 1px solid color-mix(in srgb, var(--alert-edge) 76%, transparent) !important;
+  outline-offset: -1px;
   background: color-mix(in srgb, var(--alert-edge) 17%, #08090d 83%) !important;
   color: var(--alert-ink);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--alert-edge) 28%, transparent);
+  box-shadow: none;
 }
 button.alert-label:disabled { cursor: default; opacity: .72; }
+:root button.alert-label[data-alert-label="error"][aria-pressed="true"] {
+  background: #b4232c !important;
+  border-color: #b4232c !important;
+  color: #fff !important;
+  outline: none !important;
+  box-shadow: none;
+}
+:root button.alert-label[data-alert-label="error"][aria-pressed="true"]:focus-visible {
+  outline: 1px solid #fff !important;
+  outline-offset: -3px;
+}
 
 .small-alert__icon,
 .on-page-alert__icon {
@@ -148,6 +159,11 @@ button.alert-label:disabled { cursor: default; opacity: .72; }
   border-color: color-mix(in srgb, var(--alert-edge) 32%, transparent);
   background: color-mix(in srgb, var(--alert-edge) 6%, #08090d 94%);
   color: var(--text);
+}
+.on-page-alert__actions .on-page-alert__dismiss {
+  --alert-edge: var(--appearance-error, #df8f96);
+  --appearance-interaction-outline: var(--appearance-error, #df8f96);
+  color: var(--appearance-error, #df8f96);
 }
 .on-page-alert__actions .ui-button:hover:not(:disabled) {
   filter: brightness(1.12);

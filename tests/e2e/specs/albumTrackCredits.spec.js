@@ -343,7 +343,11 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
   await stepLogger.step('Show the exact main-album and bonus-disc durations', async () => {
     const groups = await trackModalActions.readDiscGroupPresentation();
     expect(groups.headers).toEqual(['Bonus Disc']);
-    expect(groups.totals).toEqual([]);
+    expect(groups.totals).toEqual([
+      'Total Length: 25m 30s',
+      'Total Main Album Length: 3:00',
+      'Bonus Disc Length: 22:30',
+    ]);
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 25m 30s');
     await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');
@@ -371,7 +375,7 @@ test('FTC-ALBUM-DETAILS-005 ignores bonus-like album and path words', { tag: '@a
   await stepLogger.step('Show only the ordinary album total', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: [],
-      totals: [],
+      totals: ['Total Length: 18m 00s'],
     });
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 18m 00s');
@@ -401,7 +405,7 @@ test('FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2', { tag: '
   await stepLogger.step('Render inferred CD1 and numeric CD2 without bonus semantics', async () => {
     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
       headers: ['CD 1', 'CD 2'],
-      totals: [],
+      totals: ['Total Length: 18m 00s'],
     });
     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
       .toBe('Total Length: 18m 00s');

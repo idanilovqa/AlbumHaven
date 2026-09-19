@@ -103,9 +103,13 @@ export class GlobalPlayerActions {
       normalized,
     );
     const expected = normalized === 'waveform'
-      ? { height: 92, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
-      : { height: 68, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+      ? { height: 100, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
+      : { height: 76, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
     await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
+    // Regular mode folds the retained canvas to preserve the mode-transition animation.
+    // Verify its painted/interactive state, not DOM removal or a null bounding box.
+    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('opacity', normalized === 'waveform' ? '1' : '0');
+    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('pointer-events', 'none');
     const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
     const centerY = (bounds) => bounds.y + (bounds.height / 2);
     const expectedCenterY = checkpoint.player.y + expected.centerline;
@@ -133,11 +137,11 @@ export class GlobalPlayerActions {
       expect(Math.abs(checkpoint.metadata.x - (checkpoint.player.x + checkpoint.paddingLeft)))
         .toBeLessThanOrEqual(1);
     } else {
-      expect(checkpoint.waveform).toBeNull();
+      expect(checkpoint.waveform).not.toBeNull();
       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
         - (checkpoint.timeline.y + checkpoint.timeline.height);
-      expect(Math.abs(bottomGap - 5)).toBeLessThanOrEqual(1);
+      expect(Math.abs(bottomGap - 13)).toBeLessThanOrEqual(1);
     }
     return checkpoint;
   }
@@ -282,7 +286,9 @@ export class GlobalPlayerActions {
   }
 
   async togglePlaybackWithSpace(expectedState, options = {}) {
-    await this.globalPlayer.appKeyboardSurface.press('Space');
+    await this.globalPlayer.timeline.focus();
+    await expect(this.globalPlayer.timeline).toBeFocused();
+    await this.globalPlayer.timeline.press('Space');
     await this.waitForPlaybackState(expectedState, options);
     return this.readCurrentPlaybackSummary();
   }
@@ -484,6 +490,7 @@ export class GlobalPlayerActions {
   async openLoopEditor(options = {}) {
     await expect(this.globalPlayer.legacyLoopButton).toHaveCount(0);
     await expect(this.globalPlayer.legacyLoopPopup).toHaveCount(0);
+    await this.hoverLoopAction('enter');
     await this.globalPlayer.loopScissorsButton.click();
     await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'editing');
     await expect(this.globalPlayer.loopCreateButton).toBeVisible({ timeout: options.timeout || 60000 });
@@ -563,6 +570,15 @@ export class GlobalPlayerActions {
   }
 
   async hoverLoopAction(target = 'enter') {
+    const playBounds = await this.globalPlayer.playButton.boundingBox();
+    if (!playBounds) throw new Error('Expected Play to have rendered bounds before revealing loop actions.');
+    await this.globalPlayer.page.mouse.move(
+      playBounds.x + (playBounds.width / 2),
+      playBounds.y + (playBounds.height / 2),
+    );
+    if (await this.globalPlayer.loopAction.getAttribute('data-loop-action-state') !== 'disabled') {
+      await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+    }
     const locator = target === 'create'
       ? this.globalPlayer.loopCreateButton
       : target === 'cancel'
@@ -574,22 +590,27 @@ export class GlobalPlayerActions {
       bounds.x + (bounds.width / 2),
       bounds.y + (bounds.height / 2),
     );
-    if (target === 'cancel') {
-      await expect(locator).toHaveCSS('color', 'rgb(239, 68, 68)');
-    } else if (target === 'create') {
-      const themedPlayerInk = await this.globalPlayer.readThemedPlayerInkColor();
-      await expect(locator).toHaveCSS(
-        'color',
-        themedPlayerInk.active ? themedPlayerInk.color : 'rgb(74, 222, 128)',
-      );
+    if (target === 'cancel' || target === 'create') {
+      const semanticColor = await this.globalPlayer.readLoopActionHoverColor(target);
+      await expect(locator).toHaveCSS('color', semanticColor);
     }
     return this.readLoopActionVisualState();
+  }
+
+  async verifyTouchLoopCreationAndCancel() {
+    await this.globalPlayer.playButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'true');
+    await this.globalPlayer.loopScissorsButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'editing');
+    await expect(this.globalPlayer.loopCancelButton).toBeVisible();
+    await this.globalPlayer.loopCancelButton.tap();
+    await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-state', 'idle');
   }
 
   async moveAwayFromLoopAction() {
     await this.globalPlayer.page.mouse.move(2, 2);
     await expect(this.globalPlayer.loopAction).toHaveAttribute('data-loop-action-engaged', 'false');
-    await expect(this.globalPlayer.loopPod).toHaveCSS('width', '39px');
+    await expect(this.globalPlayer.loopAction).toHaveCSS('opacity', '0');
     return this.readLoopActionVisualState();
   }
 
@@ -873,6 +894,7 @@ export class GlobalPlayerActions {
   }
 
   async openLoopNameDialog(options = {}) {
+    await this.hoverLoopAction('create');
     await this.globalPlayer.loopCreateButton.click();
     return this.waitForLoopNameDialog(options);
   }

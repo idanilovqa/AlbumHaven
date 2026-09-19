@@ -2,9 +2,9 @@
 
 ## What Album Haven does
 
-Album Haven can import user-selected Foobar2000 exports. Opening this help page or downloading a reference file does not read your Foobar profile, change Foobar settings, or register a scheduled task.
+Foobar2000 history import is unavailable in this build. Album Haven provides setup instructions and export references. Opening this help page or downloading a reference file does not read your Foobar profile, change Foobar settings, or register a scheduled task.
 
-Manual exports are snapshots. Export a new file when you want Album Haven to see later Foobar activity. A future continuous-sync feature, when explicitly enabled, will have its own limited authorization contract.
+Manual exports are snapshots. Export a new file when you want to capture later Foobar activity. A future continuous-sync feature, when explicitly enabled, will have its own limited authorization contract.
 
 ## Components and export formats
 

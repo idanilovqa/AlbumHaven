@@ -1,4 +1,5 @@
-<link rel="stylesheet" href="/static/css/navigation-tree.css">
+{% set navigation_asset_version = runtime_asset_version if runtime_asset_version is defined else (request.app.state.runtime_asset_version if request is defined else '') %}
+<link rel="stylesheet" href="/static/css/navigation-tree.css{% if navigation_asset_version %}?v={{ navigation_asset_version }}{% endif %}">
 <script id="navigation-tree-item-template" type="text/plain">{% include "components/navigation-tree-item.html" %}</script>
-<script src="/static/js/navigation-tree.js" defer></script>
+<script src="/static/js/navigation-tree.js{% if navigation_asset_version %}?v={{ navigation_asset_version }}{% endif %}" defer></script>
 <script src="/static/js/selection-accent.js" defer></script>

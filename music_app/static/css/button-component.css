@@ -1,4 +1,8 @@
 /* Shared current-web Button primitive. Consumer variants own colors and dimensions. */
+:root :is(.button, .ui-button),
+:root .ui-button__content {
+  white-space: nowrap;
+}
 .ui-icon {
   width: 1em;
   height: 1em;
@@ -18,7 +22,7 @@
   vertical-align: middle;
   cursor: pointer;
   outline: 1px solid transparent;
-  outline-offset: 1px;
+  outline-offset: -1px;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
 }
 .ui-button[hidden] { display: none !important; }
@@ -96,6 +100,7 @@
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
 .action-button--destructive {
+  --appearance-interaction-outline: var(--appearance-error, #ef5350);
   color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));
   border-color: var(--alert-error-edge, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent));
 }
@@ -110,6 +115,12 @@
 }
 .action-button--destructive:focus-visible {
   outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
+}
+:root :is(.action-button--destructive, .on-page-alert__dismiss):is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-error, #df8f96) !important;
+  outline: 1px solid var(--appearance-error, #df8f96) !important;
+  outline-offset: -1px !important;
+  box-shadow: none;
 }
 .action-button:disabled,
 .action-button[aria-disabled='true'] {

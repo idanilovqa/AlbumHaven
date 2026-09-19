@@ -51,7 +51,7 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     expect(rejected.error).toContain('Invalid username or password');
   });
 
-  await stepLogger.step('Persist the credential-safe connection failure in this browser', async () => {
+  await stepLogger.step('Persist the credential-safe connection failure in authorized Log History', async () => {
     await utilityTabBarActions.openTab('log-history');
     await utilityLogHistoryActions.waitForReady();
     await utilityLogHistoryActions.waitForItemCount(initialHistoryCount + 1);
@@ -63,32 +63,30 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     expect(historyText).toContain('Last.fm connection failed');
     expect(historyText).toContain('Last.fm');
     expect(historyText).toContain('Invalid username or password.');
-    expect(historyText).toContain('This browser');
+    expect(historyText).not.toContain('This browser');
     for (const forbiddenValue of FORBIDDEN_HISTORY_VALUES) {
       expect(historyText).not.toContain(forbiddenValue);
     }
-    const stored = await utilityLogHistoryActions.readBrowserStoredEntry(failedConnectionHistoryId);
-    expect(stored.databaseVersion).toBe(1);
+    const stored = await utilityLogHistoryActions.readPersistedEntry(failedConnectionHistoryId);
+    expect(stored.snapshot).toBeTruthy();
     expect(stored.entry).toMatchObject({
       id: failedConnectionHistoryId,
       action: 'Last.fm connection failed',
-      source: 'this_browser',
-      source_label: 'This browser',
+      level: 'warning',
     });
   });
 
-  await stepLogger.step('Reload, reopen browser history, and export the retained entry', async () => {
+  await stepLogger.step('Reload, reopen authorized history, and export the retained entry', async () => {
     await utilityLogHistoryActions.reloadBrowserPage();
     await galleryActions.waitForGalleryReady();
-    const retainedBeforeReopen = await utilityLogHistoryActions.readBrowserStoredEntry(
+    const retainedBeforeReopen = await utilityLogHistoryActions.readPersistedEntry(
       failedConnectionHistoryId,
     );
-    expect(retainedBeforeReopen.databaseVersion).toBe(1);
+    expect(retainedBeforeReopen.snapshot).toBeTruthy();
     expect(retainedBeforeReopen.entry).toMatchObject({
       id: failedConnectionHistoryId,
       action: 'Last.fm connection failed',
-      source: 'this_browser',
-      source_label: 'This browser',
+      level: 'warning',
     });
 
     await settingsModalAppBarActions.openSettings();
@@ -96,21 +94,18 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     await utilityLogHistoryActions.waitForReady();
     await utilityLogHistoryActions.waitForItemCount(initialHistoryCount + 1);
     await utilityLogHistoryActions.selectEntryByAction('Last.fm connection failed');
-    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain('This browser');
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain('Last.fm connection failed');
 
     const exported = await utilityLogHistoryActions.exportLogs();
-    expect(exported.suggestedFilename).toMatch(/^album-haven-log-history-.+\.json$/);
-    expect(exported.document).toMatchObject({
-      schema: 'album-haven-log-history',
-      version: 1,
-      sources: [{ id: 'this_browser', label: 'This browser' }],
-    });
+    expect(exported.suggestedFilename).toMatch(/^album-haven-logs-.+\.json$/);
+    expect(exported.document.snapshot).toBeTruthy();
+    expect(exported.document.count).toBe(1);
+    expect(exported.document.items).toEqual([retainedBeforeReopen.entry]);
     expect(exported.document.items).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: failedConnectionHistoryId,
         action: 'Last.fm connection failed',
-        source: 'this_browser',
-        source_label: 'This browser',
+        level: 'warning',
       }),
     ]));
     for (const forbiddenValue of FORBIDDEN_HISTORY_VALUES) {
@@ -171,7 +166,15 @@ test(`${CASE_ID} production UI connects and scrobbles through the signed Last.fm
     const evidence = await playbackEvidencePromise;
     expect(evidence.nonZeroSamples).toBeGreaterThan(0);
     expect(evidence.renderedFrameDelta).toBeGreaterThan(0);
-    expect(playbackJourney.scrobble.accepted).toBe(1);
+    // Measured scrobbles return the scoped ledger row, not the legacy provider envelope.
+    expect(playbackJourney.scrobble.entry).toMatchObject({
+      measurement_version: 'rendered-pcm-v1',
+      scrobble_submission_state: 'accepted',
+      scrobbled: true,
+      finalized: false,
+    });
+    expect(playbackJourney.completion.entry.id).toBe(playbackJourney.scrobble.entry.id);
+    expect(playbackJourney.completion.entry.finalized).toBe(true);
     expect(playbackJourney.completion.entry.scrobbled).toBe(true);
   });
 

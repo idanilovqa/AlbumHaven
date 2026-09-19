@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
@@ -23,7 +24,9 @@ def app(tmp_path, monkeypatch):
 def _make_asgi_app():
     from music_app import create_asgi_app
 
-    return create_asgi_app()
+    asgi_app = create_asgi_app()
+    configure_test_bootstrap_actor(asgi_app)
+    return asgi_app
 
 
 def test_asgi_read_routes_register_natively(asgi_app):
@@ -67,9 +70,7 @@ def test_asgi_status_route_preserves_current_payload_shape(app):
     assert payload["covers_in_progress"] is False
     assert payload["album_total"] == 0
     assert payload["last_scan_display"] == "Never"
-    revision_epoch, revision_counter = payload["log_history_revision"].rsplit(":", 1)
-    assert revision_epoch
-    assert revision_counter == "0"
+    assert payload["log_history_revision"] == ""
 
 
 def test_status_payload_counts_matching_active_scan_preview_without_leaking_preview_metadata():
@@ -290,7 +291,14 @@ def test_asgi_status_projects_watcher_health_outside_lock_and_event_loop(
     controller.start()
 
     async def exercise():
-        request = SimpleNamespace(app=asgi_app, state=SimpleNamespace())
+        from starlette.requests import Request
+
+        request = Request({
+            "type": "http", "method": "GET", "scheme": "http", "path": "/status",
+            "query_string": b"", "headers": [(b"host", b"testserver")],
+            "client": ("testclient", 50000), "server": ("testserver", 80),
+            "app": asgi_app,
+        })
         status_task = asyncio.create_task(asgi_read_routes.status(request))
         await asyncio.sleep(0)
         heartbeat_ran.set()
@@ -3814,12 +3822,12 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
     monkeypatch.setattr(
         asgi_read_routes,
         "load_loops",
-        lambda config: [{"id": "loop-1", "name": "Intro loop"}],
+        lambda config, **_scope: [{"id": "loop-1", "name": "Intro loop"}],
     )
     monkeypatch.setattr(
         asgi_read_routes,
         "load_log_history_snapshot",
-        lambda config: {
+        lambda config, **_scope: {
             "items": [{"id": "entry-1", "message": "Refresh started"}],
             "revision": "test-process:4",
         },
@@ -3906,12 +3914,22 @@ def test_asgi_utility_read_routes_preserve_payloads_statuses_and_problematic_fal
         "error": "Problematic album not found.",
     }
     assert loops_status == 200
-    assert _decode_json(loops_body) == {"ok": True, "loops": [{"id": "loop-1", "name": "Intro loop"}]}
+    assert _decode_json(loops_body) == {
+        "ok": True,
+        "loops": [{"id": "loop-1", "name": "Intro loop", "cover_url": ""}],
+        "allowed_actions": {
+            "library.loops.read": True,
+            "library.loops.create": True,
+            "library.loops.delete": True,
+            "library.loops.reorder": True,
+        },
+    }
     assert log_status == 200
     assert _decode_json(log_body) == {
         "ok": True,
         "items": [{"id": "entry-1", "message": "Refresh started"}],
         "revision": "test-process:4",
+        "allowed_actions": {"library.logs.read": True, "library.logs.export": True},
     }
     assert log_headers["cache-control"] == "no-store"
     assert detail_calls == ["artist/album", "query-album", "missing"]
@@ -3931,11 +3949,11 @@ def test_asgi_loops_and_log_history_use_asgi_config_without_flask_bridge(app, as
 
     seen_config_markers: list[str] = []
 
-    def fake_load_loops(config):
+    def fake_load_loops(config, **_scope):
         seen_config_markers.append(str(config["ASGI_CONFIG_MARKER"]))
         return [{"id": "loop-1", "name": "Intro loop"}]
 
-    def fake_load_log_history_snapshot(config):
+    def fake_load_log_history_snapshot(config, **_scope):
         seen_config_markers.append(str(config["ASGI_CONFIG_MARKER"]))
         return {
             "items": [{"id": "entry-1", "message": "Refresh started"}],
@@ -3963,12 +3981,22 @@ def test_asgi_loops_and_log_history_use_asgi_config_without_flask_bridge(app, as
     )
 
     assert loops_status == 200
-    assert _decode_json(loops_body) == {"ok": True, "loops": [{"id": "loop-1", "name": "Intro loop"}]}
+    assert _decode_json(loops_body) == {
+        "ok": True,
+        "loops": [{"id": "loop-1", "name": "Intro loop", "cover_url": ""}],
+        "allowed_actions": {
+            "library.loops.read": True,
+            "library.loops.create": True,
+            "library.loops.delete": True,
+            "library.loops.reorder": True,
+        },
+    }
     assert log_status == 200
     assert _decode_json(log_body) == {
         "ok": True,
         "items": [{"id": "entry-1", "message": "Refresh started"}],
         "revision": "test-process:4",
+        "allowed_actions": {"library.logs.read": True, "library.logs.export": True},
     }
     assert log_headers["cache-control"] == "no-store"
     assert seen_config_markers == ["from-request-app-state", "from-request-app-state"]
@@ -3985,7 +4013,7 @@ def test_asgi_log_history_returns_non_cacheable_empty_transient_snapshot(
     monkeypatch.setattr(
         asgi_read_routes,
         "load_log_history_snapshot",
-        lambda _config: {"items": [], "revision": "test-process:0"},
+        lambda _config, **_scope: {"items": [], "revision": "test-process:0"},
     )
 
     status, headers, body = _run_asgi_request(
@@ -3996,7 +4024,10 @@ def test_asgi_log_history_returns_non_cacheable_empty_transient_snapshot(
 
     assert status == 200
     assert headers["cache-control"] == "no-store"
-    assert _decode_json(body) == {"ok": True, "items": [], "revision": "test-process:0"}
+    assert _decode_json(body) == {
+        "ok": True, "items": [], "revision": "test-process:0",
+        "allowed_actions": {"library.logs.read": True, "library.logs.export": True},
+    }
 
 
 def test_asgi_problematic_files_use_postgres_repository_without_fixture_env_or_runtime_hydration(

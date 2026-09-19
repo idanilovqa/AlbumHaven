@@ -1,0 +1,57 @@
+test('expanded loop controls overlay the waveform from a fixed-size Play compound', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const mount = css.match(/\.loop-play-control-actions\s*\{([^}]*)\}/s)?.[1] || '';
+  const cluster = css.match(/\.loop-play-control-cluster\s*\{([^}]*)\}/s)?.[1] || '';
+  assert.match(mount, /position:\s*absolute/);
+  assert.match(mount, /overflow:\s*visible/);
+  assert.match(cluster, /position:\s*relative/);
+  assert.match(cluster, /(?:width|--[\w-]*(?:shell|cluster)[\w-]*):\s*(?:var\(|56px)/);
+  for (const style of ['capsule', 'companion']) {
+    const activeCluster = loopStyleRules(style, selector => /engaged|revealed|is-editing/.test(selector) && !/::before|loop-play-control-actions|loop-edit-action/.test(selector));
+    assert.doesNotMatch(activeCluster, /(?:width|flex-basis):\s*(?:90|123|58|88)px/, 'reveal must never widen the in-flow compound');
+  }
+});
+
+test('both reusable variants hide folded actions without introducing a second consumer geometry', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const mounted = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /\.loop-play-control-actions\s*$/.test(match[1].trim())).map(match => match[2]).join('\n');
+  assert.match(mounted, /opacity:\s*0/);
+  assert.match(mounted, /pointer-events:\s*none/);
+  const revealed = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
+    .filter(match => /revealed|engaged/.test(match[1]) && /\.loop-play-control-actions\s*$/.test(match[1].trim()))
+    .map(match => match[2]).join('\n');
+  assert.match(revealed, /opacity:\s*1/);
+  assert.match(revealed, /pointer-events:\s*auto/);
+  assert.doesNotMatch(css, /\.utility-loop-play-cluster\s+\.loop-edit-actions\s*\{/);
+  assert.doesNotMatch(css, /\.player-loop-actions\s*\{/);
+});
+
+test('persistent and saved-loop players share the same styled Play action compound', () => {
+  const macro = fs.readFileSync(path.join(__dirname, '../../../music_app/templates/partials/playback-control-cluster.html'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/runtime/playback-control-cluster.js'), 'utf8');
+  for (const source of [macro, renderer]) {
+    assert.match(source, /data-playback-control-cluster/);
+    assert.match(source, /data-loop-control-style/);
+    assert.match(source, /loop-play-control-button/);
+    assert.match(source, /loop-play-control-actions/);
+  }
+  assert.match(renderer, /saved-loop/);
+  assert.match(renderer, /expanded-player/);
+});
+
+test('saved-loop panels reserve padding for the full border and overhanging controls', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  const entry = Array.from(css.matchAll(/\.utility-loop-entry\s*\{([^}]*)\}/g), match => match[1]).join('\n');
+  const first = Array.from(css.matchAll(/\.utility-loop-entry:first-child\s*\{([^}]*)\}/g), match => match[1]).join('\n');
+  assert.match(entry, /padding:\s*(?!0(?:px)?[;\s])/);
+  assert.match(entry, /border:\s*1px\s+solid/);
+  assert.doesNotMatch(first, /padding-bottom:\s*0|border(?:-top)?:\s*(?:0|none)/);
+});
+
+test('reduced motion disables reveal geometry transitions while keeping hidden semantics', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../../../music_app/static/css/runtime/non-album-and-player.css'), 'utf8');
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)[^]*loop-play-control-cluster[^]*transition:\s*none/);
+  assert.match(css, /\.loop-edit-action\[hidden\]\s*\{[^}]*display:\s*none/s);
+});
+

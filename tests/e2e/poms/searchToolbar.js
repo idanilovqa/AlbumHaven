@@ -53,11 +53,38 @@ export function hasAppliedCanonicalSidebar(canonicalArtists, attachedArtists, op
     && hasAppliedCanonicalArtistSurface(canonical, attached, options);
 }
 
+export function readRuntimeCanonicalView(runtimeState = null) {
+  const currentState = runtimeState || (typeof state === 'undefined' ? null : state);
+  if (!currentState) return null;
+  const artists = [];
+  const seenArtists = new Set();
+  // Current-view base groups also supply mounted, locally filtered family albums.
+  // Separate gallery caches have no trusted scope provenance in this observation.
+  for (const field of ['artist_groups', 'primary_artist_groups', 'family_artist_groups',
+    'related_filter_base_primary_groups', 'related_filter_base_family_groups']) {
+    for (const group of Array.isArray(currentState?.view?.[field]) ? currentState.view[field] : []) {
+      const artist = String(group?.artist || group?.artist_display || '').trim();
+      if (!artist || seenArtists.has(artist)) continue;
+      seenArtists.add(artist);
+      artists.push(artist);
+    }
+  }
+  return {
+    query: String(currentState?.view?.query || '').trim(),
+    surface: String(currentState?.view?.surface?.active || '').trim().toLowerCase(),
+    artists,
+    activeViewRequestId: Number(currentState?.ui?.activeViewRequestId || 0),
+    activeViewRequestUrl: String(currentState?.ui?.activeViewRequestUrl || ''),
+    busy: Boolean(currentState?.busy),
+    viewStateRevision: Number(currentState?.ui?.viewStateRevision || 0),
+  };
+}
+
 export class SearchToolbar extends BasePage {
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.form = page.locator(this.formSelector);
-    this.control = this.form.locator('.search-field-control');
+    this.control = page.locator(this.formSelector + ' .search-field-control');
     this.input = page.locator(this.inputSelector);
     this.applyButton = page.locator(this.applyButtonSelector);
     this.recentSearchPopover = page.getByRole('listbox', { name: 'Recent searches' });
@@ -68,6 +95,14 @@ export class SearchToolbar extends BasePage {
 
   get formSelector() {
     return '#search-form';
+  }
+
+  async readRecentSearchGeometry() {
+    const [input, popover] = await Promise.all([
+      this.control.boundingBox(), this.recentSearchPopover.boundingBox(),
+    ]);
+    if (!input || !popover) throw new Error('Recent-search geometry requires visible control and popover bounds.');
+    return { input, popover };
   }
 
   get inputSelector() {

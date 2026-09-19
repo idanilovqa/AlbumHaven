@@ -59,7 +59,11 @@ def load_library_root_settings(
     config: dict[str, object],
     *,
     connection: object | None = None,
+    library_id=None, media_host_library_id=None,
 ) -> dict[str, object]:
+    if library_id is not None or media_host_library_id is not None:
+        from music_app.services.scoped_library_roots import load_scoped_roots
+        return load_scoped_roots(PostgresLibraryRootSettingsStore(config), library_id=library_id, media_host_library_id=media_host_library_id)
     from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
     with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:
@@ -76,7 +80,13 @@ def load_library_root_settings(
         return settings
 
 
-def save_library_root_settings(config: dict[str, object], raw_payload: object) -> dict[str, object]:
+def save_library_root_settings(config: dict[str, object], raw_payload: object, *, library_id=None, media_host_library_id=None) -> dict[str, object]:
+    if library_id is not None or media_host_library_id is not None:
+        from music_app.services.scoped_library_roots import save_scoped_roots
+        with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:
+            result = save_scoped_roots(PostgresLibraryRootSettingsStore(config), raw_payload, library_id=library_id, media_host_library_id=media_host_library_id)
+            _store_configured_root_paths_snapshot(config, result)
+            return result
     from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
     with _CONFIGURED_ROOT_PATHS_SNAPSHOT_LOCK:

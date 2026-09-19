@@ -26,6 +26,7 @@ if str(ROOT) not in sys.path:
 
 from tests.e2e.support.isolatedPostgres import (  # noqa: E402
     IsolatedDatabaseOwnershipLock,
+    apply_all_migrations,
     PERFORMANCE_AUTH_PASSWORD,
     PERFORMANCE_AUTH_USERNAME,
     configure_performance_auth_environment,
@@ -287,11 +288,8 @@ def initialize_scan_performance_database(database_url: str) -> None:
     except ImportError as exc:
         raise RuntimeError("psycopg is required for Postgres-backed scan performance runs.") from exc
 
-    migrations_root = ROOT / "migrations" / "postgres"
+    apply_all_migrations(database_url)
     with psycopg.connect(database_url) as connection:
-        for migration_name in _postgres_migration_names():
-            migration_sql = (migrations_root / migration_name).read_text(encoding="utf-8")
-            connection.execute(migration_sql)
         connection.execute(_reset_scan_performance_database_sql())
         connection.execute(_seed_bootstrap_local_library_sql())
 

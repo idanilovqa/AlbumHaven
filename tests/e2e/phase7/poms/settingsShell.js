@@ -35,6 +35,7 @@ export class SettingsShell {
       return {
         bounds: rect(nav),
         heading: rect(nav.querySelector('h2')),
+        logo: rect(document.querySelector('.app-bar-brand-art')),
         entries: Array.from(nav.querySelectorAll('nav a, nav button'), (entry) => ({
           text: entry.textContent.trim(),
           bounds: rect(entry),

@@ -1,4 +1,4 @@
-﻿const albumTrackCollator = new Intl.Collator(undefined, {
+const albumTrackCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
 });
@@ -386,6 +386,38 @@ function tagEditOriginStillOwnsView(originatingViewStateRevision) {
 }
 
 async function confirmRepairSelectedAlbum() {
+  if (state.utility.pendingRepairAction === 'saved-loop-delete') {
+    const id = state.utility.pendingSavedLoopDeleteId;
+    if (!id || state.utility.savedLoopDeleteBusy || state.utility.allowedActions?.['library.loops.delete'] !== true) return;
+    state.utility.savedLoopDeleteBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      if (await deleteSavedLoop(id, { confirmed: true }) === true) closeRepairConfirmModal();
+    } finally {
+      state.utility.savedLoopDeleteBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
+  if (state.utility.pendingRepairAction === 'suggestions') return confirmProblemSuggestions();
+  if (state.utility.pendingRepairAction === 'revert-rule') {
+    const pending = state.utility.pendingRuleRevert;
+    if (!pending || state.utility.ruleRevertBusy) return;
+    state.utility.ruleRevertBusy = true;
+    const confirm = getRepairConfirmElements();
+    if (confirm.accept) confirm.accept.disabled = true;
+    try {
+      const succeeded = pending.kind === 'version-exception'
+        ? await revertVersionException(pending.key)
+        : await queueProblemExclusionRevert(pending.item);
+      if (succeeded === true) { closeRepairConfirmModal(); state.utility.pendingRuleRevert = null; }
+    } finally {
+      state.utility.ruleRevertBusy = false;
+      if (confirm.accept) confirm.accept.disabled = false;
+    }
+    return;
+  }
   const album = (state.utility.problematicFiles || []).find((item) => item.key === state.utility.pendingRepairKey) || getSelectedProblematicAlbum();
   if (!album) {
     showToast('No album selected for repair.', 'error', 3200);
@@ -1372,9 +1404,11 @@ async function revertVersionException(albumKey) {
     renderUtilityModalContent();
     await fetchAndRender(buildApiUrl(state.view), false);
     showToast('Rule reverted.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Utilities] Failed to revert rule.', error);
     showToast(error.message || 'Failed to revert rule.', 'error', 3200);
+    return false;
   }
 }
 
@@ -1892,8 +1926,8 @@ function renderTrackModalRelease(album) {
   const mainSeconds = mainGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const bonusSeconds = bonusGroups.reduce((sum, group) => sum + group.tracks.reduce((inner, track) => inner + (Number(track.duration_seconds) || 0), 0), 0);
   const totalLength = activeDuplicateSource?.total_duration_display || album.total_duration_display || formatAlbumDuration(album.total_duration_seconds);
-  const mainLength = formatAlbumDuration(mainSeconds) || (mainGroups.length ? totalLength : '');
-  const bonusLength = formatAlbumDuration(bonusSeconds);
+  const mainLength = mainSeconds > 0 ? (formatTrackDuration(mainSeconds) || formatAlbumDuration(mainSeconds)) : '';
+  const bonusLength = bonusSeconds > 0 ? (formatTrackDuration(bonusSeconds) || formatAlbumDuration(bonusSeconds)) : '';
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
@@ -2138,10 +2172,11 @@ function buildTrackListHtml(tracks, album = null, totalLength = null) {
     ), 0), 0);
   return buildAlbumTrackTableHtml({
     groups: componentGroups,
+
     multiDisc: grouped.multiDisc,
     totalLength: totalLength ?? (album?.total_duration_display || formatAlbumDuration(album?.total_duration_seconds)),
-    mainLength: hasBonusDisc ? formatTrackDuration(durationForGroups(false)) : '',
-    bonusLength: hasBonusDisc ? formatTrackDuration(durationForGroups(true)) : '',
+    mainLength: hasBonusDisc && durationForGroups(false) > 0 ? (formatTrackDuration(durationForGroups(false)) || formatAlbumDuration(durationForGroups(false))) : '',
+    bonusLength: hasBonusDisc && durationForGroups(true) > 0 ? (formatTrackDuration(durationForGroups(true)) || formatAlbumDuration(durationForGroups(true))) : '',
     playingAnimation: document.documentElement?.getAttribute('data-album-playing-row-animation') !== 'disabled',
   });
 }
@@ -2401,3 +2436,82 @@ function refreshNonAlbumModalPlaybackState() {
   });
 }
 
+
+function openProblemSuggestionsConfirm() {
+  const album = getSelectedProblematicAlbum();
+  const proposals = getApplicableProblemSuggestions();
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || !proposals.length || state.utility.proposalApplyBusy) return;
+  state.utility.pendingProblemSuggestions = { albumKey: album.key, ids: proposals.map(item => item.id), proposals: proposals.map(item => ({ ...item })) };
+  state.utility.pendingRepairKey = album.key;
+  state.utility.pendingRepairAction = 'suggestions';
+  openRepairConfirmModal();
+}
+
+async function confirmProblemSuggestions() {
+  const pending = state.utility.pendingProblemSuggestions;
+  const album = getSelectedProblematicAlbum();
+  if (!pending || state.utility.proposalApplyBusy) return;
+  const visible = getVisibleProblemSuggestions();
+  const proposals = pending.ids.map(id => visible.find(item => item.id === id));
+  if (!album?.allowed_actions?.['library.files.edit_tags'] || album.key !== pending.albumKey || proposals.some(item => !item)) {
+    showToast('These edits are no longer available. Review the current suggestions.', 'error', 3200);
+    return;
+  }
+  const updates = {};
+  for (const proposal of proposals) {
+    const target = updates[proposal.path] ||= {};
+    for (const [field, value] of Object.entries(proposal.updates || {})) {
+      if (Object.prototype.hasOwnProperty.call(target, field) && target[field] !== value) {
+        showToast('Selected edits conflict. Review the current suggestions.', 'error', 3200);
+        return;
+      }
+      target[field] = value;
+    }
+  }
+  const originatingViewStateRevision = readTagEditOriginViewStateRevision();
+  state.utility.proposalApplyBusy = true;
+  const modal = getRepairConfirmElements();
+  if (modal.accept) modal.accept.disabled = true;
+  if (modal.cancel) modal.cancel.disabled = true;
+  try {
+    const response = await fetch('/utilities/edit-tags', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmed: true, album, proposal_ids: pending.ids, updates, problematic_files_origin: true }),
+    });
+    const data = await response.json().catch(() => ({}));
+    state.utility.proposalOutcomes = Array.isArray(data.proposal_outcomes) ? data.proposal_outcomes : [];
+    const committedIds = new Set(state.utility.proposalOutcomes.filter(item => item.status === 'committed').map(item => item.id));
+    if (!response.ok || !data.ok || pending.ids.some(id => !committedIds.has(id)) || (data.save_task_id && data.save_task_status !== 'completed')) {
+      pending.ids.forEach(id => { (state.utility.proposalSelections ||= {})[id] = true; });
+      throw new Error(data.error || 'Suggested edits were not committed.');
+    }
+    closeRepairConfirmModal();
+    const mutation = data.save_task_id ? claimProblematicSaveTaskMutation(data.save_task_id, album, pending.albumKey) : null;
+    const previousItems = state.utility.problematicFiles;
+    const refreshed = await loadProblematicFiles(true, { render: false });
+    if (!refreshed) {
+      state.utility.problematicFiles = previousItems;
+      if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id);
+      throw new Error('Edits were saved, but Problems could not refresh. Reload before retrying.');
+    }
+    pending.ids.forEach(id => { if (state.utility.proposalSelections) delete state.utility.proposalSelections[id]; });
+    if (mutation) await settleProblematicSaveTaskMutation(data.save_task_id, { reconcileSelection: true });
+    else {
+      const selectedKey = state.utility.selectedProblematicKey;
+      if ((state.utility.problematicFiles || []).some(item => item.key === selectedKey)) await loadProblematicAlbumDetail(selectedKey, true, { render: false });
+      renderUtilityModalContent();
+    }
+    if (tagEditOriginStillOwnsView(originatingViewStateRevision) && Array.isArray(data.updated_albums) && data.updated_albums.length) {
+      updateOpenTrackModalAfterTagEdit(album, applyUpdatedAlbumsToCurrentView(data.updated_albums, { originalAlbum: album, preserveScroll: true }));
+    }
+    showToast('Suggested edits applied.', 'success', 2400);
+  } catch (error) {
+    console.error('[AlbumHaven][Utilities] Suggested edits failed.', error);
+    showToast(error.message || 'Unable to apply suggested edits.', 'error', 4000);
+  } finally {
+    state.utility.proposalApplyBusy = false;
+    if (modal.accept) modal.accept.disabled = false;
+    if (modal.cancel) modal.cancel.disabled = false;
+    syncProblemSuggestionSelection();
+  }
+}

@@ -87,6 +87,7 @@ def render():
             effective_selected_artist="Artist & Friends",
             selected_artist="Artist & Friends",
             account_menu_allowed_actions=actions,
+            playback_allowed_actions=AllowedActions(()),
             account_menu_csrf_token="library-csrf",
             allowed_actions=actions,
             csrf_token="settings-csrf",

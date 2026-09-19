@@ -50,7 +50,7 @@ const coverLookupSpecSource = fs.readFileSync(
   'utf8',
 );
 
-function createContext() {
+function createContext(storage = new Map()) {
   const toasts = [];
   const scheduledTimeouts = [];
   const layer = {
@@ -60,6 +60,7 @@ function createContext() {
     },
   };
   const context = {
+    window: { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, ButtonComponent: { renderButton: config => `<button>${config.label}</button>` } },
     document: {
       createElement() {
         const toast = {
@@ -69,6 +70,7 @@ function createContext() {
             remove() {},
           },
           innerHTML: '',
+          addEventListener(type, callback) { this[type] = callback; },
           parentElement: null,
           remove() {
             const index = toasts.indexOf(toast);
@@ -92,6 +94,66 @@ function createContext() {
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, scheduledTimeouts, toasts };
 }
+
+test('watcher warning uses one shared global alert, survives partial status, and clears on recovery', () => {
+  const { context, toasts } = createContext();
+  const configurations = [];
+  context.buildOnPageAlertHtml = config => { configurations.push(config); return '<section role="alert">Warning</section>'; };
+  const warning = { watcher_health: { state: 'warning', problems: [{ root_key: 'private-root', message: 'private-path' }] } };
+  context.syncLibraryWatcherWarning(warning);
+  const mounted = toasts[0];
+  context.syncLibraryWatcherWarning(warning);
+  context.syncLibraryWatcherWarning({ scan_in_progress: true });
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0], mounted);
+  assert.equal(mounted.className, 'system-warning-notification');
+  assert.equal(configurations.length, 1);
+  assert.equal(configurations[0].severity, 'warning');
+  assert.match(configurations[0].actionsHtml, /Dismiss/);
+  assert.match(configurations[0].actionsHtml, /Go to Library page/);
+  assert.doesNotMatch(JSON.stringify(configurations), /private-root|private-path/);
+  context.syncLibraryWatcherWarning({ watcher_health: { state: 'healthy', problems: [] } });
+  assert.equal(toasts.length, 0);
+  context.syncLibraryWatcherWarning(warning);
+  assert.equal(toasts.length, 1);
+  toasts[0].click({ target: { closest: selector => selector === '[data-watcher-dismiss]' } });
+  assert.equal(toasts.length, 0);
+  context.syncLibraryWatcherWarning(warning);
+  assert.equal(toasts.length, 0, 'polling must not reopen a dismissed warning');
+});
+
+for (const action of ['[data-watcher-dismiss]', '[data-watcher-library]']) {
+  test(`${action} persists dismissal across reloads and health transitions`, () => {
+    const storage = new Map();
+    const first = createContext(storage);
+    first.context.buildOnPageAlertHtml = () => 'Warning';
+    first.context.closeUtilityModal = () => {};
+    first.context.openScanPage = () => {};
+    const warning = { watcher_health: { state: 'warning', problems: [] } };
+    first.context.syncLibraryWatcherWarning(warning);
+    first.toasts[0].click({ target: { closest: selector => selector === action } });
+    const reloaded = createContext(storage);
+    reloaded.context.buildOnPageAlertHtml = () => 'Warning';
+    reloaded.context.syncLibraryWatcherWarning({ watcher_health: { state: 'healthy', problems: [] } });
+    reloaded.context.syncLibraryWatcherWarning(warning);
+    assert.equal(reloaded.toasts.length, 0);
+  });
+}
+
+test('Go to Library dismisses the watcher alert and opens Scan Library', () => {
+  const { context, toasts } = createContext();
+  const actions = [];
+  context.buildOnPageAlertHtml = () => '<section>Warning</section>';
+  context.closeUtilityModal = () => actions.push('close');
+  context.openScanPage = () => actions.push('scan');
+  const warning = { watcher_health: { state: 'warning', problems: [] } };
+  context.syncLibraryWatcherWarning(warning);
+  toasts[0].click({ target: { closest: selector => selector === '[data-watcher-library]' } });
+  assert.deepEqual(actions, ['close', 'scan']);
+  assert.equal(toasts.length, 0);
+  context.syncLibraryWatcherWarning(warning);
+  assert.equal(toasts.length, 0, 'polling must not reopen the dismissed alert');
+});
 
 test('toast placement is opt-in for the cover lookup start notification', () => {
   const { context, toasts } = createContext();

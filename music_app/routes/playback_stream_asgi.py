@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.loop_request_scope import saved_loop_scope
+
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
@@ -82,7 +84,7 @@ async def playback_waveform(
             status_code=400,
         )
     resolved_path = (
-        resolve_loop_media_path(request.app.state.config, requested_loop_id)
+        resolve_loop_media_path(request.app.state.config, requested_loop_id, **(await saved_loop_scope(request)))
         if requested_loop_id
         else resolve_configured_media_path(request.app.state.config, requested_path)
     )

@@ -149,6 +149,7 @@ if (
   });
 }
 updateStatusIndicator({
+  allowed_actions: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__ || {},
   scan_in_progress: Boolean(bootstrap.scanInProgress),
   scan_phase: String(bootstrap.scanPhase || 'idle'),
   scan_mode: String(bootstrap.scanMode || 'idle'),

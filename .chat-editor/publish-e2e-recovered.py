@@ -1,9 +1,8 @@
 from pathlib import Path
-import base64, gzip, hashlib, re, subprocess
+import json, subprocess
 
 EXPECTED = 'ea256e48e5b72e1617f01c9954beec3b432e7da2'
 BRANCH = '2026-09-08-settings-refactor'
-DIGEST = '0e8004d8b6d4f7635a82e2e1059626fcc2710b987e4f58431c9a372e68d7e8a0'
 transport = Path(__file__).resolve().parent
 
 def git(*args):
@@ -13,31 +12,24 @@ def require_head():
     assert git('ls-remote', '--exit-code', 'origin', 'refs/heads/' + BRANCH).split()[0] == EXPECTED, 'PR changed; refusing to overwrite'
 
 require_head()
-patch = gzip.decompress(base64.b64decode((transport / 'e2e-recovered.patch.gz.b64').read_text()))
-assert hashlib.sha256(patch).hexdigest() == DIGEST, 'Patch digest mismatch'
-assert len(patch) == 37546
+files = json.loads((transport / 'e2e-recovered-files.json').read_text())
+assert len(files) == 27
 subprocess.run(['git', 'switch', '--detach', EXPECTED], check=True)
-files = {}
-for section in patch.decode().split('diff --git ')[1:]:
-    header = section.splitlines()[0]
-    a, b = header.split(' ')
-    assert a[2:] == b[2:]
-    path = b[2:]
-    assert path.startswith(('music_app/static/', 'tests/', 'docs/superpowers/plans/'))
-    before, after = re.search(r'^index ([0-9a-f]{40})\.\.([0-9a-f]{40})', section, re.M).groups()
-    if before == '0' * 40:
+for path, (before, after) in files.items():
+    if before is None:
         assert not Path(path).exists(), path
     else:
         assert git('rev-parse', EXPECTED + ':' + path) == before, 'Baseline mismatch: ' + path
-    files[path] = after
-assert len(files) == 27
-patch_path = transport / 'verified-e2e.patch'
-patch_path.write_bytes(patch)
-subprocess.run(['git', 'apply', '--unidiff-zero', '--check', '--whitespace=error-all', str(patch_path)], check=True)
-subprocess.run(['git', 'apply', '--unidiff-zero', '--whitespace=error-all', str(patch_path)], check=True)
+subprocess.run(['python', str(transport / 'add-e2e-recovered-tests.py')], check=True)
+subprocess.run(['python', str(transport / 'restore-e2e-recovered.py')], check=True)
+plan = Path('docs/superpowers/plans/2026-09-09-settings-refactor.md')
+checkpoint = (transport / 'e2e-recovered-checkpoint.md').read_text()
+assert checkpoint.splitlines()[0] not in plan.read_text()
+plan.write_text(plan.read_text().replace('## 6. Verification commands', checkpoint + '## 6. Verification commands'))
 subprocess.run(['node', 'scripts/build-runtime-bundle.cjs'], check=True)
-for path, after in files.items():
-    assert git('hash-object', '--', path) == after, 'Changed bytes: ' + path
+for path, (before, after) in files.items():
+    actual = git('hash-object', '--', path)
+    assert actual == after, (path, actual, after)
     if path.endswith('.js'):
         subprocess.run(['node', '--check', path], check=True)
 subprocess.run(['node', 'scripts/check-e2e-production-parity.cjs'], check=True)

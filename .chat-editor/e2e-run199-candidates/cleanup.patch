@@ -1,0 +1,114 @@
+diff --git a/tests/py/conftest.py b/tests/py/conftest.py
+index a266918..0999592 100644
+--- a/tests/py/conftest.py
++++ b/tests/py/conftest.py
+@@ -150,10 +150,40 @@ def _remove_owned_generated_pytest_root(path: Path, *, expected_owner: tuple[int
+             return False
+     elif _process_is_running(owner_identity[0]):
+         return False
++    try:
++        root_stat = path.stat(follow_symlinks=False)
++    except OSError:
++        return False
++    root_identity = (root_stat.st_dev, root_stat.st_ino)
++
++    def same_root() -> bool:
++        try:
++            current = path.stat(follow_symlinks=False)
++            return not path.is_symlink() and (current.st_dev, current.st_ino) == root_identity
++        except OSError:
++            return False
++
+     for attempt in range(_PYTEST_ROOT_REMOVAL_ATTEMPTS):
++        if not same_root() or _owned_generated_pytest_root(path) != owner:
++            return False
+         try:
+             shutil.rmtree(path)
+         except OSError:
++            if not path.exists():
++                return True
++            # A partial rmtree may remove the marker before hitting a Windows
++            # lock. Keep this same directory identifiable for unconfigure or
++            # the next stale-root sweep, without claiming a replacement path.
++            if not same_root():
++                return False
++            marker = path / _PYTEST_BASETEMP_OWNER_FILE
++            try:
++                with marker.open("x", encoding="utf-8") as stream:
++                    json.dump(owner, stream, sort_keys=True)
++            except FileExistsError:
++                pass  # Never overwrite an existing or changed ownership marker.
++            except OSError:
++                return False
+             if attempt + 1 == _PYTEST_ROOT_REMOVAL_ATTEMPTS:
+                 return False
+         if not path.exists():
+diff --git a/tests/py/test_pytest_harness_config.py b/tests/py/test_pytest_harness_config.py
+index 216b40b..ab1b9e4 100644
+--- a/tests/py/test_pytest_harness_config.py
++++ b/tests/py/test_pytest_harness_config.py
+@@ -315,3 +315,64 @@ def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
+         (owned_root, (os.getpid(), "acde1234")),
+         (owned_root, (os.getpid(), "acde1234")),
+     ]
++
++
++def test_partial_cleanup_retains_owner_marker_for_unconfigure_retry(tmp_path, monkeypatch):
++    workspace_temp = tmp_path / "workspace-temp"
++    owned_root = workspace_temp / "pytest-444444-acde1234"
++    _write_owner_marker(owned_root, pid=444444, token="acde1234")
++    locked_file = owned_root / "locked.txt"
++    locked_file.write_text("session-owned probe", encoding="utf-8")
++    marker = owned_root / ".album-haven-pytest-owner.json"
++    real_rmtree = shutil.rmtree
++    attempts = []
++
++    def partial_rmtree(path):
++        attempts.append(Path(path))
++        # rmtree can delete the authority marker before encountering a lock.
++        marker.unlink(missing_ok=True)
++        raise PermissionError("locked until the session plugins release their files")
++
++    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: workspace_temp.resolve())
++    monkeypatch.setattr(pytest_harness.shutil, "rmtree", partial_rmtree)
++    monkeypatch.setattr(pytest_harness.time, "sleep", lambda _seconds: None)
++    assert not pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, "acde1234"),
++    )
++    assert len(attempts) == pytest_harness._PYTEST_ROOT_REMOVAL_ATTEMPTS
++    assert locked_file.exists()
++    assert pytest_harness._owned_generated_pytest_root(owned_root) == {
++        "kind": "album-haven-pytest-basetemp", "pid": 444444, "token": "acde1234",
++    }
++
++    monkeypatch.setattr(pytest_harness.shutil, "rmtree", real_rmtree)
++    assert pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, "acde1234"),
++    )
++    assert not owned_root.exists()
++
++
++def test_partial_cleanup_never_claims_a_replacement_directory(tmp_path, monkeypatch):
++    workspace_temp = tmp_path / "workspace-temp"
++    owned_root = workspace_temp / "pytest-444444-acde1234"
++    _write_owner_marker(owned_root, pid=444444, token="acde1234")
++    retained_root = workspace_temp / "retained-original"
++    attempts = []
++
++    def replace_directory(path):
++        attempts.append(Path(path))
++        owned_root.rename(retained_root)
++        owned_root.mkdir()
++        (owned_root / "unowned.txt").write_text("must survive", encoding="utf-8")
++        raise PermissionError("the original directory was replaced")
++
++    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: workspace_temp.resolve())
++    monkeypatch.setattr(pytest_harness.shutil, "rmtree", replace_directory)
++    monkeypatch.setattr(pytest_harness.time, "sleep", lambda _seconds: None)
++    assert not pytest_harness._remove_owned_generated_pytest_root(
++        owned_root, expected_owner=(444444, "acde1234"),
++    )
++    assert len(attempts) == 1
++    assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"
++    assert not (owned_root / ".album-haven-pytest-owner.json").exists()
++    assert retained_root.is_dir()

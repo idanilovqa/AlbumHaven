@@ -32,6 +32,9 @@ jobs:
           from pathlib import Path
           patch = Path('.chat-editor/pr205-followup.patch').read_bytes()
           assert hashlib.sha256(patch).hexdigest() == '8614d7686ebe32c6c98897356dd5018c95eb61a0f0cf916d2908f361ea9c9878', 'Patch transport mismatch'
+          old = b'diff --git a/tests/js/e2e-pr205-followup-contracts.test.js b/tests/js/e2e-pr205-followup-contracts.test.js\n--- /dev/null'
+          assert patch.count(old) == 1
+          patch = patch.replace(old, old.replace(b'\n--- /dev/null', b'\nnew file mode 100644\n--- /dev/null'))
           root = Path(os.environ['RUNNER_TEMP'])
           (root / 'pr205-followup.patch').write_bytes(patch)
           files = {

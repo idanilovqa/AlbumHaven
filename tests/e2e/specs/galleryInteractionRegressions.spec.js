@@ -13,18 +13,30 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
   let firstPaintSummary;
+  let firstPaintArtistCount;
   await stepLogger.step('Server first paint shows known totals before any JavaScript hydration',async()=>{
     const response=await page.goto(new URL('/?surface=albums',test.info().project.use.baseURL).href);
     const html=await response.text();
     const scripts=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
     const payload=parseProductionBootstrapPayloadScriptSources(scripts);
     const view=payload.initial_view;
+    firstPaintArtistCount=String(view.artist_count);
     firstPaintSummary = `${view.artist_count} artists · ${view.album_count} albums`;
     expect(html).toContain(`data-gallery-context-summary>${firstPaintSummary}`);
     expect(view.album_count).toBeGreaterThan(7);
   });
   await galleryActions.waitForGalleryReady();
   await expect(ui.summary).toHaveText(firstPaintSummary);
+  await stepLogger.step('Root totals remain authoritative after scrolling beyond the initial viewport',async()=>{
+    await expect(ui.rootArtistCount).toHaveText(firstPaintArtistCount);
+    await galleryActions.scrollGalleryToMiddle();
+    await expect.poll(()=>ui.readCompletedStartupPartialView(),{timeout:60000}).toBe(false);
+    const scroll=await galleryActions.readGalleryScrollState();
+    await galleryActions.scrollGalleryBy(-scroll.scrollTop);
+    await expect.poll(async()=> (await galleryActions.readGalleryScrollState()).scrollTop).toBeLessThan(2);
+    await expect(ui.summary).toHaveText(firstPaintSummary);
+    await expect(ui.rootArtistCount).toHaveText(firstPaintArtistCount);
+  });
   await stepLogger.step('Artist Family is hidden at root and closes when returning from a selected artist',async()=>{
     const familyToggle=ui.familyToggle;
     const familyPanel=ui.familyPanel;

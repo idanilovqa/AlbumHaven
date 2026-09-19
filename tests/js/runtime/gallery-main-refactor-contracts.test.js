@@ -852,12 +852,35 @@ test('Artist Family drag selection paints one state and never retoggles a crosse
   assert.deepEqual(toggled, ['first', 'second', 'first', 'second']);
 });
 
-test('partial root gallery summary uses known totals instead of preview album count', () => {
+test('root gallery summary retains authoritative totals across full hydration', () => {
   const context = loadRuntime();
   const preview = {artistCount:7,albumCount:7};
   assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals({initial_view_partial:true,artist_count:120,album_count:900},preview))), {artistCount:120,albumCount:900});
-  assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:false,artist_count:120,album_count:900},preview),preview);
+  const hydrated = { artistCount: 135, albumCount: 915 };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.resolveGallerySummaryTotals(
+    { initial_view_partial: false, artist_count: 120, album_count: 900 }, hydrated,
+    context.createGalleryMainState(),
+  ))), { artistCount: 120, albumCount: 900 });
   assert.equal(context.resolveGallerySummaryTotals({initial_view_partial:true,selected_artist:'Artist'},preview),preview);
+});
+test('full root gallery summary preserves client-filtered and query totals', () => {
+  const context = loadRuntime();
+  const view = { initial_view_partial: false, artist_count: 120, album_count: 900 };
+  const filtered = { artistCount: 2, albumCount: 3 };
+  const filters = [
+    { sources: { hoard: false } },
+    { albumTypes: ['studio'] },
+    { familyArtists: ['Artist'] },
+    { familySelectionExplicit: true },
+  ];
+  for (const overrides of filters) {
+    assert.equal(context.resolveGallerySummaryTotals(
+      view, filtered, context.createGalleryMainState(overrides),
+    ), filtered);
+  }
+  assert.equal(context.resolveGallerySummaryTotals(
+    { ...view, query: 'Artist' }, filtered, context.createGalleryMainState(),
+  ), filtered);
 });
 test('partial bootstrap gallery chrome reports empty results after all sources are hidden', () => {
   const name = { textContent: '' };

@@ -5,6 +5,7 @@ export class GalleryRegressions {
     this.familyPanel=page.locator('#artist-family-panel');
     this.nealSidebar=page.locator('[data-sidebar-artist="Neal Morse"]');
     this.rootSidebar=page.locator('[data-sidebar-all-artists="1"]');
+    this.rootArtistCount=this.rootSidebar.locator('.navigation-tree-count');
     this.search=page.getByRole('combobox',{name:'Search music'});
     this.options=page.locator('.recent-search-option');
     this.summary=page.locator('[data-gallery-context-summary]');
@@ -33,6 +34,11 @@ export class GalleryRegressions {
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
   }
   cover(card) { return card.locator('img').first(); }
+  async readCompletedStartupPartialView() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe the production full-hydration paint marker
+    return this.page.evaluate(() => window.__ALBUM_HAVEN_STARTUP_METRICS__
+      ?.marks?.initial_refresh_complete?.detail?.partialView ?? null);
+  }
   yearWithin(card) { return card.locator('.gallery-card__hover-year'); }
   numberPlay(row) { return row.locator('.album-track-table__number-play'); }
   async readTrackPath(row) {

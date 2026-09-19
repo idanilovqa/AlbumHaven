@@ -67,3 +67,47 @@ Gates must finish on this head before reporting CI acceptance. The owner's
 retry, performance budget, approved screenshot baseline, fixture population,
 permission or audio-engine behavior is relaxed. Final full-CI and manual
 acceptance are not claimed by this document.
+
+## Final repair pass after PR Gates 207
+
+The complete PR Gates 207 run (`35434479136`) on
+`b3283d2ac7a3dc7951196a9e611785de89a89e1c` finished before this repair.
+Portable and Windows JavaScript failed the second pair of matrix-count checks
+that still expected 206 instead of the actual 207 approved cases. Those two
+checks now agree with the already-correct discovery and ownership inventories.
+No case is removed, skipped or reclassified.
+
+The completed playback/Utilities log exposed two scenario failures and one
+runner failure. FTC-UTIL-PROBLEMS-001 reached the mobile Rules layout and found
+Revert 14px from the row edge, outside its unchanged 12px top-right contract.
+Only stacked mobile exclusion tables now use 10px row padding; desktop 10px/14px
+padding and the original browser assertions remain unchanged.
+
+The saved-loop Cancel helper attempted to activate controls that had folded
+while the pointer was adjusting a range. The owning Settings plan B05 requires
+that 500ms fold and immediate reveal when returning to Play. Save and Cancel now
+use the existing native Play-hover reveal helper before their unchanged native
+clicks. No force click, timer change, hidden-state success, selection reset or
+persistence assertion was introduced. A browser probe using the real shared
+control renderer confirmed fold, reveal, native cancellation and the idle state.
+
+The I01 browser scenario passed but the runner failed during finalization.
+The runner reparsed its accumulated output and synchronously enumerated Windows
+processes on each late provider log, treating a cached result as a new lifecycle
+transition. Lifecycle transitions are now handled once per authenticated phase.
+All output and authenticated failures are still processed; original cleanup,
+nonce checks, child-close requirements and finalization deadlines remain intact.
+The new regression checks a burst of 400 ordinary output chunks, confirms one
+process snapshot per phase and verifies that late failures still return failure.
+
+Five new regressions reproduced four failures before implementation and all
+passed after it. Focused browser geometry confirms 10px mobile insets and
+unchanged desktop spacing. Local production parity passed. The Windows executor
+`35450720857` passed the complete affected runner and fixture contract files,
+37 related helper checks and production parity before publication. It verified
+source/output hashes, patch checksum, the exact five-file inventory and the
+unchanged destination head before a non-force push of
+`f9402dd6ebbf1b00d00957f5e3d23dae8159f61a`.
+
+A fresh complete PR Gates run is required on this promotion commit. This record
+is not a full-CI, merge, release or manual-acceptance claim.

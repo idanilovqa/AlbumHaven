@@ -1,0 +1,46 @@
+name: Verify complete run 202 repair checkpoint
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-verify-run202-checkpoint.yml]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify transport against the original completed patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64,gzip,hashlib,json
+          from pathlib import Path
+          manifest=json.loads(Path('.chat-editor/run202-repair.json').read_text())
+          parts=[Path(name).read_text().strip() for name in manifest['parts']]
+          # Correct two transcription insertions in transport, never in source.
+          if len(parts[1]) == 4004:
+              assert parts[1][576:580]=='3ZT5'
+              parts[1]=parts[1][:576]+parts[1][580:]
+          if len(parts[2]) == 4001:
+              assert parts[2][1442]=='W'
+              parts[2]=parts[2][:1442]+parts[2][1443:]
+          assert list(map(len,parts))==[4000,4000,4000,2428]
+          encoded=''.join(parts)
+          assert len(encoded)==manifest['encoded_bytes']
+          patch=gzip.decompress(base64.b64decode(encoded,validate=True))
+          assert len(patch)==manifest['patch_bytes']
+          assert hashlib.sha256(patch).hexdigest()==manifest['patch_sha256']
+          for name,part in zip(manifest['parts'],parts):Path(name).write_text(part+'\n')
+          Path('.chat-editor/run202-repair/verified.patch').write_bytes(patch)
+          print('Verified complete repair: 37307 bytes, sha256='+manifest['patch_sha256'])
+          PY
+          git add .chat-editor/run202-repair
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'checkpoint: verify and retain exact complete run 202 repair patch'
+            git push origin HEAD:refs/heads/2026-09-18-pr3-e2e-batch
+          fi

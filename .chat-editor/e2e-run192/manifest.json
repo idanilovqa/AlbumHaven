@@ -19,22 +19,28 @@
     {
       "id": 105803412324,
       "name": "E2E: gallery-search-visual",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "failure",
       "head_sha": "4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091",
       "started_at": "2026-09-19T00:13:18Z",
-      "completed_at": null,
-      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412324"
+      "completed_at": "2026-09-19T00:45:23Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412324",
+      "log_file": ".chat-editor/e2e-run192/105803412324.log",
+      "sha256": "b5f74c91d7e011d428fc8501872712f5ae2b3f54fbeb60c8129f9c26c82ed285",
+      "lines": 2882
     },
     {
       "id": 105803412244,
       "name": "E2E: cover-providers",
-      "status": "in_progress",
-      "conclusion": null,
+      "status": "completed",
+      "conclusion": "failure",
       "head_sha": "4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091",
       "started_at": "2026-09-19T00:13:17Z",
-      "completed_at": null,
-      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412244"
+      "completed_at": "2026-09-19T00:49:11Z",
+      "html_url": "https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/job/105803412244",
+      "log_file": ".chat-editor/e2e-run192/105803412244.log",
+      "sha256": "d75aa22fdfdc9995da011d52b6735bceb99d375e292adbf109e80e07b91b7cd3",
+      "lines": 4044
     },
     {
       "id": 105803412178,

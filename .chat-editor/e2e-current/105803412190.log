@@ -1,0 +1,1731 @@
+﻿2026-09-19T00:13:18.5033784Z Current runner version: '2.337.0'
+2026-09-19T00:13:18.5070908Z ##[group]Runner Image Provisioner
+2026-09-19T00:13:18.5072334Z Hosted Compute Agent
+2026-09-19T00:13:18.5073316Z Version: 20260828.587
+2026-09-19T00:13:18.5074875Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-19T00:13:18.5076081Z Build Date: 2026-08-28T16:44:25Z
+2026-09-19T00:13:18.5077389Z Worker ID: {558a09b0-0198-4720-8a3d-bdfe1d42d9c1}
+2026-09-19T00:13:18.5078600Z Azure Region: eastus
+2026-09-19T00:13:18.5079536Z ##[endgroup]
+2026-09-19T00:13:18.5081986Z ##[group]Operating System
+2026-09-19T00:13:18.5083035Z Microsoft Windows Server 2025
+2026-09-19T00:13:18.5084023Z 10.0.26100
+2026-09-19T00:13:18.5084947Z Datacenter
+2026-09-19T00:13:18.5085762Z ##[endgroup]
+2026-09-19T00:13:18.5086700Z ##[group]Runner Image
+2026-09-19T00:13:18.5087718Z Image: windows-2025-vs2026
+2026-09-19T00:13:18.5088710Z Version: 20260907.229.1
+2026-09-19T00:13:18.5091634Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260907.229/images/windows/Windows2025-VS2026-Readme.md
+2026-09-19T00:13:18.5095188Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260907.229
+2026-09-19T00:13:18.5096826Z ##[endgroup]
+2026-09-19T00:13:18.5098790Z ##[group]GITHUB_TOKEN Permissions
+2026-09-19T00:13:18.5101509Z Contents: read
+2026-09-19T00:13:18.5102548Z Metadata: read
+2026-09-19T00:13:18.5103484Z ##[endgroup]
+2026-09-19T00:13:18.5106242Z Secret source: Actions
+2026-09-19T00:13:18.5107882Z Cache mode: write
+2026-09-19T00:13:18.5109107Z Prepare workflow directory
+2026-09-19T00:13:18.5660459Z Prepare all required actions
+2026-09-19T00:13:18.5709066Z Getting action download info
+2026-09-19T00:13:18.7380018Z Download action repository 'actions/checkout@v5' (SHA:fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09)
+2026-09-19T00:13:18.8814505Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-09-19T00:13:19.0377923Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
+2026-09-19T00:13:19.1800470Z Download action repository 'browser-actions/setup-chrome@v2' (SHA:48ad923757ca74d66703209fe939badbdf80f2f4)
+2026-09-19T00:13:19.3619541Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-09-19T00:13:19.9200841Z Complete job name: E2E Performance: utility-problematic-files
+2026-09-19T00:13:20.0974710Z ##[group]Run actions/checkout@v5
+2026-09-19T00:13:20.0975790Z with:
+2026-09-19T00:13:20.0976233Z   fetch-depth: 0
+2026-09-19T00:13:20.0976717Z   persist-credentials: false
+2026-09-19T00:13:20.0977293Z   repository: idanilovqa/AlbumHaven
+2026-09-19T00:13:20.0981981Z   token: ***
+2026-09-19T00:13:20.0982428Z   ssh-strict: true
+2026-09-19T00:13:20.0982872Z   ssh-user: git
+2026-09-19T00:13:20.0983302Z   clean: true
+2026-09-19T00:13:20.0983762Z   sparse-checkout-cone-mode: true
+2026-09-19T00:13:20.0984320Z   fetch-tags: false
+2026-09-19T00:13:20.0984807Z   show-progress: true
+2026-09-19T00:13:20.0985270Z   lfs: false
+2026-09-19T00:13:20.0985713Z   submodules: false
+2026-09-19T00:13:20.0986175Z   set-safe-directory: true
+2026-09-19T00:13:20.0986711Z   allow-unsafe-pr-checkout: false
+2026-09-19T00:13:20.0987462Z env:
+2026-09-19T00:13:20.0988106Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:20.0988924Z ##[endgroup]
+2026-09-19T00:13:20.2391991Z Syncing repository: idanilovqa/AlbumHaven
+2026-09-19T00:13:20.2393897Z ##[group]Getting Git version info
+2026-09-19T00:13:20.2394643Z Working directory is 'D:\a\AlbumHaven\AlbumHaven'
+2026-09-19T00:13:20.3341102Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T00:13:20.7457785Z git version 2.55.0.windows.5
+2026-09-19T00:13:20.7506146Z ##[endgroup]
+2026-09-19T00:13:20.7525709Z Temporarily overriding HOME='D:\a\_temp\af394715-f757-49bc-b5e7-3a016d0bc6f2' before making global git config changes
+2026-09-19T00:13:20.7528483Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T00:13:20.7537220Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven
+2026-09-19T00:13:20.8232220Z Deleting the contents of 'D:\a\AlbumHaven\AlbumHaven'
+2026-09-19T00:13:20.8238527Z ##[group]Initializing the repository
+2026-09-19T00:13:20.8247273Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\AlbumHaven\AlbumHaven
+2026-09-19T00:13:20.9228247Z Initialized empty Git repository in D:/a/AlbumHaven/AlbumHaven/.git/
+2026-09-19T00:13:20.9254949Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/idanilovqa/AlbumHaven
+2026-09-19T00:13:20.9968500Z ##[endgroup]
+2026-09-19T00:13:20.9969846Z ##[group]Disabling automatic garbage collection
+2026-09-19T00:13:20.9977404Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-19T00:13:21.0255457Z ##[endgroup]
+2026-09-19T00:13:21.0256693Z ##[group]Setting up auth
+2026-09-19T00:13:21.0267535Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:13:21.0552708Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:13:22.6459921Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:13:22.6748175Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:13:23.2060935Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:13:23.2356976Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:13:23.7626310Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-19T00:13:23.7924445Z ##[endgroup]
+2026-09-19T00:13:23.7925290Z ##[group]Fetching the repository
+2026-09-19T00:13:23.7941562Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/* +04a38d8cbea694b84fc5903ae361d4d18957c8f4:refs/remotes/pull/3/merge
+2026-09-19T00:13:27.2174480Z From https://github.com/idanilovqa/AlbumHaven
+2026-09-19T00:13:27.2175491Z  * [new branch]      2026-08-30-phase-7-local-auth            -> origin/2026-08-30-phase-7-local-auth
+2026-09-19T00:13:27.2176847Z  * [new branch]      2026-09-05-gallery-refactor              -> origin/2026-09-05-gallery-refactor
+2026-09-19T00:13:27.2177984Z  * [new branch]      2026-09-08-settings-refactor             -> origin/2026-09-08-settings-refactor
+2026-09-19T00:13:27.2179114Z  * [new branch]      2026-09-17-pr3-rf456-build               -> origin/2026-09-17-pr3-rf456-build
+2026-09-19T00:13:27.2180225Z  * [new branch]      2026-09-18-pr3-ci-diagnostics            -> origin/2026-09-18-pr3-ci-diagnostics
+2026-09-19T00:13:27.2181327Z  * [new branch]      2026-09-18-pr3-e2e-batch                 -> origin/2026-09-18-pr3-e2e-batch
+2026-09-19T00:13:27.2182457Z  * [new branch]      2026-09-18-pr3-js-batch                  -> origin/2026-09-18-pr3-js-batch
+2026-09-19T00:13:27.2183832Z  * [new branch]      2026-09-18-pr3-python-batch              -> origin/2026-09-18-pr3-python-batch
+2026-09-19T00:13:27.2184577Z  * [new branch]      codex/pr1-review-base-2026-09-10         -> origin/codex/pr1-review-base-2026-09-10
+2026-09-19T00:13:27.2185351Z  * [new branch]      codex/pr1-review-snapshot-2026-09-10     -> origin/codex/pr1-review-snapshot-2026-09-10
+2026-09-19T00:13:27.2185948Z  * [new branch]      main                                     -> origin/main
+2026-09-19T00:13:27.2187281Z  * [new tag]         v0.9.41                                  -> v0.9.41
+2026-09-19T00:13:27.2187668Z  * [new tag]         v0.9.42                                  -> v0.9.42
+2026-09-19T00:13:27.2188024Z  * [new tag]         v0.9.43                                  -> v0.9.43
+2026-09-19T00:13:27.2188405Z  * [new tag]         v0.9.44                                  -> v0.9.44
+2026-09-19T00:13:27.2188867Z  * [new ref]         04a38d8cbea694b84fc5903ae361d4d18957c8f4 -> pull/3/merge
+2026-09-19T00:13:27.2228087Z ##[endgroup]
+2026-09-19T00:13:27.2228874Z ##[group]Determining the checkout info
+2026-09-19T00:13:27.2230292Z ##[endgroup]
+2026-09-19T00:13:27.2239396Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-19T00:13:27.2712011Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-19T00:13:27.2986514Z ##[group]Checking out the ref
+2026-09-19T00:13:27.2993777Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/3/merge
+2026-09-19T00:13:27.9318170Z Note: switching to 'refs/remotes/pull/3/merge'.
+2026-09-19T00:13:27.9318794Z 
+2026-09-19T00:13:27.9319079Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-19T00:13:27.9320083Z changes and commit them, and you can discard any commits you make in this
+2026-09-19T00:13:27.9321103Z state without impacting any branches by switching back to a branch.
+2026-09-19T00:13:27.9321711Z 
+2026-09-19T00:13:27.9322031Z If you want to create a new branch to retain commits you create, you may
+2026-09-19T00:13:27.9323007Z do so (now or later) by using -c with the switch command. Example:
+2026-09-19T00:13:27.9323352Z 
+2026-09-19T00:13:27.9323488Z   git switch -c <new-branch-name>
+2026-09-19T00:13:27.9323716Z 
+2026-09-19T00:13:27.9323848Z Or undo this operation with:
+2026-09-19T00:13:27.9324061Z 
+2026-09-19T00:13:27.9324154Z   git switch -
+2026-09-19T00:13:27.9324338Z 
+2026-09-19T00:13:27.9324611Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-19T00:13:27.9325033Z 
+2026-09-19T00:13:27.9325579Z HEAD is now at 04a38d8 Merge 4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091 into 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3
+2026-09-19T00:13:27.9457157Z ##[endgroup]
+2026-09-19T00:13:27.9827688Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-19T00:13:28.0089596Z 04a38d8cbea694b84fc5903ae361d4d18957c8f4
+2026-09-19T00:13:28.0124808Z ##[group]Removing auth
+2026-09-19T00:13:28.0132239Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:13:28.0432424Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:13:28.6204037Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:13:28.6482797Z http.https://github.com/.extraheader
+2026-09-19T00:13:28.6518232Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-19T00:13:28.6802851Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:13:29.1888547Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:13:29.2175549Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:13:29.7391585Z ##[endgroup]
+2026-09-19T00:13:29.7829807Z ##[group]Run actions/checkout@v5
+2026-09-19T00:13:29.7830146Z with:
+2026-09-19T00:13:29.7830614Z   ref: 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3
+2026-09-19T00:13:29.7830946Z   path: .trusted-ci
+2026-09-19T00:13:29.7831187Z   persist-credentials: false
+2026-09-19T00:13:29.7831521Z   repository: idanilovqa/AlbumHaven
+2026-09-19T00:13:29.7834882Z   token: ***
+2026-09-19T00:13:29.7835102Z   ssh-strict: true
+2026-09-19T00:13:29.7835324Z   ssh-user: git
+2026-09-19T00:13:29.7835531Z   clean: true
+2026-09-19T00:13:29.7835758Z   sparse-checkout-cone-mode: true
+2026-09-19T00:13:29.7836047Z   fetch-depth: 1
+2026-09-19T00:13:29.7836258Z   fetch-tags: false
+2026-09-19T00:13:29.7836477Z   show-progress: true
+2026-09-19T00:13:29.7836697Z   lfs: false
+2026-09-19T00:13:29.7836894Z   submodules: false
+2026-09-19T00:13:29.7837120Z   set-safe-directory: true
+2026-09-19T00:13:29.7837396Z   allow-unsafe-pr-checkout: false
+2026-09-19T00:13:29.7837671Z env:
+2026-09-19T00:13:29.7838303Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:29.7838754Z ##[endgroup]
+2026-09-19T00:13:29.8920157Z Syncing repository: idanilovqa/AlbumHaven
+2026-09-19T00:13:29.8928053Z ##[group]Getting Git version info
+2026-09-19T00:13:29.8928698Z Working directory is 'D:\a\AlbumHaven\AlbumHaven\.trusted-ci'
+2026-09-19T00:13:29.9842082Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T00:13:30.0126713Z git version 2.55.0.windows.5
+2026-09-19T00:13:30.0177173Z ##[endgroup]
+2026-09-19T00:13:30.0199123Z Temporarily overriding HOME='D:\a\_temp\611cdc45-b7cd-4795-a26f-35de73e6e4dc' before making global git config changes
+2026-09-19T00:13:30.0200432Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T00:13:30.0211180Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven\.trusted-ci
+2026-09-19T00:13:30.0526255Z ##[group]Initializing the repository
+2026-09-19T00:13:30.0535818Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\AlbumHaven\AlbumHaven\.trusted-ci
+2026-09-19T00:13:30.0898091Z Initialized empty Git repository in D:/a/AlbumHaven/AlbumHaven/.trusted-ci/.git/
+2026-09-19T00:13:30.0945623Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/idanilovqa/AlbumHaven
+2026-09-19T00:13:30.1335867Z ##[endgroup]
+2026-09-19T00:13:30.1336516Z ##[group]Disabling automatic garbage collection
+2026-09-19T00:13:30.1351346Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-19T00:13:30.1685181Z ##[endgroup]
+2026-09-19T00:13:30.1685780Z ##[group]Setting up auth
+2026-09-19T00:13:30.1698482Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:13:30.2075691Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:13:30.7847001Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:13:30.8153576Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:13:31.3615878Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:13:31.3926766Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:13:31.9298540Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-19T00:13:31.9596349Z ##[endgroup]
+2026-09-19T00:13:31.9596820Z ##[group]Fetching the repository
+2026-09-19T00:13:31.9615838Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3
+2026-09-19T00:13:32.9587321Z From https://github.com/idanilovqa/AlbumHaven
+2026-09-19T00:13:32.9587825Z  * branch            38f740a4e984a25c0d501a7a2166d6ccdc09dcf3 -> FETCH_HEAD
+2026-09-19T00:13:32.9624171Z ##[endgroup]
+2026-09-19T00:13:32.9624559Z ##[group]Determining the checkout info
+2026-09-19T00:13:32.9626916Z ##[endgroup]
+2026-09-19T00:13:32.9636557Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-19T00:13:32.9975210Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-19T00:13:33.0291958Z ##[group]Checking out the ref
+2026-09-19T00:13:33.0301231Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3
+2026-09-19T00:13:33.5205118Z Note: switching to '38f740a4e984a25c0d501a7a2166d6ccdc09dcf3'.
+2026-09-19T00:13:33.5205654Z 
+2026-09-19T00:13:33.5206015Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-09-19T00:13:33.5206913Z changes and commit them, and you can discard any commits you make in this
+2026-09-19T00:13:33.5207767Z state without impacting any branches by switching back to a branch.
+2026-09-19T00:13:33.5208288Z 
+2026-09-19T00:13:33.5208605Z If you want to create a new branch to retain commits you create, you may
+2026-09-19T00:13:33.5209400Z do so (now or later) by using -c with the switch command. Example:
+2026-09-19T00:13:33.5209853Z 
+2026-09-19T00:13:33.5210022Z   git switch -c <new-branch-name>
+2026-09-19T00:13:33.5210316Z 
+2026-09-19T00:13:33.5210474Z Or undo this operation with:
+2026-09-19T00:13:33.5210747Z 
+2026-09-19T00:13:33.5211009Z   git switch -
+2026-09-19T00:13:33.5211246Z 
+2026-09-19T00:13:33.5211585Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-09-19T00:13:33.5212165Z 
+2026-09-19T00:13:33.5212584Z HEAD is now at 38f740a Merge pull request #2 from idanilovqa/2026-09-05-gallery-refactor
+2026-09-19T00:13:33.5284228Z ##[endgroup]
+2026-09-19T00:13:33.5597114Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-19T00:13:33.5864093Z 38f740a4e984a25c0d501a7a2166d6ccdc09dcf3
+2026-09-19T00:13:33.5899773Z ##[group]Removing auth
+2026-09-19T00:13:33.5909367Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:13:33.6193405Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:13:34.1680442Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:13:34.1928408Z http.https://github.com/.extraheader
+2026-09-19T00:13:34.1964209Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-19T00:13:34.2245610Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:13:34.7320145Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:13:34.7615643Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:13:35.2759300Z ##[endgroup]
+2026-09-19T00:13:35.3114689Z ##[group]Run & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
+2026-09-19T00:13:35.3115293Z [36;1m& ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `[0m
+2026-09-19T00:13:35.3115656Z [36;1m  -Release fixtures-v1.0.23 `[0m
+2026-09-19T00:13:35.3115968Z [36;1m  -Profile utility-problematic-files `[0m
+2026-09-19T00:13:35.3116467Z [36;1m  -ManifestSha256 e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2[0m
+2026-09-19T00:13:35.4003978Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:13:35.4004428Z env:
+2026-09-19T00:13:35.4004801Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:35.4005893Z   ALBUM_HAVEN_FIXTURES_TOKEN: ***
+2026-09-19T00:13:35.4006202Z ##[endgroup]
+2026-09-19T00:13:38.0035167Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:13:38.0036558Z ##[group]Run actions/setup-node@v4
+2026-09-19T00:13:38.0036801Z with:
+2026-09-19T00:13:38.0036974Z   node-version: 22
+2026-09-19T00:13:38.0037159Z   cache: npm
+2026-09-19T00:13:38.0037331Z   always-auth: false
+2026-09-19T00:13:38.0037545Z   check-latest: false
+2026-09-19T00:13:38.0040164Z   token: ***
+2026-09-19T00:13:38.0040338Z env:
+2026-09-19T00:13:38.0040616Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:38.0041446Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:38.0041797Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:38.0042324Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:38.0042942Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:38.0043375Z ##[endgroup]
+2026-09-19T00:13:38.1853633Z Found in cache @ C:\hostedtoolcache\windows\node\22.23.2\x64
+2026-09-19T00:13:38.1861191Z (node:7040) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:13:38.1862464Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:13:38.1865169Z ##[group]Environment details
+2026-09-19T00:13:43.4405347Z node: v22.23.2
+2026-09-19T00:13:43.4405732Z npm: 10.9.8
+2026-09-19T00:13:43.4405915Z yarn: 1.22.22
+2026-09-19T00:13:43.4406333Z ##[endgroup]
+2026-09-19T00:13:43.5334316Z [command]C:\Windows\system32\cmd.exe /D /S /C "C:\hostedtoolcache\windows\node\22.23.2\x64\npm.cmd config get cache"
+2026-09-19T00:13:44.0965211Z C:\npm\cache
+2026-09-19T00:13:44.3542791Z Cache hit for: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T00:13:44.3661685Z (node:7040) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:13:44.5172788Z Received 3822098 of 3822098 (100.0%), 34.4 MBs/sec
+2026-09-19T00:13:44.5174279Z Cache Size: ~4 MB (3822098 B)
+2026-09-19T00:13:44.5229395Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/5927c2d6-f9c7-439a-81cb-946123203217/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T00:13:44.7630481Z Cache restored successfully
+2026-09-19T00:13:44.7643528Z Cache restored from key: node-cache-Windows-x64-npm-26253ee3ceab3d8c9b127fb1ff8b52c4c231c2e05275c7ca052f26b453f7dc92
+2026-09-19T00:13:44.7945918Z ##[group]Run node scripts/ci/resolve-ci-shard.cjs performance utility-problematic-files
+2026-09-19T00:13:44.7946813Z [36;1mnode scripts/ci/resolve-ci-shard.cjs performance utility-problematic-files[0m
+2026-09-19T00:13:44.8017310Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:13:44.8017661Z env:
+2026-09-19T00:13:44.8017949Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:44.8018362Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:44.8018710Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:44.8019212Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:44.8020016Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:44.8020475Z   FOCUSED_PERFORMANCE_TARGETS_JSON: []
+2026-09-19T00:13:44.8020721Z   FOCUSED_STAGE: full
+2026-09-19T00:13:44.8020957Z ##[endgroup]
+2026-09-19T00:13:45.2690065Z ##[group]Run foreach ($target in "utility-problematic-files,problematic-files-focused".Split(',')) {
+2026-09-19T00:13:45.2690910Z [36;1mforeach ($target in "utility-problematic-files,problematic-files-focused".Split(',')) {[0m
+2026-09-19T00:13:45.2691576Z [36;1m  $targetRoot = Join-Path "test-results\playwright-performance-targets" $target[0m
+2026-09-19T00:13:45.2692134Z [36;1m  New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null[0m
+2026-09-19T00:13:45.2692519Z [36;1m  @{[0m
+2026-09-19T00:13:45.2692717Z [36;1m    target = $target[0m
+2026-09-19T00:13:45.2692987Z [36;1m    shard = "utility-problematic-files"[0m
+2026-09-19T00:13:45.2693364Z [36;1m    fixtureProfile = "utility-problematic-files"[0m
+2026-09-19T00:13:45.2693709Z [36;1m    fixtureMode = "preloaded-release"[0m
+2026-09-19T00:13:45.2693984Z [36;1m    blocking = $false[0m
+2026-09-19T00:13:45.2694212Z [36;1m    runAttempt = "1"[0m
+2026-09-19T00:13:45.2694492Z [36;1m    conclusion = "initialized"[0m
+2026-09-19T00:13:45.2695001Z [36;1m  } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $targetRoot "ci-job.json") -Encoding utf8[0m
+2026-09-19T00:13:45.2695478Z [36;1m}[0m
+2026-09-19T00:13:45.2764663Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:13:45.2765023Z env:
+2026-09-19T00:13:45.2765311Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:45.2765722Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:45.2766069Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:45.2766570Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:45.2767204Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:45.2767653Z ##[endgroup]
+2026-09-19T00:13:45.7271490Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:13:45.7272896Z ##[group]Run actions/setup-python@v5
+2026-09-19T00:13:45.7273150Z with:
+2026-09-19T00:13:45.7273327Z   python-version: 3.11
+2026-09-19T00:13:45.7273532Z   cache: pip
+2026-09-19T00:13:45.7273737Z   cache-dependency-path: requirements.txt
+2026-09-19T00:13:45.7274006Z   check-latest: false
+2026-09-19T00:13:45.7276653Z   token: ***
+2026-09-19T00:13:45.7276853Z   update-environment: true
+2026-09-19T00:13:45.7277099Z   allow-prereleases: false
+2026-09-19T00:13:45.7277310Z   freethreaded: false
+2026-09-19T00:13:45.7277492Z env:
+2026-09-19T00:13:45.7277770Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:45.7278196Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:45.7278543Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:45.7279021Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:45.7279640Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:45.7280073Z ##[endgroup]
+2026-09-19T00:13:45.8879989Z ##[group]Installed versions
+2026-09-19T00:13:45.9571134Z (node:8160) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:13:45.9571967Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:13:45.9572711Z Successfully set up CPython (3.11.9)
+2026-09-19T00:13:45.9573139Z ##[endgroup]
+2026-09-19T00:13:48.7491936Z Cache hit for: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T00:13:48.7612882Z (node:8160) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:13:49.1991136Z Received 58149912 of 58149912 (100.0%), 139.3 MBs/sec
+2026-09-19T00:13:49.1992896Z Cache Size: ~55 MB (58149912 B)
+2026-09-19T00:13:49.2074023Z [command]"C:\Program Files\Git\usr\bin\tar.exe" -xf D:/a/_temp/58650b5a-1341-497f-9355-f87ad24f4528/cache.tzst -P -C D:/a/AlbumHaven/AlbumHaven --force-local --use-compress-program "zstd -d"
+2026-09-19T00:13:49.7863850Z Cache restored successfully
+2026-09-19T00:13:49.7900529Z Cache restored from key: setup-python-Windows-x64-python-3.11.9-pip-0c6be4352e523693f41bb557265b0d204a2348bd0887365f0c4493752562bd14
+2026-09-19T00:13:49.8217541Z ##[group]Run npm ci
+2026-09-19T00:13:49.8217817Z [36;1mnpm ci[0m
+2026-09-19T00:13:49.8288893Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:13:49.8289491Z env:
+2026-09-19T00:13:49.8289795Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:49.8290232Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:49.8290589Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:49.8291332Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:49.8291991Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:49.8292545Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:49.8293004Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:13:49.8293516Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:49.8293922Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:49.8294329Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:49.8294647Z ##[endgroup]
+2026-09-19T00:13:53.2278837Z 
+2026-09-19T00:13:53.2279520Z added 3 packages, and audited 4 packages in 2s
+2026-09-19T00:13:53.2288090Z 
+2026-09-19T00:13:53.2288739Z found 0 vulnerabilities
+2026-09-19T00:13:54.5659023Z ##[group]Run python -m pip install --upgrade pip
+2026-09-19T00:13:54.5659503Z [36;1mpython -m pip install --upgrade pip[0m
+2026-09-19T00:13:54.5659869Z [36;1mpython -m pip install -r requirements.txt[0m
+2026-09-19T00:13:54.5738519Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:13:54.5738939Z env:
+2026-09-19T00:13:54.5739248Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:13:54.5739710Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:13:54.5740440Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:13:54.5741265Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:13:54.5741930Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:13:54.5742503Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:54.5743003Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:13:54.5743463Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:54.5743966Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:54.5744692Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:13:54.5745026Z ##[endgroup]
+2026-09-19T00:13:57.1350777Z Requirement already satisfied: pip in C:\hostedtoolcache\windows\Python\3.11.9\x64\Lib\site-packages (26.2.1)
+2026-09-19T00:13:59.0226438Z Collecting jinja2 (from -r requirements.txt (line 1))
+2026-09-19T00:13:59.0253134Z   Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+2026-09-19T00:13:59.0869237Z Collecting markupsafe (from -r requirements.txt (line 2))
+2026-09-19T00:13:59.0896497Z   Using cached markupsafe-3.0.3-cp311-cp311-win_amd64.whl.metadata (2.8 kB)
+2026-09-19T00:13:59.1448064Z Collecting fastapi==0.115.6 (from -r requirements.txt (line 3))
+2026-09-19T00:13:59.1476628Z   Using cached fastapi-0.115.6-py3-none-any.whl.metadata (27 kB)
+2026-09-19T00:13:59.1865054Z Collecting uvicorn (from -r requirements.txt (line 4))
+2026-09-19T00:13:59.1890575Z   Using cached uvicorn-0.53.0-py3-none-any.whl.metadata (6.6 kB)
+2026-09-19T00:13:59.3062981Z Collecting websockets (from -r requirements.txt (line 5))
+2026-09-19T00:13:59.3088124Z   Using cached websockets-17.1-cp311-cp311-win_amd64.whl.metadata (6.5 kB)
+2026-09-19T00:13:59.3342766Z Collecting mutagen (from -r requirements.txt (line 6))
+2026-09-19T00:13:59.3367343Z   Using cached mutagen-1.48.1-py3-none-any.whl.metadata (1.8 kB)
+2026-09-19T00:13:59.5835927Z Collecting pillow (from -r requirements.txt (line 7))
+2026-09-19T00:13:59.5865871Z   Using cached pillow-12.3.0-cp311-cp311-win_amd64.whl.metadata (9.3 kB)
+2026-09-19T00:13:59.6187035Z Collecting imageio-ffmpeg==0.6.0 (from -r requirements.txt (line 8))
+2026-09-19T00:13:59.6212221Z   Using cached imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl.metadata (1.5 kB)
+2026-09-19T00:13:59.6532401Z Collecting ytmusicapi (from -r requirements.txt (line 9))
+2026-09-19T00:13:59.6555895Z   Using cached ytmusicapi-1.12.3-py3-none-any.whl.metadata (4.3 kB)
+2026-09-19T00:13:59.6940126Z Collecting pytest (from -r requirements.txt (line 10))
+2026-09-19T00:13:59.6965144Z   Using cached pytest-9.1.1-py3-none-any.whl.metadata (7.6 kB)
+2026-09-19T00:13:59.7723758Z Collecting zstandard (from -r requirements.txt (line 12))
+2026-09-19T00:13:59.7748137Z   Using cached zstandard-0.25.0-cp311-cp311-win_amd64.whl.metadata (3.3 kB)
+2026-09-19T00:13:59.8054319Z Collecting argon2-cffi (from -r requirements.txt (line 13))
+2026-09-19T00:13:59.8078532Z   Using cached argon2_cffi-25.1.0-py3-none-any.whl.metadata (4.1 kB)
+2026-09-19T00:13:59.8332669Z Collecting aiosmtplib (from -r requirements.txt (line 14))
+2026-09-19T00:13:59.8356239Z   Using cached aiosmtplib-5.1.3-py3-none-any.whl.metadata (3.6 kB)
+2026-09-19T00:14:00.0491582Z Collecting cryptography>=42 (from -r requirements.txt (line 15))
+2026-09-19T00:14:00.0520993Z   Using cached cryptography-50.0.1-cp311-abi3-win_amd64.whl.metadata (4.3 kB)
+2026-09-19T00:14:00.1078828Z Collecting watchdog<7,>=4.0 (from -r requirements.txt (line 16))
+2026-09-19T00:14:00.1103801Z   Using cached watchdog-6.0.0-py3-none-win_amd64.whl.metadata (44 kB)
+2026-09-19T00:14:00.1477494Z Collecting psycopg[binary] (from -r requirements.txt (line 11))
+2026-09-19T00:14:00.3550116Z   Downloading psycopg-3.3.6-py3-none-any.whl.metadata (4.4 kB)
+2026-09-19T00:14:00.4055131Z Collecting starlette<0.42.0,>=0.40.0 (from fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:00.4078882Z   Using cached starlette-0.41.3-py3-none-any.whl.metadata (6.0 kB)
+2026-09-19T00:14:00.5344627Z Collecting pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4 (from fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:00.5375026Z   Using cached pydantic-2.13.5-py3-none-any.whl.metadata (110 kB)
+2026-09-19T00:14:00.5660859Z Collecting typing-extensions>=4.8.0 (from fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:00.5684957Z   Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+2026-09-19T00:14:00.5908404Z Collecting annotated-types>=0.6.0 (from pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4->fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:00.5932126Z   Using cached annotated_types-0.8.0-py3-none-any.whl.metadata (15 kB)
+2026-09-19T00:14:01.3236799Z Collecting pydantic-core==2.46.5 (from pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4->fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:01.3264420Z   Using cached pydantic_core-2.46.5-cp311-cp311-win_amd64.whl.metadata (6.7 kB)
+2026-09-19T00:14:01.3481833Z Collecting typing-inspection>=0.4.2 (from pydantic!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4->fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:01.3505618Z   Using cached typing_inspection-0.4.4-py3-none-any.whl.metadata (2.6 kB)
+2026-09-19T00:14:01.3837086Z Collecting anyio<5,>=3.4.0 (from starlette<0.42.0,>=0.40.0->fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:01.3861147Z   Using cached anyio-4.15.1-py3-none-any.whl.metadata (4.7 kB)
+2026-09-19T00:14:01.4096830Z Collecting idna>=2.8 (from anyio<5,>=3.4.0->starlette<0.42.0,>=0.40.0->fastapi==0.115.6->-r requirements.txt (line 3))
+2026-09-19T00:14:01.4120127Z   Using cached idna-3.20-py3-none-any.whl.metadata (7.2 kB)
+2026-09-19T00:14:01.4409223Z Collecting click>=7.0 (from uvicorn->-r requirements.txt (line 4))
+2026-09-19T00:14:01.4433852Z   Using cached click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
+2026-09-19T00:14:01.4685757Z Collecting h11>=0.8 (from uvicorn->-r requirements.txt (line 4))
+2026-09-19T00:14:01.4709301Z   Using cached h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
+2026-09-19T00:14:01.5022069Z Collecting requests>=2.22 (from ytmusicapi->-r requirements.txt (line 9))
+2026-09-19T00:14:01.5045604Z   Using cached requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+2026-09-19T00:14:01.5320323Z Collecting colorama>=0.4 (from pytest->-r requirements.txt (line 10))
+2026-09-19T00:14:01.5344217Z   Using cached colorama-0.4.6-py2.py3-none-any.whl.metadata (17 kB)
+2026-09-19T00:14:01.5540746Z Collecting iniconfig>=1.0.1 (from pytest->-r requirements.txt (line 10))
+2026-09-19T00:14:01.5564559Z   Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+2026-09-19T00:14:01.5801588Z Collecting packaging>=22 (from pytest->-r requirements.txt (line 10))
+2026-09-19T00:14:01.5826479Z   Using cached packaging-26.3-py3-none-any.whl.metadata (3.5 kB)
+2026-09-19T00:14:01.6068989Z Collecting pluggy<2,>=1.5 (from pytest->-r requirements.txt (line 10))
+2026-09-19T00:14:01.6093202Z   Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+2026-09-19T00:14:01.6412144Z Collecting pygments>=2.7.2 (from pytest->-r requirements.txt (line 10))
+2026-09-19T00:14:01.6484473Z   Using cached pygments-2.21.0-py3-none-any.whl.metadata (2.5 kB)
+2026-09-19T00:14:01.6746919Z Collecting tzdata (from psycopg[binary]->-r requirements.txt (line 11))
+2026-09-19T00:14:01.6769725Z   Using cached tzdata-2026.4-py2.py3-none-any.whl.metadata (1.4 kB)
+2026-09-19T00:14:01.8552229Z Collecting psycopg-binary==3.3.6 (from psycopg[binary]->-r requirements.txt (line 11))
+2026-09-19T00:14:01.8630524Z   Downloading psycopg_binary-3.3.6-cp311-cp311-win_amd64.whl.metadata (2.8 kB)
+2026-09-19T00:14:01.9070597Z Collecting argon2-cffi-bindings (from argon2-cffi->-r requirements.txt (line 13))
+2026-09-19T00:14:01.9094183Z   Using cached argon2_cffi_bindings-26.1.0-cp310-abi3-win_amd64.whl.metadata (7.5 kB)
+2026-09-19T00:14:02.0468748Z Collecting cffi>=2.0.0 (from cryptography>=42->-r requirements.txt (line 15))
+2026-09-19T00:14:02.0495388Z   Using cached cffi-2.1.1-cp311-cp311-win_amd64.whl.metadata (2.6 kB)
+2026-09-19T00:14:02.0773804Z Collecting pycparser (from cffi>=2.0.0->cryptography>=42->-r requirements.txt (line 15))
+2026-09-19T00:14:02.0800195Z   Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+2026-09-19T00:14:02.2124211Z Collecting charset_normalizer<4,>=2 (from requests>=2.22->ytmusicapi->-r requirements.txt (line 9))
+2026-09-19T00:14:02.2151280Z   Using cached charset_normalizer-3.5.1-cp311-cp311-win_amd64.whl.metadata (46 kB)
+2026-09-19T00:14:02.2496958Z Collecting urllib3<3,>=1.26 (from requests>=2.22->ytmusicapi->-r requirements.txt (line 9))
+2026-09-19T00:14:02.2520745Z   Using cached urllib3-2.8.0-py3-none-any.whl.metadata (7.4 kB)
+2026-09-19T00:14:02.2814708Z Collecting certifi>=2023.5.7 (from requests>=2.22->ytmusicapi->-r requirements.txt (line 9))
+2026-09-19T00:14:02.2838288Z   Using cached certifi-2026.7.22-py3-none-any.whl.metadata (2.5 kB)
+2026-09-19T00:14:02.2947636Z Using cached fastapi-0.115.6-py3-none-any.whl (94 kB)
+2026-09-19T00:14:02.2970668Z Using cached imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl (31.2 MB)
+2026-09-19T00:14:02.3161139Z Using cached watchdog-6.0.0-py3-none-win_amd64.whl (79 kB)
+2026-09-19T00:14:02.3188933Z Using cached pydantic-2.13.5-py3-none-any.whl (472 kB)
+2026-09-19T00:14:02.3214808Z Using cached pydantic_core-2.46.5-cp311-cp311-win_amd64.whl (2.0 MB)
+2026-09-19T00:14:02.3248150Z Using cached starlette-0.41.3-py3-none-any.whl (73 kB)
+2026-09-19T00:14:02.3270851Z Using cached anyio-4.15.1-py3-none-any.whl (132 kB)
+2026-09-19T00:14:02.3297594Z Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+2026-09-19T00:14:02.3320720Z Using cached markupsafe-3.0.3-cp311-cp311-win_amd64.whl (15 kB)
+2026-09-19T00:14:02.3343621Z Using cached uvicorn-0.53.0-py3-none-any.whl (87 kB)
+2026-09-19T00:14:02.3364649Z Using cached websockets-17.1-cp311-cp311-win_amd64.whl (217 kB)
+2026-09-19T00:14:02.3391868Z Using cached mutagen-1.48.1-py3-none-any.whl (195 kB)
+2026-09-19T00:14:02.3414721Z Using cached pillow-12.3.0-cp311-cp311-win_amd64.whl (7.2 MB)
+2026-09-19T00:14:02.3471234Z Using cached ytmusicapi-1.12.3-py3-none-any.whl (111 kB)
+2026-09-19T00:14:02.3493591Z Using cached pytest-9.1.1-py3-none-any.whl (386 kB)
+2026-09-19T00:14:02.3545359Z Using cached pluggy-1.6.0-py3-none-any.whl (20 kB)
+2026-09-19T00:14:02.3591996Z Downloading psycopg-3.3.6-py3-none-any.whl (215 kB)
+2026-09-19T00:14:02.5045997Z Downloading psycopg_binary-3.3.6-cp311-cp311-win_amd64.whl (3.7 MB)
+2026-09-19T00:14:02.5711304Z    ---------------------------------------- 3.7/3.7 MB 55.1 MB/s  0:00:00
+2026-09-19T00:14:02.5733347Z Using cached zstandard-0.25.0-cp311-cp311-win_amd64.whl (506 kB)
+2026-09-19T00:14:02.5762757Z Using cached argon2_cffi-25.1.0-py3-none-any.whl (14 kB)
+2026-09-19T00:14:02.5785040Z Using cached aiosmtplib-5.1.3-py3-none-any.whl (30 kB)
+2026-09-19T00:14:02.5807565Z Using cached cryptography-50.0.1-cp311-abi3-win_amd64.whl (3.8 MB)
+2026-09-19T00:14:02.5848263Z Using cached annotated_types-0.8.0-py3-none-any.whl (13 kB)
+2026-09-19T00:14:02.5890990Z Using cached cffi-2.1.1-cp311-cp311-win_amd64.whl (185 kB)
+2026-09-19T00:14:02.5914064Z Using cached click-8.5.0-py3-none-any.whl (125 kB)
+2026-09-19T00:14:02.5937862Z Using cached colorama-0.4.6-py2.py3-none-any.whl (25 kB)
+2026-09-19T00:14:02.5959499Z Using cached h11-0.16.0-py3-none-any.whl (37 kB)
+2026-09-19T00:14:02.5986044Z Using cached idna-3.20-py3-none-any.whl (69 kB)
+2026-09-19T00:14:02.6008185Z Using cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+2026-09-19T00:14:02.6030216Z Using cached packaging-26.3-py3-none-any.whl (129 kB)
+2026-09-19T00:14:02.6052980Z Using cached pygments-2.21.0-py3-none-any.whl (1.3 MB)
+2026-09-19T00:14:02.6087502Z Using cached requests-2.34.2-py3-none-any.whl (73 kB)
+2026-09-19T00:14:02.6109915Z Using cached charset_normalizer-3.5.1-cp311-cp311-win_amd64.whl (206 kB)
+2026-09-19T00:14:02.6132917Z Using cached urllib3-2.8.0-py3-none-any.whl (135 kB)
+2026-09-19T00:14:02.6156749Z Using cached certifi-2026.7.22-py3-none-any.whl (136 kB)
+2026-09-19T00:14:02.6243987Z Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+2026-09-19T00:14:02.6266662Z Using cached typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+2026-09-19T00:14:02.6288862Z Using cached argon2_cffi_bindings-26.1.0-cp310-abi3-win_amd64.whl (25 kB)
+2026-09-19T00:14:02.6310596Z Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+2026-09-19T00:14:02.6352034Z Using cached tzdata-2026.4-py2.py3-none-any.whl (347 kB)
+2026-09-19T00:14:02.9318218Z Installing collected packages: zstandard, websockets, watchdog, urllib3, tzdata, typing-extensions, pygments, pycparser, psycopg-binary, pluggy, pillow, packaging, mutagen, markupsafe, iniconfig, imageio-ffmpeg, idna, h11, colorama, click, charset_normalizer, certifi, annotated-types, aiosmtplib, uvicorn, typing-inspection, requests, pytest, pydantic-core, psycopg, jinja2, cffi, anyio, ytmusicapi, starlette, pydantic, cryptography, argon2-cffi-bindings, fastapi, argon2-cffi
+2026-09-19T00:14:19.9755755Z 
+2026-09-19T00:14:19.9785356Z Successfully installed aiosmtplib-5.1.3 annotated-types-0.8.0 anyio-4.15.1 argon2-cffi-25.1.0 argon2-cffi-bindings-26.1.0 certifi-2026.7.22 cffi-2.1.1 charset_normalizer-3.5.1 click-8.5.0 colorama-0.4.6 cryptography-50.0.1 fastapi-0.115.6 h11-0.16.0 idna-3.20 imageio-ffmpeg-0.6.0 iniconfig-2.3.0 jinja2-3.1.6 markupsafe-3.0.3 mutagen-1.48.1 packaging-26.3 pillow-12.3.0 pluggy-1.6.0 psycopg-3.3.6 psycopg-binary-3.3.6 pycparser-3.0 pydantic-2.13.5 pydantic-core-2.46.5 pygments-2.21.0 pytest-9.1.1 requests-2.34.2 starlette-0.41.3 typing-extensions-4.16.0 typing-inspection-0.4.4 tzdata-2026.4 urllib3-2.8.0 uvicorn-0.53.0 watchdog-6.0.0 websockets-17.1 ytmusicapi-1.12.3 zstandard-0.25.0
+2026-09-19T00:14:20.2403615Z ##[group]Run browser-actions/setup-chrome@v2
+2026-09-19T00:14:20.2403998Z with:
+2026-09-19T00:14:20.2404209Z   chrome-version: 151.0.7922.138
+2026-09-19T00:14:20.2404488Z   install-dependencies: false
+2026-09-19T00:14:20.2404758Z   install-chromedriver: false
+2026-09-19T00:14:20.2405000Z   no-sudo: false
+2026-09-19T00:14:20.2405188Z env:
+2026-09-19T00:14:20.2405524Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:14:20.2405944Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:14:20.2406310Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:14:20.2406798Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:14:20.2407429Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:14:20.2407979Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:20.2408470Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:14:20.2408941Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:20.2409345Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:20.2409754Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:20.2410073Z ##[endgroup]
+2026-09-19T00:14:20.3366903Z Setup chrome 151.0.7922.138
+2026-09-19T00:14:20.3380901Z Attempting to download chrome 151.0.7922.138...
+2026-09-19T00:14:20.6050607Z Acquiring chrome 151.0.7922.138 from https://storage.googleapis.com/chrome-for-testing-public/151.0.7922.138/win64/chrome-win64.zip
+2026-09-19T00:14:22.0213355Z Installing chrome...
+2026-09-19T00:14:22.1405150Z [command]"C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Unrestricted -Command "$ErrorActionPreference = 'Stop' ; try { Add-Type -AssemblyName System.IO.Compression.ZipFile } catch { } ; try { [System.IO.Compression.ZipFile]::ExtractToDirectory('D:\a\_temp\47024a80-ea35-4d66-80f5-f4ed6061013a', 'D:\a\_temp\d81b6a3b-e4e5-45b3-bbb2-8989712f78f4', $true) } catch { if (($_.Exception.GetType().FullName -eq 'System.Management.Automation.MethodException') -or ($_.Exception.GetType().FullName -eq 'System.Management.Automation.RuntimeException') ){ Expand-Archive -LiteralPath 'D:\a\_temp\47024a80-ea35-4d66-80f5-f4ed6061013a' -DestinationPath 'D:\a\_temp\d81b6a3b-e4e5-45b3-bbb2-8989712f78f4' -Force } else { throw $_ } } ;"
+2026-09-19T00:14:24.4254883Z Successfully Installed chrome to C:\hostedtoolcache\windows\setup-chrome\chrome\151.0.7922.138\x64
+2026-09-19T00:14:24.5068872Z [command]C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command "(Get-Item (Get-Command 'C:\hostedtoolcache\windows\setup-chrome\chrome\151.0.7922.138\x64\chrome.exe').Source).VersionInfo.ProductVersion"
+2026-09-19T00:14:28.6866436Z 151.0.7922.138
+2026-09-19T00:14:28.7361261Z Successfully setup chrome 151.0.7922.138
+2026-09-19T00:14:28.7668135Z ##[group]Run node scripts/ci/validate-performance-matrix.cjs --list
+2026-09-19T00:14:28.7668927Z [36;1mnode scripts/ci/validate-performance-matrix.cjs --list[0m
+2026-09-19T00:14:28.7744174Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:14:28.7744543Z env:
+2026-09-19T00:14:28.7744861Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:14:28.7745299Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:14:28.7745664Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:14:28.7746166Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:14:28.7746834Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:14:28.7747390Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:28.7747880Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:14:28.7748340Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:28.7748763Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:28.7749171Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:28.7749498Z ##[endgroup]
+2026-09-19T00:14:35.5753602Z performance matrix: 4 profile runners, 19 targets, 26 cases
+2026-09-19T00:14:35.7127104Z ##[group]Run $env:PGPASSWORD = $null
+2026-09-19T00:14:35.7127522Z [36;1m$env:PGPASSWORD = $null[0m
+2026-09-19T00:14:35.7127950Z [36;1m$env:PLAYWRIGHT_PYTHON = Join-Path $env:pythonLocation "python.exe"[0m
+2026-09-19T00:14:35.7128425Z [36;1m.\scripts\ci\run-performance-shard.ps1 `[0m
+2026-09-19T00:14:35.7128894Z [36;1m  -Targets "utility-problematic-files,problematic-files-focused" `[0m
+2026-09-19T00:14:35.7129380Z [36;1m  -FixtureProfile "utility-problematic-files" `[0m
+2026-09-19T00:14:35.7129728Z [36;1m  -FixtureMode "preloaded-release" `[0m
+2026-09-19T00:14:35.7130030Z [36;1m  -BasePort "4253" `[0m
+2026-09-19T00:14:35.7130326Z [36;1m  -DatabaseSuffixBase "p_35408558207_1_1" `[0m
+2026-09-19T00:14:35.7130686Z [36;1m  -ShardName "utility-problematic-files" `[0m
+2026-09-19T00:14:35.7130995Z [36;1m  -Browser chrome `[0m
+2026-09-19T00:14:35.7131241Z [36;1m  -PerformanceContract ci[0m
+2026-09-19T00:14:35.7204010Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-19T00:14:35.7204386Z env:
+2026-09-19T00:14:35.7204694Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:14:35.7205121Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:14:35.7205496Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:14:35.7205993Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:14:35.7206627Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:14:35.7207171Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:35.7207652Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:14:35.7208115Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:35.7208526Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:35.7208944Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:14:35.7209509Z   PLAYWRIGHT_CHROME_EXECUTABLE: C:\hostedtoolcache\windows\setup-chrome\chrome\151.0.7922.138\x64\chrome.exe
+2026-09-19T00:14:35.7210008Z ##[endgroup]
+2026-09-19T00:14:40.7949271Z BEGIN
+2026-09-19T00:14:40.9677599Z DO
+2026-09-19T00:14:41.0267739Z CREATE ROLE
+2026-09-19T00:14:41.0371875Z CREATE ROLE
+2026-09-19T00:14:41.0468761Z CREATE ROLE
+2026-09-19T00:14:41.0495612Z COMMIT
+2026-09-19T00:14:44.4798479Z CREATE DATABASE
+2026-09-19T00:14:44.5541737Z REVOKE
+2026-09-19T00:14:44.5562540Z GRANT
+2026-09-19T00:14:44.5582009Z GRANT
+2026-09-19T00:14:44.6415892Z CREATE SCHEMA
+2026-09-19T00:14:44.6417086Z CREATE SCHEMA
+2026-09-19T00:14:44.6418849Z CREATE SCHEMA
+2026-09-19T00:14:44.6420401Z CREATE SCHEMA
+2026-09-19T00:14:44.6748160Z CREATE TABLE
+2026-09-19T00:14:44.6910204Z CREATE TABLE
+2026-09-19T00:14:44.6975241Z CREATE TABLE
+2026-09-19T00:14:44.6984370Z CREATE INDEX
+2026-09-19T00:14:44.6992890Z CREATE INDEX
+2026-09-19T00:14:44.7032551Z CREATE TABLE
+2026-09-19T00:14:44.7044066Z CREATE INDEX
+2026-09-19T00:14:44.7057895Z CREATE INDEX
+2026-09-19T00:14:44.7112919Z CREATE TABLE
+2026-09-19T00:14:44.7126919Z CREATE INDEX
+2026-09-19T00:14:44.7139917Z CREATE INDEX
+2026-09-19T00:14:44.7189588Z CREATE TABLE
+2026-09-19T00:14:44.7199864Z CREATE INDEX
+2026-09-19T00:14:44.7210169Z CREATE INDEX
+2026-09-19T00:14:44.7265779Z CREATE TABLE
+2026-09-19T00:14:44.7279849Z CREATE INDEX
+2026-09-19T00:14:44.7289385Z CREATE INDEX
+2026-09-19T00:14:44.7300844Z CREATE INDEX
+2026-09-19T00:14:44.7358321Z CREATE TABLE
+2026-09-19T00:14:44.7369415Z CREATE INDEX
+2026-09-19T00:14:44.7383263Z CREATE INDEX
+2026-09-19T00:14:44.7436058Z CREATE TABLE
+2026-09-19T00:14:44.7447952Z CREATE INDEX
+2026-09-19T00:14:44.7469197Z CREATE INDEX
+2026-09-19T00:14:44.7521173Z CREATE TABLE
+2026-09-19T00:14:44.7533364Z CREATE INDEX
+2026-09-19T00:14:44.7570176Z CREATE TABLE
+2026-09-19T00:14:44.7582998Z CREATE INDEX
+2026-09-19T00:14:44.7594912Z CREATE INDEX
+2026-09-19T00:14:44.7698175Z CREATE TABLE
+2026-09-19T00:14:44.7703554Z CREATE INDEX
+2026-09-19T00:14:44.7712304Z CREATE INDEX
+2026-09-19T00:14:44.7755258Z CREATE INDEX
+2026-09-19T00:14:44.7764789Z CREATE INDEX
+2026-09-19T00:14:44.7841378Z CREATE TABLE
+2026-09-19T00:14:44.7853017Z CREATE INDEX
+2026-09-19T00:14:44.7864345Z CREATE INDEX
+2026-09-19T00:14:44.7875663Z CREATE INDEX
+2026-09-19T00:14:44.7888944Z CREATE INDEX
+2026-09-19T00:14:44.7903280Z CREATE INDEX
+2026-09-19T00:14:44.7949758Z CREATE TABLE
+2026-09-19T00:14:44.7959338Z CREATE INDEX
+2026-09-19T00:14:44.7968413Z CREATE INDEX
+2026-09-19T00:14:44.7977569Z CREATE INDEX
+2026-09-19T00:14:44.7988116Z CREATE INDEX
+2026-09-19T00:14:44.7999314Z CREATE INDEX
+2026-09-19T00:14:44.8043504Z CREATE TABLE
+2026-09-19T00:14:44.8053299Z CREATE INDEX
+2026-09-19T00:14:44.8063119Z CREATE INDEX
+2026-09-19T00:14:44.8072221Z CREATE INDEX
+2026-09-19T00:14:44.8082565Z CREATE INDEX
+2026-09-19T00:14:44.8091864Z CREATE INDEX
+2026-09-19T00:14:44.8100833Z CREATE INDEX
+2026-09-19T00:14:44.8148324Z CREATE TABLE
+2026-09-19T00:14:44.8159078Z CREATE INDEX
+2026-09-19T00:14:44.8169075Z CREATE INDEX
+2026-09-19T00:14:44.8179728Z CREATE INDEX
+2026-09-19T00:14:44.8221675Z CREATE TABLE
+2026-09-19T00:14:44.8231181Z CREATE INDEX
+2026-09-19T00:14:44.8247239Z CREATE INDEX
+2026-09-19T00:14:44.8289649Z CREATE TABLE
+2026-09-19T00:14:44.8298892Z CREATE INDEX
+2026-09-19T00:14:44.8310679Z CREATE INDEX
+2026-09-19T00:14:44.8349271Z CREATE TABLE
+2026-09-19T00:14:44.8359833Z CREATE INDEX
+2026-09-19T00:14:44.8371429Z CREATE INDEX
+2026-09-19T00:14:44.8417901Z CREATE TABLE
+2026-09-19T00:14:44.8429287Z CREATE INDEX
+2026-09-19T00:14:44.8440452Z CREATE INDEX
+2026-09-19T00:14:44.8487938Z CREATE TABLE
+2026-09-19T00:14:44.8498175Z CREATE INDEX
+2026-09-19T00:14:44.8507968Z CREATE INDEX
+2026-09-19T00:14:44.8564683Z CREATE TABLE
+2026-09-19T00:14:44.8575836Z CREATE INDEX
+2026-09-19T00:14:44.8587737Z CREATE INDEX
+2026-09-19T00:14:44.8597881Z CREATE INDEX
+2026-09-19T00:14:44.8669809Z CREATE TABLE
+2026-09-19T00:14:44.8681205Z CREATE INDEX
+2026-09-19T00:14:44.8692782Z CREATE INDEX
+2026-09-19T00:14:44.8705112Z CREATE INDEX
+2026-09-19T00:14:44.8717469Z CREATE INDEX
+2026-09-19T00:14:44.8784853Z CREATE TABLE
+2026-09-19T00:14:44.8795051Z CREATE INDEX
+2026-09-19T00:14:44.8806355Z CREATE INDEX
+2026-09-19T00:14:44.8818241Z CREATE INDEX
+2026-09-19T00:14:44.8831498Z CREATE INDEX
+2026-09-19T00:14:44.8841895Z CREATE INDEX
+2026-09-19T00:14:44.8888041Z CREATE TABLE
+2026-09-19T00:14:44.8899471Z CREATE INDEX
+2026-09-19T00:14:44.8942103Z CREATE TABLE
+2026-09-19T00:14:44.8952052Z CREATE INDEX
+2026-09-19T00:14:44.9000768Z CREATE TABLE
+2026-09-19T00:14:44.9011251Z CREATE INDEX
+2026-09-19T00:14:44.9021353Z CREATE INDEX
+2026-09-19T00:14:44.9030848Z CREATE INDEX
+2026-09-19T00:14:44.9041138Z CREATE INDEX
+2026-09-19T00:14:44.9086529Z CREATE TABLE
+2026-09-19T00:14:44.9129843Z CREATE INDEX
+2026-09-19T00:14:44.9142708Z CREATE INDEX
+2026-09-19T00:14:44.9184527Z CREATE TABLE
+2026-09-19T00:14:44.9194259Z CREATE INDEX
+2026-09-19T00:14:44.9203206Z CREATE INDEX
+2026-09-19T00:14:44.9215111Z CREATE INDEX
+2026-09-19T00:14:44.9228036Z CREATE INDEX
+2026-09-19T00:14:44.9274830Z CREATE TABLE
+2026-09-19T00:14:44.9284753Z CREATE INDEX
+2026-09-19T00:14:44.9293892Z CREATE INDEX
+2026-09-19T00:14:44.9304072Z CREATE INDEX
+2026-09-19T00:14:44.9314439Z CREATE INDEX
+2026-09-19T00:14:44.9356016Z CREATE TABLE
+2026-09-19T00:14:44.9366713Z CREATE INDEX
+2026-09-19T00:14:44.9377466Z CREATE INDEX
+2026-09-19T00:14:44.9386814Z CREATE INDEX
+2026-09-19T00:14:44.9428469Z CREATE TABLE
+2026-09-19T00:14:44.9439143Z CREATE INDEX
+2026-09-19T00:14:44.9484061Z CREATE TABLE
+2026-09-19T00:14:44.9512483Z CREATE INDEX
+2026-09-19T00:14:44.9524846Z CREATE INDEX
+2026-09-19T00:14:44.9600411Z DO
+2026-09-19T00:14:44.9781441Z DO
+2026-09-19T00:14:44.9789069Z DO
+2026-09-19T00:14:44.9911006Z DO
+2026-09-19T00:14:45.0674933Z INSERT 0 1
+2026-09-19T00:14:45.1374123Z CREATE TABLE
+2026-09-19T00:14:45.1383914Z CREATE INDEX
+2026-09-19T00:14:45.1397173Z CREATE INDEX
+2026-09-19T00:14:45.1407581Z CREATE INDEX
+2026-09-19T00:14:45.1421888Z CREATE INDEX
+2026-09-19T00:14:45.1433347Z CREATE INDEX
+2026-09-19T00:14:45.1446834Z CREATE INDEX
+2026-09-19T00:14:45.1455990Z CREATE INDEX
+2026-09-19T00:14:45.1477110Z DO
+2026-09-19T00:14:45.1485079Z DO
+2026-09-19T00:14:45.1502863Z DO
+2026-09-19T00:14:45.2742957Z INSERT 0 1
+2026-09-19T00:14:45.3412168Z ALTER TABLE
+2026-09-19T00:14:45.3417550Z ALTER TABLE
+2026-09-19T00:14:45.3425491Z ALTER TABLE
+2026-09-19T00:14:45.3433662Z ALTER TABLE
+2026-09-19T00:14:45.3448812Z CREATE INDEX
+2026-09-19T00:14:45.3458018Z CREATE INDEX
+2026-09-19T00:14:45.3468942Z CREATE INDEX
+2026-09-19T00:14:45.3484232Z CREATE INDEX
+2026-09-19T00:14:45.3494066Z CREATE INDEX
+2026-09-19T00:14:45.3505808Z CREATE INDEX
+2026-09-19T00:14:45.3514972Z CREATE INDEX
+2026-09-19T00:14:45.3523961Z CREATE INDEX
+2026-09-19T00:14:45.4669038Z INSERT 0 1
+2026-09-19T00:14:45.5292627Z CREATE INDEX
+2026-09-19T00:14:45.5306686Z CREATE INDEX
+2026-09-19T00:14:45.5318803Z CREATE INDEX
+2026-09-19T00:14:45.6010915Z INSERT 0 1
+2026-09-19T00:14:45.6625628Z CREATE TABLE
+2026-09-19T00:14:45.6632984Z INSERT 0 6
+2026-09-19T00:14:45.6676543Z CREATE TABLE
+2026-09-19T00:14:45.6686644Z CREATE INDEX
+2026-09-19T00:14:45.6696124Z CREATE INDEX
+2026-09-19T00:14:45.6742409Z CREATE TABLE
+2026-09-19T00:14:45.6752003Z CREATE INDEX
+2026-09-19T00:14:45.6761948Z CREATE INDEX
+2026-09-19T00:14:45.6771279Z CREATE INDEX
+2026-09-19T00:14:45.6792775Z DO
+2026-09-19T00:14:45.6817239Z DO
+2026-09-19T00:14:45.7470803Z INSERT 0 1
+2026-09-19T00:14:45.8174779Z UPDATE 0
+2026-09-19T00:14:45.8186511Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0006_scope_lastfm_sync_identities.sql:26: NOTICE:  index "lastfm_sessions_account_username_idx" does not exist, skipping
+2026-09-19T00:14:45.8187412Z DROP INDEX
+2026-09-19T00:14:45.8208397Z CREATE INDEX
+2026-09-19T00:14:45.8212717Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0006_scope_lastfm_sync_identities.sql:31: NOTICE:  index "pending_scrobbles_source_identity_idx" does not exist, skipping
+2026-09-19T00:14:45.8214150Z DROP INDEX
+2026-09-19T00:14:45.8219859Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0006_scope_lastfm_sync_identities.sql:43: NOTICE:  relation "pending_scrobbles_source_identity_idx" already exists, skipping
+2026-09-19T00:14:45.8223114Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0006_scope_lastfm_sync_identities.sql:45: NOTICE:  index "scrobble_retry_state_source_identity_idx" does not exist, skipping
+2026-09-19T00:14:45.8224415Z CREATE INDEX
+2026-09-19T00:14:45.8224687Z DROP INDEX
+2026-09-19T00:14:45.8227356Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0006_scope_lastfm_sync_identities.sql:59: NOTICE:  relation "scrobble_retry_state_source_identity_idx" already exists, skipping
+2026-09-19T00:14:45.8228518Z CREATE INDEX
+2026-09-19T00:14:45.8939560Z INSERT 0 1
+2026-09-19T00:14:45.9593793Z DROP INDEX
+2026-09-19T00:14:45.9619834Z CREATE INDEX
+2026-09-19T00:14:46.0277123Z INSERT 0 1
+2026-09-19T00:14:46.0907781Z DROP INDEX
+2026-09-19T00:14:46.0928588Z CREATE INDEX
+2026-09-19T00:14:46.1607311Z INSERT 0 1
+2026-09-19T00:14:46.2433611Z CREATE TABLE
+2026-09-19T00:14:46.2442792Z CREATE INDEX
+2026-09-19T00:14:46.2455567Z CREATE INDEX
+2026-09-19T00:14:46.2485021Z DO
+2026-09-19T00:14:46.3194503Z INSERT 0 1
+2026-09-19T00:14:46.3824046Z CREATE TABLE
+2026-09-19T00:14:46.3833833Z CREATE INDEX
+2026-09-19T00:14:46.3843272Z CREATE INDEX
+2026-09-19T00:14:46.3853472Z CREATE INDEX
+2026-09-19T00:14:46.3892707Z CREATE TABLE
+2026-09-19T00:14:46.3901627Z CREATE INDEX
+2026-09-19T00:14:46.3911502Z CREATE INDEX
+2026-09-19T00:14:46.3920677Z CREATE INDEX
+2026-09-19T00:14:46.3949768Z DO
+2026-09-19T00:14:46.4579027Z INSERT 0 1
+2026-09-19T00:14:46.5213222Z CREATE TABLE
+2026-09-19T00:14:46.5226802Z CREATE INDEX
+2026-09-19T00:14:46.5235152Z CREATE INDEX
+2026-09-19T00:14:46.5246773Z CREATE INDEX
+2026-09-19T00:14:46.5273632Z DO
+2026-09-19T00:14:46.6054466Z INSERT 0 1
+2026-09-19T00:14:46.6721417Z CREATE TABLE
+2026-09-19T00:14:46.6730782Z CREATE INDEX
+2026-09-19T00:14:46.6742385Z CREATE INDEX
+2026-09-19T00:14:46.6752529Z CREATE INDEX
+2026-09-19T00:14:46.6779562Z DO
+2026-09-19T00:14:46.7662431Z INSERT 0 1
+2026-09-19T00:14:46.8357114Z CREATE TABLE
+2026-09-19T00:14:46.8365911Z CREATE INDEX
+2026-09-19T00:14:46.8377761Z CREATE INDEX
+2026-09-19T00:14:46.8388431Z CREATE INDEX
+2026-09-19T00:14:46.8414048Z DO
+2026-09-19T00:14:46.9075069Z INSERT 0 1
+2026-09-19T00:14:46.9688155Z UPDATE 0
+2026-09-19T00:14:47.0282432Z INSERT 0 1
+2026-09-19T00:14:47.1982345Z CREATE TABLE
+2026-09-19T00:14:47.1992092Z CREATE INDEX
+2026-09-19T00:14:47.2001698Z CREATE INDEX
+2026-09-19T00:14:47.2012371Z CREATE INDEX
+2026-09-19T00:14:47.2023798Z CREATE INDEX
+2026-09-19T00:14:47.2034436Z CREATE INDEX
+2026-09-19T00:14:47.2047961Z CREATE INDEX
+2026-09-19T00:14:47.2077709Z DO
+2026-09-19T00:14:47.2751498Z INSERT 0 1
+2026-09-19T00:14:47.4547582Z DO
+2026-09-19T00:14:47.5186069Z INSERT 0 1
+2026-09-19T00:14:47.5826245Z CREATE TABLE
+2026-09-19T00:14:47.5836188Z CREATE INDEX
+2026-09-19T00:14:47.5846889Z INSERT 0 1
+2026-09-19T00:14:47.5850031Z GRANT
+2026-09-19T00:14:47.7513374Z INSERT 0 1
+2026-09-19T00:14:47.9372100Z DROP INDEX
+2026-09-19T00:14:47.9400579Z CREATE INDEX
+2026-09-19T00:14:47.9496977Z UPDATE 0
+2026-09-19T00:14:48.0136681Z INSERT 0 1
+2026-09-19T00:14:48.0795204Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:13: NOTICE:  relation "local_album_featured_artists" already exists, skipping
+2026-09-19T00:14:48.0796633Z CREATE TABLE
+2026-09-19T00:14:48.0803384Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:16: NOTICE:  relation "local_album_featured_artists_library_id_idx" already exists, skipping
+2026-09-19T00:14:48.0807035Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:19: NOTICE:  relation "local_album_featured_artists_album_id_idx" already exists, skipping
+2026-09-19T00:14:48.0808823Z CREATE INDEX
+2026-09-19T00:14:48.0809204Z CREATE INDEX
+2026-09-19T00:14:48.0810896Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:22: NOTICE:  relation "local_album_featured_artists_artist_id_idx" already exists, skipping
+2026-09-19T00:14:48.0812355Z CREATE INDEX
+2026-09-19T00:14:48.0814013Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:25: NOTICE:  relation "local_album_featured_artists_library_artist_idx" already exists, skipping
+2026-09-19T00:14:48.0815475Z CREATE INDEX
+2026-09-19T00:14:48.0818256Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0019_create_local_album_featured_artists.sql:28: NOTICE:  relation "local_album_featured_artists_identity_idx" already exists, skipping
+2026-09-19T00:14:48.0819723Z CREATE INDEX
+2026-09-19T00:14:48.0851332Z DO
+2026-09-19T00:14:48.1529853Z INSERT 0 1
+2026-09-19T00:14:48.2131453Z DO
+2026-09-19T00:14:48.2870198Z INSERT 0 1
+2026-09-19T00:14:48.3480402Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0021_add_problematic_file_generated_projection.sql:1: NOTICE:  index "local_track_files_active_track_projection_idx" does not exist, skipping
+2026-09-19T00:14:48.3482011Z DROP INDEX
+2026-09-19T00:14:48.3505592Z CREATE FUNCTION
+2026-09-19T00:14:48.3507880Z REVOKE
+2026-09-19T00:14:48.3531552Z DO
+2026-09-19T00:14:48.3753912Z ALTER TABLE
+2026-09-19T00:14:48.3863283Z ALTER TABLE
+2026-09-19T00:14:48.3963565Z ALTER TABLE
+2026-09-19T00:14:48.4723341Z INSERT 0 1
+2026-09-19T00:14:48.5288843Z DROP INDEX
+2026-09-19T00:14:48.5314795Z CREATE INDEX
+2026-09-19T00:14:48.5318048Z DROP INDEX
+2026-09-19T00:14:48.5330706Z CREATE INDEX
+2026-09-19T00:14:48.7079905Z INSERT 0 1
+2026-09-19T00:14:48.7710109Z CREATE FUNCTION
+2026-09-19T00:14:48.7713358Z CREATE FUNCTION
+2026-09-19T00:14:48.7734245Z CREATE FUNCTION
+2026-09-19T00:14:48.7740187Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0023_link_local_track_files_to_library_***s.sql:162: NOTICE:  function library.windows_path_key(text) does not exist, skipping
+2026-09-19T00:14:48.7741653Z DROP FUNCTION
+2026-09-19T00:14:48.7749101Z CREATE FUNCTION
+2026-09-19T00:14:48.7800027Z UPDATE 0
+2026-09-19T00:14:48.7822746Z UPDATE 0
+2026-09-19T00:14:48.7830557Z DO
+2026-09-19T00:14:48.7832545Z REVOKE
+2026-09-19T00:14:48.7834146Z REVOKE
+2026-09-19T00:14:48.7837217Z REVOKE
+2026-09-19T00:14:48.7839335Z REVOKE
+2026-09-19T00:14:48.7855098Z DO
+2026-09-19T00:14:48.8541848Z INSERT 0 1
+2026-09-19T00:14:49.0809559Z CREATE EXTENSION
+2026-09-19T00:14:49.0925873Z DO
+2026-09-19T00:14:49.1667792Z INSERT 0 1
+2026-09-19T00:14:49.2272655Z DO
+2026-09-19T00:14:49.2952395Z INSERT 0 1
+2026-09-19T00:14:49.4867617Z CREATE TABLE
+2026-09-19T00:14:49.4878654Z CREATE INDEX
+2026-09-19T00:14:49.4888962Z CREATE INDEX
+2026-09-19T00:14:49.4923588Z DO
+2026-09-19T00:14:49.6654036Z INSERT 0 1
+2026-09-19T00:14:49.7374329Z DO
+2026-09-19T00:14:49.8032184Z INSERT 0 1
+2026-09-19T00:14:49.8651221Z DROP INDEX
+2026-09-19T00:14:49.8683733Z CREATE INDEX
+2026-09-19T00:14:49.9465918Z INSERT 0 1
+2026-09-19T00:14:50.0131035Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0029_repair_lastfm_session_conflict_identity.sql:2: NOTICE:  relation "lastfm_sessions_account_username_idx" already exists, skipping
+2026-09-19T00:14:50.0132566Z CREATE INDEX
+2026-09-19T00:14:50.0863357Z INSERT 0 1
+2026-09-19T00:14:50.1476597Z DROP TABLE
+2026-09-19T00:14:50.2164567Z INSERT 0 1
+2026-09-19T00:14:50.2864909Z CREATE INDEX
+2026-09-19T00:14:50.3497002Z INSERT 0 1
+2026-09-19T00:14:50.4153151Z DROP INDEX
+2026-09-19T00:14:50.4178946Z CREATE INDEX
+2026-09-19T00:14:50.4899913Z INSERT 0 1
+2026-09-19T00:14:50.5477887Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0033_repair_section14_album_identity_corruption.sql:9: NOTICE:  schema "pg_temp" does not exist, skipping
+2026-09-19T00:14:50.5479279Z DROP TABLE
+2026-09-19T00:14:50.5536430Z CREATE TABLE
+2026-09-19T00:14:50.5573198Z INSERT 0 0
+2026-09-19T00:14:50.5628865Z INSERT 0 0
+2026-09-19T00:14:50.5647425Z DO
+2026-09-19T00:14:50.5673484Z SELECT 0
+2026-09-19T00:14:50.5685826Z UPDATE 0
+2026-09-19T00:14:50.5701013Z INSERT 0 0
+2026-09-19T00:14:50.5706288Z DELETE 0
+2026-09-19T00:14:50.5722877Z INSERT 0 0
+2026-09-19T00:14:50.5725837Z DELETE 0
+2026-09-19T00:14:50.5740582Z UPDATE 0
+2026-09-19T00:14:50.5749585Z DELETE 0
+2026-09-19T00:14:50.5760337Z UPDATE 0
+2026-09-19T00:14:50.5766099Z DELETE 0
+2026-09-19T00:14:50.5777569Z UPDATE 0
+2026-09-19T00:14:50.5780457Z UPDATE 0
+2026-09-19T00:14:50.5784651Z DELETE 0
+2026-09-19T00:14:50.5802838Z DELETE 0
+2026-09-19T00:14:50.5828179Z DELETE 0
+2026-09-19T00:14:50.5836014Z DROP TABLE
+2026-09-19T00:14:50.5841955Z DROP TABLE
+2026-09-19T00:14:50.6619793Z INSERT 0 1
+2026-09-19T00:14:50.7184420Z LOCK TABLE
+2026-09-19T00:14:50.7188969Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0034_reconcile_semantic_local_albums.sql:8: NOTICE:  schema "pg_temp" does not exist, skipping
+2026-09-19T00:14:50.7189712Z DROP TABLE
+2026-09-19T00:14:50.7232726Z CREATE TABLE
+2026-09-19T00:14:50.7270227Z INSERT 0 0
+2026-09-19T00:14:50.7284757Z  id 
+2026-09-19T00:14:50.7285198Z ----
+2026-09-19T00:14:50.7285419Z (0 rows)
+2026-09-19T00:14:50.7285543Z 
+2026-09-19T00:14:50.7309836Z UPDATE 0
+2026-09-19T00:14:50.7322266Z INSERT 0 0
+2026-09-19T00:14:50.7325070Z DELETE 0
+2026-09-19T00:14:50.7334325Z INSERT 0 0
+2026-09-19T00:14:50.7337353Z DELETE 0
+2026-09-19T00:14:50.7345496Z UPDATE 0
+2026-09-19T00:14:50.7354341Z INSERT 0 0
+2026-09-19T00:14:50.7356782Z DELETE 0
+2026-09-19T00:14:50.7366552Z INSERT 0 0
+2026-09-19T00:14:50.7369170Z DELETE 0
+2026-09-19T00:14:50.7377821Z UPDATE 0
+2026-09-19T00:14:50.7387465Z UPDATE 0
+2026-09-19T00:14:50.7389983Z DELETE 0
+2026-09-19T00:14:50.7397777Z DROP TABLE
+2026-09-19T00:14:50.7414312Z DO
+2026-09-19T00:14:50.8035458Z INSERT 0 1
+2026-09-19T00:14:50.8612766Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:7: NOTICE:  trigger "local_albums_semantic_identity_check" for relation "library.local_albums" does not exist, skipping
+2026-09-19T00:14:50.8615028Z DROP TRIGGER
+2026-09-19T00:14:50.8617299Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:9: NOTICE:  trigger "separate_releases_semantic_identity_check" for relation "library.separate_releases" does not exist, skipping
+2026-09-19T00:14:50.8619501Z DROP TRIGGER
+2026-09-19T00:14:50.8622481Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:11: NOTICE:  trigger "local_artists_semantic_identity_check" for relation "library.local_artists" does not exist, skipping
+2026-09-19T00:14:50.8624217Z DROP TRIGGER
+2026-09-19T00:14:50.8626371Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:13: NOTICE:  trigger "local_albums_semantic_identity_discriminator" for relation "library.local_albums" does not exist, skipping
+2026-09-19T00:14:50.8629106Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:15: NOTICE:  trigger "separate_releases_semantic_identity_discriminator" for relation "library.separate_releases" does not exist, skipping
+2026-09-19T00:14:50.8630275Z DROP TRIGGER
+2026-09-19T00:14:50.8630565Z DROP TRIGGER
+2026-09-19T00:14:50.8631715Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:17: NOTICE:  trigger "separate_releases_semantic_identity_reconciliation" for relation "library.separate_releases" does not exist, skipping
+2026-09-19T00:14:50.8635252Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:19: NOTICE:  trigger "local_artists_semantic_identity_discriminator" for relation "library.local_artists" does not exist, skipping
+2026-09-19T00:14:50.8637573Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:21: NOTICE:  trigger "separate_releases_inventory_publication_lock" for relation "library.separate_releases" does not exist, skipping
+2026-09-19T00:14:50.8638572Z DROP TRIGGER
+2026-09-19T00:14:50.8638773Z DROP TRIGGER
+2026-09-19T00:14:50.8638975Z DROP TRIGGER
+2026-09-19T00:14:50.8640057Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:23: NOTICE:  trigger "local_artists_inventory_publication_lock" for relation "library.local_artists" does not exist, skipping
+2026-09-19T00:14:50.8642105Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0035_enforce_semantic_local_album_identity.sql:24: NOTICE:  function library.enforce_semantic_local_album_identity() does not exist, skipping
+2026-09-19T00:14:50.8643217Z DROP TRIGGER
+2026-09-19T00:14:50.8643417Z DROP FUNCTION
+2026-09-19T00:14:50.8649589Z ALTER TABLE
+2026-09-19T00:14:50.8664362Z CREATE FUNCTION
+2026-09-19T00:14:50.8668145Z CREATE TRIGGER
+2026-09-19T00:14:50.8670018Z CREATE TRIGGER
+2026-09-19T00:14:50.8701105Z UPDATE 0
+2026-09-19T00:14:50.8718452Z CREATE INDEX
+2026-09-19T00:14:50.8723313Z CREATE FUNCTION
+2026-09-19T00:14:50.8725696Z CREATE TRIGGER
+2026-09-19T00:14:50.8747307Z CREATE FUNCTION
+2026-09-19T00:14:50.8751684Z CREATE FUNCTION
+2026-09-19T00:14:50.8753968Z CREATE TRIGGER
+2026-09-19T00:14:50.8761603Z CREATE FUNCTION
+2026-09-19T00:14:50.8764883Z CREATE TRIGGER
+2026-09-19T00:14:50.9377325Z INSERT 0 1
+2026-09-19T00:14:50.9941995Z CREATE INDEX
+2026-09-19T00:14:51.0527486Z INSERT 0 1
+2026-09-19T00:14:51.1082988Z CREATE INDEX
+2026-09-19T00:14:51.1689690Z INSERT 0 1
+2026-09-19T00:14:51.2255778Z CREATE INDEX
+2026-09-19T00:14:51.2269934Z CREATE INDEX
+2026-09-19T00:14:51.2274792Z DROP INDEX
+2026-09-19T00:14:51.2279723Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0038_add_problematic_required_text_candidate.sql:25: NOTICE:  index "local_track_files_problem_candidate_v2_idx" does not exist, skipping
+2026-09-19T00:14:51.2283807Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0038_add_problematic_required_text_candidate.sql:26: NOTICE:  index "local_track_files_problem_candidate_v3_idx" does not exist, skipping
+2026-09-19T00:14:51.2284929Z DROP INDEX
+2026-09-19T00:14:51.2285875Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0038_add_problematic_required_text_candidate.sql:27: NOTICE:  index "local_track_files_problem_candidate_v4_idx" does not exist, skipping
+2026-09-19T00:14:51.2286698Z DROP INDEX
+2026-09-19T00:14:51.2286886Z DROP INDEX
+2026-09-19T00:14:51.2288877Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0038_add_problematic_required_text_candidate.sql:30: NOTICE:  column "scan_file_required_text_missing_candidate" of relation "local_track_files" does not exist, skipping
+2026-09-19T00:14:51.2289918Z ALTER TABLE
+2026-09-19T00:14:51.3873046Z INSERT 0 1
+2026-09-19T00:14:51.4434837Z DO
+2026-09-19T00:14:51.5255027Z INSERT 0 1
+2026-09-19T00:14:51.5819210Z DO
+2026-09-19T00:14:51.6412067Z INSERT 0 1
+2026-09-19T00:14:51.7031555Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0041_create_local_album_cover_candidate_snapshots.sql:32: NOTICE:  identifier "local_album_cover_candidate_snapshots_automatic_improvement_revision_check" will be truncated to "local_album_cover_candidate_snapshots_automatic_improvement_rev"
+2026-09-19T00:14:51.7034020Z psql:D:/a/AlbumHaven/AlbumHaven/migrations/postgres/0041_create_local_album_cover_candidate_snapshots.sql:32: NOTICE:  identifier "local_album_cover_candidate_snapshots_seen_automatic_improvement_revision_check" will be truncated to "local_album_cover_candidate_snapshots_seen_automatic_improvemen"
+2026-09-19T00:14:51.7161566Z CREATE TABLE
+2026-09-19T00:14:51.7182233Z UPDATE 0
+2026-09-19T00:14:51.7202083Z DO
+2026-09-19T00:14:51.7813610Z INSERT 0 1
+2026-09-19T00:14:51.8363627Z ALTER TABLE
+2026-09-19T00:14:51.8972861Z INSERT 0 1
+2026-09-19T00:14:51.9589677Z CREATE TABLE
+2026-09-19T00:14:51.9612421Z DO
+2026-09-19T00:14:52.0232583Z INSERT 0 1
+2026-09-19T00:14:52.0835247Z CREATE TABLE
+2026-09-19T00:14:52.0847592Z CREATE INDEX
+2026-09-19T00:14:52.0870826Z DO
+2026-09-19T00:14:52.2625551Z INSERT 0 1
+2026-09-19T00:14:52.3254253Z CREATE INDEX
+2026-09-19T00:14:52.3860594Z INSERT 0 1
+2026-09-19T00:14:52.4409345Z ALTER TABLE
+2026-09-19T00:14:52.4419503Z UPDATE 0
+2026-09-19T00:14:52.4426459Z ALTER TABLE
+2026-09-19T00:14:52.4457447Z DO
+2026-09-19T00:14:52.4471780Z CREATE INDEX
+2026-09-19T00:14:52.4480764Z CREATE INDEX
+2026-09-19T00:14:52.4519878Z CREATE TABLE
+2026-09-19T00:14:52.4560661Z CREATE TABLE
+2026-09-19T00:14:52.4568944Z CREATE INDEX
+2026-09-19T00:14:52.4578467Z CREATE INDEX
+2026-09-19T00:14:52.4588084Z CREATE INDEX
+2026-09-19T00:14:52.4627562Z CREATE TABLE
+2026-09-19T00:14:52.4637174Z CREATE INDEX
+2026-09-19T00:14:52.4817979Z DO
+2026-09-19T00:14:52.4822047Z ALTER TABLE
+2026-09-19T00:14:52.4832383Z UPDATE 0
+2026-09-19T00:14:52.4834240Z UPDATE 0
+2026-09-19T00:14:52.4837810Z ALTER TABLE
+2026-09-19T00:14:52.4855643Z DO
+2026-09-19T00:14:52.4867605Z CREATE INDEX
+2026-09-19T00:14:52.4906486Z CREATE TABLE
+2026-09-19T00:14:52.4914648Z CREATE INDEX
+2026-09-19T00:14:52.4923315Z CREATE INDEX
+2026-09-19T00:14:52.4931553Z CREATE INDEX
+2026-09-19T00:14:52.5002914Z CREATE TABLE
+2026-09-19T00:14:52.5011913Z CREATE INDEX
+2026-09-19T00:14:52.5020517Z CREATE INDEX
+2026-09-19T00:14:52.5029698Z CREATE INDEX
+2026-09-19T00:14:52.5038187Z CREATE INDEX
+2026-09-19T00:14:52.5076637Z DO
+2026-09-19T00:14:52.5774577Z INSERT 0 1
+2026-09-19T00:14:52.6376213Z CREATE TABLE
+2026-09-19T00:14:52.6386388Z CREATE INDEX
+2026-09-19T00:14:52.6398596Z CREATE INDEX
+2026-09-19T00:14:52.6426997Z DO
+2026-09-19T00:14:52.8013475Z INSERT 0 1
+2026-09-19T00:14:52.8623437Z ALTER TABLE
+2026-09-19T00:14:52.8631908Z ALTER TABLE
+2026-09-19T00:14:52.8687635Z CREATE TABLE
+2026-09-19T00:14:52.8696667Z CREATE INDEX
+2026-09-19T00:14:52.8704711Z CREATE INDEX
+2026-09-19T00:14:52.8714046Z CREATE INDEX
+2026-09-19T00:14:52.8740893Z DO
+2026-09-19T00:14:52.9373365Z INSERT 0 1
+2026-09-19T00:14:52.9943087Z DELETE 0
+2026-09-19T00:14:52.9959414Z CREATE INDEX
+2026-09-19T00:14:53.0566385Z INSERT 0 1
+2026-09-19T00:14:53.1144964Z CREATE INDEX
+2026-09-19T00:14:53.1759911Z INSERT 0 1
+2026-09-19T00:14:53.2377195Z CREATE INDEX
+2026-09-19T00:14:53.3032890Z INSERT 0 1
+2026-09-19T00:14:53.4711744Z CREATE TABLE
+2026-09-19T00:14:53.4723249Z CREATE INDEX
+2026-09-19T00:14:53.4733471Z CREATE INDEX
+2026-09-19T00:14:53.4744667Z CREATE INDEX
+2026-09-19T00:14:53.4799191Z CREATE TABLE
+2026-09-19T00:14:53.4808585Z CREATE INDEX
+2026-09-19T00:14:53.4814350Z ALTER TABLE
+2026-09-19T00:14:53.4824042Z CREATE INDEX
+2026-09-19T00:14:53.4827822Z ALTER TABLE
+2026-09-19T00:14:53.4831804Z ALTER TABLE
+2026-09-19T00:14:53.4865868Z DO
+2026-09-19T00:14:53.5542689Z INSERT 0 1
+2026-09-19T00:14:53.6181808Z CREATE TABLE
+2026-09-19T00:14:53.6207992Z DO
+2026-09-19T00:14:53.6834498Z INSERT 0 1
+2026-09-19T00:14:53.7445812Z ALTER TABLE
+2026-09-19T00:14:53.7475818Z DO
+2026-09-19T00:14:53.8129013Z INSERT 0 1
+2026-09-19T00:14:53.8710432Z CREATE FUNCTION
+2026-09-19T00:14:53.8712333Z REVOKE
+2026-09-19T00:14:53.8767660Z DO
+2026-09-19T00:14:53.9470193Z INSERT 0 1
+2026-09-19T00:14:54.1158917Z ALTER TABLE
+2026-09-19T00:14:54.1212970Z DO
+2026-09-19T00:14:54.1868249Z INSERT 0 1
+2026-09-19T00:14:54.2478095Z ALTER TABLE
+2026-09-19T00:14:54.2491263Z CREATE FUNCTION
+2026-09-19T00:14:54.2502488Z INSERT 0 0
+2026-09-19T00:14:54.2512559Z UPDATE 0
+2026-09-19T00:14:54.2538473Z DO
+2026-09-19T00:14:54.2540267Z REVOKE
+2026-09-19T00:14:54.2552204Z DO
+2026-09-19T00:14:54.3189673Z INSERT 0 1
+2026-09-19T00:14:54.3789427Z ALTER TABLE
+2026-09-19T00:14:54.3816237Z DO
+2026-09-19T00:14:54.4624483Z INSERT 0 1
+2026-09-19T00:14:54.5224691Z ALTER TABLE
+2026-09-19T00:14:54.5250189Z DO
+2026-09-19T00:14:54.6913534Z INSERT 0 1
+2026-09-19T00:14:54.7501540Z CREATE FUNCTION
+2026-09-19T00:14:54.7517611Z CREATE FUNCTION
+2026-09-19T00:14:54.7524184Z CREATE FUNCTION
+2026-09-19T00:14:54.7533458Z ALTER TABLE
+2026-09-19T00:14:54.7541858Z UPDATE 0
+2026-09-19T00:14:54.7547904Z ALTER TABLE
+2026-09-19T00:14:54.7566150Z ALTER TABLE
+2026-09-19T00:14:54.7568177Z REVOKE
+2026-09-19T00:14:54.7572092Z REVOKE
+2026-09-19T00:14:54.7574020Z REVOKE
+2026-09-19T00:14:54.7589645Z DO
+2026-09-19T00:14:54.8219490Z INSERT 0 1
+2026-09-19T00:14:54.8814517Z CREATE FUNCTION
+2026-09-19T00:14:54.8817067Z REVOKE
+2026-09-19T00:14:54.8835877Z DO
+2026-09-19T00:14:55.0472023Z INSERT 0 1
+2026-09-19T00:14:55.1044248Z DO
+2026-09-19T00:14:55.1642211Z INSERT 0 1
+2026-09-19T00:14:55.2218290Z CREATE FUNCTION
+2026-09-19T00:14:55.2221446Z REVOKE
+2026-09-19T00:14:55.2239366Z DO
+2026-09-19T00:14:55.2831353Z INSERT 0 1
+2026-09-19T00:14:55.3409199Z DO
+2026-09-19T00:14:55.4015789Z INSERT 0 1
+2026-09-19T00:14:55.4591961Z CREATE FUNCTION
+2026-09-19T00:14:55.5201066Z INSERT 0 1
+2026-09-19T00:14:55.5784851Z ALTER TABLE
+2026-09-19T00:14:55.5807152Z ALTER TABLE
+2026-09-19T00:14:55.6434006Z INSERT 0 1
+2026-09-19T00:14:55.7028917Z CREATE INDEX
+2026-09-19T00:14:55.7639251Z INSERT 0 1
+2026-09-19T00:14:55.8246032Z CREATE TABLE
+2026-09-19T00:14:55.8261492Z CREATE INDEX
+2026-09-19T00:14:55.8301964Z UPDATE 0
+2026-09-19T00:14:55.8312865Z UPDATE 0
+2026-09-19T00:14:55.8318060Z INSERT 0 0
+2026-09-19T00:14:55.8329834Z UPDATE 0
+2026-09-19T00:14:55.8347607Z DO
+2026-09-19T00:14:55.9970242Z INSERT 0 1
+2026-09-19T00:14:56.0578692Z CREATE TABLE
+2026-09-19T00:14:56.0614528Z CREATE TABLE
+2026-09-19T00:14:56.0624182Z CREATE INDEX
+2026-09-19T00:14:56.0633956Z CREATE INDEX
+2026-09-19T00:14:56.0656351Z DO
+2026-09-19T00:14:56.1300069Z INSERT 0 1
+2026-09-19T00:14:56.1870762Z ALTER TABLE
+2026-09-19T00:14:56.2470999Z INSERT 0 1
+2026-09-19T00:14:56.3048328Z ALTER TABLE
+2026-09-19T00:14:56.3064152Z ALTER TABLE
+2026-09-19T00:14:56.3673020Z INSERT 0 1
+2026-09-19T00:14:56.4365089Z ALTER TABLE
+2026-09-19T00:14:56.4383575Z CREATE INDEX
+2026-09-19T00:14:56.4990589Z INSERT 0 1
+2026-09-19T00:14:56.5550337Z ALTER TABLE
+2026-09-19T00:14:56.5566044Z ALTER TABLE
+2026-09-19T00:14:56.5592616Z UPDATE 0
+2026-09-19T00:14:56.6185807Z INSERT 0 1
+2026-09-19T00:14:56.7072152Z WARNING:  no privileges were granted for "show_limit"
+2026-09-19T00:14:56.7073670Z WARNING:  no privileges were granted for "show_trgm"
+2026-09-19T00:14:56.7077032Z WARNING:  no privileges were granted for "set_limit"
+2026-09-19T00:14:56.7079472Z WARNING:  no privileges were granted for "similarity"
+2026-09-19T00:14:56.7081814Z WARNING:  no privileges were granted for "similarity_op"
+2026-09-19T00:14:56.7084315Z WARNING:  no privileges were granted for "word_similarity"
+2026-09-19T00:14:56.7086978Z WARNING:  no privileges were granted for "word_similarity_op"
+2026-09-19T00:14:56.7089345Z WARNING:  no privileges were granted for "word_similarity_commutator_op"
+2026-09-19T00:14:56.7091208Z WARNING:  no privileges were granted for "similarity_dist"
+2026-09-19T00:14:56.7093903Z WARNING:  no privileges were granted for "word_similarity_dist_op"
+2026-09-19T00:14:56.7096445Z WARNING:  no privileges were granted for "word_similarity_dist_commutator_op"
+2026-09-19T00:14:56.7098758Z WARNING:  no privileges were granted for "gtrgm_in"
+2026-09-19T00:14:56.7101748Z WARNING:  no privileges were granted for "gtrgm_out"
+2026-09-19T00:14:56.7104296Z WARNING:  no privileges were granted for "gtrgm_consistent"
+2026-09-19T00:14:56.7107020Z WARNING:  no privileges were granted for "gtrgm_distance"
+2026-09-19T00:14:56.7109128Z WARNING:  no privileges were granted for "gtrgm_compress"
+2026-09-19T00:14:56.7111947Z WARNING:  no privileges were granted for "gtrgm_decompress"
+2026-09-19T00:14:56.7114721Z WARNING:  no privileges were granted for "gtrgm_penalty"
+2026-09-19T00:14:56.7116825Z WARNING:  no privileges were granted for "gtrgm_picksplit"
+2026-09-19T00:14:56.7119567Z WARNING:  no privileges were granted for "gtrgm_union"
+2026-09-19T00:14:56.7121693Z WARNING:  no privileges were granted for "gtrgm_same"
+2026-09-19T00:14:56.7124014Z WARNING:  no privileges were granted for "gin_extract_value_trgm"
+2026-09-19T00:14:56.7126462Z WARNING:  no privileges were granted for "gin_extract_query_trgm"
+2026-09-19T00:14:56.7128826Z WARNING:  no privileges were granted for "gin_trgm_consistent"
+2026-09-19T00:14:56.7133130Z WARNING:  no privileges were granted for "gin_trgm_triconsistent"
+2026-09-19T00:14:56.7134661Z WARNING:  no privileges were granted for "strict_word_similarity"
+2026-09-19T00:14:56.7137631Z WARNING:  no privileges were granted for "strict_word_similarity_op"
+2026-09-19T00:14:56.7139957Z WARNING:  no privileges were granted for "strict_word_similarity_commutator_op"
+2026-09-19T00:14:56.7142290Z WARNING:  no privileges were granted for "strict_word_similarity_dist_op"
+2026-09-19T00:14:56.7144921Z WARNING:  no privileges were granted for "strict_word_similarity_dist_commutator_op"
+2026-09-19T00:14:56.7147236Z WARNING:  no privileges were granted for "gtrgm_options"
+2026-09-19T00:14:56.7185254Z DO
+2026-09-19T00:14:56.7733968Z BEGIN
+2026-09-19T00:14:56.7740606Z CREATE SCHEMA
+2026-09-19T00:14:56.7778706Z CREATE TABLE
+2026-09-19T00:14:56.7783837Z INSERT 0 1
+2026-09-19T00:14:56.7786456Z UPDATE 1
+2026-09-19T00:14:56.7787951Z DELETE 1
+2026-09-19T00:14:56.7791583Z  nextval 
+2026-09-19T00:14:56.7791851Z ---------
+2026-09-19T00:14:56.7792075Z        2
+2026-09-19T00:14:56.7792306Z (1 row)
+2026-09-19T00:14:56.7792526Z 
+2026-09-19T00:14:56.7802627Z ROLLBACK
+2026-09-19T00:14:56.7820046Z DO
+2026-09-19T00:14:56.8364957Z BEGIN
+2026-09-19T00:14:56.8401317Z CREATE TABLE
+2026-09-19T00:14:56.8406378Z INSERT 0 1
+2026-09-19T00:14:56.8422928Z INSERT 0 1
+2026-09-19T00:14:56.8429607Z UPDATE 1
+2026-09-19T00:14:56.8437897Z ROLLBACK
+2026-09-19T00:14:56.9072703Z DO
+2026-09-19T00:14:56.9639529Z  ?column? 
+2026-09-19T00:14:56.9639781Z ----------
+2026-09-19T00:14:56.9639983Z (0 rows)
+2026-09-19T00:14:56.9640092Z 
+2026-09-19T00:14:56.9799679Z DO
+2026-09-19T00:15:06.2572434Z D:\a\_temp\album-haven-performance-foundations\foundation-version-manifest-performance-utility-problematic-files.json
+2026-09-19T00:15:06.3309999Z === Performance target: utility-problematic-files ===
+2026-09-19T00:15:06.3328745Z === Performance run 1/1 for utility-problematic-files ===
+2026-09-19T00:15:06.3332334Z [performance-runner] target=utility-problematic-files | attempt=1 | mode=headless | browser=chrome | real_app_port=4253
+2026-09-19T00:15:41.6234697Z Album Haven production E2E app listening on http://127.0.0.1:4253 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:4255
+2026-09-19T00:15:41.6235768Z 
+2026-09-19T00:15:41.6235979Z Running 1 test using 1 worker
+2026-09-19T00:15:41.6236270Z 
+2026-09-19T00:15:41.6237569Z [TEST] FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view
+2026-09-19T00:15:41.6240088Z   [STEP] Measure the cold Problematic Files API response before app navigation
+2026-09-19T00:15:41.6241767Z [utility-problematic-files-local] Cold Problematic Files API response ready before app navigation in 515.8658 ms | memory 0.6 MB (681552 bytes)
+2026-09-19T00:15:41.6243455Z [utility-problematic-files-local] Cold Problematic Files API response body size: 40038 bytes
+2026-09-19T00:15:41.6244672Z   [PASS] Measure the cold Problematic Files API response before app navigation (603 ms)
+2026-09-19T00:15:41.6245673Z   [STEP] Open Settings and wait for Problematic Files to become ready
+2026-09-19T00:15:41.6247052Z [utility-problematic-files-local] Problematic Files ready after opening Settings in 468 ms | memory 4.1 MB (4282256 bytes)
+2026-09-19T00:15:41.6248378Z   [PASS] Open Settings and wait for Problematic Files to become ready (1117 ms)
+2026-09-19T00:15:41.6250290Z [utility-problematic-files-local] Problematic Files readiness contract: TARGET MET: Problematic Files readiness took 468 ms, at or below the 1000 ms target (hard ceiling 1200 ms).
+2026-09-19T00:15:41.6252005Z   [STEP] Capture the Problematic Files summary and first-detail load diagnostics
+2026-09-19T00:15:41.6253901Z [utility-problematic-files-local] Problematic Files load diagnostics: summary: request=148.4ms | parse=0.9ms | state=0ms | render=61.4ms | total=211.2ms | items=18 || detail: missing
+2026-09-19T00:15:41.6255640Z   [PASS] Capture the Problematic Files summary and first-detail load diagnostics (4 ms)
+2026-09-19T00:15:41.6256652Z   [STEP] Verify the core Problematic Files layout and first detail state
+2026-09-19T00:15:41.6258088Z   [FAIL] Verify the core Problematic Files layout and first detail state :: Expected at least one visible detected-problem reason in detail.
+2026-09-19T00:15:41.6259322Z 
+2026-09-19T00:15:41.6259608Z expect(received).toBeGreaterThan(expected)
+2026-09-19T00:15:41.6259972Z 
+2026-09-19T00:15:41.6260121Z Expected: > 0
+2026-09-19T00:15:41.6260485Z Received:   0 (144 ms)
+2026-09-19T00:15:41.6264044Z   x  1 [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilitiesResponsiveness.spec.js:27:3 › FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view (5.7s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:15:41.6266894Z 
+2026-09-19T00:15:41.6268645Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"e361aceb90759d489c0b917f3e3b160fa6c892a472993d49a088e31173fc19bf","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:15:41.6270174Z 
+2026-09-19T00:15:41.6270183Z 
+2026-09-19T00:15:41.6270192Z 
+2026-09-19T00:15:41.6271845Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"e361aceb90759d489c0b917f3e3b160fa6c892a472993d49a088e31173fc19bf","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:15:41.6273327Z 
+2026-09-19T00:15:41.6275813Z   1) [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilitiesResponsiveness.spec.js:27:3 › FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view 
+2026-09-19T00:15:41.6277952Z 
+2026-09-19T00:15:41.6278821Z     Error: Expected at least one visible detected-problem reason in detail.
+2026-09-19T00:15:41.6280136Z 2026-09-19 00:15:24,738 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2026-09-19T00:15:41.6283263Z 2026-09-19 00:15:25,179 [INFO] music_app: Relation projection startup readiness ready=true rebuilt=true reason=missing_projection builder_version=local-relation-builder-v9 source_row_count=7200 duration_ms=405.23 source_load=120.15 fingerprint=48.03 pure_build=132.16 family_link_replacement=3.06 snapshot_publication=1.31
+2026-09-19T00:15:41.6287660Z 2026-09-19 00:15:31,320 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 369.34, "hydrate_in_progress": false, "payload_elapsed_ms": 164.79, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-19T00:15:41.6290641Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:15:41.6293448Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+2026-09-19T00:15:41.6303865Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":0},"passivePortDiagnostics":[{"port":4253,"status":"completed","error":null,"ownerCount":0},{"port":4255,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+2026-09-19T00:15:41.6308116Z 
+2026-09-19T00:15:41.6308405Z     expect(received).toBeGreaterThan(expected)
+2026-09-19T00:15:41.6308779Z 
+2026-09-19T00:15:41.6308939Z     Expected: > 0
+2026-09-19T00:15:41.6309285Z     Received:   0
+2026-09-19T00:15:41.6309496Z 
+2026-09-19T00:15:41.6310048Z       169 |       const summary = await utilityProblematicFilesActions.readSelectedDetailSummary();
+2026-09-19T00:15:41.6311565Z       170 |       expect(summary.title, 'Expected the first Problematic Files detail title to match explicit initial detail.').toBe(initialDetail.name);
+2026-09-19T00:15:41.6313795Z     > 171 |       expect(summary.problemReasons.length, 'Expected at least one visible detected-problem reason in detail.').toBeGreaterThan(0);
+2026-09-19T00:15:41.6316304Z           |                                                                                                                 ^
+2026-09-19T00:15:41.6317037Z       172 |       return summary;
+2026-09-19T00:15:41.6317480Z       173 |     });
+2026-09-19T00:15:41.6317814Z       174 |
+2026-09-19T00:15:41.6319017Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematicFiles\utilitiesResponsiveness.spec.js:171:113
+2026-09-19T00:15:41.6320304Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2026-09-19T00:15:41.6321603Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematicFiles\utilitiesResponsiveness.spec.js:140:28
+2026-09-19T00:15:41.6322387Z 
+2026-09-19T00:15:41.6323267Z     attachment #2: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2026-09-19T00:15:41.6325248Z     [TEST] FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view
+2026-09-19T00:15:41.6327048Z       [STEP] Measure the cold Problematic Files API response before app navigation
+2026-09-19T00:15:41.6328143Z       [PASS] Measure the cold Problematic Files API response before app navigation (603 ms)
+2026-09-19T00:15:41.6329163Z       [...
+2026-09-19T00:15:41.6330010Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:15:41.6330553Z 
+2026-09-19T00:15:41.6331252Z     attachment #4: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2026-09-19T00:15:41.6332030Z     Error 1
+2026-09-19T00:15:41.6332624Z     Error: Expected at least one visible detected-problem reason in detail.
+2026-09-19T00:15:41.6333296Z     
+2026-09-19T00:15:41.6333704Z     expect(received).toBeGreaterThan(expected)
+2026-09-19T00:15:41.6334196Z     
+2026-09-19T00:15:41.6334508Z     Expected: > 0
+2026-09-19T00:15:41.6334853Z     Received:   0
+2026-09-19T00:15:41.6335475Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematicFiles\uti...
+2026-09-19T00:15:41.6336610Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:15:41.6337133Z 
+2026-09-19T00:15:41.6337845Z     attachment #5: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2026-09-19T00:15:41.6340838Z     [2026-09-19T00:15:33.241Z] requestfailed/net::ERR_ABORTED: GET http://127.0.0.1:4253/cover?path=D%3A%5Ca%5C_temp%5Calbum-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35%5Cmedia%5Ccovers%5Capproved%5Ccover-04-2937x6819-97e7e23a44df.jpg&size=480&v=process-dcb07a4b5e1739eb963cd5e2ea74483b
+2026-09-19T00:15:41.6342889Z     [2026-09-19T0...
+2026-09-19T00:15:41.6343697Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:15:41.6344147Z 
+2026-09-19T00:15:41.6345645Z     Error Context: test-results\playwright-performance-targets\utility-problematic-files\attempt-1\utilitiesResponsiveness-FT-df87f-ters-update-the-detail-view-utility-problematic-files\error-context.md
+2026-09-19T00:15:41.6347006Z 
+2026-09-19T00:15:41.6347511Z     attachment #8: trace (application/zip) ─────────────────────────────────────────────────────────
+2026-09-19T00:15:41.6348697Z     test-results\playwright-performance-targets\utility-problematic-files\attempt-1\utilitiesResponsiveness-FT-df87f-ters-update-the-detail-view-utility-problematic-files\trace.zip
+2026-09-19T00:15:41.6349597Z     Usage:
+2026-09-19T00:15:41.6349709Z 
+2026-09-19T00:15:41.6350609Z         npx playwright show-trace test-results\playwright-performance-targets\utility-problematic-files\attempt-1\utilitiesResponsiveness-FT-df87f-ters-update-the-detail-view-utility-problematic-files\trace.zip
+2026-09-19T00:15:41.6351516Z 
+2026-09-19T00:15:41.6351854Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:15:41.6352357Z 
+2026-09-19T00:15:41.6352441Z   1 failed
+2026-09-19T00:15:41.6354050Z     [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilitiesResponsiveness.spec.js:27:3 › FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness › FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view 
+2026-09-19T00:15:41.6355250Z 
+2026-09-19T00:15:41.6355365Z === Playwright Summary ===
+2026-09-19T00:15:41.6355885Z [31m[x][0m FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness
+2026-09-19T00:15:41.6357025Z   [31m[x][0m FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view (5.7s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:15:41.6357751Z 
+2026-09-19T00:15:41.6357854Z Overall: 0/1 passed
+2026-09-19T00:15:41.6358062Z Failed tests:
+2026-09-19T00:15:41.6359617Z - FTC-UTIL-PROBLEMS-009 utility-problematic-files responsiveness > FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view (5.7s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:15:41.6360643Z 
+2026-09-19T00:15:41.6360759Z === Playwright Summary ===
+2026-09-19T00:15:41.6361124Z [31m[x][0m Problematic Files Utility
+2026-09-19T00:15:41.6362126Z   [31m[x][0m FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view (5.7s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:15:41.6362857Z 
+2026-09-19T00:15:41.6362960Z Overall: 0/1 passed
+2026-09-19T00:15:41.6363165Z Failed tests:
+2026-09-19T00:15:41.6364147Z - Problematic Files Utility > FTC-UTIL-PROBLEMS-009 immediate Problematic Files stays responsive while search and problem filters update the detail view (5.7s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:15:43.4043139Z D:\a\_temp\album-haven-performance-foundations\foundation-version-manifest-performance-problematic-files-focused.json
+2026-09-19T00:15:43.4846881Z === Performance target: problematic-files-focused ===
+2026-09-19T00:15:43.4866259Z === Performance run 1/1 for problematic-files-focused ===
+2026-09-19T00:15:43.4870506Z [performance-runner] target=problematic-files-focused | attempt=1 | mode=headless | browser=chrome | real_app_port=4261
+2026-09-19T00:16:07.3338145Z Album Haven production E2E app listening on http://127.0.0.1:4261 with 0 artists, 0 albums, 0 tracks, and provider fixtures on http://127.0.0.1:4263
+2026-09-19T00:16:07.3340534Z 2026-09-19 00:15:54,114 [INFO] music_app: Startup scan-cache hydration completed files=7200 albums=400
+2026-09-19T00:16:07.3344228Z 2026-09-19 00:15:58,920 [INFO] music_app: {"action": "Index request completed", "album_count": 0, "artist_count": 0, "bootstrap_mode": "fresh_preview", "covers_in_progress": false, "elapsed_ms": 439.98, "hydrate_in_progress": false, "payload_elapsed_ms": 233.26, "query": "", "scan_in_progress": false, "selected_artist": ""}
+2026-09-19T00:16:07.3347751Z [playwright-wrapper-failure-latched] {"phase":"tests-complete","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:16:07.3350599Z [playwright-wrapper-diagnostic] {"reason":"wrapper-child-lifecycle-mismatch","childExitCode":1,"childExitSignal":null,"childCloseCode":1,"childCloseSignal":null,"processError":null,"stopReason":"none","cleanupOutcome":"completed"}
+2026-09-19T00:16:07.3357955Z [playwright-wrapper-final-decision] {"wrapperExitCode":1,"attemptReturn":{"exitCode":1,"exitReason":"wrapper-child-lifecycle-mismatch"},"fakeDatabaseCleanup":{"status":"completed","error":null,"mode":"lock-only"},"scanAppCleanup":{"status":"not-required","error":null},"isolatedAppCleanup":{"status":"completed","error":null},"tempCleanup":{"status":"completed","error":null,"removedCount":0},"passivePortDiagnostics":[{"port":4261,"status":"completed","error":null,"ownerCount":0},{"port":4263,"status":"completed","error":null,"ownerCount":0}],"finalSummary":{"phase":"run-final","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0,"listOnly":false},"exitReason":"wrapper-child-lifecycle-mismatch"}
+2026-09-19T00:16:07.3362636Z 
+2026-09-19T00:16:07.3362891Z Running 1 test using 1 worker
+2026-09-19T00:16:07.3363210Z 
+2026-09-19T00:16:07.3364048Z [TEST] Problematic Files renders populated Postgres summary and automatic detail
+2026-09-19T00:16:07.3365096Z   [STEP] Open the isolated production app ***
+2026-09-19T00:16:07.3365788Z   [PASS] Open the isolated production app *** (1484 ms)
+2026-09-19T00:16:07.3366615Z   [STEP] Open Settings and wait for Problematic Files automatic detail
+2026-09-19T00:16:07.3367575Z   [PASS] Open Settings and wait for Problematic Files automatic detail (790 ms)
+2026-09-19T00:16:07.3368649Z   [STEP] Verify populated list, automatic detail, telemetry, layout, and timing ceiling
+2026-09-19T00:16:07.3370254Z   [FAIL] Verify populated list, automatic detail, telemetry, layout, and timing ceiling :: expect(received).toBe(expected) // Object.is equality
+2026-09-19T00:16:07.3371241Z 
+2026-09-19T00:16:07.3371527Z Expected: "Crack The Skye Fixture 07 / 2009"
+2026-09-19T00:16:07.3372166Z Received: "Crack The Skye Fixture 07" (296 ms)
+2026-09-19T00:16:07.3375769Z   x  1 [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilityProblematicFiles.spec.js:22:3 › FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail (4.4s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:16:07.3378057Z 
+2026-09-19T00:16:07.3379835Z [album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"4574c126e7887c64d63d7962229e5bd53b8f6541967e2095fc80146ecbfb3132","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:16:07.3381390Z 
+2026-09-19T00:16:07.3381400Z 
+2026-09-19T00:16:07.3381409Z 
+2026-09-19T00:16:07.3383043Z [album-haven-playwright-result] {"version":1,"phase":"run-final","nonce":"4574c126e7887c64d63d7962229e5bd53b8f6541967e2095fc80146ecbfb3132","status":"failed","total":1,"completed":1,"failed":1,"skipped":0,"errors":0}
+2026-09-19T00:16:07.3384555Z 
+2026-09-19T00:16:07.3386734Z   1) [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilityProblematicFiles.spec.js:22:3 › FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail 
+2026-09-19T00:16:07.3388621Z 
+2026-09-19T00:16:07.3389029Z     Error: expect(received).toBe(expected) // Object.is equality
+2026-09-19T00:16:07.3389551Z 
+2026-09-19T00:16:07.3389831Z     Expected: "Crack The Skye Fixture 07 / 2009"
+2026-09-19T00:16:07.3390900Z     Received: "Crack The Skye Fixture 07"
+2026-09-19T00:16:07.3391155Z 
+2026-09-19T00:16:07.3391355Z       78 |       expect(detail.key).toBe(activeItem.key);
+2026-09-19T00:16:07.3391833Z       79 |       expect(detail.name).toBe(detailSummary.title);
+2026-09-19T00:16:07.3392503Z     > 80 |       expect(activeItem.title).toBe(
+2026-09-19T00:16:07.3392859Z          |                                ^
+2026-09-19T00:16:07.3393381Z       81 |         detail.year ? `${detailSummary.title} / ${detail.year}` : detailSummary.title,
+2026-09-19T00:16:07.3393858Z       82 |       );
+2026-09-19T00:16:07.3394261Z       83 |       readinessOutcome = evaluateTimingBudget(readyMs, READY_BUDGET);
+2026-09-19T00:16:07.3395231Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematicFiles\utilityProblematicFiles.spec.js:80:32
+2026-09-19T00:16:07.3396051Z         at runStep (D:\a\AlbumHaven\AlbumHaven\tests\e2e\support\baseFixtures.js:146:22)
+2026-09-19T00:16:07.3396869Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematicFiles\utilityProblematicFiles.spec.js:63:5
+2026-09-19T00:16:07.3397365Z 
+2026-09-19T00:16:07.3397907Z     attachment #2: step-transcript.txt (text/plain) ────────────────────────────────────────────────
+2026-09-19T00:16:07.3398695Z     [TEST] Problematic Files renders populated Postgres summary and automatic detail
+2026-09-19T00:16:07.3399343Z       [STEP] Open the isolated production app ***
+2026-09-19T00:16:07.3400074Z       [PASS] Open the isolated production app *** (1484 ms)
+2026-09-19T00:16:07.3401085Z       [STEP] Open Settings and wait for Problematic Files automatic detail
+2026-09-19T00:16:07.3401852Z       [PASS] Open Settings and wait for Problema...
+2026-09-19T00:16:07.3402887Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:16:07.3403457Z 
+2026-09-19T00:16:07.3404189Z     attachment #4: stacktrace.txt (text/plain) ─────────────────────────────────────────────────────
+2026-09-19T00:16:07.3405064Z     Error 1
+2026-09-19T00:16:07.3405628Z     Error: expect(received).toBe(expected) // Object.is equality
+2026-09-19T00:16:07.3406210Z     
+2026-09-19T00:16:07.3406614Z     Expected: "Crack The Skye Fixture 07 / 2009"
+2026-09-19T00:16:07.3407263Z     Received: "Crack The Skye Fixture 07"
+2026-09-19T00:16:07.3408014Z         at D:\a\AlbumHaven\AlbumHaven\tests\e2e\utilityProblematic...
+2026-09-19T00:16:07.3409213Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:16:07.3410214Z 
+2026-09-19T00:16:07.3411804Z     attachment #5: runtime-log.txt (text/plain) ────────────────────────────────────────────────────
+2026-09-19T00:16:07.3416041Z     [2026-09-19T00:16:00.592Z] console/info: [AlbumHaven][Utilities][Diagnostics] {kind: summary, itemCount: 18, ok: true, status: 200, error: null} @ http://127.0.0.1:4261/static/js/runtime-bundle.js?v=2a6c8ddbe216db979e6e:21823:10
+2026-09-19T00:16:07.3418044Z     [2026-09-19T00:16:00.827Z] console/info: [AlbumHaven][Utilities][Diagno...
+2026-09-19T00:16:07.3419270Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:16:07.3419845Z 
+2026-09-19T00:16:07.3421748Z     Error Context: test-results\playwright-performance-targets\problematic-files-focused\attempt-1\utilityProblematicFiles-FT-23c30-ummary-and-automatic-detail-utility-problematic-files\error-context.md
+2026-09-19T00:16:07.3423474Z 
+2026-09-19T00:16:07.3424295Z     attachment #8: trace (application/zip) ─────────────────────────────────────────────────────────
+2026-09-19T00:16:07.3426500Z     test-results\playwright-performance-targets\problematic-files-focused\attempt-1\utilityProblematicFiles-FT-23c30-ummary-and-automatic-detail-utility-problematic-files\trace.zip
+2026-09-19T00:16:07.3428242Z     Usage:
+2026-09-19T00:16:07.3428453Z 
+2026-09-19T00:16:07.3430202Z         npx playwright show-trace test-results\playwright-performance-targets\problematic-files-focused\attempt-1\utilityProblematicFiles-FT-23c30-ummary-and-automatic-detail-utility-problematic-files\trace.zip
+2026-09-19T00:16:07.3431553Z 
+2026-09-19T00:16:07.3431996Z     ────────────────────────────────────────────────────────────────────────────────────────────────
+2026-09-19T00:16:07.3432334Z 
+2026-09-19T00:16:07.3432422Z   1 failed
+2026-09-19T00:16:07.3433936Z     [utility-problematic-files] › tests\e2e\utilityProblematicFiles\utilityProblematicFiles.spec.js:22:3 › FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI › Problematic Files renders populated Postgres summary and automatic detail 
+2026-09-19T00:16:07.3435598Z 
+2026-09-19T00:16:07.3435855Z === Playwright Summary ===
+2026-09-19T00:16:07.3436455Z [31m[x][0m FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI
+2026-09-19T00:16:07.3437431Z   [31m[x][0m Problematic Files renders populated Postgres summary and automatic detail (4.4s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:16:07.3437997Z 
+2026-09-19T00:16:07.3438113Z Overall: 0/1 passed
+2026-09-19T00:16:07.3438339Z Failed tests:
+2026-09-19T00:16:07.3439326Z - FTC-UTIL-PROBLEMS-010 production-path utility problematic-files UI > Problematic Files renders populated Postgres summary and automatic detail (4.4s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:16:07.3447071Z 
+2026-09-19T00:16:07.3447298Z === Playwright Summary ===
+2026-09-19T00:16:07.3447819Z [31m[x][0m Problematic Files Utility
+2026-09-19T00:16:07.3448662Z   [31m[x][0m Problematic Files renders populated Postgres summary and automatic detail (4.4s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:16:07.3449249Z 
+2026-09-19T00:16:07.3449354Z Overall: 0/1 passed
+2026-09-19T00:16:07.3449579Z Failed tests:
+2026-09-19T00:16:07.3450358Z - Problematic Files Utility > Problematic Files renders populated Postgres summary and automatic detail (4.4s)[playwright-performance-reporter] flush-complete
+2026-09-19T00:16:08.0776628Z  pg_terminate_backend 
+2026-09-19T00:16:08.0777132Z ----------------------
+2026-09-19T00:16:08.0777460Z (0 rows)
+2026-09-19T00:16:08.0777620Z 
+2026-09-19T00:16:08.4634684Z DROP DATABASE
+2026-09-19T00:16:08.4657893Z DROP ROLE
+2026-09-19T00:16:08.4676677Z DROP ROLE
+2026-09-19T00:16:08.4700712Z DROP ROLE
+2026-09-19T00:16:08.7540186Z [31;1mWrite-Error: [0mD:\a\_temp\f3b327d2-aa48-422d-9625-5510dcacf04d.ps1:4[0m
+2026-09-19T00:16:08.7541310Z [31;1m[0m[36;1mLine |[0m
+2026-09-19T00:16:08.7541940Z [31;1m[0m[36;1m[36;1m   4 | [0m [36;1m.\scripts\ci\run-performance-shard.ps1 `[0m
+2026-09-19T00:16:08.7542785Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+2026-09-19T00:16:08.7544091Z [31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mPerformance shard completed with failed targets: utility-problematic-files, problematic-files-focused[0m
+2026-09-19T00:16:08.7797972Z ##[error]Process completed with exit code 1.
+2026-09-19T00:16:08.7999222Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:08.8000855Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:08.8001136Z with:
+2026-09-19T00:16:08.8001470Z   name: foundation-versions-performance-utility-problematic-files-1
+2026-09-19T00:16:08.8002269Z   path: D:\a\_temp\album-haven-performance-foundations\foundation-version-manifest-performance-utility-problematic-files.json
+2026-09-19T00:16:08.8002919Z   if-no-files-found: error
+2026-09-19T00:16:08.8003153Z   retention-days: 14
+2026-09-19T00:16:08.8003374Z   compression-level: 6
+2026-09-19T00:16:08.8003597Z   overwrite: false
+2026-09-19T00:16:08.8003807Z   include-hidden-files: false
+2026-09-19T00:16:08.8004046Z env:
+2026-09-19T00:16:08.8004377Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:08.8004809Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:08.8005177Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:08.8005714Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:08.8006362Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:08.8006916Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:08.8007382Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:08.8007855Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:08.8008279Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:08.8009123Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:08.8009631Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:08.8010068Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8010701Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8011486Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8012260Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8013127Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8014019Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8014849Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:08.8015381Z ##[endgroup]
+2026-09-19T00:16:08.9916946Z (node:3064) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:08.9917827Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:08.9969466Z With the provided path, there will be 1 file uploaded
+2026-09-19T00:16:08.9978157Z Artifact name is valid!
+2026-09-19T00:16:08.9980245Z Root directory input is valid!
+2026-09-19T00:16:09.2368644Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:09.2583895Z (node:3064) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:09.2811771Z Uploaded bytes 561
+2026-09-19T00:16:09.2939775Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:09.2944222Z SHA256 digest of uploaded artifact zip is 7ae9c9de9f7a3dfa42e78fac29cc2c63aace9db0673e281b5c11d712e1140c01
+2026-09-19T00:16:09.2945580Z Finalizing artifact upload
+2026-09-19T00:16:09.4636514Z Artifact foundation-versions-performance-utility-problematic-files-1.zip successfully finalized. Artifact ID 10573478467
+2026-09-19T00:16:09.4638528Z Artifact foundation-versions-performance-utility-problematic-files-1 has been successfully uploaded! Final size is 561 bytes. Artifact ID is 10573478467
+2026-09-19T00:16:09.4651244Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10573478467
+2026-09-19T00:16:09.4999828Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:09.5001291Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:09.5001587Z with:
+2026-09-19T00:16:09.5001856Z   name: performance-result-utility-problematic-files-1
+2026-09-19T00:16:09.5002359Z   path: test-results/playwright-performance-targets/utility-problematic-files
+2026-09-19T00:16:09.5002800Z   if-no-files-found: error
+2026-09-19T00:16:09.5003274Z   retention-days: 14
+2026-09-19T00:16:09.5003496Z   compression-level: 6
+2026-09-19T00:16:09.5003712Z   overwrite: false
+2026-09-19T00:16:09.5003924Z   include-hidden-files: false
+2026-09-19T00:16:09.5004158Z env:
+2026-09-19T00:16:09.5004478Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:09.5004901Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:09.5005265Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:09.5005769Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:09.5006605Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:09.5007198Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:09.5007696Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:09.5008178Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:09.5008603Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:09.5009027Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:09.5009471Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:09.5009898Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5010522Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5011310Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5012080Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5012942Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5013832Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5014652Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:09.5015183Z ##[endgroup]
+2026-09-19T00:16:09.6935495Z (node:5884) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:09.6936828Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:09.7096401Z With the provided path, there will be 19 files uploaded
+2026-09-19T00:16:09.7101971Z Artifact name is valid!
+2026-09-19T00:16:09.7103249Z Root directory input is valid!
+2026-09-19T00:16:09.8867031Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:09.9771551Z (node:5884) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:10.0243411Z Uploaded bytes 1106286
+2026-09-19T00:16:10.0384703Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:10.0389300Z SHA256 digest of uploaded artifact zip is ca4226bb04212c09aba9118108fecbed6f483e63ba4641cb272c2ceeb034cf6b
+2026-09-19T00:16:10.0390780Z Finalizing artifact upload
+2026-09-19T00:16:10.2155919Z Artifact performance-result-utility-problematic-files-1.zip successfully finalized. Artifact ID 10572928942
+2026-09-19T00:16:10.2158274Z Artifact performance-result-utility-problematic-files-1 has been successfully uploaded! Final size is 1106286 bytes. Artifact ID is 10572928942
+2026-09-19T00:16:10.2167583Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10572928942
+2026-09-19T00:16:10.2494233Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:10.2495688Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:10.2495982Z with:
+2026-09-19T00:16:10.2496280Z   name: performance-diagnostics-utility-problematic-files-1
+2026-09-19T00:16:10.2497406Z   path: test-results/playwright-performance-targets/utility-problematic-files
+test-results/playwright-artifacts
+
+2026-09-19T00:16:10.2498009Z   if-no-files-found: error
+2026-09-19T00:16:10.2498255Z   retention-days: 7
+2026-09-19T00:16:10.2498477Z   compression-level: 6
+2026-09-19T00:16:10.2498702Z   overwrite: false
+2026-09-19T00:16:10.2498925Z   include-hidden-files: false
+2026-09-19T00:16:10.2499175Z env:
+2026-09-19T00:16:10.2499505Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:10.2499955Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:10.2500336Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:10.2500859Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:10.2501523Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:10.2502095Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:10.2502590Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:10.2503071Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:10.2503502Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:10.2503943Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:10.2504395Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:10.2504841Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2505469Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2506263Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2507050Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2507927Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2508820Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2509661Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:10.2510430Z ##[endgroup]
+2026-09-19T00:16:10.4412515Z (node:8856) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:10.4413409Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:10.4615465Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-19T00:16:10.4620453Z The least common ancestor is D:\a\AlbumHaven\AlbumHaven\test-results. This will be the *** directory of the artifact
+2026-09-19T00:16:10.4622091Z With the provided path, there will be 19 files uploaded
+2026-09-19T00:16:10.4625912Z Artifact name is valid!
+2026-09-19T00:16:10.4627500Z Root directory input is valid!
+2026-09-19T00:16:10.6640899Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:10.7597443Z (node:8856) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:10.8091635Z Uploaded bytes 1108452
+2026-09-19T00:16:10.8222139Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:10.8223844Z SHA256 digest of uploaded artifact zip is 36b48a10f25d97eaa8333e2bff9bcce96838af94d26eb686474fe6d53e8198eb
+2026-09-19T00:16:10.8225909Z Finalizing artifact upload
+2026-09-19T00:16:11.0060883Z Artifact performance-diagnostics-utility-problematic-files-1.zip successfully finalized. Artifact ID 10572963846
+2026-09-19T00:16:11.0062943Z Artifact performance-diagnostics-utility-problematic-files-1 has been successfully uploaded! Final size is 1108452 bytes. Artifact ID is 10572963846
+2026-09-19T00:16:11.0072270Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10572963846
+2026-09-19T00:16:11.0386844Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:11.0388301Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:11.0388594Z with:
+2026-09-19T00:16:11.0388933Z   name: foundation-versions-performance-problematic-files-focused-1
+2026-09-19T00:16:11.0389714Z   path: D:\a\_temp\album-haven-performance-foundations\foundation-version-manifest-performance-problematic-files-focused.json
+2026-09-19T00:16:11.0390361Z   if-no-files-found: error
+2026-09-19T00:16:11.0390618Z   retention-days: 14
+2026-09-19T00:16:11.0390850Z   compression-level: 6
+2026-09-19T00:16:11.0391083Z   overwrite: false
+2026-09-19T00:16:11.0391320Z   include-hidden-files: false
+2026-09-19T00:16:11.0391575Z env:
+2026-09-19T00:16:11.0391916Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:11.0392379Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:11.0392770Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:11.0393299Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:11.0393957Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:11.0394520Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.0394997Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:11.0395481Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.0395916Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.0396340Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.0396791Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:11.0397222Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0398047Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0398838Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0399614Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0400484Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0401378Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0402213Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.0402760Z ##[endgroup]
+2026-09-19T00:16:11.2353630Z (node:4756) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:11.2354636Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:11.2418342Z With the provided path, there will be 1 file uploaded
+2026-09-19T00:16:11.2423584Z Artifact name is valid!
+2026-09-19T00:16:11.2425692Z Root directory input is valid!
+2026-09-19T00:16:11.4641665Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:11.4838804Z (node:4756) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:11.5048029Z Uploaded bytes 561
+2026-09-19T00:16:11.5175794Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:11.5180437Z SHA256 digest of uploaded artifact zip is ded28d556ec8b62cb1f8edc94fa66c596ef4890248dd9ceafdde606b4635a7b0
+2026-09-19T00:16:11.5181653Z Finalizing artifact upload
+2026-09-19T00:16:11.7167692Z Artifact foundation-versions-performance-problematic-files-focused-1.zip successfully finalized. Artifact ID 10572839206
+2026-09-19T00:16:11.7170272Z Artifact foundation-versions-performance-problematic-files-focused-1 has been successfully uploaded! Final size is 561 bytes. Artifact ID is 10572839206
+2026-09-19T00:16:11.7180419Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10572839206
+2026-09-19T00:16:11.7488228Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:11.7489720Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:11.7490028Z with:
+2026-09-19T00:16:11.7490331Z   name: performance-result-problematic-files-focused-1
+2026-09-19T00:16:11.7490881Z   path: test-results/playwright-performance-targets/problematic-files-focused
+2026-09-19T00:16:11.7491436Z   if-no-files-found: error
+2026-09-19T00:16:11.7491689Z   retention-days: 14
+2026-09-19T00:16:11.7491924Z   compression-level: 6
+2026-09-19T00:16:11.7492158Z   overwrite: false
+2026-09-19T00:16:11.7492385Z   include-hidden-files: false
+2026-09-19T00:16:11.7492656Z env:
+2026-09-19T00:16:11.7493004Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:11.7493447Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:11.7493830Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:11.7494361Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:11.7495020Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:11.7495583Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.7496809Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:11.7497309Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.7497749Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.7498178Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:11.7498646Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:11.7499089Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7499713Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7500514Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7501551Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7502692Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7503625Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7504467Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:11.7505017Z ##[endgroup]
+2026-09-19T00:16:11.9512376Z (node:8288) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:11.9513245Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:11.9677483Z With the provided path, there will be 19 files uploaded
+2026-09-19T00:16:11.9682704Z Artifact name is valid!
+2026-09-19T00:16:11.9684281Z Root directory input is valid!
+2026-09-19T00:16:12.1690139Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:12.2567540Z (node:8288) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:12.3303882Z Uploaded bytes 1074598
+2026-09-19T00:16:12.3685334Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:12.3690038Z SHA256 digest of uploaded artifact zip is 823ac511e9e873a946143b7b7fae7af48025228991b48a3cbdff06186599e64c
+2026-09-19T00:16:12.3691209Z Finalizing artifact upload
+2026-09-19T00:16:12.5430859Z Artifact performance-result-problematic-files-focused-1.zip successfully finalized. Artifact ID 10573328699
+2026-09-19T00:16:12.5433648Z Artifact performance-result-problematic-files-focused-1 has been successfully uploaded! Final size is 1074598 bytes. Artifact ID is 10573328699
+2026-09-19T00:16:12.5444472Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10573328699
+2026-09-19T00:16:12.5774738Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+2026-09-19T00:16:12.5776332Z ##[group]Run actions/upload-artifact@v4
+2026-09-19T00:16:12.5776656Z with:
+2026-09-19T00:16:12.5776971Z   name: performance-diagnostics-problematic-files-focused-1
+2026-09-19T00:16:12.5777769Z   path: test-results/playwright-performance-targets/problematic-files-focused
+test-results/playwright-artifacts
+
+2026-09-19T00:16:12.5778577Z   if-no-files-found: error
+2026-09-19T00:16:12.5778842Z   retention-days: 7
+2026-09-19T00:16:12.5779082Z   compression-level: 6
+2026-09-19T00:16:12.5779316Z   overwrite: false
+2026-09-19T00:16:12.5779558Z   include-hidden-files: false
+2026-09-19T00:16:12.5780050Z env:
+2026-09-19T00:16:12.5780405Z   ALBUM_HAVEN_EXPECTED_FFMPEG_VERSION: 7.1-essentials_build-www.gyan.dev
+2026-09-19T00:16:12.5780853Z   ALBUM_HAVEN_FIXTURE_RELEASE: fixtures-v1.0.23
+2026-09-19T00:16:12.5781252Z   ALBUM_HAVEN_FIXTURE_PROFILE: utility-problematic-files
+2026-09-19T00:16:12.5781783Z   ALBUM_HAVEN_FIXTURE_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35
+2026-09-19T00:16:12.5782450Z   ALBUM_HAVEN_MEDIA_ROOT: D:\a\_temp\album-haven-fixtures-7ab6efee0a934993b54bd3e39a002c35\media
+2026-09-19T00:16:12.5783036Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:12.5783526Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.11.9\x64/lib/pkgconfig
+2026-09-19T00:16:12.5784026Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:12.5784478Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:12.5784933Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.11.9\x64
+2026-09-19T00:16:12.5785435Z   PGPASSFILE: D:\a\_temp\album-haven-postgres-p_35408558207_1_1.pgpass
+2026-09-19T00:16:12.5785901Z   ALBUM_HAVEN_CI_DATABASE: album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5786539Z   DATABASE_MIGRATOR_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5787349Z   DATABASE_APP_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5788155Z   DATABASE_READONLY_URL: postgresql://album_haven_readonly_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5789052Z   ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL: postgresql://album_haven_migrator_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5789970Z   ALBUM_HAVEN_FAKE_E2E_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5790838Z   ALBUM_HAVEN_APP_DATABASE_URL: postgresql://album_haven_app_p_35408558207_1_1@127.0.0.1/album_haven_ci_p_35408558207_1_1
+2026-09-19T00:16:12.5791410Z ##[endgroup]
+2026-09-19T00:16:12.7757644Z (node:5980) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-09-19T00:16:12.7758523Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-09-19T00:16:12.7932000Z Multiple search paths detected. Calculating the least common ancestor of all paths
+2026-09-19T00:16:12.7936233Z The least common ancestor is D:\a\AlbumHaven\AlbumHaven\test-results. This will be the *** directory of the artifact
+2026-09-19T00:16:12.7937309Z With the provided path, there will be 19 files uploaded
+2026-09-19T00:16:12.7943913Z Artifact name is valid!
+2026-09-19T00:16:12.7945781Z Root directory input is valid!
+2026-09-19T00:16:12.9990324Z Beginning upload of artifact content to blob storage
+2026-09-19T00:16:13.0886005Z (node:5980) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-09-19T00:16:13.1373031Z Uploaded bytes 1076764
+2026-09-19T00:16:13.1501288Z Finished uploading artifact content to blob storage!
+2026-09-19T00:16:13.1503155Z SHA256 digest of uploaded artifact zip is fd6dedad8edb9114632e2b15d7a17d1a6515b2c467fc90827824cc9f8288e5d1
+2026-09-19T00:16:13.1504719Z Finalizing artifact upload
+2026-09-19T00:16:13.3234697Z Artifact performance-diagnostics-problematic-files-focused-1.zip successfully finalized. Artifact ID 10573088864
+2026-09-19T00:16:13.3237945Z Artifact performance-diagnostics-problematic-files-focused-1 has been successfully uploaded! Final size is 1076764 bytes. Artifact ID is 10573088864
+2026-09-19T00:16:13.3247368Z Artifact download URL: https://github.com/idanilovqa/AlbumHaven/actions/runs/35408558207/artifacts/10573088864
+2026-09-19T00:16:13.3864695Z Post job cleanup.
+2026-09-19T00:16:13.5869941Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T00:16:13.6156641Z git version 2.55.0.windows.5
+2026-09-19T00:16:13.6226412Z Temporarily overriding HOME='D:\a\_temp\691f5619-55b2-4f6e-afab-e88d8dfad918' before making global git config changes
+2026-09-19T00:16:13.6227416Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T00:16:13.6238056Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven\.trusted-ci
+2026-09-19T00:16:13.6550341Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:16:13.6861934Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:16:14.2356097Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:16:14.2665095Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:16:14.8549029Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:16:14.8886125Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:16:15.4812718Z Post job cleanup.
+2026-09-19T00:16:15.6871016Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-19T00:16:15.7145216Z git version 2.55.0.windows.5
+2026-09-19T00:16:15.7210885Z Temporarily overriding HOME='D:\a\_temp\b6f302e7-4299-4bc0-80d6-40ecf9e0d4d2' before making global git config changes
+2026-09-19T00:16:15.7212009Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-19T00:16:15.7223021Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\AlbumHaven\AlbumHaven
+2026-09-19T00:16:15.7538611Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-19T00:16:15.7863928Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-19T00:16:16.3617501Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-19T00:16:16.3925769Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-19T00:16:16.9373366Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-19T00:16:16.9685931Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-19T00:16:17.5520073Z Cleaning up orphan processes
+2026-09-19T00:16:17.6659899Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/setup-node@v4, actions/setup-python@v5, actions/upload-artifact@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

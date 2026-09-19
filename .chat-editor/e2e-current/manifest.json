@@ -1,0 +1,106 @@
+{
+  "base": "3e34e1f57716bdfcd2dcea7959bc1213af7e13c6",
+  "head": "18ea588e352c53c6ed6c705d5ccb1678023695f6",
+  "files": [
+    "docs/superpowers/plans/2026-09-09-settings-refactor.md",
+    "music_app/static/app.js",
+    "music_app/static/css/appearance-backgrounds.css",
+    "music_app/static/css/navigation-tree.css",
+    "music_app/static/js/appearance-backgrounds.js",
+    "music_app/static/js/button-component.js",
+    "music_app/static/js/runtime-bundle.js",
+    "music_app/static/js/runtime/browser-dialog-helpers.js",
+    "music_app/static/js/runtime/core-state-and-helpers.js",
+    "music_app/static/js/runtime/utility-list-builders.js",
+    "tests/components/appearanceWorkspace.spec.js",
+    "tests/components/buttonInteractionOutline.spec.js",
+    "tests/components/playerViews.spec.js",
+    "tests/components/playerViews.spec.js-snapshots/expanded-regular-player-win32.png",
+    "tests/components/playerViews.spec.js-snapshots/expanded-waveform-player-win32.png",
+    "tests/e2e/actions/coverLookupActions.js",
+    "tests/e2e/actions/globalPlayerActions.js",
+    "tests/e2e/actions/settingsModalAppBarActions.js",
+    "tests/e2e/actions/trackModalActions.js",
+    "tests/e2e/actions/utilityAppearanceActions.js",
+    "tests/e2e/actions/utilityLogHistoryActions.js",
+    "tests/e2e/actions/utilityProblematicFilesActions.js",
+    "tests/e2e/helpers/visibleAlbumMetadata.js",
+    "tests/e2e/performance/gaplessPlayback.spec.js",
+    "tests/e2e/phase7/admin-management/adminManagement.spec.js",
+    "tests/e2e/poms/globalPlayer.js",
+    "tests/e2e/poms/settingsIntegrations.js",
+    "tests/e2e/poms/settingsModalAppBar.js",
+    "tests/e2e/poms/trackModal.js",
+    "tests/e2e/poms/utilityLogHistoryTab.js",
+    "tests/e2e/poms/utilityProblematicFilesTab.js",
+    "tests/e2e/scanPerformance/scanPerformance.spec.js",
+    "tests/e2e/specs/loops.functional.spec.js",
+    "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
+    "tests/e2e/specs/playerViewModes.spec.js",
+    "tests/e2e/specs/searchTreeCorrectness.spec.js",
+    "tests/e2e/specs/settingsIntegrations.functional.spec.js",
+    "tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js",
+    "tests/js/album-card-metadata.test.js",
+    "tests/js/appearance-fixture.test.js",
+    "tests/js/e2e-action-production-paths.test.js",
+    "tests/js/e2e-settings-contracts.test.js",
+    "tests/js/runtime/alert-components.test.js",
+    "tests/js/runtime/app-form-dialog.test.js",
+    "tests/js/runtime/app-loader-bundle.test.js",
+    "tests/js/runtime/appearance-palettes.test.js",
+    "tests/js/runtime/appearance-v009-player-isolation.test.js",
+    "tests/js/runtime/appearance-waveform-recents.test.js",
+    "tests/js/runtime/button-component.test.js",
+    "tests/js/runtime/gallery-tree-selection-performance.test.js",
+    "tests/js/runtime/library-loader-visibility.test.js",
+    "tests/js/runtime/library-settings.test.js",
+    "tests/js/runtime/player-and-waveform.test.js",
+    "tests/js/runtime/utility-suggested-edits.test.js",
+    "tests/js/settings-menu-theme-measurement.test.js",
+    "tests/js/track-modal-actions.test.js"
+  ],
+  "deleted": [],
+  "parts": [
+    "source-update-0.b64",
+    "source-update-1.b64"
+  ],
+  "sha256": "04aea36575ca00d4788fc510668e15642b297911c614eb73b19d025f609caa1c",
+  "logs": [
+    {
+      "job_id": 105803412142,
+      "sha256": "8b070d3885ca9b6cdaac3f7ca2eee544f4eecfa7ae8e763a9aa1c06293537fda",
+      "bytes": 90300,
+      "lines": 1176
+    },
+    {
+      "job_id": 105803412178,
+      "sha256": "c43088ec2f2aeb826dad2fdb79bbc7b03d02299701d4bd1a7a196dc86e7d763c",
+      "bytes": 352115,
+      "lines": 2584
+    },
+    {
+      "job_id": 105803412190,
+      "sha256": "574ab7168267486b81293b6d967c79203ba43a7ebfe9a3cce01719b65cb589ba",
+      "bytes": 147561,
+      "lines": 1731
+    },
+    {
+      "job_id": 105803412242,
+      "sha256": "92f0277221d42e13a63e7312ff0fc0edb2f0329bede595c4b8b25d1768515b7a",
+      "bytes": 771062,
+      "lines": 4579
+    },
+    {
+      "job_id": 105803412244,
+      "sha256": "edc58e752fe64268091ee7897b621a70794a8e51c4521f08341efbc787f70e85",
+      "bytes": 907472,
+      "lines": 4044
+    },
+    {
+      "job_id": 105803412324,
+      "sha256": "5e321376bdb298d2f9cd5042898b651fee5bea9b7dac1a8b5b42b54d6cedcb06",
+      "bytes": 377661,
+      "lines": 2882
+    }
+  ]
+}

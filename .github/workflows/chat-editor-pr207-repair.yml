@@ -1,0 +1,97 @@
+name: Verify and publish PR207 repair
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-pr207-repair.yml, .chat-editor/pr207-repair.patch]
+permissions:
+  contents: write
+concurrency:
+  group: pr207-repair-publication
+  cancel-in-progress: false
+jobs:
+  verify_publish:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      EXPECTED_HEAD: b3283d2ac7a3dc7951196a9e611785de89a89e1c
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Verify exact source and output identities
+        shell: python
+        run: |
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          head = os.environ['EXPECTED_HEAD']
+          branch = os.environ['TARGET_BRANCH']
+          remote = subprocess.check_output(['git','ls-remote','--exit-code','origin','refs/heads/'+branch],text=True).split()[0]
+          assert remote == head, 'PR head changed; refusing concurrent overwrite'
+          patch = subprocess.check_output(['git','show','HEAD:.chat-editor/pr207-repair.patch'])
+          assert len(patch) == 9897
+          assert hashlib.sha256(patch).hexdigest() == '1193e7fa1b42bf0e1cbff48d902393faf34d15ac5e9ddca2a393a15e9b3ea68c'
+          root = Path(os.environ['RUNNER_TEMP'])
+          (root/'pr207-repair.patch').write_bytes(patch)
+          files = {
+            'music_app/static/css/runtime/utilities.css': ['c483e5f8bba0b0df849c5f75211f90c6d765d2e6','6fc8297cfcadd4b1a2e100c722a944e2b1920d56'],
+            'scripts/run-playwright.cjs': ['5c197124ac7369460e3c722dc51ea9756f709be1','ee0405630e69178fe9bcaa84d7cb55adf2e21a06'],
+            'tests/e2e/actions/utilityLoopsActions.js': ['3a601dad9982a5dd74329042eb0f9189911da406','1201cd75fb3f4eec29fb452bbbfb206d4ccab177'],
+            'tests/js/ci-fixture-data-contracts.test.js': ['096fcc50340c2683319801fd8a4ae41475490905','67f4253e594c5b67cb8703560521595803cc675a'],
+            'tests/js/pr207-ci-repair-contracts.test.js': [None,'f9abf275487561c5da60b571773d5d975b2b6209'],
+          }
+          subprocess.run(['git','switch','--detach',head],check=True)
+          subprocess.run(['git','config','core.autocrlf','false'],check=True)
+          subprocess.run(['git','checkout-index','--force','--all'],check=True)
+          def blob(data): return hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+          for path,(before,after) in files.items():
+            if before is None:
+              assert not Path(path).exists(), path
+            else:
+              data = subprocess.check_output(['git','show','HEAD:'+path])
+              assert blob(data) == before and Path(path).read_bytes() == data, path
+          subprocess.run(['git','apply','--check','--whitespace=error-all',str(root/'pr207-repair.patch')],check=True)
+          subprocess.run(['git','apply','--whitespace=error-all',str(root/'pr207-repair.patch')],check=True)
+          for path,(_,after) in files.items(): assert blob(Path(path).read_bytes()) == after, path
+          (root/'pr207-files.json').write_text(json.dumps(files),encoding='utf-8')
+          print('All five source/output identities and exact patch bytes verified.')
+      - run: npm ci
+      - name: Install Python prerequisites for runner contract checks
+        run: python -m pip install -r requirements.txt
+      - name: Verify complete affected runner and fixture contract files
+        run: node --test --test-concurrency=1 tests/js/pr207-ci-repair-contracts.test.js tests/js/run-playwright.test.js tests/js/ci-fixture-data-contracts.test.js
+      - name: Verify native action helpers and production parity
+        run: |
+          node --test --test-concurrency=1 tests/js/e2e-pr205-followup-contracts.test.js tests/js/e2e-run192-contracts.test.js tests/js/e2e-settings-contracts.test.js
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/check-e2e-production-parity.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish only the five reviewed files to the actual PR branch
+        shell: python
+        run: |
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          files = json.loads((Path(os.environ['RUNNER_TEMP'])/'pr207-files.json').read_text())
+          for path,(_,expected) in files.items():
+            data = Path(path).read_bytes()
+            assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == expected, path
+          subprocess.run(['git','diff','--check'],check=True)
+          subprocess.run(['git','add','--',*sorted(files)],check=True)
+          staged = subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert sorted(staged) == sorted(files), staged
+          for path,(_,expected) in files.items():
+            assert subprocess.check_output(['git','rev-parse',':'+path],text=True).strip() == expected, path
+          subprocess.run(['git','config','user.name','github-actions[bot]'],check=True)
+          subprocess.run(['git','config','user.email','41898282+github-actions[bot]@users.noreply.github.com'],check=True)
+          subprocess.run(['git','commit','-m','fix: finish PR3 mobile controls and bounded runner finalization'],check=True)
+          remote = subprocess.check_output(['git','ls-remote','--exit-code','origin','refs/heads/'+os.environ['TARGET_BRANCH']],text=True).split()[0]
+          assert remote == os.environ['EXPECTED_HEAD'], 'PR head moved before publication'
+          subprocess.run(['git','push','origin','HEAD:refs/heads/'+os.environ['TARGET_BRANCH']],check=True)
+          print('PUBLISHED_PR_HEAD='+subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip())

@@ -10,7 +10,7 @@ from music_app.services.listen_history_postgres import PendingListenEntry
 from music_app.services.lastfm_listen_sync import record_retry_summary
 from music_app.services.lastfm_sync_bridge import process_pending_scrobble_attempt, record_playback_session_complete
 from music_app.services.listen_history import (load_pending_scrobble_entries, update_listen_history_entry,
-    append_listen_history_entry, is_meaningful_listen_session)
+    is_meaningful_listen_session)
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.lastfm import lastfm_api_enabled, scrobble_track, get_saved_lastfm_session
 
@@ -76,7 +76,11 @@ def retry_pending_lastfm_scrobbles(
                     lastfm_session=session, user_timezone=str(entry.get("user_timezone") or "UTC"),
                     normalize_playback_track_payload=normalize_playback_track_payload,
                     is_meaningful_listen_session=is_meaningful_listen_session,
-                    append_listen_history_entry=append_listen_history_entry,
+                    # Refresh the trusted receipt inside the provider guard. A retry
+                    # must not revalidate an indexed path that may have changed.
+                    append_listen_history_entry=lambda config, _entry, owner=pending, **scope: update_listen_history_entry(
+                        config, owner.entry['id'], {}, row_id=owner.row_id, **scope,
+                    ),
                     update_listen_history_entry=update_listen_history_entry,
                     scrobble_track=scrobble_track,
                     log_lastfm_scrobble_event=lambda action, *, level, payload, error="", owner=pending: log_app_event(

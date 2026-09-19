@@ -70,3 +70,18 @@ def test_track_counts_include_measured_receipts_and_follow_indexed_file_rename(l
             renamed_path = own['path'] + '.renamed'
             connection.execute('update library.local_track_files set private_path=%s where track_id=%s', (renamed_path, own['track_id']))
             assert counts(renamed_path) == ([2, 2] if consumer == 'track_lookup' else [2])
+            # A deleted measured identity must not attach to a different track
+            # that reuses its key and path. Legacy key-based history still counts.
+            connection.execute('delete from library.local_tracks where id=%s', (own['track_id'],))
+            retained = connection.execute(
+                "select track_id from integration.listen_history where account_id=%s and library_id=%s and metadata->'source_payload'->>'id'=%s",
+                (own['account_id'], own['library_id'], accepted_row['id']),
+            ).fetchone()
+            assert retained is not None and retained['track_id'] is None
+            replacement = connection.execute(
+                "insert into library.local_tracks(library_id,album_id,artist_id,track_key,title,duration_seconds) values(%s,%s,%s,%s,'Replacement',120) returning id",
+                (own['library_id'], album_id, artist_id, track_key),
+            ).fetchone()['id']
+            assert replacement != own['track_id']
+            connection.execute('insert into library.local_track_files(track_id,private_path) values(%s,%s)', (replacement, renamed_path))
+            assert counts(renamed_path) == ([1, 1] if consumer == 'track_lookup' else [1])

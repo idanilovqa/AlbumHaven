@@ -40,3 +40,35 @@ This is one corrective update to the already accumulated branch, following prese
 ## Results
 
 Pending implementation and focused verification. No checklist counters in the original feature plan were changed.
+
+## September 19 remote-repair audit continuation
+
+The owner requested review of all remote repairs, missing E2E coverage, fixes through a green full pipeline, and a local manual-test server on port 5001. Merge and release remain outside scope. The reviewed remote range is 177fb56..4995f3c; the shared ChatGPT conversation confirms publication but does not establish a green pipeline.
+
+This corrective delivery retains RF1-RF6 and the approved current-stack UI. Prerequisites: complete remote audit and full CI failure inventory. Run 35450899991 at 4995f3c completed with four failures: Python concurrent temporary-directory ownership, saved-loop boundary interception, integration root-save scan completion, and synthetic artist-family unselection stability.
+
+Acceptance cases:
+- RF2: deleted measured-track history cannot count toward a replacement identity; legacy aliases still count consistently in both consumers.
+- RF4: deleted or renamed pending sources cannot poison valid retries; retained history and provider receipt protection survive, and new client submissions retain source validation.
+- RF5: Problems-to-Logs navigation preserves the shared filter icon; Logs directional keys never invoke Problems filtering; Period activation works.
+- RF6: expanding and collapsing a searched loop group preserves the filter and playback state.
+- CI repairs: reproduce each of the four failed contracts and fix its responsible product or proven harness seam without weakening assertions or limits.
+
+Compatibility and rollback: preserve database history and existing public behavior; no schema rewrite, runtime fixture shortcuts, or new persistence mechanism. Revert corrective code if necessary while retaining existing migration history. Add tests at the existing seams and extend current E2E cases. Separate test-author, implementation, verification, review, and commit/push handoffs. Run one Python test process at a time and no concurrent JavaScript/Python waves. Use focused local checks, then the full native PR pipeline with skip_reviews and without skip_tests. The checkpoint is a committed, pushed, fully green candidate; only then start the normal local app on 5001 for owner testing.
+
+### Audit evidence and focused verification
+
+- Shared conversation read through the rendered page; remote publication claims were checked against Git and the completed native pipeline, not treated as a green result.
+- Confirmed additional defects: orphan measured-history key reuse, stale measured-retry source validation, destructive shared filter-button text replacement, redundant watcher-health DOM mutation, and a native loop action helper that never left the expanded control covering the handle.
+- Regression-first backend check after existing migration 0073: 3 failed / 1 passed. Corrective focused check: 11 passed. Exact Python harness case passed locally; its complete focused file passed 18 tests. Its assertion now reports ownership evidence without changing the predicate; the CI-only ownership failure remains unproven locally.
+- Watcher DOM regression reproduced before the fix. Corrected focused JavaScript checks: 223 passed. Runtime bundle, production parity, syntax, and diff checks passed.
+- Real Postgres-backed E2E: FTC-SETTINGS-S02, original saved-loop composite, and FTC-SETTINGS-L02 passed with unchanged limits. Added S02/L02 assertions cover the RF5/RF6 transitions and continuity. Owned app/provider processes, ports, databases, and roles were cleaned up after each completed wave.
+- Synthetic NAV026 investigation narrowed the actual mismatch to libraryLoaderMutationCount=3 rather than zero; other card/family fields printed by ObjectContaining were not failed expectations. The watcher helper now avoids same-value writes while retaining warning and recovery transitions. Focused browser verification is pending.
+- I01 trace showed scan complete (1090/1090, scan_in_progress=false, relations_in_progress=false). The watcher warning appeared when a watched root became unavailable and intercepted Save; the final cleanup wait masked that click failure. Its existing warning dismissal occurs after Save. Exact reorder approval was requested under the protected E2E-flow rule; I01 remains unchanged pending the owner response.
+- Temporary repair workflows have no demonstrated merge-gate bypass. Their token-generated pushes may suppress native pipeline events; this corrective delivery will use a normal authenticated push. Stale diagnostic automation was not removed as unrelated cleanup.
+
+No full local suite, merge, or release was performed. The final native full pipeline and port-5001 manual-test startup remain pending.
+
+### Focused gallery completion
+
+FTC-SEARCH-NAV-026 passed 1/1 in the real browser, including unselection with zero loader mutations and no default-gallery request. The outer performance-target wrapper exited 1 because the exact regression selection excluded the target's metric-producing scenario (reporter-finalization classification: processStatus=0, no target report, metricsComplete=false); this is not recorded as a complete performance-target pass. The original browser regression is proven locally; full target metrics remain for the complete native CI pipeline. Its owned application/provider processes, ports 57564/57566, database, and roles were cleaned up. The final diff reconciliation found no further actionable issue in the corrective code. I01 remains unchanged pending the exact test-order approval.

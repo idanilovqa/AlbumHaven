@@ -83,6 +83,25 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
   await expect(shell.filterMenu).toBeHidden();
   await expect(shell.filters).toBeFocused();
   await expect(shell.activeRow()).toHaveAttribute('data-problematic-album-key', key);
+  await expect(shell.filterIcon).toBeVisible();
+  await shell.tab('log-history').click();
+  await expect(shell.filters).toHaveAccessibleName('Period');
+  await expect(shell.filterIcon).toBeVisible();
+  for (const navigationKey of ['ArrowDown', 'ArrowUp', 'Home', 'End']) {
+    await shell.filters.press(navigationKey);
+    await expect(shell.filters).toBeEnabled();
+    await expect(shell.filterMenu).toBeHidden();
+    await expect(shell.periodDialog).toBeHidden();
+    await expect(shell.filters).toBeFocused();
+  }
+  await shell.filters.press('Enter');
+  await expect(shell.periodDialog).toBeVisible();
+  await shell.periodDialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(shell.periodDialog).toBeHidden();
+  await shell.tab('problematic-files').click();
+  await expect(shell.filterIcon).toBeVisible();
+  await expect(shell.filter('Missing cover art')).toHaveAttribute('aria-selected', 'true');
+  await expect(shell.activeRow()).toHaveAttribute('data-problematic-album-key', key);
   await shell.search.fill('');
   await expect(shell.activeRow()).toHaveAttribute('data-problematic-album-key', key);
   await shell.filters.press('ArrowDown');

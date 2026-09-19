@@ -178,11 +178,17 @@ test('S03 filter menu uses the shared trigger anchor and clears it when closed',
   assert.equal(els.problemFilterMenu.hidden, true);
 });
 
-test('S03 the integrated search control is labelled Filters', () => {
+test('S03 the integrated search control labels Filters without replacing its shared icon', () => {
   const { context, els } = harness();
   context.getProblemReasonTypes = () => ['Missing year'];
+  Object.defineProperty(els.problemFilterButton, 'textContent', {
+    set() { assert.fail('Filters must preserve the shared search-filter icon'); },
+  });
   context.renderProblemFilterControls(els);
-  assert.equal(els.problemFilterButton.textContent, 'Filters');
+  assert.equal(els.problemFilterButton.getAttribute('aria-label'), 'Filters');
+  context.state.utility.selectedProblemFilters = ['Missing year'];
+  context.renderProblemFilterControls(els);
+  assert.equal(els.problemFilterButton.getAttribute('aria-label'), 'Filters (1)');
 });
 
 const album = { key: 'test-album', album: 'Test album', name: 'Test album', album_artist: 'Test artist', artist: 'Test artist', year: 2024, tracks: [], problem_reasons: [] };

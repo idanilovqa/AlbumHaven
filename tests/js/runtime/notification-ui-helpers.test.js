@@ -435,3 +435,34 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   assert.equal(logHistoryLink.dataset.logHistoryEntryId, '');
   assert.equal(alertClasses.has('has-log-history-link'), false);
 });
+
+test('scan watcher health leaves stable loader DOM untouched and applies health transitions', () => {
+  const { context } = createContext();
+  const values = { hidden: true, innerHTML: '' };
+  const writes = [];
+  const host = {};
+  for (const property of Object.keys(values)) {
+    Object.defineProperty(host, property, {
+      get: () => values[property],
+      set: value => { writes.push(property); values[property] = value; },
+    });
+  }
+  context.document.getElementById = id => id === 'library-loader-watch-health' ? host : null;
+  context.buildOnPageAlertHtml = config => JSON.stringify(config);
+  const warning = { watcher_health: { state: 'warning', problems: [{ state: 'root_unavailable' }] } };
+  context.syncScanLibraryWatcherHealth(warning, false);
+  context.syncScanLibraryWatcherHealth({}, false);
+  assert.deepEqual(writes, [], 'background health updates must not mutate the hidden loader');
+  context.syncScanLibraryWatcherHealth({}, true);
+  assert.equal(host.hidden, false);
+  assert.match(host.innerHTML, /became unavailable/);
+  writes.length = 0;
+  context.syncScanLibraryWatcherHealth({}, true);
+  assert.deepEqual(writes, [], 'unchanged visible warning must retain its DOM');
+  context.syncScanLibraryWatcherHealth({ watcher_health: { state: 'healthy', problems: [] } }, true);
+  assert.equal(host.hidden, true);
+  assert.equal(host.innerHTML, '');
+  writes.length = 0;
+  context.syncScanLibraryWatcherHealth({}, true);
+  assert.deepEqual(writes, [], 'unchanged recovery state must retain its DOM');
+});

@@ -349,7 +349,7 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
           from library.local_tracks t join bootstrap_context b on b.library_id=t.library_id
           join library.local_track_files f on f.track_id=t.id
         ), accepted as (
-          select h.id,h.track_id,h.track_key
+          select h.id,h.track_id,h.track_key,h.measurement_version
           from integration.listen_history h join bootstrap_context b
             on b.library_id=h.library_id and b.account_id=h.account_id
           where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', 'rendered_local_listen_session')
@@ -357,14 +357,14 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
         )
         select requested.track_ref as track_key,count(distinct h.id)::int as scrobble_count
         from unnest(%(track_refs)s::text[]) as requested(track_ref)
-        join accepted h on h.track_key=requested.track_ref or exists (
+        join accepted h on (h.measurement_version is null and h.track_key=requested.track_ref) or exists (
           select 1 from track_aliases requested_alias
           where requested_alias.track_ref=requested.track_ref
-            and (requested_alias.track_id=h.track_id or exists (
+            and (requested_alias.track_id=h.track_id or (h.measurement_version is null and exists (
               select 1 from track_aliases historical_alias
               where historical_alias.track_id=requested_alias.track_id
                 and historical_alias.track_ref=h.track_key
-            ))
+            )))
         )
         group by requested.track_ref order by requested.track_ref;
     """

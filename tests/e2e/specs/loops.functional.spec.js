@@ -168,6 +168,28 @@ test('FTC-SETTINGS-L02 native panel drag persists order while another loop retai
   const rangeAfter = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
   expect([rangeAfter.startSeconds, rangeAfter.endSeconds]).toEqual([rangeBefore.startSeconds, rangeBefore.endSeconds]);
   await utilityLoopsActions.expectCreateAnotherLoopEditorActiveByName(names[0]);
+  const tree = utilityLoopsActions.utilityLoopsTab.loopTree;
+  const search = utilityLoopsActions.utilityLoopsTab.sidebar.search;
+  await search.fill(names[0]);
+  const toggle = tree.collapseToggleForGroup(tree.groupButtonByTitle(LOOP_TRACK_TITLE));
+  for (const expanded of ['false', 'true', 'false', 'true']) {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', expanded);
+    await expect(search).toHaveValue(names[0]);
+    await expect(tree.childButtons.filter({ hasText: names[1] })).toHaveCount(0);
+    await expect(tree.childButtons.filter({ hasText: names[2] })).toHaveCount(0);
+    if (expanded === 'true') {
+      await expect(tree.childButtons).toHaveCount(1);
+      await expect(tree.childButtons).toContainText(names[0]);
+    }
+  }
+  const filteredContinuity = await utilityLoopsActions.readLoopContinuity(audio, playingId);
+  expect(filteredContinuity.sameNode).toBe(true);
+  expect(filteredContinuity.snapshot.paused).toBe(false);
+  const filteredRange = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect([filteredRange.startSeconds, filteredRange.endSeconds]).toEqual([rangeBefore.startSeconds, rangeBefore.endSeconds]);
+  await utilityLoopsActions.expectCreateAnotherLoopEditorActiveByName(names[0]);
+  await search.fill('');
   await page.reload();
   await galleryActions.waitForGalleryReady();
   await settingsModalAppBarActions.openSettings();

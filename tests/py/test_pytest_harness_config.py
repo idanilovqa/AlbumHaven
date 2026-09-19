@@ -153,7 +153,7 @@ def test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_
     assert all(result["generated"] is True for result in results)
     assert all(result["session_temp_exists"] is True for result in results)
     assert all(result["appdata_exists"] is True for result in results)
-    assert all(result["appdata_is_session_owned"] is True for result in results)
+    assert all(result["appdata_is_session_owned"] is True for result in results), results
     assert all(result["config_data_dir_matches"] is True for result in results)
     assert all(
         set(result["temp_environment"].values()) == {result["session_temp"]}

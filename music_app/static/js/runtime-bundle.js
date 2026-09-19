@@ -3268,18 +3268,26 @@ function syncScanLibraryWatcherHealth(data = {}, scanPageVisible = Boolean(typeo
   if (Object.prototype.hasOwnProperty.call(data, 'watcher_health')) libraryWatcherHealth = data.watcher_health;
   const host = document.getElementById('library-loader-watch-health');
   if (!host) return;
-  if (!scanPageVisible) { host.hidden = true; host.innerHTML = ''; return; }
+  if (!scanPageVisible) {
+    if (!host.hidden) host.hidden = true;
+    if (host.innerHTML) host.innerHTML = '';
+    return;
+  }
   const problems = libraryWatcherHealth?.problems || [];
   const warning = libraryWatcherHealth?.state === 'warning' || problems.length > 0;
-  host.hidden = !warning;
-  if (!warning) { host.innerHTML = ''; return; }
+  if (host.hidden !== !warning) host.hidden = !warning;
+  if (!warning) {
+    if (host.innerHTML) host.innerHTML = '';
+    return;
+  }
   const unavailable = problems.some(problem => problem.state === 'root_unavailable');
   const message = unavailable
     ? 'A watched library folder became unavailable. Reconnect the drive or network share, check that the folder is accessible, then run Full Rescan from Library Status.'
     : problems.length
       ? 'The library watcher may have missed file changes. Run Full Rescan from Library Status to reconcile the library with your files.'
       : 'Library watcher diagnostics are unavailable. Check drive and network access, then retry the library scan.';
-  host.innerHTML = buildOnPageAlertHtml({ severity: 'warning', title: 'Library watcher needs attention', message });
+  const html = buildOnPageAlertHtml({ severity: 'warning', title: 'Library watcher needs attention', message });
+  if (host.innerHTML !== html) host.innerHTML = html;
 }
 
 function syncLibraryWatcherWarning(data = {}) {
@@ -17795,7 +17803,6 @@ function renderProblemFilterControls(els) {
 
   if (els.problemFilterButton) {
     const countSuffix = selected.length ? ` (${selected.length})` : '';
-    els.problemFilterButton.textContent = `Filters${countSuffix}`;
     els.problemFilterButton.setAttribute('aria-label', `Filters${countSuffix}`);
     els.problemFilterButton.setAttribute('title', `Filter by problem type${countSuffix}`);
     els.problemFilterButton.classList.toggle('is-active', Boolean(selected.length));

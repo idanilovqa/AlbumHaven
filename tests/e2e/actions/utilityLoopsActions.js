@@ -490,6 +490,10 @@ export class UtilityLoopsActions {
     const fraction = Math.min(0.95, Math.max(0.05, Number(targetFraction)));
     const { entry, loopId } = await this.resolveLoopEntryByName(name);
     const entryCard = this.utilityLoopsTab.loopEntryCard;
+    // The expanded edit controls intentionally paint above the start handle.
+    // Leave the compound control so its normal hover lifecycle exposes the handle.
+    await entryCard.detailTitle.hover();
+    await expect(entryCard.loopActionForEntry(entry)).toHaveAttribute('data-loop-action-engaged', 'false');
     const waveform = entryCard.savedLoopWaveformForEntry(entry, loopId);
     const handle = entryCard.savedLoopBoundaryHandleForEntry(entry, normalizedBoundary, loopId);
     const waveformBox = await waveform.boundingBox();

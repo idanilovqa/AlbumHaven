@@ -14,6 +14,8 @@ export class SettingsRefactorShell extends BasePage {
     this.rows = this.tree.locator('[data-problematic-album-key]');
     this.search = this.dialog.locator('#utility-problematic-search');
     this.filters = this.dialog.locator('#utility-problem-filter-button');
+    this.filterIcon = this.filters.locator('svg');
+    this.periodDialog = page.getByRole('dialog', { name: 'Date range', exact: true });
     this.filterMenu = this.dialog.locator('#utility-problem-filter-menu');
     this.filterOptions = this.filterMenu.locator('[data-problem-filter-value]');
     this.heading = this.dialog.locator('#utility-problematic-detail .utility-detail-title').first();

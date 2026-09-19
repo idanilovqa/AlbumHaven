@@ -1,0 +1,84 @@
+name: Publish verified E2E follow-up
+on:
+  push:
+    branches: [2026-09-18-pr3-e2e-batch]
+    paths: [.github/workflows/chat-editor-publish-e2e-followup.yml]
+permissions:
+  contents: write
+concurrency:
+  group: pr3-e2e-followup-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: 4e4d93dfcb3fb11bc43e2fd2c2e4381cd7d91091
+      TARGET_BRANCH: 2026-09-08-settings-refactor
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and apply the saved repair only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          python - <<'PY'
+          import base64, gzip, hashlib, json, os
+          from pathlib import Path
+          root = Path('.chat-editor/e2e-followup')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          assert manifest['base_head'] == os.environ['EXPECTED_HEAD']
+          encoded = ''.join((root / name).read_text().strip() for name in manifest['parts'])
+          patch = gzip.decompress(base64.b64decode(encoded))
+          assert len(patch) == 37268 == manifest['patch_bytes']
+          assert hashlib.sha256(patch).hexdigest() == '17721a5692ffaeb8220c3c6359abdf8673830d184d108a8c47f5c6ed1b7a8c9e' == manifest['patch_sha256']
+          Path(os.environ['RUNNER_TEMP'], 'e2e-followup.patch').write_bytes(patch)
+          PY
+          git switch --detach "$EXPECTED_HEAD"
+          git apply --check --whitespace=error-all "$RUNNER_TEMP/e2e-followup.patch"
+          git apply --whitespace=error-all "$RUNNER_TEMP/e2e-followup.patch"
+      - name: Install dependencies
+        run: npm ci
+      - name: Reverify focused contracts and production parity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 tests/js/e2e-action-production-paths.test.js tests/js/e2e-settings-contracts.test.js tests/js/settings-menu-theme-measurement.test.js
+          node scripts/check-e2e-production-parity.cjs
+          git diff --check
+      - name: Publish only the verified files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import subprocess
+          expected = sorted([
+            'docs/superpowers/plans/2026-09-09-settings-refactor.md',
+            'tests/e2e/actions/coverLookupActions.js',
+            'tests/e2e/actions/globalPlayerActions.js',
+            'tests/e2e/actions/settingsModalAppBarActions.js',
+            'tests/e2e/actions/trackModalActions.js',
+            'tests/e2e/actions/utilityProblematicFilesActions.js',
+            'tests/e2e/poms/settingsModalAppBar.js',
+            'tests/e2e/poms/utilityProblematicFilesTab.js',
+            'tests/e2e/specs/playerOverlaySpaceShortcut.spec.js',
+            'tests/e2e/utilityProblematicFiles/utilityProblematicFiles.spec.js',
+            'tests/js/e2e-action-production-paths.test.js',
+            'tests/js/e2e-settings-contracts.test.js',
+            'tests/js/settings-menu-theme-measurement.test.js',
+          ])
+          changed = sorted(subprocess.check_output(['git','diff','--name-only'],text=True).splitlines())
+          assert changed == expected, changed
+          subprocess.run(['git','add','--',*expected],check=True)
+          PY
+          git config user.name 'idanilovqa'
+          git config user.email '39825960+idanilovqa@users.noreply.github.com'
+          git commit -m 'test: reconcile recovered E2E keyboard, menu and Problems contracts'
+          test "$(git ls-remote --exit-code origin refs/heads/$TARGET_BRANCH | cut -f1)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          echo "Published E2E follow-up: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"

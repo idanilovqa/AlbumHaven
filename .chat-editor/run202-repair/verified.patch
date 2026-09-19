@@ -1,0 +1,633 @@
+diff --git a/docs/superpowers/plans/2026-09-09-settings-refactor.md b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+index a493537..7bdffca 100644
+--- a/docs/superpowers/plans/2026-09-09-settings-refactor.md
++++ b/docs/superpowers/plans/2026-09-09-settings-refactor.md
+@@ -547,6 +547,71 @@ its ownership marker between attempts. Each failed before the correction and now
+ passes: every attempt revalidates both the original directory identity and exact
+ owner marker before removal. Retry counts and delays are unchanged.
+ 
++### Native run 204 remaining metadata contract — September 19, 2026
++
++The complete Metadata Mutations log from run `35420739453` on `ff81ffd4`
++records two failures, FTC-TAGS-011 and FTC-TAGS-022, at the same disabled Apply
++opacity assertion. It does not record an Album Details title timeout as their
++cause. The earlier run-192 helper change incorrectly applied Appearance's primary
++footer theme to an ordinary Tag Editor Button consumer. The shared Button v001
++record preserves ordinary consumer colors, and `docs/gallery-local-review.md`
++explicitly records approved enabled red / disabled grey Apply styling with a
++successful FTC-TAGS-022 browser check. Retain that product styling.
++
++The helper now checks the disabled grey surface, ink, border, 0.55 opacity and
++not-allowed cursor, while preserving native disabled state, shared action
++attributes and all per-track pending markers. Enabled Apply still checks its
++native enabled state, pointer cursor and full opacity. The unused Appearance-
++primary-theme probe is removed. A deterministic disabled-state regression failed
++before correction; both enabled/disabled regressions and all 219 affected Node
++checks pass after it. No product CSS, tag-save behavior, fixture population,
++numbering assertion, deadline, retry, or benchmark threshold changes.
++
++The other three functional shards are still running at this checkpoint. Their
++final failure inventory and a complete native run on the eventual repair commit
++remain mandatory; the focused result is not an E2E pass or merge authorization.
++
++### Complete run 202/204 remaining E2E batch — September 18, 2026
++
++The owner asked to finish the remaining native CI jobs rather than stop at a
++checkpoint or pipeline trigger. The source for this batch is `ff81ffd4`; prior
++repairs and the green Python, JavaScript, component, Admin, Auth and performance
++contracts remain in force. The completed run 204 evidence contains two metadata,
++three Gallery and three playback/Utilities failures before its cancellation;
++run 202 attempt 2 must supply the final uncancelled inventory before publication.
++
++The exclusion reload failure is an application defect, not obsolete coverage.
++Selecting an album problem highlights its matching file pills; serialization
++persisted all those redundant file rules as well as the album rule. Reverting
++only the album rule consequently left its 18 file problems excluded. Canonical
++selection now persists the covering album rule once, without dropping a different
++selected file reason, an unknown identity awaiting server validation, or a file-only
++selection. Optimistic Rules and the request use the same canonical selection.
++The original 18-row reload assertion remains unchanged. The new 18-file unit
++regression failed with 20 persisted selections instead of the two independent
++rules and passes after the correction.
++
++The other corrections follow already-approved consumer contracts. Gallery's two
++disc cases assert the exact shared table totals while separately requiring the
++legacy footer to remain empty. Mutation continuity compares the predecessor's
++artist/year metadata captured before the mutation, alongside its existing key,
++title, row identity and scroll checks. L03/L04/B03 saved-loop layout now verifies
++exact card insets and two-row fit instead of its superseded pre-padding height
++cap; all internal one-pixel waveform/control geometry remains. The persistent
++action root is still measured while editing hides the Enter button. Regular
++player mode retains the animation canvas but must paint it at zero opacity with
++no pointer interception; waveform mode must paint it fully. The component mount
++now follows that production retention behavior and checks the same canvas across
++both modes, without replacing approved snapshots or changing the audio engine.
++
++The combined changed-behavior Node run passes 246 checks, zero failures and zero
++skips. Runtime-bundle regeneration and production-parity verification pass. The
++local component browser attempt was blocked at navigation by administrator policy,
++not counted as a successful browser check; native pinned-Chrome CI remains required.
++No test is disabled, no permission or fixture population is relaxed, and no timeout,
++retry policy or performance budget is changed. Complete native verification is
++still outstanding; this is not a merge, release or final-acceptance claim.
++
+ ## 6. Verification commands
+ 
+ Use existing repository environment/setup scripts for Postgres and real-app E2E. New tests become available in their owning slice. A new test must first fail for missing behavior, then pass after implementation; final expected outcome is zero genuine failures and a successful runtime build.
+diff --git a/music_app/static/js/runtime-bundle.js b/music_app/static/js/runtime-bundle.js
+index 54b4ab3..204e978 100644
+--- a/music_app/static/js/runtime-bundle.js
++++ b/music_app/static/js/runtime-bundle.js
+@@ -18587,8 +18587,36 @@ function scheduleProblemExclusionRequest(operation, request) {
+   return completion;
+ }
+ 
+-async function queueProblemExclusionCreate({ album, items }) {
++function effectiveProblemExclusionItems(album, items) {
+   const selectedItems = (Array.isArray(items) ? items : []).filter(Boolean);
++  const albumRows = new Map((Array.isArray(album?.album_problem_rows) ? album.album_problem_rows : [])
++    .map(row => [String(row?.row_key || ''), row]));
++  const coveredReasons = new Set();
++  selectedItems.forEach(item => {
++    const row = albumRows.get(String(item.row_key || ''));
++    if (item.scope === 'album' && row
++      && item.album_key === String(row.album_key || album?.key || '')) {
++      const reason = problemExclusionReason(row);
++      if (reason) coveredReasons.add(reason);
++    }
++  });
++  const coveredFiles = new Map();
++  (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).forEach(row => {
++    (Array.isArray(row?.ignorable_reasons) ? row.ignorable_reasons : []).forEach(item => {
++      if (coveredReasons.has(problemExclusionReason(item))) {
++        coveredFiles.set(String(item.row_key || ''), String(row.path || ''));
++      }
++    });
++  });
++  // Album-label selection also highlights matching file pills. Persist the album
++  // rule once: duplicate child rules would survive a later album-rule revert.
++  // Independently selected reasons and unknown identities still reach validation.
++  return selectedItems.filter(item => item.scope !== 'file'
++    || coveredFiles.get(String(item.row_key || '')) !== item.path);
++}
++
++async function queueProblemExclusionCreate({ album, items }) {
++  const selectedItems = effectiveProblemExclusionItems(album, items);
+   const currentRules = state.utility.rules || [];
+   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
+   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));
+diff --git a/music_app/static/js/runtime/problem-exclusion-mutations.js b/music_app/static/js/runtime/problem-exclusion-mutations.js
+index 235fb89..245a316 100644
+--- a/music_app/static/js/runtime/problem-exclusion-mutations.js
++++ b/music_app/static/js/runtime/problem-exclusion-mutations.js
+@@ -395,8 +395,36 @@ function scheduleProblemExclusionRequest(operation, request) {
+   return completion;
+ }
+ 
+-async function queueProblemExclusionCreate({ album, items }) {
++function effectiveProblemExclusionItems(album, items) {
+   const selectedItems = (Array.isArray(items) ? items : []).filter(Boolean);
++  const albumRows = new Map((Array.isArray(album?.album_problem_rows) ? album.album_problem_rows : [])
++    .map(row => [String(row?.row_key || ''), row]));
++  const coveredReasons = new Set();
++  selectedItems.forEach(item => {
++    const row = albumRows.get(String(item.row_key || ''));
++    if (item.scope === 'album' && row
++      && item.album_key === String(row.album_key || album?.key || '')) {
++      const reason = problemExclusionReason(row);
++      if (reason) coveredReasons.add(reason);
++    }
++  });
++  const coveredFiles = new Map();
++  (Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : []).forEach(row => {
++    (Array.isArray(row?.ignorable_reasons) ? row.ignorable_reasons : []).forEach(item => {
++      if (coveredReasons.has(problemExclusionReason(item))) {
++        coveredFiles.set(String(item.row_key || ''), String(row.path || ''));
++      }
++    });
++  });
++  // Album-label selection also highlights matching file pills. Persist the album
++  // rule once: duplicate child rules would survive a later album-rule revert.
++  // Independently selected reasons and unknown identities still reach validation.
++  return selectedItems.filter(item => item.scope !== 'file'
++    || coveredFiles.get(String(item.row_key || '')) !== item.path);
++}
++
++async function queueProblemExclusionCreate({ album, items }) {
++  const selectedItems = effectiveProblemExclusionItems(album, items);
+   const currentRules = state.utility.rules || [];
+   const currentRule = currentRules.find((rule) => rule?.key === 'problem-ignores');
+   const selectedKeys = new Set(selectedItems.map((item) => String(item?.row_key || '')));
+diff --git a/tests/components/playerViews.spec.js b/tests/components/playerViews.spec.js
+index 2bb6fce..8a98125 100644
+--- a/tests/components/playerViews.spec.js
++++ b/tests/components/playerViews.spec.js
+@@ -67,7 +67,7 @@ async function mountPlayer(page, mode, loopControlStyle = 'capsule') {
+               <div class="player-meta"><div class="player-title">Transatlantic - We All Need Some Light</div><button class="player-album-link" type="button">/ SMPTe</button></div>
+               <div class="player-time">3:13 / 5:46</div>
+               <div class="player-timeline-wrap${isWaveform ? ' is-waveform' : ''}">
+-                <canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"${isWaveform ? '' : ' hidden'}></canvas>
++                <canvas class="player-waveform-canvas" width="900" height="56" aria-hidden="true"></canvas>
+                 <input class="player-timeline" type="range" min="0" max="346" value="193" aria-label="Seek">
+               </div>
+             </div>
+@@ -286,3 +286,23 @@ for (const style of ['capsule', 'companion']) {
+     });
+   }
+ }
++
++
++test('regular and waveform presentations retain one canvas and gate its paint rather than removing it', async ({ page }) => {
++  await page.setViewportSize({ width: 1280, height: 640 });
++  await mountPlayer(page, 'regular');
++  const canvas = page.locator('.player-waveform-canvas');
++  await expect(canvas).toHaveCount(1);
++  await expect(canvas).not.toHaveAttribute('hidden');
++  await expect(canvas).toHaveCSS('opacity', '0');
++  await expect(canvas).toHaveCSS('pointer-events', 'none');
++  const identity = await canvas.elementHandle();
++  // Component-only presentation changes use the same classes as updateWaveformAppearance.
++  await page.locator('.player-timeline-wrap').evaluate(element => element.classList.add('is-waveform'));
++  await expect(canvas).toHaveCSS('opacity', '1');
++  expect(await canvas.evaluate((element, retained) => element === retained, identity)).toBe(true);
++  await page.locator('.player-timeline-wrap').evaluate(element => element.classList.remove('is-waveform'));
++  await expect(canvas).toHaveCSS('opacity', '0');
++  expect(await canvas.evaluate((element, retained) => element === retained, identity)).toBe(true);
++  await identity.dispose();
++});
+diff --git a/tests/e2e/actions/globalPlayerActions.js b/tests/e2e/actions/globalPlayerActions.js
+index 12a5674..ec385bc 100644
+--- a/tests/e2e/actions/globalPlayerActions.js
++++ b/tests/e2e/actions/globalPlayerActions.js
+@@ -106,6 +106,10 @@ export class GlobalPlayerActions {
+       ? { height: 100, centerline: 57, metadataTop: 7, timestampTop: 8, timelineHeight: 56 }
+       : { height: 76, centerline: 39, metadataTop: 10, timestampTop: 11, timelineHeight: 48 };
+     await expect(this.globalPlayer.player).toHaveCSS('height', `${expected.height}px`);
++    // Regular mode folds the retained canvas to preserve the mode-transition animation.
++    // Verify its painted/interactive state, not DOM removal or a null bounding box.
++    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('opacity', normalized === 'waveform' ? '1' : '0');
++    await expect(this.globalPlayer.waveformCanvas).toHaveCSS('pointer-events', 'none');
+     const checkpoint = await this.globalPlayer.readExpandedGeometryCheckpoint();
+     const centerY = (bounds) => bounds.y + (bounds.height / 2);
+     const expectedCenterY = checkpoint.player.y + expected.centerline;
+@@ -133,7 +137,7 @@ export class GlobalPlayerActions {
+       expect(Math.abs(checkpoint.metadata.x - (checkpoint.player.x + checkpoint.paddingLeft)))
+         .toBeLessThanOrEqual(1);
+     } else {
+-      expect(checkpoint.waveform).toBeNull();
++      expect(checkpoint.waveform).not.toBeNull();
+       expect(Math.abs(checkpoint.metadata.x - checkpoint.timeline.x)).toBeLessThanOrEqual(1);
+       const bottomGap = (checkpoint.player.y + checkpoint.player.height)
+         - (checkpoint.timeline.y + checkpoint.timeline.height);
+diff --git a/tests/e2e/actions/tagEditorActions.js b/tests/e2e/actions/tagEditorActions.js
+index 17d4a20..5b6f01f 100644
+--- a/tests/e2e/actions/tagEditorActions.js
++++ b/tests/e2e/actions/tagEditorActions.js
+@@ -379,10 +379,11 @@ export class TagEditorActions {
+     } else {
+       await expect(this.tagEditor.applyButton).toBeDisabled();
+       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+-      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
+-      const theme = await this.tagEditor.readApplyTheme();
+-      expect(theme.background).toEqual(theme.expectedBackground);
+-      expect(theme.ink).toEqual(theme.expectedInk);
++      // Ordinary Button consumers retain their approved disabled surface and ink.
++      await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
++      await expect(this.tagEditor.applyButton).toHaveCSS('background-color', 'rgb(55, 65, 81)');
++      await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
++      await expect(this.tagEditor.applyButton).toHaveCSS('border-top-color', 'rgb(75, 85, 99)');
+     }
+     await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
+     await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');
+diff --git a/tests/e2e/actions/utilityProblematicFilesActions.js b/tests/e2e/actions/utilityProblematicFilesActions.js
+index 8b7a998..3af22b1 100644
+--- a/tests/e2e/actions/utilityProblematicFilesActions.js
++++ b/tests/e2e/actions/utilityProblematicFilesActions.js
+@@ -753,6 +753,7 @@ export class UtilityProblematicFilesActions {
+         removedKey: String(active.getAttribute('data-problematic-album-key') || ''),
+         previousKey: String(items[removedIndex - 1].getAttribute('data-problematic-album-key') || ''),
+         previousTitle: String(items[removedIndex - 1].querySelector(selectors.titleSelector)?.textContent || '').trim(),
++        previousMeta: String(items[removedIndex - 1].querySelector(selectors.metaSelector)?.textContent || '').trim(),
+         order: items.map((item) => String(item.getAttribute('data-problematic-album-key') || '')),
+         text: items.map((item) => String(item.textContent || '').trim()),
+         nodes: items,
+@@ -770,12 +771,14 @@ export class UtilityProblematicFilesActions {
+       activeSelector: this.utilityProblematicFilesTab.activeListItemSelector,
+       itemSelector: this.utilityProblematicFilesTab.listItemSelector,
+       titleSelector: this.utilityProblematicFilesTab.listItemTitleSelector,
++      metaSelector: this.utilityProblematicFilesTab.listItemMetaSelector,
+     });
+     // parity-check: allow-read-only-measurement-evaluate -- read the retained MutationObserver snapshot without changing application state
+     return this.mutationObservation.evaluate((snapshot) => ({
+       removedKey: snapshot.removedKey,
+       previousKey: snapshot.previousKey,
+       previousTitle: snapshot.previousTitle,
++      previousMeta: snapshot.previousMeta,
+       scrollTop: snapshot.scrollTop,
+     }));
+   }
+diff --git a/tests/e2e/poms/tagEditor.js b/tests/e2e/poms/tagEditor.js
+index 85fd51c..74c9b72 100644
+--- a/tests/e2e/poms/tagEditor.js
++++ b/tests/e2e/poms/tagEditor.js
+@@ -1,5 +1,4 @@
+ import { BasePage } from './basePage.js';
+-import { readThemeColorChannels } from './settingsModalAppBar.js';
+ 
+ function exactNormalizedText(value) {
+   const escaped = String(value || '').trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+@@ -7,23 +6,6 @@ function exactNormalizedText(value) {
+ }
+ 
+ export class TagEditor extends BasePage {
+-  async readApplyTheme() {
+-    // parity-check: allow-read-only-measurement-evaluate -- compare the shared primary footer button with its inherited theme tokens
+-    const colors = await this.applyButton.evaluate(async element => {
+-      await Promise.all(element.getAnimations()
+-        .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+-        .map(animation => animation.finished));
+-      const style = getComputedStyle(element);
+-      return {
+-        background: style.backgroundColor,
+-        expectedBackground: style.getPropertyValue('--appearance-primary-button').trim(),
+-        ink: style.color,
+-        expectedInk: style.getPropertyValue('--appearance-primary-button-ink').trim(),
+-      };
+-    });
+-    return Object.fromEntries(Object.entries(colors).map(([key, value]) => [key, readThemeColorChannels(value)]));
+-  }
+-
+   constructor(page, testInfo = null) {
+     super(page, testInfo);
+     this.overlay = page.locator('#tag-editor-modal');
+diff --git a/tests/e2e/poms/utilityLoopEntryCard.js b/tests/e2e/poms/utilityLoopEntryCard.js
+index e5c5b12..59568c8 100644
+--- a/tests/e2e/poms/utilityLoopEntryCard.js
++++ b/tests/e2e/poms/utilityLoopEntryCard.js
+@@ -359,7 +359,7 @@ export class UtilityLoopEntryCard extends BasePage {
+   }
+ 
+   async readCompactLayoutSnapshot(entry) {
+-    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds] = await Promise.all([
++    const [entryBounds, playBounds, actionBounds, mainBounds, topRowBounds, pitchBounds, timelineBounds, timeBounds, repeatBounds, speedBounds, headerBounds, headingBounds, shellBounds] = await Promise.all([
+       entry.boundingBox(),
+       this.playButtonForEntry(entry).boundingBox(),
+       this.loopActionForEntry(entry).boundingBox(),
+@@ -371,12 +371,26 @@ export class UtilityLoopEntryCard extends BasePage {
+       this.repeatButtonForEntry(entry).boundingBox(),
+       this.speedControlForEntry(entry).boundingBox(),
+       this.detailHeader.boundingBox(),
++      entry.locator('.utility-loop-heading').boundingBox(),
++      entry.locator('.utility-loop-shell').boundingBox(),
+     ]);
+-    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds) {
++    if (!entryBounds || !playBounds || !actionBounds || !mainBounds || !topRowBounds || !timelineBounds || !timeBounds || !repeatBounds || !speedBounds || !headerBounds || !headingBounds || !shellBounds) {
+       throw new Error('Expected rendered compact saved-loop controls and top row.');
+     }
++    // parity-check: allow-read-only-measurement-evaluate -- read approved L03/L04 card insets independently of painted control bounds
++    const cardInsets = await entry.evaluate(element => {
++      const style = getComputedStyle(element);
++      return {
++        top: Number.parseFloat(style.paddingTop), right: Number.parseFloat(style.paddingRight),
++        bottom: Number.parseFloat(style.paddingBottom), left: Number.parseFloat(style.paddingLeft),
++        rowGap: Number.parseFloat(style.rowGap), border: Number.parseFloat(style.borderTopWidth),
++      };
++    });
+     return {
+       entryBounds,
++      headingBounds,
++      shellBounds,
++      cardInsets,
+       playBounds,
+       scissorsBounds: actionBounds,
+       mainBounds,
+diff --git a/tests/e2e/specs/albumIdentityConsolidation.spec.js b/tests/e2e/specs/albumIdentityConsolidation.spec.js
+index 13a38f6..779a638 100644
+--- a/tests/e2e/specs/albumIdentityConsolidation.spec.js
++++ b/tests/e2e/specs/albumIdentityConsolidation.spec.js
+@@ -394,6 +394,7 @@ test('FTC-UTIL-PROBLEMS-007 preserves the selected list during mutation and remo
+     expect(previousSelection).toEqual({
+       key: mutationTarget.previousKey,
+       title: mutationTarget.previousTitle,
++      meta: mutationTarget.previousMeta,
+     });
+     expect(await utilityProblematicFilesActions.readVisibleListItems()).not.toEqual(
+       expect.arrayContaining([expect.objectContaining({ key: mutationTarget.removedKey })]),
+diff --git a/tests/e2e/specs/albumTrackCredits.spec.js b/tests/e2e/specs/albumTrackCredits.spec.js
+index 22e2fd8..c531c88 100644
+--- a/tests/e2e/specs/albumTrackCredits.spec.js
++++ b/tests/e2e/specs/albumTrackCredits.spec.js
+@@ -343,7 +343,11 @@ test('FTC-ALBUM-DETAILS-005 shows bonus duration only for an explicit bonus-disc
+   await stepLogger.step('Show the exact main-album and bonus-disc durations', async () => {
+     const groups = await trackModalActions.readDiscGroupPresentation();
+     expect(groups.headers).toEqual(['Bonus Disc']);
+-    expect(groups.totals).toEqual([]);
++    expect(groups.totals).toEqual([
++      'Total Length: 25m 30s',
++      'Total Main Album Length: 3:00',
++      'Bonus Disc Length: 22:30',
++    ]);
+     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
+       .toBe('Total Length: 25m 30s');
+     await expect(trackModalActions.trackModal.albumTrackTable.mainTotal).toHaveText('Total Main Album Length: 3:00');
+@@ -401,7 +405,7 @@ test('FTC-ALBUM-DETAILS-005 infers CD1 beside an ordinary numeric CD2', { tag: '
+   await stepLogger.step('Render inferred CD1 and numeric CD2 without bonus semantics', async () => {
+     expect(await trackModalActions.readDiscGroupPresentation()).toEqual({
+       headers: ['CD 1', 'CD 2'],
+-      totals: [],
++      totals: ['Total Length: 18m 00s'],
+     });
+     expect(await trackModalActions.trackModal.readAlbumTrackTableTotal())
+       .toBe('Total Length: 18m 00s');
+diff --git a/tests/e2e/specs/loops.functional.spec.js b/tests/e2e/specs/loops.functional.spec.js
+index 44f9b33..c9d4a5f 100644
+--- a/tests/e2e/specs/loops.functional.spec.js
++++ b/tests/e2e/specs/loops.functional.spec.js
+@@ -518,7 +518,14 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
+       endHandle: false,
+     });
+     const compactLayout = await utilityLoopsActions.readCompactLoopLayoutByName('Warmup Loop');
+-    expect(compactLayout.entryBounds.height).toBeLessThan(140);
++    // L03 adds Original timestamps; L04/B03 reserves the approved bottom glow padding.
++    // Keep the card exactly fitted to its two rows instead of the superseded 140px cap.
++    expect(compactLayout.cardInsets).toEqual({ top: 16, right: 18, bottom: 24, left: 18, rowGap: 7, border: 1 });
++    const { entryBounds, headingBounds, shellBounds } = compactLayout;
++    expect(Math.abs(headingBounds.y - entryBounds.y - 17)).toBeLessThanOrEqual(1);
++    expect(Math.abs(shellBounds.y - headingBounds.y - headingBounds.height - 7)).toBeLessThanOrEqual(1);
++    expect(Math.abs(entryBounds.y + entryBounds.height - shellBounds.y - shellBounds.height - 25)).toBeLessThanOrEqual(1);
++    expect(Math.abs(entryBounds.height - headingBounds.height - shellBounds.height - 49)).toBeLessThanOrEqual(1);
+     expect(compactLayout.pitchBounds.y).toBeGreaterThanOrEqual(compactLayout.topRowBounds.y);
+     expect(compactLayout.pitchBounds.y + compactLayout.pitchBounds.height)
+       .toBeLessThanOrEqual(compactLayout.topRowBounds.y + compactLayout.topRowBounds.height + 1);
+diff --git a/tests/js/e2e-run192-contracts.test.js b/tests/js/e2e-run192-contracts.test.js
+index 2718e2c..be283d9 100644
+--- a/tests/js/e2e-run192-contracts.test.js
++++ b/tests/js/e2e-run192-contracts.test.js
+@@ -74,22 +74,30 @@ for (const method of ['revertRuleContaining', 'beginRevertRuleContaining']) {
+   });
+ }
+ 
+-test('disabled tag Apply follows the shared disabled Button cursor without weakening disabled state', async () => {
+-  const applyButton = {};
+-  const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
+-    expect: element => ({
+-      async toBeDisabled() { assert.equal(element, applyButton); },
+-      async toHaveAttribute(name, value) { assert.equal(element, applyButton); assert.equal(value, 'primary'); assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name)); },
+-      async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, name === 'cursor' ? 'not-allowed' : '1'); },
+-      toEqual(expected) { assert.deepEqual(element, expected); },
+-    }),
++for (const pending of [false, true]) {
++  test(`tag Apply preserves its approved ${pending ? 'enabled' : 'disabled grey'} consumer treatment and native state`, async () => {
++    const applyButton = {};
++    const calls = [];
++    const expectedStyles = pending
++      ? { cursor: 'pointer', opacity: '1' }
++      : { cursor: 'not-allowed', opacity: '0.55', 'background-color': 'rgb(55, 65, 81)',
++        color: 'rgb(148, 163, 184)', 'border-top-color': 'rgb(75, 85, 99)' };
++    const { Actions } = loadActions('tagEditorActions.js', 'TagEditorActions', {
++      expect: element => ({
++        async toBeDisabled() { assert.equal(element, applyButton); assert.equal(pending, false); calls.push('disabled'); },
++        async toBeEnabled() { assert.equal(element, applyButton); assert.equal(pending, true); calls.push('enabled'); },
++        async toHaveAttribute(name, value) {
++          assert.equal(element, applyButton); assert.equal(value, 'primary');
++          assert.ok(['data-ui-button-action', 'data-editor-footer-action'].includes(name));
++        },
++        async toHaveCSS(name, value) { assert.equal(element, applyButton); assert.equal(value, expectedStyles[name]); calls.push(name); },
++      }),
++    });
++    await new Actions({ trackTitles: { allTextContents: async () => [] }, applyButton })
++      .expectPendingChanges(pending ? ['changed.mp3'] : []);
++    assert.deepEqual(calls, [pending ? 'enabled' : 'disabled', ...Object.keys(expectedStyles)]);
+   });
+-  await new Actions({
+-    trackTitles: { allTextContents: async () => [] },
+-    applyButton,
+-    readApplyTheme: async () => ({ background: 'saved', expectedBackground: 'saved', ink: 'saved ink', expectedInk: 'saved ink' }),
+-  }).expectPendingChanges([]);
+-});
++}
+ 
+ test('Album Details keeps the legacy modal footer distinct from the shared table totals', async () => {
+   const { TrackModal } = await import('../e2e/poms/trackModal.js');
+diff --git a/tests/js/e2e-run204-contracts.test.js b/tests/js/e2e-run204-contracts.test.js
+new file mode 100644
+index 0000000..a3f0dd1
+--- /dev/null
++++ b/tests/js/e2e-run204-contracts.test.js
+@@ -0,0 +1,115 @@
++const assert = require('node:assert/strict');
++const fs = require('node:fs');
++const path = require('node:path');
++const test = require('node:test');
++const vm = require('node:vm');
++
++function loadActions(supplied) {
++  const context = { ...supplied };
++  vm.createContext(context);
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/actions/utilityProblematicFilesActions.js'), 'utf8')
++    .replace(/^import[\s\S]*?;\r?\n/gm, '').replace('export class ', 'class ');
++  vm.runInContext(source + ';globalThis.Actions = UtilityProblematicFilesActions;', context);
++  return context.Actions;
++}
++
++test('mutation continuity captures the surviving artist/year metadata before the list changes', async () => {
++  class Element {}
++  const previous = new Element();
++  previous.getAttribute = () => 'prior-album';
++  previous.querySelector = selector => ({ textContent: selector === '.title' ? ' Prior album ' : ' Artist · 2026 ' });
++  const selected = new Element();
++  selected.getAttribute = () => 'selected-album';
++  const items = [previous, selected];
++  const list = new Element();
++  list.scrollTop = 42;
++  const Actions = loadActions({
++    HTMLElement: Element,
++    document: { querySelector: selector => selector === '.list' ? list : selected, querySelectorAll: () => items },
++    MutationObserver: class { observe() {} disconnect() {} },
++  });
++  const actions = new Actions({
++    activeListItem: { scrollIntoViewIfNeeded: async () => {} },
++    sidebarListSelector: '.list', activeListItemSelector: '.selected', listItemSelector: '.item',
++    listItemTitleSelector: '.title', listItemMetaSelector: '.meta',
++    page: { async evaluateHandle(callback, selectors) {
++      const snapshot = callback(selectors);
++      return { evaluate: async read => read(snapshot), dispose: async () => {} };
++    } },
++  });
++  const snapshot = await actions.prepareSelectedMutationContinuity();
++  assert.equal(snapshot.previousKey, 'prior-album');
++  assert.equal(snapshot.previousTitle, 'Prior album');
++  assert.equal(snapshot.previousMeta, 'Artist · 2026');
++  assert.equal(snapshot.scrollTop, 42);
++});
++
++
++function loadPlayerActions(expect) {
++  const context = { expect };
++  vm.createContext(context);
++  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/actions/globalPlayerActions.js'), 'utf8')
++    .replace(/^import .*;\r?\n/gm, '').replace('export class ', 'class ');
++  vm.runInContext(source + ';globalThis.Actions = GlobalPlayerActions;', context);
++  return context.Actions;
++}
++
++for (const mode of ['regular', 'waveform']) {
++  test(`expanded ${mode} geometry verifies waveform paint without treating a folded canvas as removed`, async () => {
++    const waveformMode = mode === 'waveform';
++    const player = {};
++    const canvas = {};
++    const calls = [];
++    const height = waveformMode ? 100 : 76;
++    const center = waveformMode ? 57 : 39;
++    const timelineHeight = waveformMode ? 56 : 48;
++    const bounds = (x, y, width, h) => ({ x, y, width, height: h });
++    const checkpoint = {
++      presentation: mode, paddingLeft: 28, player: bounds(0, 0, 1000, height),
++      collapse: bounds(0, center-10, 20, 20), cover: bounds(28, center-24, 48, 48),
++      play: bounds(90, center-24, 48, 48), timeline: bounds(156, center-timelineHeight/2, 800, timelineHeight),
++      metadata: bounds(waveformMode ? 28 : 156, waveformMode ? 7 : 10, 500, 20),
++      timestamp: bounds(900, waveformMode ? 8 : 11, 50, 20),
++      waveform: bounds(156, center-(waveformMode ? 28 : 3.92), 800, waveformMode ? 56 : 7.84),
++    };
++    function expect(actual) {
++      return {
++        toBe: expected => assert.equal(actual, expected),
++        toBeNull: () => assert.equal(actual, null),
++        not: { toBeNull: () => assert.notEqual(actual, null) },
++        toBeLessThanOrEqual: expected => assert.ok(actual <= expected, `${actual} > ${expected}`),
++        async toHaveAttribute(name, value) { assert.equal(actual, player); assert.equal(value, mode); },
++        async toHaveCSS(name, value) {
++          if (actual === player) { assert.equal(name, 'height'); assert.equal(value, `${height}px`); }
++          else { assert.equal(actual, canvas); calls.push([name, value]); }
++        },
++      };
++    }
++    expect.soft = expect;
++    const Actions = loadPlayerActions(expect);
++    await new Actions({ player, waveformCanvas: canvas, readExpandedGeometryCheckpoint: async () => checkpoint })
++      .expectExpandedGeometry(mode);
++    assert.deepEqual(calls, [['opacity', waveformMode ? '1' : '0'], ['pointer-events', 'none']]);
++  });
++}
++
++test('saved-loop compact layout retains the action root while reporting approved card insets', async () => {
++  const { UtilityLoopEntryCard } = await import('../e2e/poms/utilityLoopEntryCard.js');
++  const pom = Object.create(UtilityLoopEntryCard.prototype);
++  const box = { x: 10, y: 10, width: 40, height: 40 };
++  const actionBox = { x: 60, y: 20, width: 34, height: 46 };
++  const loc = bounds => ({ boundingBox: async () => bounds, count: async () => 1,
++    textContent: async () => '- 0 pst +', isVisible: async () => true });
++  const expectedPadding = { top: 16, right: 18, bottom: 24, left: 18, rowGap: 7, border: 1 };
++  const entry = { boundingBox: async () => box, locator: () => loc(box),
++    evaluate: async () => expectedPadding };
++  for (const name of ['playButtonForEntry', 'loopActionForEntry', 'utilityMainForEntry', 'topRowForEntry',
++    'pitchControlForEntry', 'timelineWrapForEntry', 'savedLoopTimeForEntry', 'repeatButtonForEntry',
++    'speedControlForEntry', 'ordinaryTimelineForEntry']) pom[name] = () => loc(box);
++  pom.loopActionForEntry = () => loc(actionBox);
++  pom.loopScissorsButtonForEntry = () => { assert.fail('editing intentionally hides the Enter button'); };
++  pom.detailHeader = loc(box);
++  const result = await pom.readCompactLayoutSnapshot(entry);
++  assert.deepEqual(result.scissorsBounds, actionBox);
++  assert.deepEqual(result.cardInsets, expectedPadding);
++});
+diff --git a/tests/js/runtime/problem-exclusion-mutations.test.js b/tests/js/runtime/problem-exclusion-mutations.test.js
+index 48612cd..c0c4cd8 100644
+--- a/tests/js/runtime/problem-exclusion-mutations.test.js
++++ b/tests/js/runtime/problem-exclusion-mutations.test.js
+@@ -728,3 +728,56 @@ test('stale Problematic Files GET cannot defeat acknowledged revert invalidation
+ 
+   assert.equal(context.state.utility.loaded, false);
+ });
++
++for (const selectAlbum of [false, true]) {
++  test(`bulk matching-file selection ${selectAlbum ? 'under an album exclusion persists no redundant child rules' : 'without an album exclusion preserves every file rule'}`, async () => {
++    const album = albumFixture();
++    const reason = 'Undecoded characters';
++    album.track_problem_rows = Array.from({ length: 18 }, (_, index) => ({
++      path: `C:\\Music\\fixture\\${index}.flac`, filename: `${index}.flac`,
++      reasons: [reason], ignorable_reasons: [{ row_key: `file::${index}::undecoded`, reason }],
++    }));
++    album.track_problem_rows[0].reasons.push('Missing year');
++    album.track_problem_rows[0].ignorable_reasons.push({ row_key: 'file::0::year', reason: 'Missing year' });
++    const persisted = new Map();
++    const requests = [];
++    const { context } = loadMutationHelpers({
++      async fetch(url, options) {
++        const payload = JSON.parse(options.body);
++        requests.push({ url, payload });
++        if (url.endsWith('/revert')) persisted.delete(payload.row_key);
++        else for (const item of payload.items) persisted.set(item.row_key, item);
++        return { ok: true, async json() { return { ok: true, applied_items: payload.items || [] }; } };
++      },
++    });
++    context.state.utility.problematicFiles = [album];
++    context.state.utility.selectedProblematicKey = album.key;
++    const rowKeys = [
++      ...(selectAlbum ? [album.album_problem_rows[0].row_key] : []),
++      ...album.track_problem_rows.flatMap(row => row.ignorable_reasons.map(item => item.row_key)),
++    ];
++    const items = rowKeys.map(rowKey => context.buildProblemExclusionItemFromAlbum(album, rowKey));
++    await context.queueProblemExclusionCreate({ album, items });
++    assert.equal(requests[0].payload.items.length, selectAlbum ? 2 : 19);
++    assert.equal(problemIgnoreRule(context).count, selectAlbum ? 2 : 19);
++    assert.equal(persisted.has('file::0::year'), true, 'different file-level reasons remain independently selected');
++    if (selectAlbum) {
++      await context.queueProblemExclusionRevert(items[0]);
++      assert.deepEqual([...persisted.keys()], ['file::0::year'],
++        'reverting the single album exclusion restores all 18 undecoded-file problems');
++      assert.equal(problemIgnoreRule(context).count, 1);
++    } else {
++      assert.equal([...persisted.keys()].filter(key => key.endsWith('::undecoded')).length, 18);
++    }
++  });
++}
++
++test('album selection canonicalization retains foreign or unknown file identities for server validation', () => {
++  const album = albumFixture();
++  const { context } = loadMutationHelpers();
++  const ownedKey = album.track_problem_rows[0].ignorable_reasons[0].row_key;
++  const foreign = { row_key: ownedKey, scope: 'file', path: 'C:\\Other\\foreign.flac', problem_reason: 'Undecoded characters' };
++  const unknown = { row_key: 'unknown::undecoded', scope: 'file', path: album.track_problem_rows[0].path, problem_reason: 'Undecoded characters' };
++  const selected = [albumItem(), foreign, unknown];
++  assert.deepEqual(clone(context.effectiveProblemExclusionItems(album, selected)), selected);
++});

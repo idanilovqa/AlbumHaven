@@ -1580,7 +1580,7 @@
     "config": "playwright.config.js",
     "project": "functional",
     "test": "tests/e2e/specs/playerOverlaySpaceShortcut.spec.js",
-    "case": "FTC-PLAYER-014 Space controls background playback across Album Details, notifications, and Settings",
+    "case": "FTC-PLAYER-014 Space preserves native overlay actions and range playback across Album Details, notifications, and Settings",
     "profile": "functional-core",
     "setupScope": "isolated",
     "stateMode": "owned-mutation",

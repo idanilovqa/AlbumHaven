@@ -1,0 +1,104 @@
+{
+  "run": 35419743702,
+  "attempt": 2,
+  "jobs": [
+    {
+      "id": 105842633835,
+      "name": "E2E: Phase 7 Admin Management",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:56:32Z"
+    },
+    {
+      "id": 105842633837,
+      "name": "Python Tests",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T05:06:04Z",
+      "log_sha256": "61b2ad8c58f5f9ecf22cc9407b7e8a5689a95ef5720b642891b76f00e6c29c9d"
+    },
+    {
+      "id": 105842633839,
+      "name": "E2E: Phase 7 Auth Lifecycle",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:56:00Z"
+    },
+    {
+      "id": 105842633909,
+      "name": "E2E Performance: playback-media",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:58:54Z"
+    },
+    {
+      "id": 105842633913,
+      "name": "E2E: Production Parity",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:54:12Z"
+    },
+    {
+      "id": 105842633918,
+      "name": "E2E Performance: synthetic-large-library",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T05:08:40Z"
+    },
+    {
+      "id": 105842633931,
+      "name": "E2E: gallery-search-visual",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    },
+    {
+      "id": 105842633938,
+      "name": "E2E: playback-utilities",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    },
+    {
+      "id": 105842633951,
+      "name": "E2E: cover-providers",
+      "status": "in_progress",
+      "conclusion": null,
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": null
+    },
+    {
+      "id": 105842633961,
+      "name": "E2E: metadata-mutations",
+      "status": "completed",
+      "conclusion": "failure",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T05:14:29Z",
+      "log_sha256": "ff65ce6160f63fd0b5ab2dcfd582cc535a8d34643e0af90c604d68ce792d865d"
+    },
+    {
+      "id": 105842633969,
+      "name": "E2E Performance: scan-library",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:58:39Z"
+    },
+    {
+      "id": 105842633989,
+      "name": "E2E Performance: utility-problematic-files",
+      "status": "completed",
+      "conclusion": "success",
+      "head_sha": "ff81ffd4e846fa6606054b9d3b30dadffa4a6e18",
+      "completed_at": "2026-09-19T04:56:36Z"
+    }
+  ]
+}

@@ -398,7 +398,9 @@ function buildGalleryFamilyPanelBody() {
     const primary = artist === primaryArtist;
     const albums = Array.isArray(group.albums) ? group.albums : [];
     const album = albums.find(albumHasDisplayCover) || albums[0];
-    const artwork = album ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork` }) : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
+    const artwork = album
+      ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork`, deferPreview: true })
+      : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
     const divider = primaryGroup && relatedGroups.length > 0 && index === 1
       ? '<div class="artist-family-panel__primary-divider gallery-divider__line" role="separator" aria-label="Related artists"></div>'
       : '';
@@ -426,6 +428,7 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
   const focusedArtist = panelBody.contains(focused) ? focused?.dataset?.galleryFamilyArtist : null;
   const scrollTop = panelBody.scrollTop;
   panelBody.innerHTML = html;
+  if (typeof virtualGrid !== 'undefined') virtualGrid.activateGalleryCoverImages(panelBody);
   panelBody.scrollTop = scrollTop;
   if (focusedArtist) {
     const replacement = Array.from(panelBody.querySelectorAll('[data-gallery-family-artist]'))

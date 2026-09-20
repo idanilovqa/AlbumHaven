@@ -630,6 +630,17 @@ function openUtilityFoobarFormats(trigger) {
     onSelect: value => { state.utility.foobarFormat = value; },
   });
 }
+function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, viewportBottom) {
+  const gap = 4;
+  const height = Math.max(80, Number(menuHeight) || 0);
+  const below = Math.max(80, Number(viewportBottom) - triggerRect.bottom - 12);
+  const above = Math.max(80, triggerRect.top - 12);
+  if (height > below && above > below) {
+    return { top: Math.max(8, triggerRect.top - gap - Math.min(height, above)), maxHeight: above };
+  }
+  return { top: triggerRect.bottom + gap, maxHeight: below };
+}
+
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
@@ -655,7 +666,12 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
     menu.style.width = `${Math.max(0, menuWidth)}px`;
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
-    menu.style.top = `${rect.bottom + 4}px`; menu.style.maxHeight = `${Math.max(80, window.innerHeight - rect.bottom - 12)}px`;
+    const playerRect = document.querySelector?.('.global-player')?.getBoundingClientRect?.();
+    const viewportBottom = playerRect?.height > 0 && playerRect.top < window.innerHeight
+      ? Math.max(0, playerRect.top)
+      : window.innerHeight;
+    const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, menu.scrollHeight, viewportBottom);
+    menu.style.top = `${vertical.top}px`; menu.style.maxHeight = `${vertical.maxHeight}px`;
     syncTriggerAnchor(menu, trigger);
   };
   const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };

@@ -42,7 +42,9 @@ export class UtilityAppearanceTab extends BasePage {
     this.recentSetsHeading = this.editor.getByText('Recent sets', { exact: true });
     this.latestPlayerSetButton = this.editor.getByRole('button', { name: 'Restore latest set', exact: true });
     this.useThemeInteractionsButton = this.editor.getByRole('button', { name: 'Use theme', exact: true });
-    this.requestError = this.editor.locator('[data-background-request-error]');
+    this.requestError = this.editor.locator(
+      '[data-background-request-error] .on-page-alert__message',
+    );
     this.editorFooter = new EditorFooter(page.locator('#utility-modal-footer'));
     this.appBar = new AppBar(page, testInfo);
     this.navigationRail = page.locator('#shell-navigation-rail');

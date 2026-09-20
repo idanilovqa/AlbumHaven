@@ -550,8 +550,8 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   const state = {
     view: {
       selected_artist: 'Neal Morse',
-      primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one' }] }],
-      family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'deep-water' }] }],
+      primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', cover_url: '/cover?path=neal' }] }],
+      family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'deep-water', cover_url: '/cover?path=cosmic' }] }],
     },
     gallery: {
       mainState: {
@@ -575,6 +575,9 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   assert.match(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*min\(390px, 92vw\)/);
   assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*max-content/);
   assert.match(markup, /ui-filter-pill__artwork artist-family-panel__artwork/);
+  assert.match(markup, /data-gallery-cover-src="\/cover\?path=neal"/);
+  assert.match(markup, /data-production-cover-src="\/cover\?path=cosmic"/);
+  assert.doesNotMatch(markup, /<img[^>]+\ssrc=/);
   assert.match(markup, /ui-filter-pill__marker artist-family-panel__marker/);
   assert.match(markup, /ui-filter-pill__count artist-family-panel__count/);
   assert.match(textOnlyPill, /class="ui-filter-pill"/);
@@ -587,6 +590,26 @@ test('Artist Family panel uses fixed-width reusable filter pills with optional a
   assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist\.is-primary\s*\{/);
   assert.match(galleryMainCssSource, /height: 60px/);
   assert.match(galleryMainCssSource, /box-shadow: none !important/);
+});
+
+test('Artist Family panel sends deferred artwork through the shared gallery cover loader', () => {
+  const activated = [];
+  const panelBody = {
+    contains: () => false,
+    innerHTML: '',
+    querySelectorAll: () => [],
+    scrollTop: 12,
+  };
+  const context = loadRuntime({
+    document: { activeElement: null },
+    virtualGrid: { activateGalleryCoverImages: root => activated.push(root) },
+  });
+
+  context.renderGalleryFamilyPanelBody(panelBody, '<button>Family</button>');
+
+  assert.equal(panelBody.innerHTML, '<button>Family</button>');
+  assert.deepEqual(activated, [panelBody]);
+  assert.equal(panelBody.scrollTop, 12);
 });
 
 test('unavailable release types remain inert while Studio and Compilation use catalog-backed facts', () => {

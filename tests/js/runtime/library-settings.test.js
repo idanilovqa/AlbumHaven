@@ -241,6 +241,20 @@ test('move policy choices retain IDs, reset defaults, and honor manage permissio
   assert.doesNotMatch(context.buildLibrarySettingsPolicyButton('preferred_main_write_root', [], '', 'Library destination', ''), /<button/);
 });
 
+test('choice dropdown opens above the persistent player when the lower space is covered', () => {
+  const { context } = loadHelpers();
+  const above = context.resolveUtilityChoiceDropdownVerticalPlacement(
+    { top: 620, bottom: 660 }, 96, 680,
+  );
+  assert.equal(above.top, 520);
+  assert.equal(above.maxHeight, 608);
+  const below = context.resolveUtilityChoiceDropdownVerticalPlacement(
+    { top: 120, bottom: 160 }, 96, 680,
+  );
+  assert.equal(below.top, 164);
+  assert.equal(below.maxHeight, 508);
+});
+
 test('shared choice dropdown toggles, switches triggers, preserves IDs and Foobar strings', () => {
   const { context } = loadHelpers();
   const menus = [], selected = [];

@@ -206,6 +206,12 @@ test('notification owner ignores occluded background controls, retries deferred 
   resizes();
   callbacks.shift()();
   assert.equal(shown, 1, 'layout changes must not restart its lifetime');
+  occupied = true;
+  resizes();
+  callbacks.shift()();
+  assert.equal(attributes.has('data-notification-deferred'), false,
+    'a notification that was already presented must retain its last visible placement');
+  occupied = false;
   intrinsicWidth = 358;
   context.window.visualViewport = { offsetLeft: 50, offsetTop: 0, width: 195, height: 200 };
   resizes();
@@ -675,6 +681,10 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   assert.match(
     baseLayoutSource,
     /\.repair-alert\.has-log-history-link\.is-visible\s*\{[^}]*transform:\s*translate\(-50%,\s*0\);/u,
+  );
+  assert.match(
+    baseLayoutSource,
+    /\.repair-alert-message\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/u,
   );
 
   context.showRepairAlert('Saved.', 'success');

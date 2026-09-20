@@ -212,7 +212,7 @@ export class CoverLookupActions {
         underlyingCenterElement,
       );
       const underlyingOverlay = underlyingCenterElement instanceof Element
-        ? underlyingCenterElement.closest('#cover-lookup-modal, [role="dialog"]')
+        ? underlyingCenterElement.closest('#cover-lookup-modal')
         : null;
       return {
         pointerEvents: toastLayerStyle.pointerEvents,

@@ -75,7 +75,10 @@ test('FTC-MOBILE-WEB-007 keeps ratings on one line while narrower galleries pres
   await stepLogger.step('Narrow the same production view and record its settled layout and screenshot', async () => {
     await page.setViewportSize(NARROW_VIEWPORT);
     await galleryActions.scrollToAlbumUnderHeading(ARTIST, RATED_ALBUM);
-    await galleryActions.galleryPage.lastCardInFirstAlbumRow.hover();
+    await galleryActions.galleryPage.albumCard
+      .cardsByArtistAndAlbum(ARTIST, RATED_ALBUM)
+      .first()
+      .hover();
     narrowLayout = await waitForResponsiveGalleryLayout(galleryActions.galleryPage, {
       artistName: ARTIST,
       ratedAlbumName: RATED_ALBUM,

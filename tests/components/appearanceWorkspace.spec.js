@@ -30,7 +30,7 @@ async function mount(page, method, options = {}) {
     'runtime/shell-persistent-player.css', 'navigation-tree.css', 'appearance-backgrounds.css', 'button-component.css',
   ] : ['button-component.css', 'appearance-backgrounds.css'];
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
-  for (const file of ['button-component.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
+  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
     if (!await instance.load()) throw new Error('Component appearance setup must load successfully.');

@@ -3297,7 +3297,10 @@ function placeFloatingNotifications() {
       top: bottom ? viewport.bottom - size.height - playerHeight - 12 : viewport.top + 14,
     };
     const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
-    if (!position) { node.setAttribute('data-notification-deferred', ''); continue; }
+    if (!position) {
+      if (!entry.presented) node.setAttribute('data-notification-deferred', '');
+      continue;
+    }
     for (const [key, value] of Object.entries(position)) {
       const property = `--notification-${key}`, pixels = `${value}px`;
       if (node.style.getPropertyValue(property) !== pixels) node.style.setProperty(property, pixels);
@@ -3824,12 +3827,17 @@ function buildAlbumArtboxHtml(config = {}) {
   return `<span class="album-artbox album-artbox--${state}" data-album-artbox-state="${state}" aria-label="${escapeHtml(label)}">${content}${actionHtml ? `<span class="album-artbox__action">${actionHtml}</span>` : ''}</span>`;
 }
 
-function buildUtilityAlbumArtbox(album, { label = 'Album artwork', interactive = false, source = '' } = {}) {
+function buildUtilityAlbumArtbox(album, {
+  label = 'Album artwork', interactive = false, source = '', deferPreview = false,
+} = {}) {
   const preview = source || album?.cover_url || buildAlbumDisplayCoverUrl(album);
   const fullSource = album?.cover_url || buildAlbumLightboxCoverUrl(album) || preview;
+  const previewSourceAttributes = deferPreview
+    ? `data-gallery-cover-src="${escapeHtml(preview)}" data-production-cover-src="${escapeHtml(preview)}"`
+    : `src="${escapeHtml(preview)}"`;
   const artbox = buildAlbumArtboxHtml({
     state: preview ? 'ready' : 'missing', label,
-    coverHtml: preview ? `<img class="utility-detail-cover-image" src="${escapeHtml(preview)}" alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
+    coverHtml: preview ? `<img class="utility-detail-cover-image" ${previewSourceAttributes} alt="${escapeHtml(label)}" loading="${interactive ? 'eager' : 'lazy'}" decoding="async" data-cover-path="${escapeHtml(album?.cover_path || '')}" data-remote-cover-url="${escapeHtml(album?.remote_cover_url || album?.remote_cover_thumbnail_url || '')}" onerror="handleUtilityAlbumArtboxError(this)">` : '',
   });
   return interactive && preview
     ? `<button type="button" class="utility-artbox-trigger" data-open-lightbox="1" data-cover-src="${escapeHtml(fullSource)}" data-cover-alt="${escapeHtml(label)}" aria-label="${escapeHtml(`Enlarge ${label}`)}">${artbox}</button>`
@@ -5587,7 +5595,9 @@ function buildGalleryFamilyPanelBody() {
     const primary = artist === primaryArtist;
     const albums = Array.isArray(group.albums) ? group.albums : [];
     const album = albums.find(albumHasDisplayCover) || albums[0];
-    const artwork = album ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork` }) : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
+    const artwork = album
+      ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork`, deferPreview: true })
+      : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
     const divider = primaryGroup && relatedGroups.length > 0 && index === 1
       ? '<div class="artist-family-panel__primary-divider gallery-divider__line" role="separator" aria-label="Related artists"></div>'
       : '';
@@ -5615,6 +5625,7 @@ function renderGalleryFamilyPanelBody(panelBody, html) {
   const focusedArtist = panelBody.contains(focused) ? focused?.dataset?.galleryFamilyArtist : null;
   const scrollTop = panelBody.scrollTop;
   panelBody.innerHTML = html;
+  if (typeof virtualGrid !== 'undefined') virtualGrid.activateGalleryCoverImages(panelBody);
   panelBody.scrollTop = scrollTop;
   if (focusedArtist) {
     const replacement = Array.from(panelBody.querySelectorAll('[data-gallery-family-artist]'))
@@ -19587,6 +19598,17 @@ function openUtilityFoobarFormats(trigger) {
     onSelect: value => { state.utility.foobarFormat = value; },
   });
 }
+function resolveUtilityChoiceDropdownVerticalPlacement(triggerRect, menuHeight, viewportBottom) {
+  const gap = 4;
+  const height = Math.max(80, Number(menuHeight) || 0);
+  const below = Math.max(80, Number(viewportBottom) - triggerRect.bottom - 12);
+  const above = Math.max(80, triggerRect.top - 12);
+  if (height > below && above > below) {
+    return { top: Math.max(8, triggerRect.top - gap - Math.min(height, above)), maxHeight: above };
+  }
+  return { top: triggerRect.bottom + gap, maxHeight: below };
+}
+
 function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
   if (utilityFoobarFormatCleanup) {
     const sameTrigger = utilityChoiceTrigger === trigger;
@@ -19612,7 +19634,12 @@ function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect
     const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
     menu.style.width = `${Math.max(0, menuWidth)}px`;
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
-    menu.style.top = `${rect.bottom + 4}px`; menu.style.maxHeight = `${Math.max(80, window.innerHeight - rect.bottom - 12)}px`;
+    const playerRect = document.querySelector?.('.global-player')?.getBoundingClientRect?.();
+    const viewportBottom = playerRect?.height > 0 && playerRect.top < window.innerHeight
+      ? Math.max(0, playerRect.top)
+      : window.innerHeight;
+    const vertical = resolveUtilityChoiceDropdownVerticalPlacement(rect, menu.scrollHeight, viewportBottom);
+    menu.style.top = `${vertical.top}px`; menu.style.maxHeight = `${vertical.maxHeight}px`;
     syncTriggerAnchor(menu, trigger);
   };
   const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };

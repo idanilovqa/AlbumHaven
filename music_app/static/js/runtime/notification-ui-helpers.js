@@ -87,7 +87,10 @@ function placeFloatingNotifications() {
       top: bottom ? viewport.bottom - size.height - playerHeight - 12 : viewport.top + 14,
     };
     const position = findClearNotificationPosition(size, preferred, viewport, obstacles);
-    if (!position) { node.setAttribute('data-notification-deferred', ''); continue; }
+    if (!position) {
+      if (!entry.presented) node.setAttribute('data-notification-deferred', '');
+      continue;
+    }
     for (const [key, value] of Object.entries(position)) {
       const property = `--notification-${key}`, pixels = `${value}px`;
       if (node.style.getPropertyValue(property) !== pixels) node.style.setProperty(property, pixels);

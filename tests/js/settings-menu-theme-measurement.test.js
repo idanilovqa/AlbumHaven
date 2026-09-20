@@ -25,7 +25,10 @@ test('hover measurements await real finite transitions before sampling color', a
   const original = global.getComputedStyle;
   global.getComputedStyle = () => {
     assert.equal(settled, true);
-    return { getPropertyValue: () => '#171717', backgroundColor: 'rgb(23, 45, 67)' };
+    return {
+      getPropertyValue: name => name === '--dropdown-item-hover-background' ? 'rgb(23, 45, 67)' : '',
+      backgroundColor: 'rgb(23, 45, 67)',
+    };
   };
   try {
     const pending = SettingsModalAppBar.prototype.readAdminHoverTheme.call({ adminPanelMenuItem: { evaluate: callback => callback(element) } });
@@ -35,11 +38,11 @@ test('hover measurements await real finite transitions before sampling color', a
   } finally { global.getComputedStyle = original; }
 });
 
-test('default account hover protects the approved navy color even when unused appearance tokens exist', async () => {
+test('default account hover protects the neutral dropdown color even when unused appearance tokens exist', async () => {
   const { SettingsModalAppBar } = await import(moduleUrl);
   const original = global.getComputedStyle;
   const tokens = { '--text': '#eeeeee', '--panel': '#171717', '--appearance-item-hover': 'rgb(28, 38, 34)' };
-  let backgroundColor = 'rgb(23, 45, 67)';
+  let backgroundColor = 'rgb(40.2, 40.2, 40.2)';
   global.getComputedStyle = () => ({ getPropertyValue: name => tokens[name] || '', backgroundColor });
   const element = { getAnimations: () => [], ownerDocument: { documentElement: { hasAttribute: () => false } } };
   const owner = { adminPanelMenuItem: { evaluate: callback => callback(element) } };
@@ -48,7 +51,7 @@ test('default account hover protects the approved navy color even when unused ap
   });
   try {
     const correct = await SettingsModalAppBar.prototype.readAdminHoverTheme.call(owner);
-    assert.deepEqual(correct.expected, [23, 45, 67]);
+    assert.deepEqual(correct.expected, [40.2, 40.2, 40.2]);
     assertHover(correct);
     backgroundColor = 'rgb(34, 34, 34)';
     const wrong = await SettingsModalAppBar.prototype.readAdminHoverTheme.call(owner);
@@ -57,10 +60,10 @@ test('default account hover protects the approved navy color even when unused ap
 });
 
 for (const attribute of ['data-appearance-palette', 'data-appearance-item-hover']) {
-  test(`explicit ${attribute} uses the saved row-hover token without accepting arbitrary observed colors`, async () => {
+  test(`explicit ${attribute} keeps the shared dropdown hover token without accepting arbitrary observed colors`, async () => {
     const { SettingsModalAppBar } = await import(moduleUrl);
     const original = global.getComputedStyle;
-    const tokens = { '--appearance-item-hover': '#387f68', '--appearance-hover': '#abcdef' };
+    const tokens = { '--dropdown-item-hover-background': '#387f68', '--appearance-item-hover': '#abcdef' };
     global.getComputedStyle = () => ({ getPropertyValue: name => tokens[name] || '', backgroundColor: 'rgb(56, 127, 104)' });
     const element = { getAnimations: () => [], ownerDocument: { documentElement: { hasAttribute: name => name === attribute } } };
     try {

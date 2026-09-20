@@ -468,8 +468,11 @@ test('renderLibraryLoader keeps Browse hidden while an active scan is showing Lo
 });
 
 test('Library warning follows dedicated page mode across selection and health changes', () => {
-  const { context, elements, title, spinner } = createLoaderRenderFixture();
-  const notice = elements['library-scan-warning'] = { hidden: false };
+  const { context, title, spinner } = createLoaderRenderFixture();
+  const modes = [];
+  context.syncScanLibraryWatcherHealth = (data, scanPageVisible) => {
+    modes.push({ scanPageVisible, health: data.watcher_health.state });
+  };
   vm.runInContext(`
     state.view = { query: 'Neal Morse', album_count: 1 };
     state.status = { watcher_health: { state: 'warning' } };
@@ -479,19 +482,19 @@ test('Library warning follows dedicated page mode across selection and health ch
   `, context);
   assert.equal(title.textContent, 'Loading selection');
   assert.equal(spinner.hidden, false);
-  assert.equal(notice.hidden, true);
+  assert.deepEqual(modes.at(-1), { scanPageVisible: false, health: 'warning' });
   vm.runInContext(`
     state.ui.pendingViewTransition = false;
     renderLibraryLoader(state.status, { scanPageVisible: true });
   `, context);
-  assert.equal(notice.hidden, false);
+  assert.deepEqual(modes.at(-1), { scanPageVisible: true, health: 'warning' });
   vm.runInContext('renderLibraryLoader(state.status);', context);
-  assert.equal(notice.hidden, true);
+  assert.deepEqual(modes.at(-1), { scanPageVisible: false, health: 'warning' });
   vm.runInContext(`
     state.status.watcher_health.state = 'healthy';
     renderLibraryLoader(state.status, { scanPageVisible: true });
   `, context);
-  assert.equal(notice.hidden, true);
+  assert.deepEqual(modes.at(-1), { scanPageVisible: true, health: 'healthy' });
 });
 
 test('renderLibraryLoader does not rewrite an already-hidden idle loader', () => {

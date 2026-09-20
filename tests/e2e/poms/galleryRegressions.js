@@ -26,8 +26,11 @@ export class GalleryRegressions {
     this.art=this.modal.locator('.track-modal-cover .album-artbox');
     this.tracks=this.modal.locator('.track-modal-list');
     this.rows=this.modal.locator('.album-track-table__row');
-    this.warning=page.getByRole('button',{name:'Library warning',exact:true});
-    this.warningPanel=page.locator('#library-warning-panel');
+    this.warning=page.locator('#toast-layer .system-warning-notification').filter({hasText:'Library watcher needs attention'});
+    this.warningDismiss=this.warning.getByRole('button',{name:'Dismiss',exact:true});
+    this.warningGoLibrary=this.warning.getByRole('button',{name:'Go to Library page',exact:true});
+    this.removedWarningButton=page.getByRole('button',{name:'Library warning',exact:true});
+    this.removedWarningPanel=page.locator('#library-warning-panel');
     this.scanWarning=page.locator('#library-scan-warning');
     this.libraryCheck=page.locator('#scan-indicator .status-check');
     this.library=page.getByRole('button',{name:'Library status',exact:true});

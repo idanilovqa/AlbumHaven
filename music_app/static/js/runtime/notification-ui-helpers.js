@@ -135,87 +135,95 @@ function unregisterFloatingNotification(node) {
 }
 
 let libraryWatcherWarning = null;
-let libraryWatcherWarningDismissed = false;
 let libraryWatcherHealth = null;
-const libraryWatcherDismissalKey = 'album-haven.library-watcher-warning-dismissed.v1';
+let libraryWatcherDismissalInFlight = null;
 
-function isLibraryWatcherWarningDismissed() {
-  try {
-    return libraryWatcherWarningDismissed || window.localStorage?.getItem(libraryWatcherDismissalKey) === '1';
-  } catch (_error) {
-    return libraryWatcherWarningDismissed;
-  }
+function cacheLibraryWatcherHealth(data) {
+  if (!Object.prototype.hasOwnProperty.call(data, 'watcher_health')) return;
+  const health = data.watcher_health || {};
+  if (health.state === 'healthy') state.ui.dismissedLibraryWarningToken = '';
+  // Only /status carries the event token and per-account acknowledgement.
+  if (health.warning_token || health.state === 'healthy') libraryWatcherHealth = health;
 }
 
-function dismissLibraryWatcherWarning() {
-  libraryWatcherWarningDismissed = true;
-  try { window.localStorage?.setItem(libraryWatcherDismissalKey, '1'); } catch (_error) {}
-  unregisterFloatingNotification(libraryWatcherWarning);
-  libraryWatcherWarning?.remove();
-  libraryWatcherWarning = null;
+async function dismissLibraryWatcherWarning(button) {
+  const token = button?.getAttribute?.('data-warning-token')
+    || libraryWatcherWarning?.dataset?.warningToken || '';
+  if (!token) return false;
+  while (libraryWatcherDismissalInFlight) {
+    if (libraryWatcherDismissalInFlight.token === token) return libraryWatcherDismissalInFlight.promise;
+    await libraryWatcherDismissalInFlight.promise;
+  }
+  if (libraryWatcherHealth?.warning_token !== token
+    || libraryWatcherWarning?.dataset?.warningToken !== token) return false;
+  const operation = { token, promise: null };
+  libraryWatcherDismissalInFlight = operation;
+  if (button) button.disabled = true;
+  operation.promise = (async () => {
+    try {
+      const response = await fetch('/account/library-warning/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
+      });
+      if (!response.ok) throw new Error(response.status === 409
+        ? 'The library warning changed. Please review the latest warning.'
+        : 'Unable to dismiss the warning. Please try again.');
+      state.ui.dismissedLibraryWarningToken = token;
+      if (libraryWatcherHealth?.warning_token === token) {
+        libraryWatcherHealth = { ...libraryWatcherHealth, dismissed: true };
+      }
+      syncLibraryWatcherWarning({});
+      return true;
+    } catch (error) {
+      showRepairAlert(error.message || 'Unable to dismiss the warning. Please try again.', 'error', null);
+      return false;
+    } finally {
+      if (button) button.disabled = false;
+      if (libraryWatcherDismissalInFlight === operation) libraryWatcherDismissalInFlight = null;
+    }
+  })();
+  return operation.promise;
 }
 
 function syncScanLibraryWatcherHealth(data = {}, scanPageVisible = Boolean(typeof state !== 'undefined' && state.ui?.scanPageReturnContext)) {
-  if (Object.prototype.hasOwnProperty.call(data, 'watcher_health')) libraryWatcherHealth = data.watcher_health;
-  const host = document.getElementById('library-loader-watch-health');
-  if (!host) return;
-  if (!scanPageVisible) {
-    if (!host.hidden) host.hidden = true;
-    if (host.innerHTML) host.innerHTML = '';
-    return;
+  cacheLibraryWatcherHealth(data);
+  if (typeof renderLibraryWarning === 'function') {
+    renderLibraryWarning({ watcher_health: libraryWatcherHealth || {} }, { scanPageVisible });
   }
-  const problems = libraryWatcherHealth?.problems || [];
-  const warning = libraryWatcherHealth?.state === 'warning' || problems.length > 0;
-  if (host.hidden !== !warning) host.hidden = !warning;
-  if (!warning) {
-    if (host.innerHTML) host.innerHTML = '';
-    return;
-  }
-  const unavailable = problems.some(problem => problem.state === 'root_unavailable');
-  const message = unavailable
-    ? 'A watched library folder became unavailable. Reconnect the drive or network share, check that the folder is accessible, then run Full Rescan from Library Status.'
-    : problems.length
-      ? 'The library watcher may have missed file changes. Run Full Rescan from Library Status to reconcile the library with your files.'
-      : 'Library watcher diagnostics are unavailable. Check drive and network access, then retry the library scan.';
-  const html = buildOnPageAlertHtml({ severity: 'warning', title: 'Library watcher needs attention', message });
-  if (host.innerHTML !== html) host.innerHTML = html;
 }
 
 function syncLibraryWatcherWarning(data = {}) {
-  if (!Object.prototype.hasOwnProperty.call(data, 'watcher_health')) return;
-  const health = data.watcher_health;
-  syncScanLibraryWatcherHealth(data);
-  const warning = health?.state === 'warning'
-    || (Array.isArray(health?.problems) && health.problems.length > 0);
-  if (!warning) {
+  cacheLibraryWatcherHealth(data);
+  syncScanLibraryWatcherHealth();
+  const health = libraryWatcherHealth || {};
+  const model = libraryWarningPresentation(health, state.ui.dismissedLibraryWarningToken);
+  if (!model.warning || model.dismissed || !model.token) {
     unregisterFloatingNotification(libraryWatcherWarning);
     libraryWatcherWarning?.remove();
     libraryWatcherWarning = null;
     return;
   }
-  if (isLibraryWatcherWarningDismissed()) {
-    unregisterFloatingNotification(libraryWatcherWarning);
-    libraryWatcherWarning?.remove();
-    libraryWatcherWarning = null;
-    return;
-  }
-  if (libraryWatcherWarning?.parentElement) return;
+  if (libraryWatcherWarning?.parentElement && libraryWatcherWarning.dataset.warningToken === model.token) return;
+  unregisterFloatingNotification(libraryWatcherWarning);
+  libraryWatcherWarning?.remove();
+  libraryWatcherWarning = null;
   const layer = document.getElementById('toast-layer');
   if (!layer) return;
   libraryWatcherWarning = document.createElement('div');
   libraryWatcherWarning.className = 'system-warning-notification';
+  libraryWatcherWarning.dataset.warningToken = model.token;
   libraryWatcherWarning.innerHTML = buildOnPageAlertHtml({
     severity: 'warning',
     title: 'Library watcher needs attention',
     message: 'Some library changes may have been missed. Check Library Status for recovery options.',
-    actionsHtml: window.ButtonComponent.renderButton({ label: 'Dismiss', className: 'on-page-alert__dismiss', attributes: { 'data-watcher-dismiss': '1' } })
-      + window.ButtonComponent.renderButton({ label: 'Go to Library page', variant: 'primary', attributes: { 'data-watcher-library': '1' } }),
+    actionsHtml: window.ButtonComponent.renderButton({ label: 'Dismiss', className: 'on-page-alert__dismiss', attributes: { 'data-watcher-dismiss': '1', 'data-warning-token': model.token } })
+      + window.ButtonComponent.renderButton({ label: 'Go to Library page', variant: 'primary', attributes: { 'data-watcher-library': '1', 'data-warning-token': model.token } }),
   });
-  libraryWatcherWarning.addEventListener('click', event => {
-    if (event.target.closest('[data-watcher-dismiss]')) {
-      dismissLibraryWatcherWarning();
-    } else if (event.target.closest('[data-watcher-library]')) {
-      dismissLibraryWatcherWarning();
+  libraryWatcherWarning.addEventListener('click', async event => {
+    const dismiss = event.target.closest('[data-watcher-dismiss]');
+    const openLibrary = event.target.closest('[data-watcher-library]');
+    const button = dismiss || openLibrary;
+    if (!button || button.disabled) return;
+    if (await dismissLibraryWatcherWarning(button) && openLibrary) {
       closeUtilityModal();
       openScanPage();
       syncScanLibraryWatcherHealth();

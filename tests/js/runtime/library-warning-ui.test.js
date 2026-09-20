@@ -10,9 +10,9 @@ function load() {
   return context;
 }
 
-function renderScanWarning(problem, scanPageVisible = true) {
+function renderScanWarning(problem, scanPageVisible = true, dismissed = true) {
   const context = load();
-  const elements = new Map(['library-warning-button', 'library-warning-panel', 'library-scan-warning']
+  const elements = new Map(['library-scan-warning']
     .map(id => [id, { innerHTML: '', hidden: true, dataset: {} }]));
   context.document.getElementById = id => elements.get(id) || null;
   elements.set('library-loader', { classList: { contains: () => scanPageVisible } });
@@ -22,10 +22,10 @@ function renderScanWarning(problem, scanPageVisible = true) {
   vm.runInContext(fs.readFileSync(path.join(__dirname,
     '../../../music_app/static/js/runtime/alert-components.js'), 'utf8'), context);
   context.renderLibraryWarning({ watcher_health: {
-    state: 'warning', warning_token: 'owned-warning', problems: [problem],
+    state: 'warning', warning_token: 'owned-warning', dismissed, problems: [problem],
   } });
   const notice = elements.get('library-scan-warning');
-  assert.equal(notice.hidden, !scanPageVisible);
+  assert.equal(notice.hidden, !scanPageVisible || !dismissed);
   return notice.innerHTML;
 }
 
@@ -58,25 +58,13 @@ test('watcher health keeps the Library notice but omits the action for a read-on
     assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321|Private Music|[A-Z]:\\/);
   }
 });
-test('dismissal hides only the matching warning, not its Scan page notice',()=>{
-  const context=load();
-  const health={state:'warning',warning_token:'first'};
-  assert.equal(context.libraryWarningPresentation(health,'').showIcon,true);
-  assert.equal(context.libraryWarningPresentation(health,'first').showIcon,false);
-  assert.equal(context.libraryWarningPresentation(health,'first').warning,true);
-  assert.equal(context.libraryWarningPresentation({...health,dismissed:true},'').showIcon,false);
-  assert.equal(context.libraryWarningPresentation({...health,warning_token:'second'},'first').showIcon,true);
-  assert.equal(context.libraryWarningPresentation({state:'healthy'},'first').showIcon,false);
-});
-test('failed dismissal is reported without acknowledging or closing the warning',async()=>{
-  const context=load();
-  const panel={dataset:{warningToken:'first'}};
-  context.document.getElementById=()=>panel;
-  context.fetch=async()=>({ok:false,status:503});
-  let message='';context.showRepairAlert=value=>{message=value;};
-  const button={disabled:false};
-  await context.dismissLibraryWarning(button);
-  assert.equal(button.disabled,false);
-  assert.equal(context.state.ui.dismissedLibraryWarningToken,undefined);
-  assert.match(message,/Unable to dismiss/);
+test('Library warning requires acknowledgement of the current warning token', () => {
+  const context = load();
+  const health = { state: 'warning', warning_token: 'first' };
+  assert.equal(context.libraryWarningPresentation(health, '').dismissed, false);
+  assert.equal(context.libraryWarningPresentation(health, 'first').dismissed, true);
+  assert.equal(context.libraryWarningPresentation({ ...health, dismissed: true }, '').dismissed, true);
+  assert.equal(context.libraryWarningPresentation({ ...health, warning_token: 'second' }, 'first').dismissed, false);
+  assert.equal(context.libraryWarningPresentation({ state: 'healthy' }, 'first').warning, false);
+  assert.equal(renderScanWarning({ allowed_actions: { 'library.refresh': true } }, true, false), '');
 });

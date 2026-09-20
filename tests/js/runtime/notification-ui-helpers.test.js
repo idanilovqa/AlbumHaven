@@ -16,6 +16,8 @@ const helperPath = path.join(
   'notification-ui-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const warningHelperPath = path.join(path.dirname(helperPath), 'library-warning-ui.js');
+const warningHelperSource = fs.readFileSync(warningHelperPath, 'utf8');
 const baseLayoutPath = path.join(
   __dirname,
   '..',
@@ -53,6 +55,9 @@ const coverLookupSpecSource = fs.readFileSync(
 function createContext(storage = new Map()) {
   const toasts = [];
   const scheduledTimeouts = [];
+  const requests = [];
+  const scanNotice = { hidden: true, innerHTML: '' };
+  const loader = { scanPageVisible: false, classList: { contains: () => loader.scanPageVisible } };
   const layer = {
     appendChild(toast) {
       toasts.push(toast);
@@ -60,10 +65,17 @@ function createContext(storage = new Map()) {
     },
   };
   const context = {
+    state: { ui: { dismissedLibraryWarningToken: '' }, status: {} },
+    fetch: async (url, options) => {
+      requests.push({ url, ...options });
+      return { ok: true, status: 200, json: async () => ({ dismissed_token: JSON.parse(options.body).token }) };
+    },
+    buildOnPageAlertHtml: config => JSON.stringify(config),
     window: { localStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) }, ButtonComponent: { renderButton: config => `<button>${config.label}</button>` } },
     document: {
       createElement() {
         const toast = {
+          dataset: {},
           className: '',
           classList: {
             add() {},
@@ -81,7 +93,8 @@ function createContext(storage = new Map()) {
         return toast;
       },
       getElementById(id) {
-        return id === 'toast-layer' ? layer : null;
+        return id === 'toast-layer' ? layer : id === 'library-scan-warning' ? scanNotice
+          : id === 'library-loader' ? loader : null;
       },
     },
     scheduleBrowserAnimationFrame() {},
@@ -90,9 +103,24 @@ function createContext(storage = new Map()) {
       return scheduledTimeouts.length;
     },
   };
+  context.ButtonComponent = context.window.ButtonComponent;
   vm.createContext(context);
+  vm.runInContext(warningHelperSource, context, { filename: warningHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, scheduledTimeouts, toasts };
+  return { context, scheduledTimeouts, toasts, requests, scanNotice, loader };
+}
+
+const firstWarningToken = 'a'.repeat(64);
+const nextWarningToken = 'b'.repeat(64);
+function watcherWarning(token = firstWarningToken, dismissed = false) {
+  return { watcher_health: { state: 'warning', warning_token: token, dismissed,
+    problems: [{ state: 'root_unavailable', allowed_actions: { 'library.refresh': true } }] } };
+}
+function warningButton(toast) {
+  const token = toast.dataset.warningToken;
+  const button = { disabled: false,
+    getAttribute: name => name === 'data-warning-token' ? token : null };
+  return button;
 }
 
 test('floating notification placement preserves a clear preferred corner', () => {
@@ -188,11 +216,13 @@ test('notification owner ignores occluded background controls, retries deferred 
   assert.equal(listeners.size, 0);
 });
 
-test('watcher warning uses one shared global alert, survives partial status, and clears on recovery', () => {
+test('watcher warning uses one shared global alert, survives partial status, and clears on recovery', async () => {
   const { context, toasts } = createContext();
   const configurations = [];
   context.buildOnPageAlertHtml = config => { configurations.push(config); return '<section role="alert">Warning</section>'; };
-  const warning = { watcher_health: { state: 'warning', problems: [{ root_key: 'private-root', message: 'private-path' }] } };
+  const warning = watcherWarning();
+  warning.watcher_health.problems[0].root_key = 'private-root';
+  warning.watcher_health.problems[0].message = 'private-path';
   context.syncLibraryWatcherWarning(warning);
   const mounted = toasts[0];
   context.syncLibraryWatcherWarning(warning);
@@ -209,39 +239,151 @@ test('watcher warning uses one shared global alert, survives partial status, and
   assert.equal(toasts.length, 0);
   context.syncLibraryWatcherWarning(warning);
   assert.equal(toasts.length, 1);
-  toasts[0].click({ target: { closest: selector => selector === '[data-watcher-dismiss]' } });
+  assert.equal(await context.dismissLibraryWatcherWarning(warningButton(toasts[0])), true);
   assert.equal(toasts.length, 0);
   context.syncLibraryWatcherWarning(warning);
   assert.equal(toasts.length, 0, 'polling must not reopen a dismissed warning');
 });
 
-for (const action of ['[data-watcher-dismiss]', '[data-watcher-library]']) {
-  test(`${action} persists dismissal across reloads and health transitions`, () => {
-    const storage = new Map();
-    const first = createContext(storage);
-    first.context.buildOnPageAlertHtml = () => 'Warning';
-    first.context.closeUtilityModal = () => {};
-    first.context.openScanPage = () => {};
-    const warning = { watcher_health: { state: 'warning', problems: [] } };
-    first.context.syncLibraryWatcherWarning(warning);
-    first.toasts[0].click({ target: { closest: selector => selector === action } });
-    const reloaded = createContext(storage);
-    reloaded.context.buildOnPageAlertHtml = () => 'Warning';
-    reloaded.context.syncLibraryWatcherWarning({ watcher_health: { state: 'healthy', problems: [] } });
-    reloaded.context.syncLibraryWatcherWarning(warning);
-    assert.equal(reloaded.toasts.length, 0);
-  });
-}
+test('dismissal persists the displayed token and leaves recovery notice only on Library', async () => {
+  const { context, toasts, requests, scanNotice, loader } = createContext();
+  const warning = watcherWarning();
+  context.state.status = warning;
+  context.syncLibraryWatcherWarning(warning);
+  context.syncScanLibraryWatcherHealth(warning, true);
+  assert.equal(scanNotice.hidden, true, 'the floating alert owns an unacknowledged warning');
+  assert.equal(await context.dismissLibraryWatcherWarning(warningButton(toasts[0])), true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/account/library-warning/dismiss');
+  assert.equal(requests[0].method, 'POST');
+  assert.deepEqual(JSON.parse(requests[0].body), { token: firstWarningToken });
+  assert.equal(context.state.ui.dismissedLibraryWarningToken, firstWarningToken);
+  assert.equal(toasts.length, 0);
+  context.syncScanLibraryWatcherHealth(warning, false);
+  assert.equal(scanNotice.hidden, true);
+  loader.scanPageVisible = true;
+  context.syncScanLibraryWatcherHealth(warning, true);
+  assert.equal(scanNotice.hidden, false);
+  assert.match(scanNotice.innerHTML, /Full Rescan/);
+  const reloaded = createContext();
+  reloaded.context.syncLibraryWatcherWarning(watcherWarning(firstWarningToken, true));
+  assert.equal(reloaded.toasts.length, 0, 'the server acknowledgement survives reload');
+  reloaded.context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  assert.equal(reloaded.toasts.length, 1, 'a new warning must surface');
+});
 
-test('Go to Library dismisses the watcher alert and opens Scan Library', () => {
+test('legacy localStorage dismissal cannot suppress current account warnings', () => {
+  const storage = new Map([['album-haven.library-watcher-warning-dismissed.v1', '1']]);
+  const { context, toasts } = createContext(storage);
+  context.syncLibraryWatcherWarning(watcherWarning());
+  assert.equal(toasts.length, 1);
+});
+
+test('tokenless view health cannot reopen an acknowledged warning or dismiss an unknown event', async () => {
+  const { context, toasts, requests } = createContext();
+  const tokenless = { watcher_health: { state: 'warning', problems: [{ state: 'root_unavailable' }] } };
+  context.syncLibraryWatcherWarning(tokenless);
+  assert.equal(toasts.length, 0, 'wait for authoritative status before mounting an actionable warning');
+  assert.equal(await context.dismissLibraryWatcherWarning(), false);
+  assert.equal(requests.length, 0);
+  context.syncLibraryWatcherWarning(watcherWarning(firstWarningToken, true));
+  context.syncLibraryWatcherWarning(tokenless);
+  assert.equal(toasts.length, 0, 'unscoped view responses must retain server acknowledgement');
+  context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  assert.equal(toasts.length, 1);
+});
+
+test('healthy recovery resets transient dismissal before a later warning', async () => {
+  const { context, toasts } = createContext();
+  context.syncLibraryWatcherWarning(watcherWarning());
+  await context.dismissLibraryWatcherWarning(warningButton(toasts[0]));
+  context.syncLibraryWatcherWarning({ watcher_health: { state: 'healthy', problems: [] } });
+  assert.equal(context.state.ui.dismissedLibraryWarningToken, '');
+  context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  assert.equal(toasts.length, 1);
+});
+
+for (const status of [409, 503, 'network']) test(`failed dismissal ${status} retains the warning`, async () => {
+  const { context, toasts } = createContext();
+  const errors = [];
+  context.showRepairAlert = message => errors.push(message);
+  context.fetch = async () => {
+    if (status === 'network') throw new Error('Network unavailable');
+    return { ok: false, status };
+  };
+  context.syncLibraryWatcherWarning(watcherWarning());
+  const mounted = toasts[0], button = warningButton(mounted);
+  assert.equal(await context.dismissLibraryWatcherWarning(button), false);
+  assert.equal(toasts[0], mounted);
+  assert.equal(button.disabled, false);
+  assert.equal(context.state.ui.dismissedLibraryWarningToken, '');
+  assert.equal(errors.length, 1);
+});
+
+for (const status of [200, 409]) test(`in-flight dismissal ${status} cannot hide a newer warning`, async () => {
+  const { context, toasts } = createContext();
+  let complete, calls = 0;
+  context.showRepairAlert = () => {};
+  context.fetch = () => { calls++; return new Promise(resolve => { complete = resolve; }); };
+  context.syncLibraryWatcherWarning(watcherWarning());
+  const button = warningButton(toasts[0]);
+  const first = context.dismissLibraryWatcherWarning(button);
+  const repeated = context.dismissLibraryWatcherWarning(button);
+  assert.equal(calls, 1, 'duplicate clicks share the token request');
+  context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  complete({ ok: status === 200, status, json: async () => ({ dismissed_token: firstWarningToken }) });
+  await Promise.all([first, repeated]);
+  assert.equal(toasts.length, 1);
+  assert.equal(toasts[0].dataset.warningToken, nextWarningToken);
+  context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  assert.equal(toasts.length, 1, 'later polling must retain the new warning');
+});
+
+for (const replaceQueuedWarning of [false, true]) test(`different warning acknowledgements serialize and revalidate queued tokens (replaced=${replaceQueuedWarning})`, async () => {
+  const { context, toasts } = createContext();
+  const pending = [];
+  context.fetch = (_url, options) => new Promise(resolve => {
+    pending.push({ token: JSON.parse(options.body).token, resolve });
+  });
+  context.syncLibraryWatcherWarning(watcherWarning());
+  const first = context.dismissLibraryWatcherWarning(warningButton(toasts[0]));
+  context.syncLibraryWatcherWarning(watcherWarning(nextWarningToken));
+  const second = context.dismissLibraryWatcherWarning(warningButton(toasts[0]));
+  assert.equal(pending.length, 1, 'the newer acknowledgement must wait for the previous write');
+  const thirdToken = 'c'.repeat(64);
+  if (replaceQueuedWarning) context.syncLibraryWatcherWarning(watcherWarning(thirdToken));
+  pending[0].resolve({ ok: true, status: 200 });
+  assert.equal(await first, true);
+  if (replaceQueuedWarning) {
+    assert.equal(await second, false, 'a queued click cannot acknowledge a superseded event');
+    assert.equal(pending.length, 1);
+    assert.equal(toasts[0].dataset.warningToken, thirdToken);
+  } else {
+    assert.equal(pending.length, 2);
+    assert.equal(pending[1].token, nextWarningToken);
+    assert.equal(toasts[0].dataset.warningToken, nextWarningToken);
+    pending[1].resolve({ ok: true, status: 200 });
+    assert.equal(await second, true);
+    assert.equal(toasts.length, 0);
+    assert.equal(context.state.ui.dismissedLibraryWarningToken, nextWarningToken);
+  }
+});
+
+test('Go to Library awaits persisted acknowledgement before opening Scan Library', async () => {
   const { context, toasts } = createContext();
   const actions = [];
   context.buildOnPageAlertHtml = () => '<section>Warning</section>';
   context.closeUtilityModal = () => actions.push('close');
   context.openScanPage = () => actions.push('scan');
-  const warning = { watcher_health: { state: 'warning', problems: [] } };
+  let complete;
+  context.fetch = () => new Promise(resolve => { complete = resolve; });
+  const warning = watcherWarning();
   context.syncLibraryWatcherWarning(warning);
-  toasts[0].click({ target: { closest: selector => selector === '[data-watcher-library]' } });
+  const button = warningButton(toasts[0]);
+  const clicked = toasts[0].click({ target: { closest: selector => selector === '[data-watcher-library]' ? button : null } });
+  assert.deepEqual(actions, []);
+  complete({ ok: true, status: 200, json: async () => ({ dismissed_token: firstWarningToken }) });
+  await clicked;
   assert.deepEqual(actions, ['close', 'scan']);
   assert.equal(toasts.length, 0);
   context.syncLibraryWatcherWarning(warning);
@@ -529,7 +671,7 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   assert.equal(alertClasses.has('has-log-history-link'), false);
 });
 
-test('scan watcher health leaves stable loader DOM untouched and applies health transitions', () => {
+test('acknowledged Library warning leaves stable loader DOM untouched and applies health transitions', () => {
   const { context } = createContext();
   const values = { hidden: true, innerHTML: '' };
   const writes = [];
@@ -540,9 +682,9 @@ test('scan watcher health leaves stable loader DOM untouched and applies health 
       set: value => { writes.push(property); values[property] = value; },
     });
   }
-  context.document.getElementById = id => id === 'library-loader-watch-health' ? host : null;
+  context.document.getElementById = id => id === 'library-scan-warning' ? host : null;
   context.buildOnPageAlertHtml = config => JSON.stringify(config);
-  const warning = { watcher_health: { state: 'warning', problems: [{ state: 'root_unavailable' }] } };
+  const warning = watcherWarning(firstWarningToken, true);
   context.syncScanLibraryWatcherHealth(warning, false);
   context.syncScanLibraryWatcherHealth({}, false);
   assert.deepEqual(writes, [], 'background health updates must not mutate the hidden loader');
@@ -554,7 +696,7 @@ test('scan watcher health leaves stable loader DOM untouched and applies health 
   assert.deepEqual(writes, [], 'unchanged visible warning must retain its DOM');
   context.syncScanLibraryWatcherHealth({ watcher_health: { state: 'healthy', problems: [] } }, true);
   assert.equal(host.hidden, true);
-  assert.equal(host.innerHTML, '');
+  assert.match(host.innerHTML, /became unavailable/, 'hidden notice retains its reusable markup');
   writes.length = 0;
   context.syncScanLibraryWatcherHealth({}, true);
   assert.deepEqual(writes, [], 'unchanged recovery state must retain its DOM');

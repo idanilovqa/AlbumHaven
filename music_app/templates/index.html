@@ -80,8 +80,6 @@
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
             <span class="status-progress" id="scan-indicator-progress" aria-hidden="true" style="display:none"></span>
           {% endcall %}
-          {% call action_button('Library warning', id='library-warning-button', title='Library warning', hidden=true, attributes={'aria-controls': 'library-warning-panel', 'aria-expanded': 'false'}) %}{% endcall %}
-          <div class="gallery-anchored-menu library-warning-panel" id="library-warning-panel" role="group" aria-label="Library warning" hidden></div>
           {% call action_button('Sources', id='gallery-sources-button', title='Sources', attributes={'data-gallery-sources-anchor': '1', 'aria-controls': 'gallery-sources-menu', 'aria-expanded': 'false'}) %}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>{% endcall %}
           <div class="gallery-anchored-menu" id="gallery-sources-menu" data-anchored-surface="sources" role="group" aria-label="Sources" hidden>
             <span class="gallery-menu-title">Sources</span>
@@ -173,7 +171,6 @@
           {% endif %}
         </div>
         <div id="library-scan-warning" hidden></div>
-        <div id="library-loader-watch-health" hidden></div>
         <div class="library-loader-progress" id="library-loader-progress"></div>
         <ol class="library-loader-phase-guide" id="library-loader-phase-guide" aria-label="Scan phases" hidden>
           <li><strong>Discovering music files</strong><span>Enumerates candidate files in your local library.</span></li>

@@ -37,7 +37,7 @@ async function mountSearchInput(page, filter = false) {
   await page.route(componentUrl, (route) => route.fulfill({
     contentType: 'text/html; charset=utf-8',
     body: `<!doctype html>
-      <html style="--muted: rgb(144, 155, 166); --appearance-search-focus: #00f; --appearance-interaction-outline: rgb(75, 193, 115); --appearance-accent: rgb(75, 193, 115);">
+      <html style="--muted: rgb(144, 155, 166); --appearance-search-focus: #00f; --appearance-interaction-outline: rgb(75, 193, 115); --appearance-accent: rgb(75, 193, 115); --dropdown-item-hover-background: rgb(41, 43, 47);">
         <body>
           <header class="${filter ? 'utility-sidebar' : 'app-bar'}" ${filter ? 'id="utility-modal"' : ''}>
             <form class="${filter ? 'utility-sidebar-search' : 'toolbar-left'}" onsubmit="event.preventDefault()">
@@ -100,7 +100,11 @@ for (const filter of [false, true]) {
     await expect(button).toHaveCSS('outline-offset', '-3px');
     await expect(button).toHaveCSS('border-style', 'none');
     await expect(button).toHaveCSS('box-shadow', 'none');
-    expect(await button.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(idleButtonBackground);
+    if (filter) {
+      await expect(button).toHaveCSS('background-color', 'rgb(41, 43, 47)');
+    } else {
+      expect(await button.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe(idleButtonBackground);
+    }
     await expect(control).toHaveCSS('outline-style', 'none');
     await page.keyboard.press('Shift+Tab');
     await expect(input).toBeFocused();

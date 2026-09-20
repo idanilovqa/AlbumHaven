@@ -72,7 +72,7 @@
   transition: color .15s ease, background-color .15s ease;
 }
 .search-field-action > .search-field-button:is(:hover, :focus-visible):not(:disabled) {
-  background: var(--search-field-hover, var(--panel-2));
+  background: var(--search-field-hover, var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))));
   color: var(--search-field-color, var(--text));
 }
 .search-field-action > .search-field-button:disabled { opacity: .5; cursor: default; }

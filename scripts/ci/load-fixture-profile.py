@@ -1853,6 +1853,20 @@ def _validate_staged_named_identities(
         artist = identity.get("artist")
         album = identity.get("album")
         year = identity.get("year")
+        if artist is not None and album is None and year is None:
+            row = connection.execute(
+                """
+                select 1
+                from fixture_stage
+                where table_name='local_artists'
+                  and record->>'name'=%s
+                limit 1
+                """,
+                (artist,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"fixture named identity mismatch: {name}")
+            continue
         row = connection.execute(
             """
             select 1

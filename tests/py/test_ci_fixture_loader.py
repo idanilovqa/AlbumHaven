@@ -1554,12 +1554,40 @@ def test_loader_casts_optional_named_identity_parameters_for_postgres_nulls() ->
             return Result()
 
     loader._validate_staged_named_identities(
-        Connection(), {"artist-only": {"artist": "Neal Morse"}}
+        Connection(), {"artist-album": {"artist": "Neal Morse", "album": "Testimony"}}
     )
 
     normalized = " ".join(statements[0].casefold().split())
     assert "%s::text is null" in normalized
     assert "%s::integer is null" in normalized
+
+
+def test_loader_validates_staged_relationship_only_artist_without_an_album() -> None:
+    loader = _load_fixture_loader_module()
+    calls: list[tuple[str, object]] = []
+
+    class Result:
+        @staticmethod
+        def fetchone() -> tuple[int] | None:
+            return (1,) if "local_albums" not in calls[-1][0] else None
+
+    class Connection:
+        @staticmethod
+        def execute(statement: str, parameters: object = None) -> Result:
+            calls.append((statement, parameters))
+            return Result()
+
+    loader._validate_staged_named_identities(
+        Connection(),
+        {"devinTownsendFamily": {"relationshipArtist": "IR8"}},
+    )
+
+    assert len(calls) == 1
+    statement, parameters = calls[0]
+    assert "table_name='local_artists'" in statement
+    assert "local_albums" not in statement
+    assert parameters == ("IR8",)
+
 
 def test_loader_rolls_back_transaction_when_seed_is_corrupt(tmp_path: Path) -> None:
     loader = _load_fixture_loader_module()

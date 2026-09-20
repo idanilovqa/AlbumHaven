@@ -52,6 +52,10 @@ export class ArtistFamily extends BasePage {
     }).first();
   }
 
+  chipCountByName(name) {
+    return this.chipByName(name).locator('.artist-family-panel__count');
+  }
+
   async readPanelStructure() {
     // parity-check: allow-read-only-measurement-evaluate -- measure Artist Family geometry and owned descendants
     return this.box.evaluate((panel) => ({

@@ -90,6 +90,11 @@ export class ArtistFamilyActions {
     await this.artistFamily.chipByName(name).click({ noWaitAfter: true, ...options });
   }
 
+  async readChipCountByName(name, options = {}) {
+    await this.expand(options);
+    return Number.parseInt(String(await this.artistFamily.chipCountByName(name).textContent() || '0'), 10);
+  }
+
   async readPanelStructure() {
     const [headerBox, combineBox, panelBox, toggleBox] = await Promise.all([
       this.artistFamily.header.boundingBox(),

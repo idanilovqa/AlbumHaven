@@ -508,6 +508,49 @@ test('Artist Family panel loads the complete known family even when the current 
   assert.match(markup, /data-gallery-family-artist="The Devin Townsend Project"/);
 });
 
+test('Artist Family resolves an IR8 member identity to its visible split-release group', () => {
+  const splitGroup = {
+    artist: 'IR8 / Sexoturica',
+    artist_display: 'IR8 / Sexoturica',
+    variation_names: ['IR8', 'IR8 / Sexoturica'],
+    albums: [{ key: 'split-release', name: 'IR8 vs Sexoturica' }],
+  };
+  const state = {
+    view: {
+      selected_artist: 'Devin Townsend',
+      related_artists: ['IR8'],
+      primary_artist_groups: [{ artist: 'Devin Townsend', albums: [{ key: 'ocean-machine' }] }],
+      family_artist_groups: [
+        { artist: 'IR8', artist_display: 'IR8', albums: [] },
+        splitGroup,
+      ],
+    },
+    gallery: {
+      mainState: {
+        sources: { main_library: true, new_arrivals: true, hoard: true },
+        albumTypes: ['studio', 'ep'],
+        view: 'cards',
+        familyArtists: [],
+      },
+    },
+  };
+  const context = loadRuntime({
+    state,
+    groupMatchesRelatedArtists: (group, artists) => (
+      (group.variation_names || []).some((name) => artists.has(name))
+    ),
+  });
+  const getGalleryFamilyPanelGroups = requireContract(context, 'getGalleryFamilyPanelGroups');
+  const buildGalleryFamilyPanelBody = requireContract(context, 'buildGalleryFamilyPanelBody');
+
+  const groups = plain(getGalleryFamilyPanelGroups());
+  assert.deepEqual(groups.map((group) => group.artist), ['Devin Townsend', 'IR8 / Sexoturica']);
+  assert.equal(groups[1].albums[0].name, 'IR8 vs Sexoturica');
+  const markup = buildGalleryFamilyPanelBody();
+  assert.match(markup, /data-gallery-family-artist="IR8 \/ Sexoturica"/);
+  assert.doesNotMatch(markup, /data-gallery-family-artist="IR8"/);
+});
+
 test('GalleryBar scroll context uses absolute virtual section coordinates instead of mounted DOM offsets', () => {
   const context = loadRuntime({
     virtualGrid: {

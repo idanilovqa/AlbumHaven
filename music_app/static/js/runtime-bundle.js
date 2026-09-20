@@ -5350,19 +5350,23 @@ function getGalleryFamilyPanelGroups() {
     ...(state.view.related_filter_base_family_groups || []),
   ];
   const candidates = baseGroups.length ? [...baseGroups, ...getGalleryMainGroups()] : [...cachedGroups, ...getGalleryMainGroups()];
-  const groupsByArtist = new Map();
-  candidates.forEach((group) => {
-    const artist = galleryMainGroupArtist(group);
-    if (!artist) return;
-    const existing = groupsByArtist.get(artist);
-    if (!existing || (group.albums?.length || 0) > (existing.albums?.length || 0)) {
-      groupsByArtist.set(artist, group);
-    }
-  });
   const fallbackArtists = getGalleryMainGroups().map((group) => galleryMainGroupArtist(group)).filter(Boolean);
   const familyArtists = relatedArtists.length ? relatedArtists : fallbackArtists;
   const names = [primaryArtist, ...familyArtists.filter((artist) => artist !== primaryArtist)];
-  return names.map((artist) => groupsByArtist.get(artist) || { artist, artist_display: artist, albums: [] });
+  const resolvedGroups = names.map((artist) => {
+    const matchingArtist = new Set([artist]);
+    return candidates.reduce((best, group) => {
+      const matches = galleryMainGroupArtist(group) === artist || (
+        typeof groupMatchesRelatedArtists === 'function'
+        && groupMatchesRelatedArtists(group, matchingArtist)
+      );
+      if (!matches) return best;
+      return !best || (group.albums?.length || 0) > (best.albums?.length || 0) ? group : best;
+    }, null) || { artist, artist_display: artist, albums: [] };
+  });
+  return resolvedGroups.filter((group, index) => (
+    resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index
+  ));
 }
 
 function getGalleryMainContextSections() {

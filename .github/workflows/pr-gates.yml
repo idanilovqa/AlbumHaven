@@ -649,9 +649,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.23 `
+            -Release fixtures-v1.0.24 `
             -Profile functional-core `
-            -ManifestSha256 e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2
+            -ManifestSha256 1b68ff21620663c500a3869c74f01565ecbcd38f906a5c7eb690ac75581db8f6
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -833,9 +833,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.23 `
+            -Release fixtures-v1.0.24 `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2
+            -ManifestSha256 1b68ff21620663c500a3869c74f01565ecbcd38f906a5c7eb690ac75581db8f6
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

@@ -35,8 +35,8 @@ const EXPECTED_FUNCTIONAL_CONFIGS = [
   'playwright.lastfm-auto-timezone.config.js',
   'playwright.non-album-rescan.config.js',
 ];
-const FIXTURE_RELEASE = 'fixtures-v1.0.23';
-const FIXTURE_MANIFEST_SHA256 = 'e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2';
+const FIXTURE_RELEASE = 'fixtures-v1.0.24';
+const FIXTURE_MANIFEST_SHA256 = '1b68ff21620663c500a3869c74f01565ecbcd38f906a5c7eb690ac75581db8f6';
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));

@@ -139,6 +139,51 @@ test('library root values use locator primitives supported by the pinned Playwri
   assert.deepEqual(Array.from(await ui.rootValues('Main Library')), values);
 });
 
+test('move policy helper restores an originally disabled policy', async () => {
+  const calls = [];
+  const toggle = {
+    async getAttribute(name) {
+      assert.equal(name, 'aria-checked');
+      return 'true';
+    },
+    async click() { calls.push('click'); },
+  };
+  const Pom = loadPom('settingsIntegrations.js', 'SettingsIntegrations', {
+    BasePage: class {},
+    expect(actual) {
+      assert.equal(actual, toggle);
+      return {
+        async toHaveAttribute(name, value) {
+          assert.equal(name, 'aria-checked');
+          assert.equal(value, 'false');
+          calls.push('checked-false');
+        },
+      };
+    },
+  });
+  const ui = Object.create(Pom.prototype);
+  ui.detail = {
+    getByRole(role, options) {
+      assert.equal(role, 'switch');
+      assert.equal(options.name, 'Auto Move rated albums to Main library');
+      return toggle;
+    },
+  };
+  ui.policyMenu = () => ({ count: async () => 0 });
+  await ui.setMovePolicyEnabled('Library destination', false);
+  assert.deepEqual(calls, ['click', 'checked-false']);
+});
+
+test('integrations cleanup clears a temporary destination before removing its root', () => {
+  const source = fs.readFileSync(path.resolve(__dirname, '../e2e/specs/settingsIntegrations.functional.spec.js'), 'utf8');
+  const chooseTemporary = source.indexOf("await ui.choosePolicy(label, rootValues.at(-1));");
+  const disablePolicy = source.indexOf("await ui.setMovePolicyEnabled(label, Boolean(original));", chooseTemporary);
+  const removeRoots = source.indexOf("for (const [title, category] of categories)", disablePolicy);
+  assert.ok(chooseTemporary >= 0, 'cleanup must target the temporary root when the saved policy was empty');
+  assert.ok(disablePolicy > chooseTemporary, 'cleanup must restore the switch after targeting the temporary root');
+  assert.ok(removeRoots > disablePolicy, 'cleanup must remove the targeted temporary root to clear the persisted policy');
+});
+
 
 test('Problems readers include both album and file reasons while excluding proposal-only labels', () => {
   const selectors = [];

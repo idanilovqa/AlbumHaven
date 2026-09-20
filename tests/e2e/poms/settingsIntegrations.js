@@ -32,10 +32,14 @@ export class SettingsIntegrations {
   }
   policyTrigger(label) { return this.detail.getByRole('button', { name: label, exact: true }); }
   policyMenu(label) { return this.page.getByRole('menu', { name: label, exact: true }); }
-  async enableMovePolicy(label) {
+  async setMovePolicyEnabled(label, enabled) {
     const toggle = this.detail.getByRole('switch', { name: label === 'Library destination' ? 'Auto Move rated albums to Main library' : 'Move New Arrivals to Hoard', exact: true });
-    if (await toggle.getAttribute('aria-checked') !== 'true') await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    const expected = enabled ? 'true' : 'false';
+    if (await toggle.getAttribute('aria-checked') !== expected) await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', expected);
+  }
+  async enableMovePolicy(label) {
+    await this.setMovePolicyEnabled(label, true);
     await expect(this.policyMenu(label)).toHaveCount(0);
   }
   async choosePolicy(label, value) {

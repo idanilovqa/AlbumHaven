@@ -306,7 +306,7 @@ input[type='search'] {
   transition: opacity 220ms ease, transform 220ms ease;
   max-width: min(520px, calc(100vw - 32px));
 }
-.repair-alert-message {
+#repair-alert-message {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -238,7 +238,10 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       expect(evidence.missingSpinners).toBe(0);
       await expect(ui.scanWarning).toBeHidden();
       await expect(ui.warning).toBeVisible();
-      await ui.rootSidebar.click();await galleryActions.waitForGalleryReady();
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await galleryActions.waitForGalleryReady();
+      await expect(ui.rootSidebar).toBeVisible();
     });
     await stepLogger.step('Dismiss survives reload and moves the unresolved notice to Library only',async()=>{
       await ui.warningDismiss.click();

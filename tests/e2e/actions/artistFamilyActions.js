@@ -9,7 +9,10 @@ export class ArtistFamilyActions {
       const list = document.querySelector(selectors.listSelector);
       return toggle instanceof HTMLElement
         && list instanceof HTMLElement
-        && list.childElementCount > 0;
+        && list.childElementCount > 0
+        && !list.querySelector(
+          'img[data-gallery-cover-src], img[data-gallery-cover-loading="1"]:not([src])',
+        );
     }, {
       timeout: options.timeout || 30000,
     }, {

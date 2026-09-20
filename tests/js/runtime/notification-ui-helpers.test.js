@@ -684,7 +684,7 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   );
   assert.match(
     baseLayoutSource,
-    /\.repair-alert-message\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/u,
+    /#repair-alert-message\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis;[^}]*white-space:\s*nowrap;/u,
   );
 
   context.showRepairAlert('Saved.', 'success');

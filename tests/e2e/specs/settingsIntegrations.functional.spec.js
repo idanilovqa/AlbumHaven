@@ -19,6 +19,10 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
     ['Hoard', 'hoarding_library_roots', 'Hoard additional'],
     ['New Arrivals', 'new_arrivals_roots', 'Incoming additional'],
   ];
+  const movePolicies = [
+    ['Library destination', 'Main Library', 'main_library_roots', 'preferred_main_write_root'],
+    ['Move to Hoard', 'Hoard', 'hoarding_library_roots', 'move_new_arrivals_to'],
+  ];
   try {
     await expect(ui.detail).not.toContainText('Folder layout');
     for (const [title, category, folder] of categories) {
@@ -33,10 +37,7 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
       await ui.chooseLast(title, folder);
       await expect(ui.roots(title).last()).not.toHaveValue('');
     }
-    for (const [label, title, category, key] of [
-      ['Library destination', 'Main Library', 'main_library_roots', 'preferred_main_write_root'],
-      ['Move to Hoard', 'Hoard', 'hoarding_library_roots', 'move_new_arrivals_to'],
-    ]) {
+    for (const [label, title, category, key] of movePolicies) {
       await ui.enableMovePolicy(label);
       if ((await ui.rootValues(title)).filter(value => value.trim()).length === 1) {
         await expect(ui.policyTrigger(label)).toHaveCount(0);
@@ -84,6 +85,16 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
   } finally {
     await appBarActions.waitForIncrementalScanComplete();
     await ui.navigation('Library').click();
+    for (const [label, title, category, key] of movePolicies) {
+      const original = before[category].find(root => root.id === before.move_policy[key]);
+      const rootValues = (await ui.rootValues(title)).filter(value => value.trim());
+      if (original && rootValues.length > 1) {
+        await ui.choosePolicy(label, original.path);
+      } else if (!original && rootValues.length > before[category].length && rootValues.length > 1) {
+        await ui.choosePolicy(label, rootValues.at(-1));
+      }
+      await ui.setMovePolicyEnabled(label, Boolean(original));
+    }
     for (const [title, category] of categories) {
       const retainedCount = Math.max(1, before[category].length);
       while (await ui.roots(title).count() > retainedCount) await ui.removeLast(title);

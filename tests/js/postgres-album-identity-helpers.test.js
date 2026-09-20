@@ -129,3 +129,12 @@ test('rejects case-insensitive password query parameters before spawning psql', 
   );
   assert.equal(spawned, false);
 });
+
+test('track metadata query reads canonical library-root linkage', () => {
+  const sql = fs.readFileSync(
+    path.resolve(__dirname, '../e2e/helpers/postgresAlbumTrackMetadataQuery.sql'),
+    'utf8',
+  );
+  assert.match(sql, /library\.local_track_files\.library_root_id/u);
+  assert.doesNotMatch(sql, /metadata\s*->>\s*'library_root_id'/u);
+});

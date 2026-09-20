@@ -34,6 +34,10 @@ export class ArtistFamily extends BasePage {
     return '[data-gallery-family-panel-body]';
   }
 
+  get pendingCoverSelector() {
+    return 'img[data-gallery-cover-src], img[data-gallery-cover-loading="1"]:not([src])';
+  }
+
   get primaryChipSelector() {
     return '[data-gallery-family-panel-body] [data-gallery-family-artist].is-primary';
   }

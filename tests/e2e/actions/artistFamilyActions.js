@@ -10,14 +10,13 @@ export class ArtistFamilyActions {
       return toggle instanceof HTMLElement
         && list instanceof HTMLElement
         && list.childElementCount > 0
-        && !list.querySelector(
-          'img[data-gallery-cover-src], img[data-gallery-cover-loading="1"]:not([src])',
-        );
+        && !list.querySelector(selectors.pendingCoverSelector);
     }, {
       timeout: options.timeout || 30000,
     }, {
       toggleSelector: this.artistFamily.toggleSelector,
       listSelector: this.artistFamily.listSelector,
+      pendingCoverSelector: this.artistFamily.pendingCoverSelector,
     });
   }
 

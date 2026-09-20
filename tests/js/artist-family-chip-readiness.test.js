@@ -48,10 +48,7 @@ test('family panel readiness waits for deferred cover activation to settle', asy
   list.childElementCount = 2;
   let deferredCoverPending = true;
   list.querySelector = (selector) => {
-    assert.equal(
-      selector,
-      'img[data-gallery-cover-src], img[data-gallery-cover-loading="1"]:not([src])',
-    );
+    assert.equal(selector, '[data-owned-pending-cover]');
     return deferredCoverPending ? {} : null;
   };
   global.HTMLElement = FakeHTMLElement;
@@ -66,6 +63,7 @@ test('family panel readiness waits for deferred cover activation to settle', asy
     const actions = new ArtistFamilyActions({
       toggleSelector: '[data-family-toggle]',
       listSelector: '[data-family-list]',
+      pendingCoverSelector: '[data-owned-pending-cover]',
       async waitForPageCondition(predicate, _options, selectors) {
         assert.equal(predicate(selectors), false);
         deferredCoverPending = false;

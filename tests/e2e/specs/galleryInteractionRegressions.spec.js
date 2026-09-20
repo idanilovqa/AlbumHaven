@@ -242,6 +242,8 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,search
       await searchToolbarActions.waitForQuery('');
       await galleryActions.waitForGalleryReady();
       await expect(ui.rootSidebar).toBeVisible();
+      await ui.rootSidebar.click();
+      await galleryActions.waitForGalleryReady();
     });
     await stepLogger.step('Dismiss survives reload and moves the unresolved notice to Library only',async()=>{
       await ui.warningDismiss.click();

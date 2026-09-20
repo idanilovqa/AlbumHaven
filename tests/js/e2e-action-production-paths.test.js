@@ -12,6 +12,16 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), 'utf8').replace(/\r\n?/gu, '\n');
 }
 
+test('warning regression clears search before navigating to visible All artists root', () => {
+  const source = read('tests/e2e/specs/galleryInteractionRegressions.spec.js');
+  const clear = source.indexOf("await searchToolbarActions.clearSearch({ submitWithEnter: true });");
+  const visible = source.indexOf('await expect(ui.rootSidebar).toBeVisible();', clear);
+  const navigate = source.indexOf('await ui.rootSidebar.click();', visible);
+  assert.ok(clear >= 0, 'scenario must clear the narrowing search');
+  assert.ok(visible > clear, 'scenario must prove the All artists root is actionable after clearing search');
+  assert.ok(navigate > visible, 'scenario must navigate through All artists to activate the deferred warning');
+});
+
 test('FTC-COVERS-016 keeps the 7500px local cover active when matching remote art is not an improvement', () => {
   const spec = read('tests/e2e/specs/coverLookupMatching.spec.js');
   const allowedResolutionSet = spec.match(

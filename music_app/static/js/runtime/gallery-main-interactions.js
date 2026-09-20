@@ -391,13 +391,15 @@ function buildGalleryFamilyPanelBody() {
   ];
   const groupsByArtist = new Map(relatedGroups.map((group) => [galleryMainGroupArtist(group), group]));
   const panelGroups = [...(primaryGroup ? [primaryGroup] : []), ...orderedNames.map((artist) => groupsByArtist.get(artist)).filter(Boolean)];
-  return panelGroups.map((group, index) => {
+  return panelGroups.map((group) => {
     const artist = String(group.artist_display || group.artist || 'Artist');
     const count = albumCounts.get(artist) || 0;
     const active = mainState.familySelectionExplicit !== true || mainState.familyArtists.includes(artist);
     const primary = artist === primaryArtist;
-    const divider = index === 1 ? '<div class="artist-family-panel__primary-divider" aria-hidden="true"></div>' : '';
-    return `${divider}<button class="artist-family-panel__artist${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}" type="button" data-gallery-family-artist="${escapeHtml(artist)}" draggable="false" aria-pressed="${active ? 'true' : 'false'}"><span>${escapeHtml(artist)}</span><span>${count}</span></button>`;
+    const albums = Array.isArray(group.albums) ? group.albums : [];
+    const album = albums.find(albumHasDisplayCover) || albums[0];
+    const artwork = album ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork` }) : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
+    return `<button class="artist-family-panel__artist${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}" type="button" data-gallery-family-artist="${escapeHtml(artist)}" title="${escapeHtml(artist)}" aria-label="${escapeHtml(artist)}" draggable="false" aria-pressed="${active ? 'true' : 'false'}"><span class="artist-family-panel__marker" aria-hidden="true"></span><span class="artist-family-panel__artwork" aria-hidden="true">${artwork}</span><span class="artist-family-panel__name">${escapeHtml(artist)}</span><span class="artist-family-panel__count">${count}</span></button>`;
   }).join('');
 }
 
@@ -457,6 +459,11 @@ function updateGalleryMainChrome() {
       renderGalleryFamilyPanelBody(panelBody, buildGalleryFamilyPanelBody());
       panelBody.dataset.galleryRenderSignature = panelSignature;
     }
+  }
+  const panelTitle = document.querySelector('[data-gallery-family-panel-title]');
+  if (panelTitle) {
+    panelTitle.textContent = primaryArtist ? `${primaryArtist} Family` : 'Artist Family';
+    panelTitle.title = panelTitle.textContent;
   }
   const panelTotal = document.querySelector('[data-gallery-family-panel-total]');
   if (panelTotal) panelTotal.textContent = galleryMainPlural(getGalleryFamilyPanelModel().totals.albumCount, 'album');

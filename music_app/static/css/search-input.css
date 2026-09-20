@@ -1,6 +1,6 @@
 /* One field surface encloses both the editable input and overridable action. */
 :root {
-  --search-field-focus: var(--appearance-search-focus, var(--appearance-selected-accent, #72baff));
+  --search-field-focus: var(--muted, var(--appearance-muted, #9ca3af));
 }
 .search-field {
   position: relative;
@@ -9,6 +9,7 @@
   font-size: 12px;
 }
 .search-field-control {
+  --ui-input-action-button-focus: var(--search-field-focus);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
@@ -49,10 +50,6 @@
 .search-field input[type='search']::-webkit-search-cancel-button:hover {
   background-color: var(--search-field-hover, var(--panel-2));
 }
-.search-field-control:focus-within {
-  outline: 2px solid var(--search-field-focus);
-  outline-offset: 2px;
-}
 :root .search-field .search-field-control > input[type='search']:focus-visible,
 :root .search-field .search-field-action > .search-field-button:focus-visible {
   border: 0;
@@ -82,7 +79,7 @@
 
 /* The connected dropdown owns focus styling while its trigger is open.
    Its bridge must paint over the enclosing field border without clipping. */
-.search-field-control:has(.search-field-button.trigger-anchor-open) {
+:root .search-field-control:has(.search-field-button.trigger-anchor-open) {
   outline: none;
 }
 .search-field-action > .search-field-button.trigger-anchor-open {
@@ -92,7 +89,7 @@
 
 .recent-search-popover { position: fixed; z-index: 105; }
 
-.search-field-control:has(input[aria-expanded="true"]) {
+:root .search-field-control:has(input[aria-expanded="true"]) {
   outline: none;
   border: 1px solid var(--search-field-focus);
   border-bottom-color: transparent;

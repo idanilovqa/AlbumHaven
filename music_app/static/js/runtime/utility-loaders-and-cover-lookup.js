@@ -1014,6 +1014,7 @@ let utilityCoverLoadSuspensionToken = 0;
 function openUtilityModal({ resetSearch = true, resetSelection = true, forceLoad = true } = {}) {
   const els = getUtilityModalElements();
   if (!els.overlay) return;
+  document.getElementById('track-modal')?.classList.remove('is-above-settings');
   if (
     !utilityCoverLoadSuspensionToken
     && typeof virtualGrid !== 'undefined'

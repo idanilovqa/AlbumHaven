@@ -75,6 +75,91 @@ test('P04 Year mismatch display variants share one filter type', () => {
   assert.equal(new Set(normalized).size, 1);
 });
 
+test('P03 clearing a reversed problem range is idempotent and leaves other reasons untouched', () => {
+  const context = loadHelpers();
+  context.state.utility.problematicFiles[0].track_problem_rows = [
+    { ignorable_reasons: [{ row_key: 'year-1', reason: 'Missing year' }] },
+    { ignorable_reasons: [{ row_key: 'encoding-2', reason: 'Encoding problem' }] },
+    { ignorable_reasons: [{ row_key: 'year-3', reason: 'Missing year' }] },
+  ];
+  context.state.utility.problemExclusionSelections = { 'year-1': true, 'encoding-2': true };
+  context.state.utility.proposalSelections = { 'proposal-year': true };
+  assert.equal(context.extendProblemExclusionRange('Missing year', 2, 0, false), true);
+  assert.equal(context.extendProblemExclusionRange('Missing year', 0, 2, false), true);
+  assert.deepEqual(Object.keys(context.state.utility.problemExclusionSelections), ['encoding-2']);
+  assert.deepEqual(context.state.utility.proposalSelections, { 'proposal-year': true });
+});
+
+for (const initiallySelected of [false, true]) {
+  test(`P03 drag keeps starting intent when selected=${initiallySelected} through reverse and backtrack`, async () => {
+    const context = loadHelpers();
+    context.state.coverLookup = { drawerOpen: false };
+    context.document = { querySelectorAll: () => [] };
+    context.handleLibrarySettingsClick = () => false;
+    context.renderUtilityModalContentAndRestoreProblemExclusionFocus = () => {};
+    context.syncProblemExclusionSelection = () => {};
+    context.state.utility.problematicFiles[0].track_problem_rows = [0, 1, 2].map(index => ({
+      ignorable_reasons: [
+        { row_key: `year-${index}`, reason: 'Missing year' },
+        { row_key: `encoding-${index}`, reason: 'Encoding problem' },
+      ],
+    }));
+    context.state.utility.problemExclusionSelections = {
+      'encoding-0': true, ...(initiallySelected ? { 'year-2': true } : { 'year-0': true }),
+    };
+    context.state.utility.proposalSelections = { 'proposal-year': true };
+    vm.runInContext(readRuntime('bootstrap-utility-event-handlers'), context);
+    const eventFor = (index, reason = 'Missing year') => {
+      const attributes = {
+        'data-problem-exclusion-row-key': `${reason === 'Missing year' ? 'year' : 'encoding'}-${index}`,
+        'data-problem-exclusion-scope': 'file',
+        'data-problem-exclusion-reason': reason,
+        'data-problem-exclusion-row-index': String(index),
+      };
+      const pill = { getAttribute: name => attributes[name] };
+      return {
+        button: 0, ctrlKey: true, shiftKey: true, preventDefault() {},
+        target: { closest: selector => [
+          '[data-problem-exclusion-row-key]', '[data-problem-exclusion-scope="file"]',
+        ].includes(selector) ? pill : null },
+      };
+    };
+    context.handleUtilityBootstrapMouseDown(eventFor(2));
+    assert.equal(context.state.utility.problemExclusionDrag.selected, !initiallySelected);
+    context.handleUtilityBootstrapMouseOver(eventFor(0, 'Encoding problem'));
+    assert.equal(Boolean(context.state.utility.problemExclusionSelections['year-0']), !initiallySelected);
+    context.handleUtilityBootstrapMouseOver(eventFor(0));
+    context.handleUtilityBootstrapMouseOver(eventFor(1));
+    context.handleUtilityBootstrapMouseOver(eventFor(0));
+    await context.handleUtilityBootstrapClick(eventFor(0));
+    assert.deepEqual(Object.keys(context.state.utility.problemExclusionSelections).sort(),
+      initiallySelected ? ['encoding-0'] : ['encoding-0', 'year-0', 'year-1', 'year-2']);
+    assert.deepEqual(context.state.utility.proposalSelections, { 'proposal-year': true });
+  });
+
+  test(`P03 ordinary problem click toggles once when selected=${initiallySelected}`, async () => {
+    const context = loadHelpers();
+    context.state.coverLookup = { drawerOpen: false };
+    context.document = { querySelectorAll: () => [] };
+    context.handleLibrarySettingsClick = () => false;
+    context.renderUtilityModalContentAndRestoreProblemExclusionFocus = () => {};
+    context.state.utility.problemExclusionSelections = initiallySelected ? { 'year-0': true } : {};
+    vm.runInContext(readRuntime('bootstrap-utility-event-handlers'), context);
+    const attributes = {
+      'data-problem-exclusion-row-key': 'year-0', 'data-problem-exclusion-scope': 'file',
+      'data-problem-exclusion-reason': 'Missing year', 'data-problem-exclusion-row-index': '0',
+    };
+    const pill = { getAttribute: name => attributes[name] };
+    const event = {
+      button: 0, preventDefault() {},
+      target: { closest: selector => selector === '[data-problem-exclusion-row-key]' ? pill : null },
+    };
+    context.handleUtilityBootstrapMouseDown(event);
+    await context.handleUtilityBootstrapClick(event);
+    assert.equal(Boolean(context.state.utility.problemExclusionSelections['year-0']), !initiallySelected);
+  });
+}
+
 for (const kind of ['problem-exclusion', 'version-exception']) {
   test(`R02 clicking ${kind} Revert waits for confirmation before mutation`, async () => {
     const context = loadHelpers();

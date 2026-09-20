@@ -115,7 +115,7 @@ function renderProblematicFiles({ preserveProblematicTree = false } = {}) {
   const selectedAlbum = getSelectedProblematicAlbumFrom(items);
   renderTree(state.utility.selectedProblematicKey);
   if (selectedAlbum?.detail_load_failed) {
-    els.detail.innerHTML = '<div class="utility-empty-state">Unable to load the selected problematic album.</div>';
+    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Album details unavailable', message: 'Unable to load the selected problematic album.' });
     return;
   }
   if (!selectedAlbum?.detail_loaded) {
@@ -400,21 +400,27 @@ function renderUtilityLoopList(els, loops) {
 function bindUtilityLoopDragAndDrop() {
   const clear = () => { clearUtilityLoopDragState(); syncUtilityLoopDragUi(); };
   const payload = () => ({ type: state.utility.loopDragType, id: state.utility.loopDragId, groupKey: state.utility.loopDragGroupKey });
-  document.querySelectorAll('[data-loop-tree-song]').forEach(container => {
+  document.querySelectorAll('[data-loop-tree-song], [data-loop-panel-song]').forEach(container => {
     if (container.dataset.edgeDragBound === '1') return;
     container.dataset.edgeDragBound = '1';
     const edgeTarget = event => {
-      if (event.target.closest('[data-utility-loop-id]')) return null;
-      const nodes = container.querySelectorAll('[data-utility-loop-id]');
+      if (event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) return null;
+      const nodes = Array.from(container.querySelectorAll('[data-utility-loop-id], [data-utility-loop-entry]')).filter(node => !node.hidden);
       if (!nodes.length) return null;
-      const first = nodes[0], last = nodes[nodes.length - 1];
-      const before = event.clientY <= first.getBoundingClientRect().top;
-      if (!before && event.clientY < last.getBoundingClientRect().bottom) return null;
-      return { target: { type: 'loop', id: getUtilityLoopNodeId(before ? first : last), groupKey: container.getAttribute('data-loop-tree-song') }, position: before ? 'before' : 'after' };
+      const next = nodes.find(node => event.clientY <= node.getBoundingClientRect().top);
+      const node = next || nodes[nodes.length - 1];
+      return { target: { type: 'loop', id: getUtilityLoopNodeId(node), groupKey: container.getAttribute('data-loop-tree-song') || container.getAttribute('data-loop-panel-song') }, position: next ? 'before' : 'after' };
     };
     container.addEventListener('dragover', event => {
       const edge = edgeTarget(event);
-      if (!edge || !buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) return;
+      if (!edge) {
+        if (!event.target.closest('[data-utility-loop-id], [data-utility-loop-entry]')) updateUtilityLoopDropState('', '', '');
+        return;
+      }
+      if (!buildReorderedUtilityLoops(state.utility.loops, payload(), edge.target, edge.position)) {
+        updateUtilityLoopDropState('', '', '');
+        return;
+      }
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
       updateUtilityLoopDropState('loop', edge.target.id, edge.position, edge.target.groupKey);
@@ -559,8 +565,8 @@ function renderUtilityLoops() {
   }
 
   if (state.utility.loopsLoadError) {
-    els.list.innerHTML = '<div class="utility-empty-state compact">Saved loops could not be loaded.</div>';
-    els.detail.innerHTML = `<div class="utility-empty-state" role="alert">${escapeHtml(state.utility.loopsLoadError)}</div>`;
+    els.list.innerHTML = '';
+    els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Saved loops unavailable', message: state.utility.loopsLoadError });
     return;
   }
   if (!loops.length) {
@@ -634,7 +640,7 @@ function renderUtilityAppearance() {
   } else if (selectedKey === 'selection-accent') {
     const appearance = typeof window !== 'undefined' ? window.AlbumHavenAppearance?.instance : null;
     if (appearance?.mountSelectionAccent) appearance.mountSelectionAccent(els.detail);
-    else els.detail.innerHTML = '<div class="utility-empty-state">Selection &amp; Hover could not be loaded. Reload this page to try again.</div>';
+    else els.detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Selection & Hover could not be loaded. Reload this page to try again.' });
   } else if (selectedKey === 'alerts') {
     if (typeof window !== 'undefined') window.AlbumHavenSelectionAccent?.unmount?.();
     if (typeof mountAlertsAppearanceEditor === 'function') mountAlertsAppearanceEditor(els.detail);

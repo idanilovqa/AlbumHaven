@@ -223,7 +223,7 @@ function initCompactPlayer() {
   els.next?.addEventListener('click', () => playCompactQueueOffset(1));
   const openCurrentAlbumDetails = () => {
     const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false });
+    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   };
   els.cover?.addEventListener('click', event => {
     if (compactPlayerSuppressClick) { event.preventDefault(); compactPlayerSuppressClick = false; return; }

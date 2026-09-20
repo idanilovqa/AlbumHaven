@@ -96,6 +96,30 @@ test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot
   expect(downloaded.document.items).toEqual(captured.items);
   expect(downloaded.document.count).toBe(captured.items.length);
   const history = utilityLogHistoryActions.utilityLogHistoryTab;
+  await history.exportAllButton.click();
+  await history.exportCustomButton.click();
+  for (const [field, input] of [['from', history.exportFrom], ['to', history.exportTo]]) {
+    await expect(input).toHaveAttribute('readonly', '');
+    await expect(input).toHaveAttribute('placeholder', 'mm/dd/yyyy');
+    await input.click();
+    await expect(input).toBeFocused();
+    expect(await history.readDateFocusOutline(input)).toEqual({ painted: true, unclipped: true, horizontalOverflow: false });
+    await history.exportDateButton(field).hover();
+    await page.mouse.down();
+    try {
+      await expect.poll(async () => (await history.readDateFocusOutline(input)).painted).toBe(false);
+    } finally {
+      await page.mouse.up();
+    }
+    const calendar = history.exportCalendar(field);
+    await expect(calendar).toBeVisible();
+    await calendar.locator('[data-calendar-date][aria-current=date]').click();
+    await expect(calendar).toBeHidden();
+    await expect(input).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
+  }
+  await expect(history.exportTo).toHaveValue(await history.exportFrom.inputValue());
+  await history.exportCancel.click();
+  await expect(history.exportDialog).toBeHidden();
   await history.periodButton.click();
   // The shared calendar opens with today's start/end; presets belong to Export all logs.
   await expect(history.periodFrom).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
@@ -195,6 +219,7 @@ test('FTC-SETTINGS-L02 native panel drag persists order while another loop retai
   const moveEntry = await utilityLoopsActions.resolveLoopEntryByName(names[1]);
   const targetEntry = await utilityLoopsActions.resolveLoopEntryByName(names[2]);
   const moveIsEarlier = before.indexOf(moveEntry.loopId) < before.indexOf(targetEntry.loopId);
+  await utilityLoopsActions.verifyLoopInsertionCues();
   const result = await utilityLoopsActions.dragLoopAfterByName(
     moveIsEarlier ? names[1] : names[2],
     moveIsEarlier ? names[2] : names[1],

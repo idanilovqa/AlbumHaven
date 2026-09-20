@@ -14,6 +14,12 @@ export class UtilityLogHistoryTab extends BasePage {
     this.visibleHistorySurfaces = page.locator('#utility-problematic-list, #utility-problematic-detail');
     this.sourceLabel = page.locator('#utility-problematic-detail .utility-log-console-detail > p').first();
     this.exportButton = page.locator('#utility-problematic-detail [data-log-history-action="export-current"]');
+    this.exportAllButton = page.getByRole('button', { name: 'Export all logs', exact: true });
+    this.exportDialog = page.getByRole('dialog', { name: 'Export all logs', exact: true });
+    this.exportCustomButton = this.exportDialog.getByRole('button', { name: 'Custom', exact: true });
+    this.exportFrom = this.exportDialog.getByLabel('From date', { exact: true });
+    this.exportTo = this.exportDialog.getByLabel('To date', { exact: true });
+    this.exportCancel = this.exportDialog.getByRole('button', { name: 'Cancel', exact: true });
     this.consoleLines = page.locator('#utility-problematic-detail .console-log__line');
     this.console = page.locator('#utility-problematic-detail .console-log');
     this.emptySnapshot = this.console.getByText('No events in this snapshot.', { exact: true });
@@ -29,6 +35,37 @@ export class UtilityLogHistoryTab extends BasePage {
 
   periodDateButton(field) {
     return this.periodDialog.getByRole('button', { name: `Choose ${field} date`, exact: true });
+  }
+
+  exportDateButton(field) {
+    return this.exportDialog.getByRole('button', { name: 'Choose ' + field + ' date', exact: true });
+  }
+
+  exportCalendar(field) {
+    return this.exportDialog.getByRole('dialog', { name: 'Choose ' + field + ' date', exact: true });
+  }
+
+  async readDateFocusOutline(input) {
+    // parity-check: allow-read-only-measurement-evaluate -- verify the focused date outline remains inside every clipping ancestor
+    return input.evaluate(inputNode => {
+      const node = inputNode.closest('.date-range-picker__control');
+      const style = getComputedStyle(node);
+      const extent = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset));
+      const bounds = node.getBoundingClientRect();
+      let unclipped = true;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        const parentStyle = getComputedStyle(parent);
+        const rect = parent.getBoundingClientRect();
+        if (/(auto|scroll|hidden|clip)/.test(parentStyle.overflowX)) {
+          unclipped &&= bounds.left - extent >= rect.left + parent.clientLeft && bounds.right + extent <= rect.left + parent.clientLeft + parent.clientWidth;
+        }
+        if (/(auto|scroll|hidden|clip)/.test(parentStyle.overflowY)) {
+          unclipped &&= bounds.top - extent >= rect.top + parent.clientTop && bounds.bottom + extent <= rect.top + parent.clientTop + parent.clientHeight;
+        }
+      }
+      const content = node.closest('#app-form-content');
+      return { painted: style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0, unclipped, horizontalOverflow: content.scrollWidth > content.clientWidth };
+    });
   }
 
   periodCalendar(field) {

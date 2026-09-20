@@ -11,7 +11,7 @@ export class SettingsIntegrations {
     this.watcherWarning = page.locator('#toast-layer .system-warning-notification').filter({ hasText: 'Library watcher needs attention' });
     this.dismissWatcherWarning = this.watcherWarning.getByRole('button', { name: 'Dismiss', exact: true });
     this.save = this.detail.getByRole('button', { name: 'Save library settings', exact: true });
-    this.error = this.detail.locator('.library-settings-error');
+    this.error = this.detail.locator('[data-on-page-alert="error"]');
     this.search = page.locator('#utility-problematic-search');
     this.playbackStatistics = this.detail.getByRole('heading', { name: 'Playback statistics', exact: true });
     this.importButton = this.detail.getByRole('button', { name: 'Import', exact: true });
@@ -22,6 +22,35 @@ export class SettingsIntegrations {
   navigation(label) { return this.page.locator('[data-utility-integration-key]').filter({ hasText: new RegExp(`^${label}$`, 'u') }); }
   section(title) { return this.detail.locator('.library-settings-section').filter({ has: this.page.getByRole('heading', { name: title, exact: true }) }); }
   roots(title) { return this.section(title).getByRole('textbox'); }
+  policyTrigger(label) { return this.detail.getByRole('button', { name: label, exact: true }); }
+  policyMenu(label) { return this.page.getByRole('menu', { name: label, exact: true }); }
+  async enableMovePolicy(label) {
+    const toggle = this.detail.getByRole('switch', { name: label === 'Library destination' ? 'Auto Move rated albums to Main library' : 'Move New Arrivals to Hoard', exact: true });
+    if (await toggle.getAttribute('aria-checked') !== 'true') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+    await expect(this.policyMenu(label)).toHaveCount(0);
+  }
+  async choosePolicy(label, value) {
+    const trigger = this.policyTrigger(label);
+    await this.enableMovePolicy(label);
+    await expect(this.policyMenu(label)).toHaveCount(0);
+    await trigger.click();
+    const menu = this.policyMenu(label);
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveClass(/gallery-anchored-menu/u);
+    const triggerBox = await trigger.boundingBox();
+    const menuBox = await menu.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(menuBox).not.toBeNull();
+    expect(Math.abs(menuBox.width - triggerBox.width)).toBeLessThanOrEqual(1);
+    if (label === 'Library destination') {
+      await expect(menu.getByRole('menuitemradio', { name: /Choose a Main Library root/u })).toHaveCount(0);
+    }
+    await menu.getByRole('menuitemradio', { name: value, exact: true }).click();
+    await expect(menu).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toContainText(value);
+  }
   async add(title) { await this.section(title).getByRole('button', { name: 'Add path', exact: true }).click(); }
   async removeLast(title) { await this.section(title).getByRole('button', { name: new RegExp(`^Remove ${title} path `, 'u') }).last().click(); }
   async chooseLast(title, folder, cancel = false) {

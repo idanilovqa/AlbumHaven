@@ -1,3 +1,4 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -6,6 +7,7 @@
   <meta name="referrer" content="same-origin">
   <title>Accept Album Haven invitation</title>
   <link rel="stylesheet" href="/static/css/password-recovery.css">
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
 </head>
 <body><main class="recovery-glow"><section class="recovery-panel">
   {% if completed %}
@@ -14,7 +16,7 @@
   {% elif valid %}
     <h1>Accept invitation</h1>
     {% if password_invalid %}
-      <p role="alert">Choose a different password and try again.</p>
+      {{ on_page_alert('Choose a different password and try again.', severity='error') }}
     {% endif %}
     <form method="post" action="/accept-invitation">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

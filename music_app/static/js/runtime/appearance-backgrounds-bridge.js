@@ -26,7 +26,7 @@ function unmountAppearanceEditors() {
 function mountBackgroundAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor) editor.mount(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Backgrounds could not be loaded. Reload this page to try again.' });
 }
 
 // Live canvases consume only the account's applied state, never the editor draft.
@@ -76,17 +76,17 @@ function mountSeekbarAppearanceEditor(detail) {
       updateWaveformAppearance(true);
     },
   });
-  else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+  else host.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Waveform colors could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlbumPageAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlbumPage) editor.mountAlbumPage(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Album page appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Album page appearance could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlertsAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlerts) editor.mountAlerts(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Alert appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Alert appearance could not be loaded. Reload this page to try again.' });
 }

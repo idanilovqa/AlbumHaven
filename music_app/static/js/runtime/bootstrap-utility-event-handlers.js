@@ -29,7 +29,7 @@ async function handleUtilityBootstrapClick(event) {
     });
   }
 
-  if (!event.target.closest('.utility-problem-filter, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
+  if (!event.target.closest('.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips') && state.utility.problemDropdownOpen) {
     state.utility.problemDropdownOpen = false;
     renderProblemFilterControls(getUtilityModalElements());
   }
@@ -1036,7 +1036,7 @@ function handleUtilityBootstrapMouseDown(event) {
       selectProblemExclusion(rowKey, { toggle: false });
     }
     state.utility.problemExclusionDrag = scope === 'file' && Number.isInteger(rowIndex)
-      ? { reason, startIndex: rowIndex, lastIndex: rowIndex }
+      ? { reason, startIndex: rowIndex, lastIndex: rowIndex, selected: !alreadySelected }
       : null;
     state.utility.problemExclusionSuppressClick = true;
     if (!alreadySelected) {
@@ -1154,7 +1154,7 @@ function handleUtilityBootstrapMouseOver(event) {
     }
     if (normalizeProblemFilterReason(reason) !== normalizeProblemFilterReason(drag.reason) || !Number.isInteger(rowIndex)) return true;
     if (rowIndex === drag.lastIndex) return true;
-    if (extendProblemExclusionRange(reason, drag.startIndex, rowIndex)) {
+    if (extendProblemExclusionRange(reason, drag.startIndex, rowIndex, drag.selected)) {
       drag.lastIndex = rowIndex;
       syncProblemExclusionSelection();
     }

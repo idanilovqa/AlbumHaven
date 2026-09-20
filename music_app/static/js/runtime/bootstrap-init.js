@@ -234,7 +234,7 @@ document.addEventListener('contextmenu', (event) => {
   const indicator = event.target.closest('#scan-indicator');
   if (!indicator) return;
   event.preventDefault();
-  showStatusContextMenu(event.clientX, event.clientY);
+  showStatusContextMenu(indicator);
 });
 
 document.addEventListener('click', (event) => {
@@ -244,12 +244,18 @@ document.addEventListener('click', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  const statusAnchor = event.target.closest?.('#scan-indicator');
+  if (statusAnchor && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+    event.preventDefault();
+    showStatusContextMenu(statusAnchor);
+    return;
+  }
   if (typeof handleArtistsDrawerKeydown === 'function') {
     handleArtistsDrawerKeydown(event);
   }
   if (event.key === 'Escape') {
     hideVersionContextMenu();
-    hideStatusContextMenu();
+    hideStatusContextMenu(true);
   }
 });
 

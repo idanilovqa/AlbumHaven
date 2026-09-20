@@ -14,7 +14,7 @@ export class ArtistFamily extends BasePage {
     this.primaryChip = page.locator(this.primaryChipSelector);
     this.chips = page.locator(this.chipSelector);
     this.firstInactiveChip = page.locator(`${this.chipSelector}:not(.is-active)`).first();
-    this.chipLabelSelector = 'span:first-child';
+    this.chipLabelSelector = '.artist-family-panel__name';
     this.chipLabels = this.chips.locator(this.chipLabelSelector);
     this.header = page.locator(`${this.boxSelector} > header`);
     this.combineRow = page.locator(`${this.boxSelector} > .artist-family-panel__combine-row`);
@@ -43,7 +43,7 @@ export class ArtistFamily extends BasePage {
 
   chipByName(name) {
     return this.chips.filter({
-      has: this.page.locator('span:first-child').filter({ hasText: exactNormalizedText(name) }),
+      has: this.page.locator('.artist-family-panel__name').filter({ hasText: exactNormalizedText(name) }),
     }).first();
   }
 
@@ -61,6 +61,17 @@ export class ArtistFamily extends BasePage {
           backgroundColor: style.backgroundColor,
           borderColor: style.borderColor,
           color: style.color,
+          ...(element.matches('[data-gallery-family-artist]') ? {
+          height: element.getBoundingClientRect().height,
+          borderWidth: style.borderTopWidth,
+          boxShadow: style.boxShadow,
+          markerVisible: getComputedStyle(element.querySelector('.artist-family-panel__marker')).visibility,
+          thumbnailWidth: element.querySelector('.artist-family-panel__artwork').getBoundingClientRect().width,
+          thumbnailHeight: element.querySelector('.artist-family-panel__artwork').getBoundingClientRect().height,
+          badgeWidth: element.querySelector('.artist-family-panel__count').getBoundingClientRect().width,
+          badgeHeight: element.querySelector('.artist-family-panel__count').getBoundingClientRect().height,
+          badgeBackground: getComputedStyle(element.querySelector('.artist-family-panel__count')).backgroundColor,
+          } : {}),
         };
       };
       return {

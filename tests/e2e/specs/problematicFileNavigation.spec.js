@@ -454,6 +454,15 @@ test('FTC-UTIL-PROBLEMS-001 scopes exclusions with optimistic persistence and re
     expect(selectedFiles).toHaveLength(3);
     expect(selectedFiles.every((item) => item.scope === 'file' && item.reason === sharedReason)).toBe(true);
     expect(new Set(selectedFiles.map((item) => item.key)).size).toBe(3);
+    await utilityProblematicFilesActions.dragFileProblemRange(
+      consecutiveRows.map((row) => row.filename).reverse(), sharedReason,
+    );
+    expect(await utilityProblematicFilesActions.readSelectedProblemInstances()).toEqual([]);
+    expect(await utilityProblematicFilesActions.readExcludeProblemEnabled()).toBe(false);
+    await utilityProblematicFilesActions.dragFileProblemRange(
+      consecutiveRows.map((row) => row.filename), sharedReason,
+    );
+    expect(await utilityProblematicFilesActions.readSelectedProblemInstances()).toEqual(selectedFiles);
     createdFileExclusionKeys = selectedFiles.map((item) => item.key);
     await utilityProblematicFilesActions.openExclusionConfirmation();
     await utilityProblematicFilesActions.confirmExclusion();

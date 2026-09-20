@@ -81,8 +81,8 @@ function buildUtilityLogHistoryConsole(value) {
   const title = selected ? escapeHtml(selected.action || 'Log entry') : value.temporaryRowId ? 'Logs for selected period' : 'Recent activity';
   return `<div class="utility-log-console-detail"><div class="utility-log-toolbar"><h3>${title}</h3>${canExportUtilityLogHistory() ? utilityLogButton('Export all logs', 'export-draft') : ''}</div>
     ${selected ? `<p>${escapeHtml([formatLogHistoryTimestamp(selected.timestamp), selected.source, selected.artist, selected.album, selected.title].filter(Boolean).join(' · '))}</p>` : value.temporaryRowId ? `<p>${escapeHtml(value.periodLabel || '')}</p>` : ''}
-    ${value.stale ? '<p role="status">New activity is available. Refresh to capture it.</p>' : ''}
-    ${value.error ? `<p class="utility-log-error" role="alert">${escapeHtml(value.error)}</p>` : ''}
+    ${value.stale ? buildOnPageAlertHtml({ severity: 'info', role: 'status', message: 'New activity is available. Refresh to capture it.' }) : ''}
+    ${value.error ? buildOnPageAlertHtml({ severity: 'error', title: 'Log history unavailable', message: value.error }) : ''}
     ${buildConsoleLog(value.items)}
     <div class="utility-log-toolbar">${utilityLogButton(value.loading ? 'Loading…' : 'Refresh', 'refresh', { disabled: value.loading })}
     ${value.nextCursor ? utilityLogButton('Load more', 'more', { disabled: value.loading || value.refreshRequired }) : ''}
@@ -153,46 +153,37 @@ function openUtilityLogHistoryQuery(exportAfter = false) {
       },
     });
   }
-  let preset = 'today', source = '';
+  let preset = 'today';
+  let disposeCalendar = () => {};
   const types = Array.from(new Set(['Tags edited', 'Library status error', 'Local cover selection persisted', 'Cover art update completed', 'Library indexing failed', ...(state.utility.logHistory || []).map(item => item.action).filter(Boolean)]));
-  const sources = Array.from(new Set((state.utility.logHistory || []).map(item => item.source).filter(Boolean)));
   controller.beginDraft({ preset });
   const contentHtml = `<div class="utility-log-query-form"><p>Timezone: ${escapeHtml(zone)}</p><h4>Date range</h4>
     <div class="utility-log-presets">${[['today', 'Today'], ['7-days', '7 days'], ['30-days', '30 days'], ['custom', 'Custom']].map(([value, label]) => window.ButtonComponent.renderButton({ label, attributes: { 'data-log-preset': value, 'aria-pressed': String(value === preset) } })).join('')}</div>
-    <div class="utility-log-query-dates" data-log-custom-dates hidden><label>From date<input type="date" name="fromDate"></label><label>To date<input type="date" name="toDate"></label></div>
+    <div data-log-custom-dates hidden>${buildDateRangePicker()}</div>
     <h4>Log types</h4><div class="utility-log-type-options">${types.map(value => `<label><input type="checkbox" name="eventType" value="${escapeHtml(value)}" checked> ${escapeHtml(value)}</label>`).join('')}</div>
-    <label>Source</label>${window.ButtonComponent.renderButton({ label: 'All sources', attributes: { 'data-log-source-trigger': '1', 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}
-    <div class="utility-problem-filter-menu" data-log-source-menu role="menu" hidden>${['', ...sources].map(value => window.ButtonComponent.renderButton({ label: value || 'All sources', attributes: { role: 'menuitemradio', 'aria-checked': String(!value), 'data-log-source-value': value } })).join('')}</div>
     <label>Text<input name="text" placeholder="Filter event text"></label></div>`;
   const mount = content => {
+    const dates = content.querySelector('[data-log-custom-dates]');
+    const syncCalendar = () => {
+      disposeCalendar();
+      dates.hidden = preset !== 'custom';
+      dates.querySelectorAll('input, button').forEach(control => { control.disabled = dates.hidden; });
+      disposeCalendar = dates.hidden ? () => {} : mountDateRangePicker(dates);
+    };
+    syncCalendar();
     content.querySelectorAll('[data-log-preset]').forEach(button => button.addEventListener('click', () => {
       preset = button.getAttribute('data-log-preset');
       content.querySelectorAll('[data-log-preset]').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-      content.querySelector('[data-log-custom-dates]').hidden = preset !== 'custom';
+      syncCalendar();
     }));
-    const trigger = content.querySelector('[data-log-source-trigger]'), menu = content.querySelector('[data-log-source-menu]');
-    trigger.addEventListener('click', () => {
-      menu.hidden = !menu.hidden; trigger.setAttribute('aria-expanded', String(!menu.hidden));
-      if (!menu.hidden) { const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.left = `${rect.left}px`; menu.style.top = `${rect.bottom + 4}px`; menu.style.zIndex = '130'; syncTriggerAnchor(menu, trigger); menu.querySelector('button')?.focus(); }
-      else clearTriggerAnchor(menu);
-    });
-    menu.querySelectorAll('[data-log-source-value]').forEach(button => button.addEventListener('click', () => {
-      source = button.getAttribute('data-log-source-value'); trigger.querySelector('.ui-button__content').textContent = source || 'All sources';
-      menu.querySelectorAll('button').forEach(item => item.setAttribute('aria-checked', String(item === button)));
-      menu.hidden = true; clearTriggerAnchor(menu); trigger.setAttribute('aria-expanded', 'false'); trigger.focus({ preventScroll: true });
-    }));
-    menu.addEventListener('keydown', event => {
-      const buttons = Array.from(menu.querySelectorAll('button')), index = buttons.indexOf(document.activeElement);
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); menu.hidden = true; clearTriggerAnchor(menu); trigger.setAttribute('aria-expanded', 'false'); trigger.focus(); }
-      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }
-    });
+
   };
   return showAppFormDialog({ title: exportAfter ? 'Export all logs' : 'Filter log period', anchor: exportAfter ? null : getUtilityModalElements().problemFilterButton, contentHtml, submitLabel: exportAfter ? 'Export logs' : 'Apply', onMount: mount,
-    onClose: content => { const menu = content.querySelector('[data-log-source-menu]'); if (menu) clearTriggerAnchor(menu); controller.cancelDraft(); },
+    onClose: () => { disposeCalendar(); controller.cancelDraft(); },
     onSubmit: async content => {
       const selectedTypes = Array.from(content.querySelectorAll('[name="eventType"]')).filter(input => input.checked).map(input => input.value);
       if (!selectedTypes.length) throw new Error('Choose at least one log type.');
-      controller.beginDraft({ preset, fromDate: content.querySelector('[name="fromDate"]').value, toDate: content.querySelector('[name="toDate"]').value, sources: source ? [source] : [], event_types: selectedTypes.length === types.length ? [] : selectedTypes, text: content.querySelector('[name="text"]').value });
+      controller.beginDraft({ preset, fromDate: content.querySelector('[name="fromDate"]').value, toDate: content.querySelector('[name="toDate"]').value, sources: [], event_types: selectedTypes.length === types.length ? [] : selectedTypes, text: content.querySelector('[name="text"]').value });
       await controller.applyDraft(); if (exportAfter) await downloadUtilityLogHistory(); return true;
     },
   });

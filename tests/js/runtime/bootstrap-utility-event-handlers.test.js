@@ -231,6 +231,43 @@ function createContext(stateOverrides = {}) {
   return { context, calls };
 }
 
+test('clicking the filter search input dismisses only the dropdown without consuming input focus', async () => {
+  const selected = ['Missing cover art'];
+  const { context, calls } = createContext({ selectedProblemFilters: selected });
+  const { event, wasPrevented } = createEvent({
+    // The input shares this wrapper; the old boundary must reproduce the bug.
+    '.utility-problem-filter, .utility-problem-filter-chips': createElement(),
+  });
+  context.document.activeElement = event.target;
+  event.target.focus = () => assert.fail('Dismissal must not redirect focus');
+  await context.handleUtilityBootstrapClick(event);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.getUtilityModalElements().problemFilterMenu.hidden, true);
+  assert.equal(calls.filterRenders, 1);
+  assert.equal(calls.renders, 0);
+  assert.equal(wasPrevented(), false);
+  assert.equal(context.document.activeElement, event.target);
+  assert.equal(context.state.utility.selectedProblemFilters, selected);
+});
+
+for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {
+  test(`clicking within ${ancestor} preserves its normal dropdown behavior`, async () => {
+    const { context, calls } = createContext();
+    const element = createElement();
+    const { event } = createEvent();
+    event.target.closest = selector => {
+      if (selector.split(', ').includes(ancestor)) return element;
+      if (ancestor === '.utility-problem-filter-button' && selector === '[data-toggle-problem-filter="1"]') return element;
+      return null;
+    };
+    await context.handleUtilityBootstrapClick(event);
+    const trigger = ancestor === '.utility-problem-filter-button';
+    assert.equal(context.state.utility.problemDropdownOpen, !trigger);
+    assert.equal(calls.filterRenders, 0);
+    assert.equal(calls.renders, trigger ? 1 : 0);
+  });
+}
+
 test('editing a tag field refreshes the canonical pending-change presentation', () => {
   const path = 'C:\\Music\\Artist\\Album\\01 Track.flac';
   const input = createElement({ 'data-tag-field': 'title' });
@@ -292,7 +329,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   });
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -319,7 +356,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -344,7 +381,7 @@ test('removing a problem filter preserves the selected album in the live bootstr
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-remove-problem-filter]': createElement({
       'data-remove-problem-filter': 'Poor art quality',
     }),
@@ -769,7 +806,7 @@ test('applying the base incomplete-order filter preserves a selection after deta
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Incomplete track order',
     }),

@@ -113,3 +113,30 @@ test('AlertLabel interaction states retain the gallery alert severity color fami
   const labelRules = css.match(/[^{}]*\.alert-label[^{}]*\{[^}]*\}/g)?.join('\n') || '';
   assert.doesNotMatch(labelRules, /--appearance-interaction-outline/);
 });
+
+test('standalone alert exports escape text and attribute values without runtime globals', () => {
+  const css = fs.readFileSync(path.join(repoRoot, 'music_app/static/css/runtime/alert-components.css'), 'utf8');
+  assert.match(css, /\.on-page-alert\[hidden\]\s*\{\s*display:\s*none;/);
+  assert.match(css, /color:\s*var\(--text,\s*var\(--appearance-ink,\s*#edf4fb\)\)/);
+  assert.match(css, /color:\s*var\(--muted,\s*var\(--appearance-muted,\s*#b8c7d6\)\)/);
+  const alerts = require('../../../music_app/static/js/runtime/alert-components.js');
+  const html = alerts.buildOnPageAlertHtml({
+    severity: 'warning', title: '<Error>', message: '<script>alert("x")</script>',
+    messageId: '" onmouseover="bad', role: 'status',
+  });
+  assert.match(html, /on-page-alert--warning" role="status"/);
+  assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+  assert.match(html, /id="&quot; onmouseover=&quot;bad"/);
+  assert.doesNotMatch(html, /<script| id="" onmouseover=/);
+  assert.match(alerts.buildOnPageAlertHtml({ role: 'presentation' }), /role="alert"/);
+});
+
+test('alert browser exports tolerate standalone and bundled loading in the same window', () => {
+  const context = { window: {} };
+  vm.createContext(context);
+  const source = fs.readFileSync(path.join(repoRoot, 'music_app/static/js/runtime/alert-components.js'), 'utf8');
+  vm.runInContext(source, context);
+  vm.runInContext(source, context);
+  assert.equal(context.window.AlertComponent.buildOnPageAlertHtml, context.buildOnPageAlertHtml);
+  assert.match(context.window.AlertComponent.buildSmallAlertHtml({ message: '<missing>' }), /&lt;missing&gt;/);
+});

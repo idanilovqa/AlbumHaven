@@ -1931,27 +1931,20 @@ function renderTrackModalRelease(album) {
   if (els.duplicateWarning && els.duplicateTabs) {
     if (duplicateSources.length > 1) {
       els.duplicateWarning.hidden = false;
-      els.duplicateWarning.innerHTML = `
-        <span>Album seems to have duplicate files:</span>
-        <span class="track-modal-duplicate-warning-icons">
-          ${duplicateSources.map((source, index) => {
-            const isActive = index === duplicateSourceIndex;
-            const folderTitle = escapeHtml(String(source.folder_path || source.folder_name || `Folder ${index + 1}`));
-            return `
-              <button
-                type="button"
-                class="track-modal-duplicate-folder-button ${isActive ? 'is-active' : ''}"
-                data-open-track-modal-duplicate-folder="1"
-                data-album-key="${albumKey}"
-                data-duplicate-source-index="${index}"
-                title="${folderTitle}">
-                <span class="track-modal-duplicate-folder-icon" aria-hidden="true">📁</span>
-                <span class="track-modal-duplicate-folder-badge">${index + 1}</span>
-              </button>
-            `;
-          }).join('')}
-        </span>
-      `;
+      els.duplicateWarning.innerHTML = buildOnPageAlertHtml({
+        severity: 'warning', title: 'Duplicate album files', message: 'Album seems to have duplicate files:',
+        actionsHtml: duplicateSources.map((source, index) => ButtonComponent.renderButton({
+          label: `Folder ${index + 1}`,
+          variant: index === duplicateSourceIndex ? 'primary' : 'secondary',
+          title: String(source.folder_path || source.folder_name || `Folder ${index + 1}`),
+          attributes: {
+            'data-open-track-modal-duplicate-folder': '1',
+            'data-album-key': resolvedAlbumKey,
+            'data-duplicate-source-index': String(index),
+            'aria-pressed': String(index === duplicateSourceIndex),
+          },
+        })).join(''),
+      });
       els.duplicateTabs.hidden = false;
       els.duplicateTabs.innerHTML = duplicateSources.map((source, index) => {
         const isActive = index === duplicateSourceIndex;

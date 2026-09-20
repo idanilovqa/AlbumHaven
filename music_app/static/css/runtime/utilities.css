@@ -492,9 +492,7 @@
   gap: 10px;
   align-items: center;
 }
-.library-settings-root-row input,
-.library-settings-root-row select,
-.library-settings-policy-grid select {
+.library-settings-root-row input {
   width: 100%;
   min-width: 0;
   border-radius: 10px;
@@ -504,9 +502,7 @@
   padding: 9px 10px;
   font: inherit;
 }
-.library-settings-root-row input:focus,
-.library-settings-root-row select:focus,
-.library-settings-policy-grid select:focus {
+.library-settings-root-row input:focus {
   outline: none;
   border-color: rgba(96,165,250,0.72);
   box-shadow: 0 0 0 3px rgba(96,165,250,0.16);
@@ -514,17 +510,9 @@
 .library-settings-inline-field {
   grid-template-columns: 120px minmax(0, 1fr);
 }
+.library-settings-policy-grid [data-library-policy-trigger] { width: min(100%, 320px); min-width: 0; justify-content: flex-start; }
 .library-settings-root-remove {
   white-space: nowrap;
-}
-.library-settings-error {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(239,68,68,0.3);
-  background: rgba(239,68,68,0.1);
-  color: #fecaca;
-  font-size: 0.84rem;
-  line-height: 1.4;
 }
 .utility-divider {
   width: 100%;
@@ -1342,29 +1330,7 @@
   color: var(--muted);
   line-height: 1.45;
 }
-.tag-edit-non-album-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-top: 14px;
-  padding: 11px 12px;
-  border: 1px solid rgba(250, 204, 21, 0.4);
-  border-radius: 10px;
-  background: rgba(250, 204, 21, 0.09);
-  color: var(--text);
-  font-size: 0.9rem;
-  line-height: 1.4;
-}
-.tag-edit-non-album-warning[hidden] {
-  display: none;
-}
-.tag-edit-non-album-warning-icon {
-  flex: 0 0 auto;
-  color: rgb(250, 204, 21);
-  font-size: 1.05rem;
-  font-weight: 900;
-  line-height: 1.2;
-}
+#tag-edit-non-album-warning { margin-top: 14px; }
 .confirm-modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -1806,18 +1772,10 @@
   border-radius: 0;
   background: transparent;
 }
-#utility-modal[data-active-tab="integrations"] .library-settings-root-list > .utility-empty-state {
-  min-height: 0;
-  padding: 8px 0;
-  text-align: left;
-}
 .library-settings-root-row { grid-template-columns: minmax(0, 1fr); }
 .library-settings-path-control { display: flex; align-items: center; min-width: 0; width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); padding-right: 4px; }
-.library-settings-path-control:focus-within { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 .library-settings-path-control input, .library-settings-path-control input:focus { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; box-shadow: none; outline: none; }
 .library-settings-path-control .action-button { flex: 0 0 auto; border: 0; }
-.library-settings-layout-field { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: .82rem; }
-.library-settings-layout-field select { width: auto; }
 .settings-integration-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 12px; }
 .settings-scrobbling-heading { display: flex; align-items: center; gap: 32px; flex-wrap: wrap; }
 .settings-connected-status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--success, var(--accent)); }
@@ -1825,12 +1783,16 @@
 .settings-playback-statistics dl > div { display: flex; gap: 24px; justify-content: space-between; }
 .settings-playback-statistics dd { margin: 0; }
 .settings-folder-list { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
-.settings-foobar-format-menu { width: min(280px, calc(100vw - 16px)); overflow-y: auto; }
+.settings-foobar-format-menu { box-sizing: border-box; width: min(280px, calc(100vw - 16px)); overflow-y: auto; }
 .settings-guide-copy { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .settings-reading-guide section + section { margin-top: 24px; }
 #app-form-modal.app-form-reading .confirm-modal-dialog { width: min(1000px, calc(100vw - 32px)); }
 #app-form-modal.app-form-reading [hidden] { display: none !important; }
 
-.library-settings-path-control .action-button:focus-visible { outline: none; box-shadow: none; }
 .settings-guide-copy { white-space: normal; }
 .settings-guide-copy pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.library-settings-move-policy-row { display: grid; gap: 8px; margin-bottom: 12px; max-width: 440px; }
+.library-settings-move-policy-row .gallery-switch { padding-inline: 0; font: inherit; text-align: left; }
+.library-settings-move-policy-row .gallery-switch:disabled { opacity: .45; cursor: default; background: transparent; }
+.library-settings-move-policy-row [data-library-policy-value] { color: var(--muted); overflow-wrap: anywhere; }

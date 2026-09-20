@@ -228,7 +228,9 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
     buildProblematicAlbumListItem() { return '<button>Album Alpha</button>'; },
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
+  context.escapeHtml = value => String(value || '');
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -236,6 +238,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
 
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /unable to load/i);
+  assert.match(elements.detail.innerHTML, /data-on-page-alert="error"/);
 });
 
 test('focused-track navigation keeps the matching album selected during a summary refresh', () => {

@@ -82,8 +82,7 @@ html .cover-lookup-drawer {
 .background-preview-floating { position: absolute; right: 12px; top: 51px; width: 140px; padding: 12px; border: 1px solid var(--appearance-line); border-radius: 8px; background: var(--preview-floating); box-shadow: 0 12px 20px #0003; font-size: 11px; }
 .background-preview-floating span { display: block; margin-top: 9px; }
 .background-preview-player { background: var(--appearance-player); padding: 9px 13px; color: var(--appearance-muted); font-size: 10px; }
-.background-warning { margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--appearance-stars); border-radius: 8px; color: var(--appearance-ink); background: color-mix(in srgb, var(--appearance-stars) 15%, var(--appearance-panel-background)); font-size: 12px; line-height: 1.5; }
-.background-request-error { color: var(--appearance-editor-error); font-size: 12px; }
+.background-warning, .background-request-error { margin: 14px 0 0; }
 .background-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--appearance-line); }
 .background-actions .button { height: 37px; padding: 0 15px; border: 1px solid var(--appearance-line); border-radius: 8px; color: var(--appearance-ink); background: var(--appearance-control); font: inherit; }
 .background-actions .background-reset { margin-right: auto; background: transparent; color: var(--appearance-muted); }
@@ -180,7 +179,7 @@ html .cover-lookup-drawer {
 :root[data-appearance-palette] :is(input[type='checkbox'], input[type='radio']) { accent-color: var(--appearance-accent); }
 :root :is(input[type='checkbox'], input[type='radio']):not(.global-player *):hover:not(:disabled) { outline: 1px solid var(--appearance-interaction-outline, var(--appearance-accent)); outline-offset: 1px; }
 :root:is([data-appearance-palette], [data-appearance-item-action-pressed]) :is(input[type='checkbox'], input[type='radio']):not(.global-player *):active:not(:disabled) { accent-color: var(--appearance-item-action-pressed, var(--appearance-accent)); }
-:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.gallery-info-button):focus-visible {
+:root :is(button, input, select, [role='button'], [data-actionable]):not(.loop-edit-action):not(.loop-range-handle):not(.global-player *):not(.search-field *):not(.ui-input-action *):not(.gallery-info-button):focus-visible {
   outline: 1px solid var(--appearance-interaction-outline, var(--appearance-play, var(--appearance-accent)));
   outline-offset: 1px;
 }
@@ -215,18 +214,18 @@ html .cover-lookup-drawer {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root[data-appearance-palette] :is(.related-chip, .artist-family-panel__artist) {
+:root[data-appearance-palette] .related-chip {
   background: var(--appearance-control);
   border-color: var(--appearance-line);
   color: var(--appearance-ink);
 }
-:root:is([data-appearance-palette], [data-appearance-item-hover]) :is(.related-chip, .artist-family-panel__artist):hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
-:root[data-appearance-palette] :is(.related-chip, .artist-family-panel__artist):hover {
+:root:is([data-appearance-palette], [data-appearance-item-hover]) .related-chip:hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
+:root[data-appearance-palette] .related-chip:hover {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
 }
-:root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.related-chip.active, .artist-family-panel__artist.is-active) { background: var(--appearance-item-selected, var(--appearance-hover)); }
-:root[data-appearance-palette] :is(.related-chip.active, .artist-family-panel__artist.is-active) {
+:root:is([data-appearance-palette], [data-appearance-item-selected]) .related-chip.active { background: var(--appearance-item-selected, var(--appearance-hover)); }
+:root[data-appearance-palette] .related-chip.active {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-accent) 30%, transparent);
@@ -240,7 +239,7 @@ html .cover-lookup-drawer {
 }
 :root[data-appearance-palette] .settings-host :is(.settings-nav-item, .settings-nav-item span, .members-row, .member-identity small, .member-access small, .detail-person small, .detail-field small, .field small, .session-status, .account-header p strong) { color: var(--appearance-muted); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host :is(.settings-nav-item.is-active, .settings-nav-item:hover, .member-actions-menu button:hover, .member-actions-menu a:hover) { background: var(--appearance-hover); color: var(--appearance-ink); }
-:root[data-appearance-palette] .settings-host :is(.field > span, .security-callout, .security-callout strong, .invitation-copy-fallback p) { color: var(--appearance-ink); }
+:root[data-appearance-palette] .settings-host :is(.field > span, .invitation-copy-fallback p) { color: var(--appearance-ink); }
 :root[data-appearance-palette] .settings-host :is(.password-control, .password-control input, .detail-field > input, .detail-field > select, .invitation-copy-fallback, .invitation-copy-fallback input, .account-button:not(.is-primary), .member-avatar) { color: var(--appearance-ink); background: var(--appearance-control); border-color: var(--appearance-line); }
 :root[data-appearance-palette] .settings-host .password-control button { color: var(--appearance-accent); }
 /* Player preferences are one saved group, independent of seekbar display mode. */
@@ -627,6 +626,7 @@ html .cover-lookup-drawer {
 .appearance-alert-live-preview { margin-top: 14px; }
 .appearance-alert-preview-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(190px, .75fr); gap: 14px; margin-top: 14px; }
 .appearance-alert-preview__page { align-self: stretch; }
+.appearance-alert-preview__page > .on-page-alert { height: 100%; box-sizing: border-box; }
 .appearance-alert-preview__small {
   display: grid;
   align-content: start;
@@ -833,11 +833,8 @@ html .cover-lookup-drawer {
   --appearance-item-action-pressed: var(--appearance-item-selected);
 }
 
-/* Dropdown rows use a neutral inset edge, independent of player accents. */
-:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button) {
-  transition: background-color 150ms ease, outline-color 150ms ease;
-}
-:root :is(.tag-editor-track, .gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button):not(.tag-editor-track.is-active):not(.account-menu-item):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+/* File rows retain their own interaction treatment. */
+:root .tag-editor-track:not(.is-active):is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
   outline: 1px solid color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
   outline-offset: -1px !important;
   box-shadow: none !important;
@@ -850,21 +847,6 @@ html .cover-lookup-drawer {
   background: var(--tag-editor-selection-fill) !important;
   box-shadow: inset var(--navigation-tree-selection-accent-width, 3px) 0 0 var(--navigation-tree-selection-accent-color, var(--accent)) !important;
 }
-/* A defined transparent starting edge prevents currentColor flashing on hover. */
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button) {
-  outline: 1px solid transparent !important;
-  outline-offset: -1px !important;
-  transition: background-color 150ms ease !important;
-}
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button):hover:not(:disabled):not([aria-disabled="true"]) {
-  outline-color: color-mix(in srgb, var(--text, #eee) 24%, var(--panel, #171717)) !important;
-  box-shadow: none !important;
-}
-:root :is(.gallery-anchored-menu button, .account-menu-item, [role="menu"] [role^="menuitem"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button):is(:focus, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"], .is-active):not(:disabled):not([aria-disabled="true"]) {
-  outline-color: color-mix(in srgb, var(--text, #eee) 50%, var(--panel, #171717)) !important;
-  box-shadow: none !important;
-}
-
 /* File selection is immediate, including deselection of the previous row. */
 :root .tag-editor-track { transition: none !important; }
 

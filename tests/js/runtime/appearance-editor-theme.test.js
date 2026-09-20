@@ -264,3 +264,19 @@ test('restoring the saved recent player set leaves a clean disabled Cancel butto
   assert.equal(instance.controller.getState().dirty, false);
   assert.equal(editor.querySelector('.background-actions').querySelector('[data-background-cancel]').disabled, true);
 });
+
+
+for (const method of ['mount', 'mountSeekbar', 'mountSelectionAccent', 'mountAlerts', 'mountAlbumPage']) {
+  test(method + ' renders request failures through the shared alert and clears recovery state', async () => {
+    const { instance, editor } = await mounted(method);
+    const notice = editor.querySelector('[data-background-request-error]');
+    instance.controller.clear('Unable to save <unsafe> & retry');
+    assert.equal(notice.hidden, false);
+    assert.match(notice.innerHTML, /data-on-page-alert="error"/);
+    assert.match(notice.innerHTML, /Unable to save &lt;unsafe&gt; &amp; retry/);
+    assert.doesNotMatch(notice.innerHTML, /<unsafe>/);
+    instance.controller.clear();
+    assert.equal(notice.hidden, true);
+    assert.equal(notice.innerHTML, '');
+  });
+}

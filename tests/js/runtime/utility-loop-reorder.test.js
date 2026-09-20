@@ -72,7 +72,7 @@ function panel(loop) {
 }
 function setup() {
   const loops = [makeLoop('a'), makeLoop('b'), makeLoop('c'), makeLoop('other', 'track:2')];
-  const detail = new Element(); const panels = new Element({ class: 'utility-loop-entry-list' }); detail.appendChild(panels);
+  const detail = new Element(); const panels = new Element({ class: 'utility-loop-entry-list', 'data-loop-panel-song': 'track:1' }); detail.appendChild(panels);
   const list = new Element(); const treeChildren = new Element({ class: 'utility-loop-tree-children', 'data-loop-tree-song': 'track:1' }); list.appendChild(treeChildren);
   for (const loop of loops.filter(item => item.song_key === 'track:1')) {
     panels.appendChild(panel(loop)); treeChildren.appendChild(new Element({ 'data-utility-loop-id': loop.id, 'data-utility-loop-group-key': loop.song_key }));
@@ -301,20 +301,46 @@ for (const type of ['input', 'search']) test(`L01 shared ${type} event updates o
   assert.equal(h.context.state.utility.rulesSearchQuery, 'Rules unchanged');
 });
 
-for (const [label, sourceIndex, clientY, ordered] of [['above first', 2, -8, ['c', 'a', 'b']], ['below last', 0, 298, ['b', 'c', 'a']]]) {
-  test(`tree accepts drops ${label} in outer spacing`, async () => {
+for (const containerType of ['tree', 'panel'])
+for (const [label, sourceIndex, clientY, targetIndex, position, ordered] of [
+  ['above first', 2, -8, 0, 'before', ['c', 'a', 'b']],
+  ['between rows', 2, 95, 1, 'before', ['a', 'c', 'b']],
+  ['below last', 0, 298, 2, 'after', ['b', 'c', 'a']],
+]) {
+  test(`${containerType} shows and accepts drops ${label}`, async () => {
     const h = setup(); h.context.bindUtilityLoopDragAndDrop();
-    const container = h.context.document.querySelector('[data-loop-tree-song]');
+    const container = h.context.document.querySelector(`[data-loop-${containerType}-song]`);
     container.children[sourceIndex].dispatch('dragstart');
     let accepted = false;
     container.dispatch('dragover', { clientY, preventDefault() { accepted = true; } });
     assert.equal(accepted, true);
+    assert.equal(container.children[targetIndex].classList.contains(`is-drop-${position}`), true);
     const pending = container.dispatch('drop', { clientY });
+    assert.equal(container.children.some(node => node.classList.contains('is-drop-before') || node.classList.contains('is-drop-after')), false);
     assert.deepEqual(h.requests[0].body.ordered_ids, ordered);
     h.finish({ ok: true, song_key: 'track:1', order_revision: 8, ordered_ids: ordered, loops: ordered.map(id => h.loops.find(loop => loop.id === id)) });
     await pending;
   });
 }
+
+test('panel gaps ignore hidden rows and clear a stale cue for invalid song membership', () => {
+  const h = setup(); h.context.bindUtilityLoopDragAndDrop();
+  h.panels.children[0].hidden = true;
+  h.panels.children[2].dispatch('dragstart');
+  h.panels.dispatch('dragover', { clientY: -8 });
+  assert.equal(h.panels.children[0].classList.contains('is-drop-before'), false);
+  assert.equal(h.panels.children[1].classList.contains('is-drop-before'), true);
+  h.panels.children.forEach(node => { node.hidden = true; });
+  h.panels.dispatch('dragover', { clientY: -8 });
+  assert.equal(h.panels.children[1].classList.contains('is-drop-before'), false);
+  h.panels.children.forEach(node => { node.hidden = false; });
+  h.panels.dispatch('dragover', { clientY: 95 });
+  assert.equal(h.panels.children[1].classList.contains('is-drop-before'), true);
+  h.panels.setAttribute('data-loop-panel-song', 'track:2');
+  h.panels.dispatch('dragover', { clientY: -8 });
+  assert.equal(h.panels.children[1].classList.contains('is-drop-before'), false);
+  assert.deepEqual(h.requests, []);
+});
 
 test('L05 live panel drag binds handles, exposes the intended insertion cue, and uses the revision path', async () => {
   const h = setup();

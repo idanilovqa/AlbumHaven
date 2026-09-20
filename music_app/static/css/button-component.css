@@ -132,3 +132,25 @@
 @media (prefers-reduced-motion: reduce) {
   .ui-button, .action-button { transition: none; }
 }
+
+/* Explicit compound fields share focus ownership; embedded actions own their own focus. */
+:root .ui-input-action:has(> input:focus):not(:has(button:active, .trigger-anchor-open, > input[aria-expanded="true"])) {
+  outline: var(--ui-input-action-focus-outline, 1px solid var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  outline-offset: var(--ui-input-action-focus-offset, -1px) !important;
+  border-color: var(--ui-input-action-focus-border, var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  box-shadow: var(--ui-input-action-focus-shadow, none) !important;
+}
+:root .ui-input-action button:focus-visible:not(.trigger-anchor-open) {
+  outline: 2px solid var(--ui-input-action-button-focus, var(--focus-ring, var(--accent))) !important;
+  outline-offset: -3px !important;
+}
+
+:root .ui-input-action > input:focus { outline: none !important; box-shadow: none !important; }
+
+/* Text-entry controls share the calendar's muted inset focus edge. */
+:root :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="hidden"]):not(.ui-input-action > input):focus {
+  outline: 1px solid var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  outline-offset: -1px !important;
+  border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  box-shadow: none !important;
+}

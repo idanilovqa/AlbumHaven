@@ -17,27 +17,10 @@ export class AlbumTrackTable {
   }
 
   async readPlayingSpectra(rowIndex = 0) {
-    // parity-check: allow-read-only-measurement-evaluate -- inspect both rendered perimeter spectra without changing playback or preferences
-    return this.rows.nth(rowIndex).evaluate((row) => [...row.querySelectorAll('.album-track-spectrum')].map((spectrum) => {
-      const style = getComputedStyle(spectrum);
-      const rect = spectrum.querySelector('rect');
-      const bounds = rect.getBBox();
-      const animation = spectrum.getAnimations()[0];
-      return {
-        animation: style.animationName, display: style.display, opacity: style.opacity,
-        dashOffset: Number.parseFloat(style.strokeDashoffset), duration: style.animationDuration,
-        timing: style.animationTimingFunction, startTime: animation?.startTime ?? null,
-        pathLength: rect.pathLength.baseVal.value, radius: rect.rx.baseVal.value,
-        fill: style.fill, pointerEvents: getComputedStyle(spectrum.ownerSVGElement).pointerEvents,
-        width: bounds.width, height: bounds.height,
-        viewportWidth: spectrum.ownerSVGElement.getBoundingClientRect().width,
-        viewportHeight: spectrum.ownerSVGElement.getBoundingClientRect().height,
-        rowWidth: row.getBoundingClientRect().width, rowHeight: row.getBoundingClientRect().height,
-        rowX: row.getBoundingClientRect().x, rowY: row.getBoundingClientRect().y,
-        viewportX: spectrum.ownerSVGElement.getBoundingClientRect().x,
-        viewportY: spectrum.ownerSVGElement.getBoundingClientRect().y,
-        rowBackground: getComputedStyle(row).backgroundColor, rowOpacity: getComputedStyle(row).opacity,
-      };
+    // parity-check: allow-read-only-measurement-evaluate -- inspect both rendered spectra without changing playback or preferences
+    return this.rows.nth(rowIndex).evaluate((row) => ['::before', '::after'].map((pseudo) => {
+      const style = getComputedStyle(row, pseudo);
+      return { animation: style.animationName, display: style.display, opacity: style.opacity };
     }));
   }
 
@@ -60,7 +43,7 @@ export class AlbumTrackTable {
   }
 
   async readRunningAnimationCount(rowIndex = 0) {
-    // parity-check: allow-read-only-measurement-evaluate -- measure running animations on the real playing row and its decoration
+    // parity-check: allow-read-only-measurement-evaluate -- measure running animations on the real playing row and its pseudo-elements
     return this.rows.nth(rowIndex).evaluate((row) => row.getAnimations({ subtree: true })
       .filter((animation) => animation.playState === 'running').length);
   }

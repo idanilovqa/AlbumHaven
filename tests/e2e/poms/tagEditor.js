@@ -53,10 +53,10 @@ export class TagEditor extends BasePage {
     });
     this.nonAlbumRarityWarning = this.confirmDialog.getByRole('alert');
     this.nonAlbumRarityWarningIcon = this.nonAlbumRarityWarning.locator(
-      '[data-non-album-rarity-warning-icon="1"]',
+      '.on-page-alert__icon',
     );
     this.nonAlbumRarityWarningText = this.nonAlbumRarityWarning.locator(
-      '[data-non-album-rarity-warning-text="1"]',
+      '.on-page-alert__message',
     );
     this.repairAlertMessageSelector = '#repair-alert-message';
     this.repairAlertLogHistorySelector = '#repair-alert-log-history';

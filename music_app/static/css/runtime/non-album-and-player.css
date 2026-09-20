@@ -47,7 +47,8 @@
   overflow-anchor: none;
   overscroll-behavior: contain;
 }
-.albums-viewport { position: relative; min-height: 100%; overflow-anchor: none; }
+/* Keep the decorative focus glow inside the gallery's horizontal bounds. */
+.albums-viewport { position: relative; min-width: 0; max-width: 100%; min-height: 100%; overflow-x: clip; overflow-anchor: none; }
 .gallery-focus-glow {
   position: absolute;
   width: 300px;
@@ -90,7 +91,7 @@
 }
 .artist-section { margin: 0 0 28px; }
 .artist-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
-.artist-name { font-size: 1.2rem; font-weight: 700; margin: 0; }
+.artist-name { min-width: 0; overflow-wrap: anywhere; font-size: 1.2rem; font-weight: 700; margin: 0; }
 .artist-meta { color: var(--muted); font-size: 0.9rem; }
 .artist-rows { display: flex; flex-direction: column; gap: 14px; }
 .album-row {
@@ -1257,6 +1258,7 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .utility-loop-entry-list {
   display: grid;
   gap: 12px;
+  padding-block: 10px;
   min-height: 0;
 }
 .utility-loop-entry {
@@ -1784,19 +1786,16 @@ a.play { color: var(--accent); text-decoration: none; margin-left: 8px; }
 .utility-log-query-form { display: grid; gap: 12px; min-width: 0; width: 100%; }
 .utility-log-query-form label { display: grid; min-width: 0; gap: 5px; overflow-wrap: anywhere; }
 .utility-log-query-form h4, .utility-log-query-form p { margin: 0; }
-.utility-log-query-form input, .utility-log-query-form select { box-sizing: border-box; min-width: 0; max-width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
-.utility-log-query-form input:not([type="checkbox"]), .utility-log-query-form [data-log-source-trigger] { width: 100%; }
-.utility-log-query-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.utility-log-query-dates[hidden] { display: none; }
-@media (max-width: 480px) { .utility-log-query-dates { grid-template-columns: minmax(0, 1fr); } }
+.utility-log-query-form > label > input, .utility-log-type-options input { box-sizing: border-box; min-width: 0; max-width: 100%; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.utility-log-query-form > label > input, .utility-log-query-form [data-log-source-trigger] { width: 100%; }
 .utility-log-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .utility-log-type-options { display: grid; gap: 8px; }
 .utility-log-type-options label { display: flex; align-items: center; gap: 8px; }
-.utility-log-error { color: var(--appearance-danger, var(--danger)); }
 .app-form-anchored { background: transparent; }
 #app-form-modal .confirm-modal-dialog { box-sizing: border-box; display: flex; flex-direction: column; max-height: 100%; overflow: visible; }
-#app-form-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+#app-form-content { min-height: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
 #app-form-modal .confirm-modal-title, #app-form-modal .confirm-modal-actions, #app-form-error { flex: 0 0 auto; }
+#app-form-error:empty { display: none; }
 .utility-loop-entry.is-drop-before::before { top: -9px; }
 .utility-loop-entry.is-drop-after::after { bottom: -9px; }
 .utility-loop-tree-child.is-drop-before::before { top: -2px; }

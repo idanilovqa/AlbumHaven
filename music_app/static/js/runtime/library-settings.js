@@ -4,11 +4,7 @@ const LIBRARY_SETTINGS_ROOT_CATEGORIES = Object.freeze([
   'new_arrivals_roots',
 ]);
 
-const LIBRARY_SETTINGS_LAYOUT_OPTIONS = Object.freeze([
-  { value: 'artist', label: 'Artist folders' },
-  { value: 'genre/artist', label: 'Genre / artist folders' },
-  { value: 'album-at-root', label: 'Albums at root' },
-]);
+const LIBRARY_SETTINGS_LAYOUT_MODES = Object.freeze(['artist', 'genre/artist', 'album-at-root']);
 
 function getDefaultLibrarySettingsState() {
   return {
@@ -46,7 +42,7 @@ function normalizeLibrarySettingsRootEntry(category, entry, index) {
   };
   if (category === 'main_library_roots') {
     const layoutMode = String(source.layout_mode || 'artist').trim();
-    normalized.layout_mode = LIBRARY_SETTINGS_LAYOUT_OPTIONS.some((option) => option.value === layoutMode)
+    normalized.layout_mode = LIBRARY_SETTINGS_LAYOUT_MODES.includes(layoutMode)
       ? layoutMode
       : 'artist';
   }
@@ -77,6 +73,21 @@ function normalizeLibrarySettingsPayload(raw) {
 
 function cloneLibrarySettingsDraft(settings) {
   return normalizeLibrarySettingsPayload(cloneRuntimeJson(settings, {}));
+}
+
+function serializeLibrarySettingsDraft(draft) {
+  const payload = normalizeLibrarySettingsPayload(draft);
+  LIBRARY_SETTINGS_ROOT_CATEGORIES.forEach(category => {
+    const blankIds = new Set();
+    payload[category] = payload[category].filter(root => {
+      if (root.path.trim()) return true;
+      blankIds.add(root.id);
+      return false;
+    });
+    const policyKey = category === 'main_library_roots' ? 'preferred_main_write_root' : category === 'hoarding_library_roots' ? 'move_new_arrivals_to' : '';
+    if (policyKey && blankIds.has(payload.move_policy[policyKey])) payload.move_policy[policyKey] = '';
+  });
+  return payload;
 }
 
 function countConfiguredLibraryRoots(settings) {
@@ -125,6 +136,9 @@ function getLibrarySettingsDraft() {
   if (!librarySettingsState.draft) {
     librarySettingsState.draft = cloneLibrarySettingsDraft(librarySettingsState.settings || {});
   }
+  LIBRARY_SETTINGS_ROOT_CATEGORIES.forEach(category => {
+    if (!librarySettingsState.draft[category]?.length) librarySettingsState.draft[category] = [normalizeLibrarySettingsRootEntry(category, {}, 0)];
+  });
   return librarySettingsState.draft;
 }
 
@@ -147,11 +161,12 @@ function removeLibraryRootDraftEntry(category, index) {
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
   const removed = roots[index];
   draft[category] = roots.filter((_, itemIndex) => itemIndex !== index);
+  if (!draft[category].length) draft[category].push(normalizeLibrarySettingsRootEntry(category, {}, 0));
   if (removed?.id) {
-    if (draft.move_policy.preferred_main_write_root === removed.id) {
+    if (category === 'main_library_roots' && draft.move_policy.preferred_main_write_root === removed.id) {
       draft.move_policy.preferred_main_write_root = '';
     }
-    if (draft.move_policy.move_new_arrivals_to === removed.id) {
+    if (category === 'hoarding_library_roots' && draft.move_policy.move_new_arrivals_to === removed.id) {
       draft.move_policy.move_new_arrivals_to = '';
     }
   }
@@ -197,17 +212,35 @@ function applyLibrarySettingsFieldTarget(target) {
 }
 
 function handleLibrarySettingsClick(event) {
-  const layout = event.target.closest('[data-library-layout-trigger]');
-  if (layout) {
+  const toggle = event.target.closest('[id^="library-auto-move-"]');
+  if (toggle) {
     event.preventDefault();
-    const index = Number(layout.getAttribute('data-library-root-index'));
-    const root = getLibrarySettingsDraft().main_library_roots?.[index];
-    if (!root || ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return true;
-    openUtilityChoiceDropdown(layout, {
-      formats: LIBRARY_SETTINGS_LAYOUT_OPTIONS.map(option => option.label),
-      selected: LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.value === root.layout_mode)?.label,
-      label: 'Folder layout',
-      onSelect: label => updateLibraryRootDraftField('main_library_roots', index, 'layout_mode', LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.label === label).value),
+    const owner = ensureLibrarySettingsState();
+    if (owner.allowedActions?.['library.settings.manage'] !== true || toggle.disabled) return true;
+    const field = toggle.id === 'library-auto-move-main' ? 'preferred_main_write_root' : toggle.id === 'library-auto-move-hoard' ? 'move_new_arrivals_to' : '';
+    if (!field) return false;
+    owner.moveAutomationDraft ||= {};
+    owner.moveAutomationDraft[field] = !owner.moveAutomationDraft[field];
+    renderUtilityModalContent();
+    document.getElementById?.(toggle.id)?.focus({ preventScroll: true });
+    return true;
+  }
+  const policy = event.target.closest('[data-library-policy-trigger]');
+  if (policy) {
+    event.preventDefault();
+    if (ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return true;
+    const field = policy.getAttribute('data-library-policy-trigger');
+    const category = field === 'preferred_main_write_root' ? 'main_library_roots' : field === 'move_new_arrivals_to' ? 'hoarding_library_roots' : '';
+    if (!category) return true;
+    const draft = getLibrarySettingsDraft();
+    openUtilityChoiceDropdown(policy, {
+      matchTriggerWidth: true,
+      formats: buildLibrarySettingsRootOptions(draft[category]),
+      selected: draft.move_policy[field] || buildLibrarySettingsRootOptions(draft[category])[0]?.value, label: field === 'preferred_main_write_root' ? 'Library destination' : 'Move to Hoard',
+      onSelect: value => {
+        if (ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true) return false;
+        updateLibrarySettingsDraftField(field, value);
+      },
     });
     return true;
   }
@@ -384,7 +417,7 @@ async function saveUtilityLibrarySettings() {
     const response = await fetch('/library-settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: cloneLibrarySettingsDraft(getLibrarySettingsDraft()) }),
+      body: JSON.stringify({ settings: serializeLibrarySettingsDraft(getLibrarySettingsDraft()) }),
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Unable to save library settings');
@@ -415,18 +448,31 @@ async function saveUtilityLibrarySettings() {
   }
 }
 
-function buildLibrarySettingsRootOptions(roots, selectedId, placeholder) {
-  const items = Array.isArray(roots) ? roots : [];
-  const options = [`<option value="">${escapeHtml(placeholder)}</option>`];
-  items.forEach((root, index) => {
-    const rootId = String(root?.id || '');
-    const rootPath = String(root?.path || '').trim();
-    const label = rootPath || `Root ${index + 1}`;
-    options.push(
-      `<option value="${escapeHtml(rootId)}" ${rootId === selectedId ? 'selected' : ''}>${escapeHtml(label)}</option>`,
-    );
+function buildLibrarySettingsRootOptions(roots, placeholder) {
+  return [...(placeholder ? [{ value: '', label: placeholder }] : []), ...(Array.isArray(roots) ? roots : [])
+    .filter(root => String(root?.path || '').trim())
+    .map(root => ({ value: String(root.id), label: String(root.path).trim() }))];
+}
+
+function buildLibrarySettingsPolicyButton(field, roots, selectedId, label) {
+  const choices = buildLibrarySettingsRootOptions(roots);
+  if (choices.length <= 1) return `<span data-library-policy-value="${field}">${escapeHtml(choices[0]?.label || 'No library path configured')}</span>`;
+  const selectedLabel = choices.find(choice => choice.value === selectedId)?.label || choices[0]?.label;
+  return window.ButtonComponent.renderButton({
+    label: selectedLabel,
+    ariaLabel: label, disabled: ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] !== true,
+    attributes: { 'data-library-policy-trigger': field, 'aria-haspopup': 'menu', 'aria-expanded': 'false' },
   });
-  return options.join('');
+}
+
+function buildLibraryMovePolicyRow(field, roots, selectedId, title, destinationLabel, key) {
+  const owner = ensureLibrarySettingsState();
+  const enabled = owner.moveAutomationDraft?.[field] === true;
+  const hasRoots = buildLibrarySettingsRootOptions(roots).length > 0;
+  return `<div class="library-settings-move-policy-row">
+    ${buildGallerySwitchHtml({ id: `library-auto-move-${key}`, label: title, checked: enabled, disabled: !hasRoots || owner.allowedActions?.['library.settings.manage'] !== true })}
+    ${enabled && hasRoots ? buildLibrarySettingsPolicyButton(field, roots, selectedId, destinationLabel) : ''}
+  </div>`;
 }
 
 function buildLibrarySettingsRootSection(category, title, description) {
@@ -434,16 +480,15 @@ function buildLibrarySettingsRootSection(category, title, description) {
   const roots = Array.isArray(draft[category]) ? draft[category] : [];
   const canManage = ensureLibrarySettingsState().allowedActions?.['library.settings.manage'] === true;
   const canBrowse = canManage && ensureLibrarySettingsState().allowedActions?.['library.filesystem.browse'] === true && ensureLibrarySettingsState().allowedActions?.['library.paths.read'] === true;
-  const rows = roots.length ? roots.map((root, index) => `<div class="library-settings-root-row">
-    <div class="library-settings-path-control"><input type="text" value="${escapeHtml(root.path || '')}"
+  const rows = roots.map((root, index) => `<div class="library-settings-root-row">
+    <div class="library-settings-path-control ui-input-action"><input type="text" value="${escapeHtml(root.path || '')}"
       aria-label="${escapeHtml(title)} path ${index + 1}" placeholder="${escapeHtml(title)} folder"
       data-library-root-field="path" data-library-root-list="${escapeHtml(category)}" data-library-root-index="${index}" ${canManage ? '' : 'disabled'}>
       ${window.ButtonComponent.renderActionButton({ariaLabel: `Choose ${title} folder ${index + 1}`, iconClass: 'album-details-header__action-icon album-details-header__action-icon--folder', disabled: !canBrowse,
         attributes: {'data-browse-library-root': category, 'data-library-root-index': index}})}
       ${window.ButtonComponent.renderActionButton({ariaLabel: `Remove ${title} path ${index + 1}`, icon: 'delete', semantic: 'destructive', disabled: !canManage,
         attributes: {'data-remove-library-root': category, 'data-library-root-index': index}})}</div>
-    ${category === 'main_library_roots' ? `<div class="library-settings-layout-field"><span>Folder layout</span>${window.ButtonComponent.renderButton({ label: LIBRARY_SETTINGS_LAYOUT_OPTIONS.find(option => option.value === root.layout_mode)?.label || 'Artist folders', ariaLabel: `Folder layout for ${title} path ${index + 1}`, disabled: !canManage, attributes: { 'data-library-layout-trigger': '1', 'data-library-root-index': index, 'aria-haspopup': 'menu', 'aria-expanded': 'false' } })}</div>` : ''}
-    </div>`).join('') : '<div class="utility-empty-state compact">No roots added yet.</div>';
+    </div>`).join('');
 
   return `
     <section class="library-settings-section">
@@ -468,10 +513,8 @@ function buildUtilityLibrarySettingsDetail() {
     return `
       <div class="utility-rule-detail">
         <h3 class="utility-rule-title">Library</h3>
-        <p class="utility-rule-description">${escapeHtml(librarySettingsState.error)}</p>
-        <div class="confirm-modal-actions">
-          <button class="button" type="button" data-reload-library-settings="1">Retry</button>
-        </div>
+        ${buildOnPageAlertHtml({ severity: 'error', title: 'Library settings unavailable', message: librarySettingsState.error,
+          actionsHtml: ButtonComponent.renderButton({ label: 'Retry', attributes: { 'data-reload-library-settings': '1' } }) })}
       </div>
     `;
   }
@@ -482,7 +525,7 @@ function buildUtilityLibrarySettingsDetail() {
   return `
     <div class="utility-rule-detail">
       <h3 class="utility-rule-title">Library</h3>
-      ${librarySettingsState.error ? `<div class="library-settings-error">${escapeHtml(librarySettingsState.error)}</div>` : ''}
+      ${librarySettingsState.error ? buildOnPageAlertHtml({ severity: 'error', title: 'Library settings could not be updated', message: librarySettingsState.error }) : ''}
       ${buildLibrarySettingsRootSection('main_library_roots', 'Main Library', '')}
       ${buildLibrarySettingsRootSection('hoarding_library_roots', 'Hoard', 'Unlistened music.')}
       ${buildLibrarySettingsRootSection('new_arrivals_roots', 'New Arrivals', 'Folders watched for new music.')}
@@ -490,22 +533,12 @@ function buildUtilityLibrarySettingsDetail() {
         <div class="library-settings-section-heading">
           <div>
             <h4>Move policy</h4>
-            <p>Choose the preferred write targets that the server-owned move planner should use.</p>
+            <p>Choose where albums are moved into your libraries.</p>
           </div>
         </div>
-        <div class="lastfm-credentials-grid library-settings-policy-grid">
-          <label class="lastfm-inline-field library-settings-inline-field">
-            <span>Library writes</span>
-            <select data-library-settings-field="preferred_main_write_root">
-              ${buildLibrarySettingsRootOptions(draft.main_library_roots, movePolicy.preferred_main_write_root, 'Choose a Main Library root')}
-            </select>
-          </label>
-          <label class="lastfm-inline-field library-settings-inline-field">
-            <span>Move to Hoard</span>
-            <select data-library-settings-field="move_new_arrivals_to">
-              ${buildLibrarySettingsRootOptions(draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Choose a Hoard root')}
-            </select>
-          </label>
+        <div class="library-settings-policy-grid">
+          ${buildLibraryMovePolicyRow('preferred_main_write_root', draft.main_library_roots, movePolicy.preferred_main_write_root, 'Auto Move rated albums to Main library', 'Library destination', 'main')}
+          ${buildLibraryMovePolicyRow('move_new_arrivals_to', draft.hoarding_library_roots, movePolicy.move_new_arrivals_to, 'Move New Arrivals to Hoard', 'Move to Hoard', 'hoard')}
         </div>
       </section>
       <section class="library-settings-section">
@@ -589,6 +622,7 @@ async function openUtilityFoobarGuide() {
 }
 
 let utilityFoobarFormatCleanup = null;
+let utilityChoiceTrigger = null;
 function openUtilityFoobarFormats(trigger) {
   return openUtilityChoiceDropdown(trigger, {
     formats: ['Playback Statistics XML', 'Text Tools — standard', 'Text Tools — enhanced'],
@@ -596,38 +630,45 @@ function openUtilityFoobarFormats(trigger) {
     onSelect: value => { state.utility.foobarFormat = value; },
   });
 }
-function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect }) {
-  if (utilityFoobarFormatCleanup) { utilityFoobarFormatCleanup(); return; }
+function openUtilityChoiceDropdown(trigger, { formats, selected, label, onSelect, matchTriggerWidth = false }) {
+  if (utilityFoobarFormatCleanup) {
+    const sameTrigger = utilityChoiceTrigger === trigger;
+    utilityFoobarFormatCleanup();
+    if (sameTrigger) return;
+  }
+  const choices = formats.map(format => typeof format === 'string' ? { value: format, label: format } : format);
   const menu = document.createElement('div');
-  menu.className = 'utility-problem-filter-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
+  menu.className = 'gallery-anchored-menu settings-foobar-format-menu'; menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', label);
-  menu.innerHTML = formats.map(format => window.ButtonComponent.renderButton({label: format,
-    attributes: {role: 'menuitemradio', 'aria-checked': String(format === selected), 'data-foobar-format': format}})).join('');
+  menu.innerHTML = choices.map(choice => window.ButtonComponent.renderButton({label: choice.label, className: 'gallery-menu-action', attributes: {role: 'menuitemradio', 'aria-checked': String(choice.value === selected), 'data-foobar-format': choice.value}})).join('');
   document.body.append(menu);
   let closed = false;
   const close = () => {
     if (closed) return; closed = true;
     clearTriggerAnchor(menu); menu.remove(); trigger.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', outside, true); window.removeEventListener('resize', position);
-    observer?.disconnect(); utilityFoobarFormatCleanup = null;
+    observer?.disconnect(); utilityFoobarFormatCleanup = null; utilityChoiceTrigger = null;
   };
   const position = () => {
     if (!trigger.isConnected) { close(); return; }
     const rect = trigger.getBoundingClientRect(); menu.style.position = 'fixed'; menu.style.zIndex = '130';
-    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 290))}px`;
+    const menuWidth = matchTriggerWidth ? Math.min(rect.width, window.innerWidth - 16) : Math.min(280, window.innerWidth - 16);
+    menu.style.width = `${Math.max(0, menuWidth)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
     menu.style.top = `${rect.bottom + 4}px`; menu.style.maxHeight = `${Math.max(80, window.innerHeight - rect.bottom - 12)}px`;
     syncTriggerAnchor(menu, trigger);
   };
   const outside = event => { if (!menu.contains(event.target) && !trigger.contains(event.target)) close(); };
   const observer = typeof MutationObserver === 'function' ? new MutationObserver(() => { if (menu.hidden || !trigger.isConnected) close(); }) : null;
   observer?.observe(document.body, {childList:true,subtree:true,attributes:true,attributeFilter:['hidden']});
-  utilityFoobarFormatCleanup = close; trigger.setAttribute('aria-expanded', 'true'); position();
+  utilityFoobarFormatCleanup = close; utilityChoiceTrigger = trigger; trigger.setAttribute('aria-expanded', 'true'); position();
   document.addEventListener('pointerdown', outside, true); window.addEventListener('resize', position);
   menu.addEventListener('click', event => {
     const choice = event.target.closest('[data-foobar-format]'); if (!choice) return;
-    const value = choice.getAttribute('data-foobar-format'); if (!formats.includes(value)) return;
-    onSelect(value);
-    const label = trigger.querySelector('.ui-button__content'); if (label) label.textContent = value;
+    const value = choice.getAttribute('data-foobar-format');
+    const option = choices.find(item => item.value === value); if (!option) return;
+    if (onSelect(value) === false) { close(); return; }
+    const label = trigger.querySelector('.ui-button__content'); if (label) label.textContent = option.label;
     close(); trigger.focus({preventScroll:true});
   });
   menu.addEventListener('keydown', event => {

@@ -20,6 +20,7 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
     removeEventListener() {}, contains(node) { return node === this || this.children.includes(node); },
     replaceChildren(...nodes) { this.children = nodes; this.childNodes = nodes; },
     append(...nodes) { this.children.push(...nodes); this.childNodes = this.children; },
+    prepend(...nodes) { this.children = [...nodes, ...this.children.filter(node => !nodes.includes(node))]; this.childNodes = this.children; },
     appendChild(node) { this.append(node); return node; },
     focus() {}, cloneNode() { return this; },
   });
@@ -35,11 +36,17 @@ function harness({ library = false, initialPath = '/admin/members' } = {}) {
   host.hidden = library;
   host.querySelector = (selector) => selector === '[data-settings-nav]' ? nav : selector === '[data-settings-outlet]' ? outlet : null;
   const shell = attributes();
+  const galleryContent = attributes();
+  shell.querySelector = selector => selector === '#shell-main-surface' ? galleryContent : null;
+  const error = attributes();
+  const errorMessage = { textContent: '' };
+  error.hidden = true;
+  error.querySelector = selector => selector === '.on-page-alert__message' ? errorMessage : null;
   const body = attributes();
   const document = {
     readyState: 'loading', title: 'Library', body,
     querySelector(selector) {
-      return ({ '[data-settings-host]': host, '[data-settings-nav]': nav, '[data-settings-outlet]': outlet, '#app-shell': library ? shell : null })[selector] || null;
+      return ({ '[data-settings-navigation-error]': error, '[data-settings-host]': host, '[data-settings-nav]': nav, '[data-settings-outlet]': outlet, '#app-shell': library ? shell : null })[selector] || null;
     },
     getElementById(id) { return id === 'app-shell' ? shell : null; },
     querySelectorAll() { return []; },
@@ -149,8 +156,32 @@ test('a rejected protected-page response leaves the current content and history 
   const app = harness();
   app.respond('Access denied', 'http://localhost:5000/admin/members', 403);
   assert.equal(await app.navigation.navigate('/admin/members'), false);
+  const error = app.document.querySelector('[data-settings-navigation-error]');
+  assert.equal(error.hidden, false);
+  assert.equal(error.querySelector('.on-page-alert__message').textContent, 'This page could not be loaded. Please try again.');
   assert.equal(app.outlet.innerHTML, 'initial');
   assert.equal(app.historyCalls.length, 0);
+});
+
+test('navigation failure reuses its in-flow alert in the visible gallery and replaced settings outlet', async () => {
+  const app = harness({ library: true });
+  const error = app.document.querySelector('[data-settings-navigation-error]');
+  app.respond('Unavailable', 'http://localhost:5000/account', 503);
+  assert.equal(await app.navigation.navigate('/account'), false);
+  const gallery = app.shell.querySelector('#shell-main-surface');
+  assert.equal(gallery.childNodes[0], error);
+  assert.equal(error.hidden, false);
+  assert.equal(app.host.hidden, true);
+  app.respond('Account');
+  assert.equal(await app.navigation.navigate('/account'), true);
+  assert.equal(error.hidden, true);
+  app.outlet.replaceChildren({ textContent: 'Replacement settings content' });
+  app.respond('Unavailable', 'http://localhost:5000/admin/members', 503);
+  assert.equal(await app.navigation.navigate('/admin/members'), false);
+  assert.equal(app.outlet.childNodes[0], error);
+  assert.equal(app.outlet.childNodes[1].textContent, 'Replacement settings content');
+  assert.equal(error.hidden, false);
+  assert.equal(app.outlet.scrollTop, 0);
 });
 
 test('history restoration does not push a duplicate browser entry', async () => {

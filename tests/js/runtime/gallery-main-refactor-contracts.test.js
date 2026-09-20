@@ -6,6 +6,7 @@ const vm = require('node:vm');
 
 const runtimeRoot = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime');
 const proposedRuntimeFiles = [
+  'album-artbox.js',
   'gallery-main-components.js',
   'gallery-main-state.js',
   'gallery-main-interactions.js',
@@ -35,6 +36,9 @@ function loadRuntime(overrides = {}) {
       .replaceAll('>', '&gt;')
       .replaceAll('"', '&quot;'),
     console,
+    albumHasDisplayCover: album => Boolean(album?.cover_url),
+    buildAlbumDisplayCoverUrl: album => album?.cover_url || '',
+    buildAlbumLightboxCoverUrl: album => album?.cover_url || '',
     ...overrides,
   };
   vm.createContext(context);
@@ -235,7 +239,7 @@ test('Artist Family pills disable native dragging while the primary artist stays
 
   assert.match(markup, /is-primary[^>]*draggable="false"/);
   assert.match(markup, /data-gallery-family-artist="Cosmic Cathedral"[^>]*draggable="false"/);
-  assert.match(markup, /artist-family-panel__primary-divider/);
+  assert.doesNotMatch(markup, /artist-family-panel__primary-divider/);
   assert.deepEqual(
     plain(reorderGalleryFamilyArtists(['Cosmic Cathedral', 'The Neal Morse Band'], 'The Neal Morse Band', 'Cosmic Cathedral')),
     ['The Neal Morse Band', 'Cosmic Cathedral'],
@@ -506,6 +510,28 @@ test('GalleryBar scroll context uses absolute virtual section coordinates instea
   ]);
 });
 
+test('family panel heading uses the selected primary artist with an adjacent count', () => {
+  const title = {}, total = {}, name = {}, summary = {};
+  const info = { dataset: {}, setAttribute() {}, remove() {} };
+  const bar = { offsetHeight: 54, querySelector: selector => selector === '[data-gallery-context-name]' ? name : selector === '[data-gallery-context-summary]' ? summary : info };
+  const context = loadRuntime({ state: { gallery: {}, view: {
+    selected_artist: 'Neal Morse',
+    primary_artist_groups: [{ artist: 'Neal Morse', albums: [{ key: 'one', source: 'main_library' }] }],
+    family_artist_groups: [{ artist: 'Cosmic Cathedral', albums: [{ key: 'two', source: 'main_library' }] }],
+  } }, document: {
+    querySelector: selector => ({ '[data-gallery-bar]': bar, '[data-gallery-family-panel-title]': title, '[data-gallery-family-panel-total]': total })[selector] || null,
+    getElementById: id => id === 'albums-scroll' ? { scrollTop: 0 } : null,
+  } });
+  context.updateGalleryMainControls = () => {};
+  context.updateGalleryMainChrome();
+  assert.equal(title.textContent, 'Neal Morse Family');
+  assert.equal(title.title, title.textContent);
+  assert.equal(total.textContent, '2 albums');
+  const markup = context.buildArtistFamilyPanelHtml({ title: title.textContent, albumTotal: total.textContent });
+  assert.match(markup, /<h2[^>]*>Neal Morse Family<\/h2><span aria-hidden="true">•<\/span><span data-gallery-family-panel-total>2 albums<\/span>/);
+  assert.match(indexTemplateSource, /data-gallery-family-panel-title>Artist Family<\/h2><span aria-hidden="true">•<\/span><span data-gallery-family-panel-total>/);
+});
+
 test('Artist Family panel reuses the legacy selected and primary visual hierarchy', () => {
   const state = {
     view: {
@@ -529,18 +555,15 @@ test('Artist Family panel reuses the legacy selected and primary visual hierarch
 
   assert.match(markup, /class="artist-family-panel__artist is-active is-primary"[^>]*data-gallery-family-artist="Neal Morse"/);
   assert.match(markup, /class="artist-family-panel__artist is-active"[^>]*data-gallery-family-artist="Cosmic Cathedral"/);
-  assert.match(
-    galleryMainCssSource,
-    /\.artist-family-panel__artist\.is-active\s*\{[^}]*background:\s*color-mix\(in srgb, var\(--accent\) 22%, var\(--panel-2\)\)[^}]*box-shadow:/,
-  );
-  assert.match(
-    galleryMainCssSource,
-    /\.artist-family-panel__artist\.is-primary\s*\{[^}]*border-width:\s*2px[^}]*0 0 18px color-mix\(in srgb, var\(--accent\) 16%, transparent\)/,
-  );
-  assert.match(
-    galleryMainCssSource,
-    /\.artist-family-panel__artist\.is-primary\.is-active\s*\{[^}]*0 0 22px color-mix\(in srgb, var\(--accent\) 24%, transparent\)/,
-  );
+  assert.match(markup, /title="Cosmic Cathedral"/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*min\(390px, 92vw\)/);
+  assert.match(markup, /artist-family-panel__artwork/);
+  assert.match(markup, /artist-family-panel__marker/);
+  assert.match(markup, /artist-family-panel__count/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel__name\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist\.is-primary\s*\{/);
+  assert.match(galleryMainCssSource, /height: 60px/);
+  assert.match(galleryMainCssSource, /box-shadow: none !important/);
 });
 
 test('unavailable release types remain inert while Studio and Compilation use catalog-backed facts', () => {
@@ -947,4 +970,31 @@ test('root summary preserves unkeyed occurrences and selected-artist family tota
   assert.equal(root.albumCount, 3, 'missing keys must not collapse unrelated records');
   assert.equal(context.resolveGallerySummaryTotals({ selected_artist: 'Lead' }, mounted,
     context.createGalleryMainState(), groups), mounted);
+});
+
+
+test('family header contributes to panel width and never truncates the full family name', () => {
+  assert.match(galleryMainCssSource, /\.artist-family-panel__title-row h2\s*\{[^}]*white-space:\s*normal;[^}]*overflow-wrap:\s*anywhere/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel > header\s*\{[^}]*contain:\s*inline-size/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel__heading p\s*\{[^}]*contain:\s*inline-size/);
+});
+
+test('family rows use available album art and retain independent pressed states', () => {
+  const groups = [
+    { artist: 'One', albums: [{}, { cover_url: '/cover/one' }] },
+    { artist: 'Two', albums: [{ cover_url: '/cover/two' }] },
+    { artist: 'Three', albums: [] },
+  ];
+  const context = loadRuntime({ state: { view: { selected_artist: 'One' } } });
+  context.ensureGalleryMainState = () => ({ familySelectionExplicit: true, familyArtists: ['One', 'Two'] });
+  context.getGalleryFamilyPanelModel = () => ({ groups });
+  context.getGalleryFamilyPanelGroups = () => groups;
+  const html = context.buildGalleryFamilyPanelBody();
+  assert.equal((html.match(/aria-pressed="true"/g) || []).length, 2);
+  assert.equal((html.match(/aria-pressed="false"/g) || []).length, 1);
+  assert.match(html, /src="\/cover\/one"/);
+  assert.match(html, /src="\/cover\/two"/);
+  assert.match(html, /data-album-artbox-state="empty"/);
+  assert.equal((html.match(/<button /g) || []).length, 3);
+  assert.doesNotMatch(html, /primary-divider|data-open-lightbox/);
 });

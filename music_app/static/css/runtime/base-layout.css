@@ -247,12 +247,6 @@ input[type='search'] {
 .toast {
   min-width: 280px;
   max-width: min(460px, calc(100vw - 32px));
-  background: color-mix(in srgb, var(--success) 18%, var(--panel) 82%);
-  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border) 55%);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 10px 22px rgba(0,0,0,0.22);
   opacity: 0;
   transform: translateY(-8px);
   transition: opacity 0.25s ease, transform 0.25s ease;
@@ -291,7 +285,6 @@ input[type='search'] {
 }
 [data-notification-deferred] { visibility: hidden; }
 .toast.is-visible { opacity: 1; transform: translateY(0); }
-.toast.is-error { background: color-mix(in srgb, #ef4444 18%, var(--panel) 82%); border-color: color-mix(in srgb, #ef4444 45%, var(--border) 55%); }
 .toast.is-top-center {
   position: fixed;
   top: 14px;
@@ -303,44 +296,23 @@ input[type='search'] {
   transform: translate(-50%, 0);
 }
 .repair-alert {
-  pointer-events: none;
   position: fixed;
+  pointer-events: none;
   right: 16px;
   bottom: calc(var(--player-height) + 12px);
   z-index: 140;
-  transform: translateY(8px);
   opacity: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(520px, calc(100vw - 32px));
-  padding: 9px 11px 9px 13px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--success) 48%, var(--border) 52%);
-  background: color-mix(in srgb, var(--success) 12%, rgba(15, 23, 42, 0.68) 88%);
-  backdrop-filter: blur(10px);
-  color: var(--text);
-  box-shadow: 0 10px 26px rgba(0,0,0,0.18);
-  font-size: 0.86rem;
-  font-weight: 700;
+  transform: translateY(8px);
   transition: opacity 220ms ease, transform 220ms ease;
+  max-width: min(520px, calc(100vw - 32px));
 }
 .repair-alert[hidden] {
   display: none;
 }
+.repair-alert .ui-button { pointer-events: auto; }
 .repair-alert.is-visible {
   opacity: 1;
   transform: translateY(0);
-}
-.repair-alert.is-error {
-  border-color: color-mix(in srgb, #ef4444 52%, var(--border) 48%);
-  background: color-mix(in srgb, #ef4444 12%, rgba(15, 23, 42, 0.7) 88%);
-}
-.repair-alert-message {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .repair-alert.has-log-history-link {
   top: 14px;
@@ -349,49 +321,10 @@ input[type='search'] {
   bottom: auto;
   transform: translate(-50%, -8px);
   transition: opacity 220ms ease;
-  align-items: center;
-  border-radius: 12px;
   max-width: min(480px, calc(100vw - 32px));
-}
-.repair-alert.has-log-history-link .repair-alert-message {
-  white-space: nowrap;
 }
 .repair-alert.has-log-history-link.is-visible {
   transform: translate(-50%, 0);
-}
-.repair-alert-inline-link {
-  pointer-events: auto;
-  flex: 0 0 auto;
-  margin-left: 8px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 84%, white 16%);
-  font: inherit;
-  font-weight: 800;
-  text-decoration: underline;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.repair-alert-inline-link:hover {
-  color: white;
-}
-.repair-alert-close {
-  pointer-events: auto;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.06);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.78rem;
-  line-height: 1;
-}
-.repair-alert-close:hover {
-  border-color: rgba(255,255,255,0.24);
-  background: rgba(255,255,255,0.12);
 }
 :root input:is(:not([type]), [type='text'], [type='password'], [type='search'], [type='email'], [type='url'], [type='tel'], [type='number']):not(:disabled):not([readonly]),
 :root textarea:not(:disabled):not([readonly]),

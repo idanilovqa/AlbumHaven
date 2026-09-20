@@ -68,13 +68,13 @@
 
   const announceRoster = (message) => {
     if (!rosterStatus) return;
-    rosterStatus.textContent = message;
+    rosterStatus.querySelector('.on-page-alert__message').textContent = message;
     rosterStatus.hidden = false;
   };
 
   const showRosterError = (message) => {
     if (!rosterError) return;
-    rosterError.textContent = message;
+    rosterError.querySelector('.on-page-alert__message').textContent = message;
     rosterError.hidden = false;
   };
 
@@ -357,13 +357,13 @@
   const showError = (message) => {
     if (!error) return;
     error.hidden = false;
-    error.textContent = message || 'Account management is temporarily unavailable.';
+    error.querySelector('.on-page-alert__message').textContent = message || 'Account management is temporarily unavailable.';
   };
 
   const showStatus = (message) => {
     if (!status) return;
     status.hidden = false;
-    status.textContent = message;
+    status.querySelector('.on-page-alert__message').textContent = message;
   };
 
   const navigateAfterMutation = async (destination, button) => {

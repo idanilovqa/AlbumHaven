@@ -143,3 +143,19 @@
 
 :root.panel-text-selection-active .panel-selection-origin::selection,
 :root.panel-text-selection-active .panel-selection-origin *::selection { background: Highlight; color: HighlightText; }
+
+/* Shared dropdown rows. Themes may override --dropdown-item-hover-background. */
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option) {
+  outline: none !important;
+  box-shadow: none !important;
+  transition: background-color 150ms ease;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+  border-color: transparent !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option):focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

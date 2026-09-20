@@ -1405,6 +1405,25 @@ test('saved-loop editor stays hidden and busy until waveform draw succeeds, and 
   assert.deepEqual(failed.fetchCalls, []);
 });
 
+test('saved-loop scissors can reopen after unavailable waveform media is repaired', async () => {
+  const harness = createSavedLoopEditorHarness();
+  let loads = 0;
+  harness.context.loadSavedLoopWaveformPeaks = async () => {
+    loads += 1;
+    return loads === 1 ? null : harness.waveform;
+  };
+
+  assert.equal(await harness.context.createLoopFromSavedLoop('loop-1'), false);
+  assert.equal(harness.editor.hidden, true);
+  assert.equal(harness.actionRoot.getAttribute('aria-busy'), 'false');
+  assert.equal(await harness.context.createLoopFromSavedLoop('loop-1'), true);
+  assert.equal(harness.editor.hidden, false);
+  assert.equal(harness.boundaryTimes.hidden, true, 'the obsolete timestamp row stays hidden');
+  assert.equal(harness.waveformDraws.length, 1);
+  assert.equal(loads, 2);
+  assert.deepEqual(harness.fetchCalls, [], 'opening the editor must not save a loop');
+});
+
 test('cancel during pending saved-loop waveform load invalidates stale completion without side effects', async () => {
   let resolveWaveform;
   const harness = createSavedLoopEditorHarness({
@@ -2198,5 +2217,28 @@ for (const action of ['cancel', 'create', 'play', 'delete']) {
       assert.deepEqual(harness.dialogCalls, []);
       assert.deepEqual(harness.fetchCalls, []);
     }
+  });
+}
+
+
+for (const handoff of [false, true]) {
+  test('loop start reports rejection without exposing media paths; handoff=' + handoff, async () => {
+    const audio = new FakeAudio({ paused: true, duration: 12, src: '/loops/media/loop-1' });
+    const messages = [];
+    audio.play = () => Promise.reject(Object.assign(new Error('private media location'), { name: 'NotSupportedError' }));
+    const context = loadHelper({
+      document: { querySelector: () => audio, querySelectorAll: () => [] },
+      getPlayerPlaybackSnapshot: () => handoff ? { paused: false, ended: false } : null,
+      pausePlayerPlaybackForHandoff: () => Promise.resolve(true),
+      showToast: message => messages.push(message),
+      console: { warn() {} },
+    });
+    context.updateUtilityLoopPlayerUi = () => {};
+    context.toggleUtilityLoopPlayback('loop-1');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /Unable to start loop playback/);
+    assert.doesNotMatch(messages[0], /private media location/);
+    assert.equal(audio.paused, true);
   });
 }

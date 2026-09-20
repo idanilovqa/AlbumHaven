@@ -1,7 +1,7 @@
 /* Shared themed calendar. Consumers own timezone conversion and submission. */
 function buildDateRangePicker({ fromDate = '', toDate = '' } = {}) {
   return `<div class="date-range-picker" data-date-range-picker>
-    ${[['fromDate', 'From date', fromDate], ['toDate', 'To date', toDate]].map(([name, label, value]) => `<div class="date-range-picker__field"><span>${label}</span><div class="date-range-picker__control"><input type="text" name="${name}" aria-label="${label}" value="${escapeHtml(value)}" readonly required>${window.ButtonComponent.renderActionButton({ icon: 'calendar', ariaLabel: `Choose ${label.toLowerCase()}`, attributes: { 'data-calendar-trigger': name, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' } })}</div></div>`).join('')}
+    ${[['fromDate', 'From date', fromDate], ['toDate', 'To date', toDate]].map(([name, label, value]) => `<div class="date-range-picker__field"><span>${label}</span><div class="date-range-picker__control ui-input-action"><input type="text" name="${name}" aria-label="${label}" value="${escapeHtml(value)}" placeholder="mm/dd/yyyy" readonly required>${window.ButtonComponent.renderActionButton({ icon: 'calendar', ariaLabel: `Choose ${label.toLowerCase()}`, attributes: { 'data-calendar-trigger': name, 'aria-haspopup': 'dialog', 'aria-expanded': 'false' } })}</div></div>`).join('')}
   </div>`;
 }
 

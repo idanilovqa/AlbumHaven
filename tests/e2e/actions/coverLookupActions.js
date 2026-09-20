@@ -172,7 +172,7 @@ export class CoverLookupActions {
     const finalVisualState = await this.coverLookup
       .waitForCoverLookupStartedToastFinalState({ timeout });
     await expect(this.coverLookup.coverLookupStartedToast).toBeVisible({ timeout });
-    await expect(this.coverLookup.coverLookupStartedToast).toHaveText('Cover art lookup started.');
+    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover art lookup started.');
     await expect(this.coverLookup.searchProgress).toBeVisible({ timeout });
     const toastOcclusionTargets = this.coverLookup.toastOcclusionTargets();
     const targetEntries = Object.entries(toastOcclusionTargets);

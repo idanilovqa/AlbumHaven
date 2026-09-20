@@ -531,6 +531,9 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
+    els.overlay.classList.add('is-above-settings');
+  }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
@@ -552,7 +555,7 @@ function openTrackModal(album, options = {}) {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
-      openTrackModal(resolvedAlbum, options);
+      openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -763,6 +766,7 @@ function closeTrackModal() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
   resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
@@ -830,6 +834,10 @@ function attachModalEvents() {
     const coverLookupDeleteConfirmEls = getCoverLookupDeleteConfirmElements();
     if (coverLookupDeleteConfirmEls.overlay && !coverLookupDeleteConfirmEls.overlay.hidden) {
       closeCoverLookupDeleteConfirm();
+      return;
+    }
+    if (!els.overlay.hidden && els.overlay.classList.contains('is-above-settings')) {
+      if (!event.defaultPrevented) closeTrackModal();
       return;
     }
     const utilityEls = getUtilityModalElements();

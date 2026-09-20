@@ -233,11 +233,19 @@ function syncLibraryWatcherWarning(data = {}) {
   registerFloatingNotification(libraryWatcherWarning, { origin: 'bottom-right' });
 }
 
-function showToast(html, variant = 'success', duration = 3600, options = {}) {
+function buildFloatingNotificationAlertHtml(message, variant, actionsHtml = '', messageId = '') {
+  const severity = normalizeAlertSeverity(variant);
+  return buildOnPageAlertHtml({
+    severity, title: severity === 'error' ? 'Error' : severity === 'warning' ? 'Warning' : 'Update',
+    message, actionsHtml, messageId, role: severity === 'info' ? 'status' : 'alert',
+  });
+}
+
+function showToast(message, variant = 'success', duration = 3600, options = {}) {
   const layer = document.getElementById('toast-layer');
   if (!layer) return;
   const errorKey = isNotificationErrorVariant(variant)
-    ? String(options.errorKey || html || '')
+    ? String(options.errorKey || message || '')
     : '';
   if (errorKey && activeErrorToasts.get(errorKey)?.parentElement) {
     return;
@@ -248,7 +256,7 @@ function showToast(html, variant = 'success', duration = 3600, options = {}) {
     isNotificationErrorVariant(variant) ? 'is-error' : '',
     options.placement === 'top-center' ? 'is-top-center' : '',
   ].filter(Boolean).join(' ');
-  toast.innerHTML = html;
+  toast.innerHTML = buildFloatingNotificationAlertHtml(message, variant);
   layer.appendChild(toast);
   if (errorKey) activeErrorToasts.set(errorKey, toast);
   registerFloatingNotification(toast, { origin: options.placement === 'top-center' ? 'top-center' : 'top-right', onPlaced() {
@@ -266,9 +274,17 @@ function showToast(html, variant = 'success', duration = 3600, options = {}) {
 
 function showRepairAlert(message, variant = 'success', duration = 2000, options = {}) {
   const alert = document.getElementById('repair-alert');
+  if (!alert) return;
+  const actionsHtml = ButtonComponent.renderButton({
+    label: 'View details', attributes: { id: 'repair-alert-log-history', 'data-open-log-history-alert': '1', hidden: true },
+  }) + ButtonComponent.renderButton({
+    label: 'Dismiss', className: 'on-page-alert__dismiss',
+    attributes: { 'data-dismiss-repair-alert': '1', 'aria-label': 'Dismiss repair alert' },
+  });
+  alert.innerHTML = buildFloatingNotificationAlertHtml(options.html ? '' : message, variant, actionsHtml, 'repair-alert-message');
   const messageEl = document.getElementById('repair-alert-message');
   const logHistoryLink = document.getElementById('repair-alert-log-history');
-  if (!alert || !messageEl) return;
+  if (!messageEl) return;
   if (state.repairAlertTimer) {
     clearBrowserTimeout(state.repairAlertTimer);
     state.repairAlertTimer = null;

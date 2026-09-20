@@ -47,6 +47,7 @@ export class CoverLookup extends BasePage {
       .filter({ hasText: 'Cover art lookup started.' })
       .last();
     this.toolbarRight = page.locator(this.toolbarRightSelector);
+    this.coverLookupStartedToastMessage = this.coverLookupStartedToast.locator('.on-page-alert__message');
   }
 
   get modalSelector() {

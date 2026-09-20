@@ -74,7 +74,7 @@
             </span>
             <span class="cover-lookup-drawer-badge" id="cover-lookup-drawer-badge" hidden></span>
           {% endcall %}
-          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready') %}
+          {% call action_button('Library status', class_name='status-indicator is-idle', id='scan-indicator', title='Library ready', attributes={'aria-controls': 'status-context-menu', 'aria-expanded': 'false'}) %}
             <span class="status-spinner" aria-hidden="true"></span>
             <span class="status-check" aria-hidden="true">&#10003;</span>
             <span class="status-refresh" aria-hidden="true">&#10227;</span>
@@ -200,10 +200,9 @@
   <aside class="artist-family-panel" id="artist-family-panel" data-artist-family-panel aria-label="Artist Family" aria-hidden="true" hidden>
     <header>
       <div class="artist-family-panel__heading">
-        <h2>Artist Family</h2>
+        <div class="artist-family-panel__title-row"><h2 data-gallery-family-panel-title>Artist Family</h2><span aria-hidden="true">•</span><span data-gallery-family-panel-total></span></div>
         <p>Select or unselect an artist to update Gallery.</p>
       </div>
-      <span data-gallery-family-panel-total></span>
     </header>
     <div class="artist-family-panel__combine-row">
       <button class="gallery-switch" id="artist-family-combine-similar" type="button" role="switch" aria-checked="false" data-toggle-combine-similar-artists="1">
@@ -214,7 +213,8 @@
   </aside>
   <aside class="artist-info-overlay" data-artist-info-overlay role="dialog" aria-label="Artist information" hidden></aside>
 
-  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  {% from 'components/on-page-alert.html' import on_page_alert %}
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
   <main class="settings-host settings-shell" data-settings-host hidden>
     {{ app_bar() }}
     {% with allowed_actions = account_menu_allowed_actions, csrf_token = account_menu_csrf_token %}
@@ -253,12 +253,8 @@
     </div>
   </div>
 
-  <div class="toast-layer" id="toast-layer" aria-live="polite" aria-atomic="true"></div>
-  <div class="repair-alert" id="repair-alert" role="status" aria-live="polite" hidden>
-    <span class="repair-alert-message" id="repair-alert-message"></span>
-    <button class="repair-alert-inline-link" id="repair-alert-log-history" type="button" data-open-log-history-alert="1" hidden>View details</button>
-    <button class="repair-alert-close" type="button" data-dismiss-repair-alert="1" aria-label="Dismiss repair alert">x</button>
-  </div>
+  <div class="toast-layer" id="toast-layer"></div>
+  <div class="repair-alert" id="repair-alert" hidden></div>
 
   <aside class="cover-lookup-drawer shell-info-drawer" id="cover-lookup-drawer" data-shell-slot="info_drawer" data-shell-component-kind="{{ shell_drawer.component_kind or 'notification_drawer' }}" data-shell-content-kind="{{ shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-default-content-kind="{{ shell_drawer.default_content_kind or shell_drawer.content_kind or 'cover_lookup_drawer' }}" data-shell-supported-content-kinds="{{ (shell_drawer.supported_content_kinds or [shell_drawer.content_kind or 'cover_lookup_drawer'])|join(',') }}" data-shell-surface-family="{{ shell_drawer.surface_family or 'notifications' }}" data-shell-default-surface-family="{{ shell_drawer.default_surface_family or shell_drawer.surface_family or 'notifications' }}" data-shell-placement="{{ shell_drawer.placement or 'right' }}" data-shell-splitter-desktop-only="{{ 'true' if shell_drawer.splitter and shell_drawer.splitter.desktop_only else 'false' }}" data-shell-mobile-fallback="{{ shell_drawer.splitter.mobile_fallback if shell_drawer.splitter else '' }}" data-shell-splitter-state-scope="{{ shell_drawer.splitter.state_scope if shell_drawer.splitter else '' }}" hidden>
     <div class="cover-lookup-drawer-header">

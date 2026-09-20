@@ -13,7 +13,7 @@ function setup() {
     renderUtilityLogHistory: () => changes.push('render'), renderUtilityModalContent() {}, getUtilityModalElements: () => ({ overlay: { hidden: false } }),
   });
   vm.runInContext(fs.readFileSync(path.resolve(dir, '../button-component.js'), 'utf8'), context);
-  for (const name of ['date-range-picker', 'utility-log-history-query', 'utility-log-history-ui', 'utility-loaders-and-cover-lookup', 'utility-list-builders']) {
+  for (const name of ['alert-components', 'date-range-picker', 'utility-log-history-query', 'utility-log-history-ui', 'utility-loaders-and-cover-lookup', 'utility-list-builders']) {
     const file = path.join(dir, `${name}.js`); if (fs.existsSync(file)) vm.runInContext(fs.readFileSync(file, 'utf8'), context);
   }
   context.renderUtilityLogHistory = () => changes.push('render');
@@ -28,6 +28,8 @@ test('shared calendar handles leap years, selected dates and range limits withou
   assert.match(html, /data-calendar-date="2024-02-09"[^>]*disabled/);
   assert.match(html, /data-calendar-date="2024-02-21"[^>]*disabled/);
   assert.doesNotMatch(context.buildDateRangePicker(), /type="date"/);
+  assert.equal((context.buildDateRangePicker().match(/placeholder="mm\/dd\/yyyy"/g) || []).length, 2);
+  assert.match(context.buildDateRangePicker(), /date-range-picker__control ui-input-action/);
   assert.match(context.buildDateRangePicker(), /data-calendar-trigger="fromDate"/);
   assert.equal((context.buildCalendarMonth({ year: 2025, month: 1 }).match(/data-calendar-date=/g) || []).length, 28);
 });
@@ -76,7 +78,57 @@ test('export query uses the shared form-modal owner and approved preset/type con
   assert.ok(options); assert.equal(options.title, 'Export all logs');
   assert.match(options.contentHtml, /data-log-preset="7-days"/);
   assert.match(options.contentHtml, /type="checkbox"/);
+  assert.match(options.contentHtml, /data-date-range-picker/);
+  assert.doesNotMatch(options.contentHtml, /type="date"/);
   assert.doesNotMatch(options.contentHtml, /<select|comma/i);
+ assert.doesNotMatch(options.contentHtml, /data-log-source|All sources|<label>Source/);
+});
+
+test('export custom calendar retains dates across presets and disposes its listeners', async () => {
+  const h = setup(); await h.context.loadUtilityLogHistory();
+  let options, mounts = 0, disposals = 0, cancelled = 0, downloaded = 0;
+  const drafts = [];
+  h.context.showAppFormDialog = value => { options = value; };
+  h.context.getUtilityLogHistoryController = () => ({
+    beginDraft: value => drafts.push(value), applyDraft: async () => {}, cancelDraft: () => { cancelled += 1; },
+  });
+  h.context.downloadUtilityLogHistory = async () => { downloaded += 1; };
+  h.context.clearTriggerAnchor = () => {};
+  const from = { value: '2026-09-01' }, to = { value: '2026-09-19' };
+  const calendarButtons = [{}, {}];
+  const dates = { hidden: true, querySelectorAll: () => [from, to, ...calendarButtons] };
+  h.context.mountDateRangePicker = root => {
+    assert.equal(root, dates); mounts += 1;
+    return () => { disposals += 1; };
+  };
+  const buttons = ['today', '7-days', '30-days', 'custom'].map(preset => ({
+    getAttribute: () => preset, setAttribute() {}, addEventListener(type, callback) { this[type] = callback; },
+  }));
+  const content = {
+    querySelector: selector => ({
+      '[data-log-custom-dates]': dates,
+      '[name="fromDate"]': from, '[name="toDate"]': to, '[name="text"]': { value: 'saved' },
+    })[selector],
+    querySelectorAll: selector => selector === '[data-log-preset]' ? buttons : selector === '[name="eventType"]' ? [{ checked: true, value: 'Saved' }] : [],
+  };
+  h.context.openUtilityLogHistoryQuery(true);
+  options.onMount(content);
+  assert.equal(mounts, 0); assert.equal(from.disabled, true); assert.equal(to.disabled, true);
+  assert.ok(calendarButtons.every(button => button.disabled));
+  buttons[3].click();
+  assert.equal(dates.hidden, false); assert.equal(from.disabled, false); assert.equal(to.disabled, false); assert.equal(mounts, 1);
+  assert.ok(calendarButtons.every(button => !button.disabled));
+  buttons[1].click();
+  assert.equal(dates.hidden, true); assert.equal(from.disabled, true); assert.equal(disposals, 1);
+  assert.equal(from.value, '2026-09-01'); assert.equal(to.value, '2026-09-19');
+  buttons[3].click();
+  assert.equal(mounts, 2);
+  await options.onSubmit(content);
+  assert.equal(drafts.at(-1).preset, 'custom'); assert.equal(drafts.at(-1).fromDate, from.value); assert.equal(drafts.at(-1).toDate, to.value);
+  assert.equal(drafts.at(-1).sources.length, 0);
+  assert.equal(downloaded, 1);
+  options.onClose(content);
+  assert.equal(disposals, 2); assert.equal(cancelled, 1);
 });
 
 test('ordinary tree selection and a changed period label retain exact nodes and ordering', () => {

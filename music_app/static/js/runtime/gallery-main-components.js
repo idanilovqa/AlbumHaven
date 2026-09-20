@@ -5,7 +5,7 @@ function galleryMainPlural(count, singular) {
 
 function buildGallerySwitchHtml(config = {}) {
   const checked = Boolean(config.checked);
-  return `<button class="gallery-switch" id="${escapeHtml(config.id || '')}" type="button" role="switch" aria-checked="${checked ? 'true' : 'false'}"${config.source ? ` data-gallery-source="${escapeHtml(config.source)}"` : ''}>
+  return `<button class="gallery-switch" id="${escapeHtml(config.id || '')}" type="button" role="switch" aria-checked="${checked ? 'true' : 'false'}"${config.disabled ? ' disabled' : ''}${config.source ? ` data-gallery-source="${escapeHtml(config.source)}"` : ''}>
     <span>${escapeHtml(config.label || '')}</span><span class="gallery-switch__track" aria-hidden="true"><span class="gallery-switch__knob"></span></span>
   </button>`;
 }
@@ -36,7 +36,7 @@ function buildArtistFamilyPanelHtml(config = {}) {
     label: 'Combine similar artists',
     checked: Boolean(config.combineSimilarArtists),
   }).replace('<button ', '<button data-toggle-combine-similar-artists="1" ');
-  return `<aside class="artist-family-panel" data-artist-family-panel aria-label="${escapeHtml(config.title || 'Artist Family')}" aria-hidden="true" hidden><header><div class="artist-family-panel__heading"><h2>${escapeHtml(config.title || 'Artist Family')}</h2><p>Select or unselect an artist to update Gallery.</p></div><span data-gallery-family-panel-total>${escapeHtml(config.albumTotal || '')}</span></header><div class="artist-family-panel__combine-row">${combineSwitch}</div><div class="artist-family-panel__body gallery-scrollbar">${String(config.bodyHtml || '')}</div></aside>`;
+  return `<aside class="artist-family-panel" data-artist-family-panel aria-label="${escapeHtml(config.title || 'Artist Family')}" aria-hidden="true" hidden><header><div class="artist-family-panel__heading"><div class="artist-family-panel__title-row"><h2 data-gallery-family-panel-title title="${escapeHtml(config.title || 'Artist Family')}">${escapeHtml(config.title || 'Artist Family')}</h2><span aria-hidden="true">•</span><span data-gallery-family-panel-total>${escapeHtml(config.albumTotal || '')}</span></div><p>Select or unselect an artist to update Gallery.</p></div></header><div class="artist-family-panel__combine-row">${combineSwitch}</div><div class="artist-family-panel__body gallery-scrollbar">${String(config.bodyHtml || '')}</div></aside>`;
 }
 
 function buildGalleryEmptySelectionHtml() {

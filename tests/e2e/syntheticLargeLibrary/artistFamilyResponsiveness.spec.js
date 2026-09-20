@@ -124,6 +124,13 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(structure.anchorWidth).toMatch(/^\d+px$/);
       expect(structure.anchorHeight).toMatch(/^\d+px$/);
       expect(structure.total).toMatch(/^\d+ albums?$/);
+      expect(structure.title).toBe(EXPECTED_FAMILY.primary + ' Family');
+      expect(structure.totalLeft).toBeGreaterThan(structure.titleRight);
+      expect(Math.abs(structure.totalTop - structure.titleTop)).toBeLessThan(6);
+      expect(structure.width).toBeLessThan(390);
+      expect(structure.width).toBeLessThanOrEqual(structure.widthCap);
+      expect(structure.labelsEllipsize).toBe(true);
+
 
       const source = EXPECTED_FAMILY.resonance;
       const target = EXPECTED_FAMILY.cosmic;

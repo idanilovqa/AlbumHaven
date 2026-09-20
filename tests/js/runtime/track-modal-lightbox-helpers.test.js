@@ -426,6 +426,61 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('player Album Details takes foreground without closing Settings or its draft', () => {
+  const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
+  const draft = { title: 'Unsaved appearance' };
+  context.state.utility.appearanceDraft = draft;
+  utilityModal.hidden = false;
+  context.attachModalEvents();
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] }, {
+    coverLightboxGallery: false, foreground: true,
+  });
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  const keydown = documentListeners.get('keydown')[0];
+  keydown({ key: 'Escape', defaultPrevented: true });
+  assert.equal(trackModal.hidden, false, 'a consumed Escape leaves the foreground dialog open');
+  keydown({ key: 'Escape' });
+  assert.equal(trackModal.hidden, true);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.closeUtilityModalCalls, 0);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  assert.equal(context.document.body.classList.contains('modal-open'), true);
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, true);
+});
+
+test('Settings reopening stays above a player details request that hydrates later', async () => {
+  let resolveDetails;
+  const preview = { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] };
+  const { context, trackModal, utilityModal } = loadHelper({
+    initialAlbums: [preview], utilityLoaded: true,
+    onFetchAlbumDetails: () => new Promise(resolve => { resolveDetails = resolve; }),
+  });
+  utilityModal.hidden = false;
+  context.openTrackModal(preview, { coverLightboxGallery: false, foreground: true });
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  const utilityPath = path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js');
+  vm.runInContext(fs.readFileSync(utilityPath, 'utf8'), context, { filename: utilityPath });
+  context.deferActiveStartupViewForUtilityModal = () => {};
+  context.renderUtilityModalContent = () => {};
+  context.openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: false });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  resolveDetails({ ok: true, status: 200, json: async () => ({
+    ok: true, album: { ...preview, preview_only: false, tracks: [{ path: 'track.flac' }] },
+  }) });
+  await flushMicrotasks();
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false,
+    'late detail hydration cannot take foreground back from Settings');
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, false);
+});
+
 function lightboxFocusHarness() {
   const result = loadHelper();
   const { context, lightboxOverlay } = result;
@@ -674,7 +729,9 @@ async function run() {
       fetchedAlbum: hydratedAlbum,
     });
 
-    context.openTrackModal(previewAlbum, { coverLightboxGallery: false });
+    context.document.getElementById('utility-modal').hidden = false;
+    context.openTrackModal(previewAlbum, { coverLightboxGallery: false, foreground: true });
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true);
     assert.equal(
       context.state.ui.trackModalCoverLightboxGallery,
       false,
@@ -688,6 +745,8 @@ async function run() {
       false,
       'detail hydration must preserve the player-origin single-cover mode',
     );
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true,
+      'normal detail hydration retains the player-requested foreground order');
 
     context.openTrackModal({ key: 'beta', name: 'Album Beta', tracks: [] });
     assert.equal(

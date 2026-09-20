@@ -131,9 +131,18 @@ function ensureStatusContextMenu() {
   if (menu) return menu;
   menu = document.createElement('div');
   menu.id = 'status-context-menu';
-  menu.className = 'status-context-menu';
+  menu.className = 'gallery-anchored-menu';
   menu.hidden = true;
-  menu.innerHTML = '<button type="button" class="status-context-menu-item" data-status-role="scan-action" data-status-action="full-rescan">Full Rescan</button><button type="button" class="status-context-menu-item" data-status-role="cover-action" data-status-action="fetch-covers">Fetch Album Covers</button><button type="button" class="status-context-menu-item" data-status-role="scan-page" data-status-action="go-to-scan-page">Open Library/Scan</button>';
+  menu.setAttribute('role', 'group');
+  menu.setAttribute('aria-label', 'Library actions');
+  menu.innerHTML = [
+    ['scan-action', 'full-rescan', 'Full Rescan'],
+    ['cover-action', 'fetch-covers', 'Fetch Album Covers'],
+    ['scan-page', 'go-to-scan-page', 'Open Library/Scan'],
+  ].map(([role, action, label]) => ButtonComponent.renderButton({
+    label, className: 'gallery-menu-action',
+    attributes: { 'data-status-role': role, 'data-status-action': action },
+  })).join('');
   document.body.appendChild(menu);
   return menu;
 }
@@ -162,12 +171,16 @@ function syncStatusContextButtonPresentation(button, presentation) {
   if (button.getAttribute('data-status-action') !== presentation.action) {
     button.setAttribute('data-status-action', presentation.action);
   }
-  if (button.textContent !== presentation.label) {
-    button.textContent = presentation.label;
+  const label = button.querySelector?.('.ui-button__content') || button;
+  if (label.textContent !== presentation.label) {
+    label.textContent = presentation.label;
   }
   const disabled = Boolean(presentation.disabled);
   if (button.disabled !== disabled) {
     button.disabled = disabled;
+  }
+  if (button.getAttribute('aria-disabled') !== String(disabled)) {
+    button.setAttribute('aria-disabled', String(disabled));
   }
 }
 
@@ -215,20 +228,20 @@ function syncStatusContextMenu() {
   return menu;
 }
 
-function hideStatusContextMenu() {
+function hideStatusContextMenu(restoreFocus = false) {
   const menu = document.getElementById('status-context-menu');
-  if (!menu) return;
-  menu.hidden = true;
+  if (typeof galleryMainSurfaceController !== 'undefined'
+    && galleryMainSurfaceController?.current()?.key === 'library-status') {
+    closeGalleryMainSurface(restoreFocus === true);
+  } else if (menu) {
+    menu.hidden = true;
+    if (typeof clearTriggerAnchor === 'function') clearTriggerAnchor(menu);
+  }
 }
 
-function showStatusContextMenu(x, y) {
+function showStatusContextMenu(anchor = document.getElementById('scan-indicator')) {
   const menu = syncStatusContextMenu();
-  menu.hidden = false;
-  const padding = 8;
-  const menuRect = menu.getBoundingClientRect();
-  const clamped = clampPositionToViewport(x, y, menuRect.width, menuRect.height, padding);
-  menu.style.left = `${clamped.left}px`;
-  menu.style.top = `${clamped.top}px`;
+  return openGalleryMainSurface('library-status', anchor, menu);
 }
 
 function startStatusIndicatorImmediately(overrides = {}) {

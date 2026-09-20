@@ -963,7 +963,7 @@ function attachPlayerEvents() {
   });
   els.coverButton?.addEventListener('click', () => {
     const album = resolveAlbumForPlayerTrack(state.player.current);
-    if (album) openTrackModal(album, { coverLightboxGallery: false });
+    if (album) openTrackModal(album, { coverLightboxGallery: false, foreground: true });
   });
   els.timeline?.addEventListener('keydown', handlePlayerTimelineKeydown);
   els.timeline?.addEventListener('input', () => {

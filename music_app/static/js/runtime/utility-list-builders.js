@@ -2777,7 +2777,7 @@ function selectProblemExclusion(rowKey, { toggle = true } = {}) {
   state.utility.problemExclusionSelections = selections;
 }
 
-function extendProblemExclusionRange(reason, startIndex, endIndex) {
+function extendProblemExclusionRange(reason, startIndex, endIndex, selected = true) {
   const album = getSelectedProblematicAlbum();
   const rows = Array.isArray(album?.track_problem_rows) ? album.track_problem_rows : [];
   const normalizedReason = String(reason || '');
@@ -2791,7 +2791,12 @@ function extendProblemExclusionRange(reason, startIndex, endIndex) {
     if (match) keys.push(String(match.row_key));
   }
   if (!keys.length) return false;
-  state.utility.problemExclusionSelections = { ...(state.utility.problemExclusionSelections || {}), ...Object.fromEntries(keys.map((key) => [key, true])) };
+  const selections = { ...(state.utility.problemExclusionSelections || {}) };
+  keys.forEach(key => {
+    if (selected) selections[key] = true;
+    else delete selections[key];
+  });
+  state.utility.problemExclusionSelections = selections;
   return true;
 }
 

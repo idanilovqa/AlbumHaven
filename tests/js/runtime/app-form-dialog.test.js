@@ -76,7 +76,7 @@ test('anchored form fits the containing Settings panel and available height with
 test('query controls shrink to the form body without a horizontal scrollbar', () => {
   const css=fs.readFileSync(path.resolve(__dirname,'../../../music_app/static/css/runtime/non-album-and-player.css'),'utf8');
   assert.match(css,/\.utility-log-query-form\s*\{[^}]*width:\s*100%/s);
-  assert.match(css,/\.utility-log-query-form input[^}]*box-sizing:\s*border-box/s);
+  assert.match(css,/\.utility-log-query-form > label > input[^}]*box-sizing:\s*border-box/s);
   assert.match(css,/\.utility-log-query-form h4[^}]*margin:\s*0/s);
 });
 

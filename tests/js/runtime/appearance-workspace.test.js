@@ -253,6 +253,12 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
   assert.match(alerts, /data-alert-live-preview/);
   assert.match(alerts, /data-alert-preview-small-compact/);
   assert.match(alerts, /data-alert-preview-small-expanded/);
+  assert.match(alerts, /class="appearance-alert-preview__page" aria-hidden="true"/, 'sample alerts must not announce real failures');
+  assert.match(alerts, /data-alert-preview-small-compact aria-hidden="true"/);
+  assert.match(alerts, /data-alert-preview-small-expanded aria-hidden="true"/);
+  assert.match(alerts, /data-on-page-alert="error"/, 'page preview uses the shared alert renderer');
+  assert.equal((alerts.match(/data-small-alert="error"/g) || []).length, 2, 'both artbox previews use the shared alert renderer');
+  assert.match(album, /data-on-page-alert="error"/, 'missing album preview uses the shared alert renderer');
 
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) assert.match(album, new RegExp(`data-album-details-layout="${layout}"`));
   assert.match(album, /data-album-preview-state="present"/);

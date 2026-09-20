@@ -16,6 +16,8 @@ const helperPath = path.join(
   'notification-ui-helpers.js',
 );
 const helperSource = fs.readFileSync(helperPath, 'utf8');
+const alertSource = fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8');
+const ButtonComponent = require('../../../music_app/static/js/button-component.js');
 const warningHelperPath = path.join(path.dirname(helperPath), 'library-warning-ui.js');
 const warningHelperSource = fs.readFileSync(warningHelperPath, 'utf8');
 const baseLayoutPath = path.join(
@@ -105,6 +107,7 @@ function createContext(storage = new Map()) {
   };
   context.ButtonComponent = context.window.ButtonComponent;
   vm.createContext(context);
+  vm.runInContext(alertSource, context, { filename: 'alert-components.js' });
   vm.runInContext(warningHelperSource, context, { filename: warningHelperPath });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, scheduledTimeouts, toasts, requests, scanNotice, loader };
@@ -413,7 +416,7 @@ test('simultaneous identical error toasts coalesce while distinct errors remain 
   context.showToast('Unable to load problematic files.', 'error', 3200);
 
   assert.deepEqual(
-    toasts.map((toast) => toast.innerHTML),
+    toasts.map((toast) => toast.innerHTML.match(/class="on-page-alert__message">([^<]*)<\/p>/)?.[1]),
     [
       'Unable to load the selected problematic album.',
       'Unable to load problematic files.',
@@ -432,7 +435,7 @@ test('an identical error can appear after its prior toast is removed', () => {
   context.showToast('Unable to load the selected problematic album.', 'error', 3200);
 
   assert.equal(toasts.length, 1);
-  assert.equal(toasts[0].innerHTML, 'Unable to load the selected problematic album.');
+  assert.match(toasts[0].innerHTML, /Unable to load the selected problematic album\./);
 });
 
 test('global toast layer stays noninteractive and above every other runtime CSS layer', () => {
@@ -551,6 +554,7 @@ function createRepairAlertContext() {
   const logHistoryLink = { hidden: true, dataset: {} };
   const context = {
     state: { repairAlertTimer: null },
+    ButtonComponent,
     document: {
       getElementById(id) {
         if (id === 'repair-alert') return alert;
@@ -571,6 +575,7 @@ function createRepairAlertContext() {
     },
   };
   vm.createContext(context);
+  vm.runInContext(alertSource, context, { filename: 'alert-components.js' });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return {
     alert,
@@ -652,10 +657,12 @@ test('log-linked repair alert is compact, top-centered, and targets one Log Hist
   assert.equal(logHistoryLink.hidden, false);
   assert.equal(logHistoryLink.dataset.logHistoryEntryId, 'tag-edit-failure-42');
   assert.equal(alertClasses.has('has-log-history-link'), true);
-  assert.match(
-    indexTemplateSource,
-    /id="repair-alert-message"[^>]*><\/span>\s*<button[^>]*id="repair-alert-log-history"[^>]*data-open-log-history-alert="1"[^>]*>View details<\/button>/u,
-  );
+  assert.match(indexTemplateSource, /id="repair-alert" hidden><\/div>/u);
+  const markup = context.document.getElementById('repair-alert').innerHTML;
+  assert.match(markup, /class="on-page-alert on-page-alert--error"/u);
+  assert.match(markup, /id="repair-alert-message"/u);
+  assert.match(markup, /class="[^"]*ui-button[^"]*"[^>]*id="repair-alert-log-history"[^>]*data-open-log-history-alert="1"/u);
+  assert.match(markup, /data-dismiss-repair-alert="1"/u);
   assert.match(
     baseLayoutSource,
     /\.repair-alert\.has-log-history-link\s*\{[^}]*top:\s*\d+px;[^}]*left:\s*50%;[^}]*right:\s*auto;[^}]*bottom:\s*auto;[^}]*transform:\s*translate\(-50%,\s*-\d+px\);[^}]*transition:\s*opacity\s+220ms\s+ease;/u,
@@ -700,4 +707,24 @@ test('acknowledged Library warning leaves stable loader DOM untouched and applie
   writes.length = 0;
   context.syncScanLibraryWatcherHealth({}, true);
   assert.deepEqual(writes, [], 'unchanged recovery state must retain its DOM');
+});
+
+test('floating alerts use approved severity, escaped messages, and shared repair actions', () => {
+  const { context, toasts } = createContext();
+  context.showToast('<img src=x onerror=alert(1)>', 'error');
+  context.showToast('Watch the library', 'warning');
+  context.showToast('Saved', 'success');
+  assert.match(toasts[0].innerHTML, /on-page-alert--error" role="alert"/);
+  assert.match(toasts[0].innerHTML, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.doesNotMatch(toasts[0].innerHTML, /<img/);
+  assert.match(toasts[1].innerHTML, /on-page-alert--warning/);
+  assert.match(toasts[2].innerHTML, /on-page-alert--info" role="status"/);
+  const repair = createRepairAlertContext();
+  repair.context.showRepairAlert('<b>Pending</b>', 'success', null);
+  assert.match(repair.alert.innerHTML, /on-page-alert--info" role="status"/);
+  assert.match(repair.alert.innerHTML, /&lt;b&gt;Pending&lt;\/b&gt;/);
+  assert.match(repair.alert.innerHTML, /ui-button/);
+  assert.match(repair.alert.innerHTML, /data-dismiss-repair-alert="1"/);
+  repair.context.showRepairAlert('<a href="#details">Details</a>', 'info', null, { html: true });
+  assert.equal(repair.message.innerHTML, '<a href="#details">Details</a>');
 });

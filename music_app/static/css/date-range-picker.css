@@ -19,16 +19,14 @@
 #app-form-modal:has(.date-range-picker) {
   --appearance-interaction-outline: var(--muted);
 }
-#app-form-modal .date-range-picker__control:focus-within {
-  outline: 1px solid var(--muted) !important;
-  outline-offset: -1px;
-  border-color: var(--muted);
-  box-shadow: none;
-}
-#app-form-modal .date-range-picker__control > input,
-#app-form-modal .date-range-picker__control > .action-button:not(.trigger-anchor-open) {
+#app-form-modal .date-range-picker__control > input {
   border: 0 !important;
   outline: none !important;
+  box-shadow: none !important;
+  background: transparent;
+}
+#app-form-modal .date-range-picker__control > .action-button:not(.trigger-anchor-open) {
+  border: 0 !important;
   box-shadow: none !important;
   background: transparent;
 }
@@ -41,6 +39,8 @@
   clip-path: none;
   border-inline: 1px solid var(--border);
 }
+#app-form-modal:has(.date-range-picker) .utility-detail-meta { margin: 10px 0 0; }
+#app-form-modal:has(.date-range-picker) .confirm-modal-actions { margin-top: 12px; }
 #app-form-modal:has(.date-range-picker) #app-form-cancel {
   color: var(--appearance-error, #df8f96);
   border-color: color-mix(in srgb, var(--appearance-error, #df8f96) 50%, var(--border));
@@ -53,7 +53,7 @@
 }
 @media (max-width: 480px) { .date-range-picker { grid-template-columns: minmax(0, 1fr); } }
 .date-range-picker__field { display: grid; gap: 6px; min-width: 0; }
-.date-range-picker__control { display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--appearance-control, var(--panel-2)); padding-right: 4px; }
+.date-range-picker__control { --ui-input-action-focus-outline: 1px solid var(--muted); --ui-input-action-focus-offset: -1px; --ui-input-action-focus-border: var(--muted); --ui-input-action-button-focus: var(--muted); display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--appearance-control, var(--panel-2)); padding-right: 4px; }
 .date-range-picker__control input { border: 0; background: transparent; font-size: 13px; }
 .calendar-picker { position: fixed; z-index: 140; box-sizing: border-box; padding: 10px; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px #0006; }
 .calendar-picker__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 13px; }

@@ -75,6 +75,15 @@ test('FTC-SETTINGS-S02 combined search and Filters retain selection and keyboard
   await shell.filter('Missing cover art').click();
   await expect(shell.filter('Missing cover art')).toHaveAttribute('aria-selected', 'true');
   await expect(shell.filterMenu).toBeHidden();
+  await shell.filters.click();
+  await expect(shell.filterMenu).toBeVisible();
+  await shell.search.click();
+  await expect(shell.filterMenu).toBeHidden();
+  await expect(shell.filters).toHaveAttribute('aria-expanded', 'false');
+  await expect(shell.search).toBeFocused();
+  await expect(shell.search).toHaveValue('Neal Morse Plays Pink Floyd');
+  await expect(shell.filter('Missing cover art')).toHaveAttribute('aria-selected', 'true');
+  await expect(shell.activeRow()).toHaveAttribute('data-problematic-album-key', key);
   await shell.filters.press('ArrowDown');
   await expect(shell.filterMenu).toBeVisible();
   await expect(shell.filterOptions.first()).toBeFocused();

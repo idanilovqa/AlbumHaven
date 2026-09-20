@@ -11,8 +11,10 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
   galleryActions,
   globalPlayerActions,
   navigationPanelActions,
+  page,
   playbackEvidence,
   searchToolbarActions,
+  settingsModalAppBarActions,
   stepLogger,
   trackModalActions,
 }) => {
@@ -89,10 +91,18 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
   });
 
   await stepLogger.step('Open player artwork and recover the original playing album and track', async () => {
+    await settingsModalAppBarActions.openSettings();
     await globalPlayerActions.openCurrentAlbumFromCover();
     const reopened = await trackModalActions.waitForLoadedSummary();
     expect(reopened.title).toContain(PLAYING_ALBUM);
     expect(`${reopened.title} ${reopened.subtitle}`).toContain(PLAYING_ALBUM_ARTIST);
     expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
+    await trackModalActions.trackModal.closeButton.click({ trial: true });
+    await page.keyboard.press('Escape');
+    await expect(trackModalActions.trackModal.dialog).toBeHidden();
+    await settingsModalAppBarActions.waitForOpen();
+    await globalPlayerActions.waitForCurrentTrack({ path: playedTrack.path, trackTitle: playedTrack.title });
+    await globalPlayerActions.waitForPlaybackState({ paused: false });
+    await settingsModalAppBarActions.closeSettings();
   });
 });

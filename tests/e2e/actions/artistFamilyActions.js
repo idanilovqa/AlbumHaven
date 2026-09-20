@@ -100,6 +100,17 @@ export class ArtistFamilyActions {
       anchorEnvelope: panel.dataset.anchorEnvelope || '',
       anchorWidth: getComputedStyle(panel).getPropertyValue('--gallery-anchor-width').trim(),
       anchorHeight: getComputedStyle(panel).getPropertyValue('--gallery-anchor-height').trim(),
+      title: panel.querySelector('h2').textContent.trim(),
+      titleRight: panel.querySelector('h2').getBoundingClientRect().right,
+      totalLeft: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().left,
+      totalTop: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().top,
+      titleTop: panel.querySelector('h2').getBoundingClientRect().top,
+      width: parseFloat(getComputedStyle(panel).width),
+      widthCap: Math.min(390, innerWidth * 0.92),
+      labelsEllipsize: [...panel.querySelectorAll('[data-gallery-family-artist] > .artist-family-panel__name')].every(label => {
+        const style = getComputedStyle(label);
+        return style.textOverflow === 'ellipsis' && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden';
+      }),
     }));
     return {
       headerBox,

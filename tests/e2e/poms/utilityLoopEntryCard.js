@@ -71,6 +71,44 @@ export class UtilityLoopEntryCard extends BasePage {
     return this.detailEntries.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-utility-loop-entry')));
   }
 
+  async readInsertionCue(entry, position) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect the real insertion marker paint and clipping bounds during native drag
+    return entry.evaluate((node, side) => {
+      const marker = getComputedStyle(node, side === 'before' ? '::before' : '::after');
+      const bounds = node.getBoundingClientRect();
+      const height = parseFloat(marker.height);
+      const top = side === 'before' ? bounds.top + parseFloat(marker.top) : bounds.bottom - parseFloat(marker.bottom) - height;
+      let visibleTop = 0;
+      let visibleBottom = innerHeight;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+          const rect = parent.getBoundingClientRect();
+          visibleTop = Math.max(visibleTop, rect.top);
+          visibleBottom = Math.min(visibleBottom, rect.bottom);
+        }
+      }
+      return { painted: marker.content !== 'none' && height > 0 && marker.backgroundColor !== 'rgba(0, 0, 0, 0)', unclipped: top >= visibleTop && top + height <= visibleBottom };
+    }, position);
+  }
+
+  async readInsertionTarget(entry, position, offset) {
+    // parity-check: allow-read-only-measurement-evaluate -- locate the native drag point and its scroll viewport without changing the page
+    return entry.evaluate((node, { position, offset }) => {
+      const bounds = node.getBoundingClientRect();
+      let top = 0;
+      let bottom = innerHeight;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (/(auto|scroll|hidden|clip)/.test(getComputedStyle(parent).overflowY)) {
+          const rect = parent.getBoundingClientRect();
+          top = Math.max(top, rect.top);
+          bottom = Math.min(bottom, rect.bottom);
+        }
+      }
+      const y = (position === 'before' ? bounds.top : bounds.bottom) + offset;
+      return { x: bounds.left + Math.min(30, bounds.width / 2), y, visible: y > top + 3 && y < bottom - 3, scrollBy: y - (top + bottom) / 2, rowY: Math.max(top + 4, Math.min(bottom - 4, bounds.top + bounds.height / 2)) };
+    }, { position, offset });
+  }
+
   repeatButtonForEntry(entry) {
     return entry.locator('[data-toggle-loop-repeat]');
   }

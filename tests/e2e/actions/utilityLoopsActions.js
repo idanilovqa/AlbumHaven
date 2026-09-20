@@ -252,6 +252,46 @@ export class UtilityLoopsActions {
     return result;
   }
 
+  async verifyLoopInsertionCues() {
+    const page = this.utilityLoopsTab.page;
+    const card = this.utilityLoopsTab.loopEntryCard;
+    const originalOrder = await card.readPanelOrder();
+    expect(originalOrder.length).toBeGreaterThanOrEqual(3);
+    for (const [sourceIndex, targetIndex, position, offset] of [
+      [originalOrder.length - 1, 0, 'before', -5],
+      [originalOrder.length - 1, 1, 'before', -6],
+      [0, originalOrder.length - 1, 'after', 5],
+    ]) {
+      const source = card.detailEntries.nth(sourceIndex);
+      const target = card.detailEntries.nth(targetIndex);
+      await card.dragHandleForEntry(source).hover();
+      await page.mouse.down();
+      try {
+        const handle = await card.dragHandleForEntry(source).boundingBox();
+        expect(handle).not.toBeNull();
+        await page.mouse.move(handle.x + handle.width / 2 + 12, handle.y + handle.height / 2, { steps: 4 });
+        await target.scrollIntoViewIfNeeded();
+        let point = await card.readInsertionTarget(target, position, offset);
+        if (!point.visible) {
+          await page.mouse.move(point.x, point.rowY);
+          await page.mouse.wheel(0, point.scrollBy);
+          await expect.poll(async () => (await card.readInsertionTarget(target, position, offset)).visible).toBe(true);
+          point = await card.readInsertionTarget(target, position, offset);
+        }
+        const { x, y } = point;
+        await page.mouse.move(x, y, { steps: 8 });
+        await page.mouse.move(x, y);
+        await expect(target).toHaveClass(new RegExp(`\\bis-drop-${position}\\b`));
+        expect(await card.readInsertionCue(target, position)).toEqual({ painted: true, unclipped: true });
+      } finally {
+        await page.keyboard.press('Escape');
+        await page.mouse.up();
+      }
+      await expect(target).not.toHaveClass(/\bis-drop-(before|after)\b/);
+      expect(await card.readPanelOrder()).toEqual(originalOrder);
+    }
+  }
+
   async verifySongArtworkAndYear(title, expectedYear) {
     const tab = this.utilityLoopsTab;
     const song = tab.loopTree.groupButtonByTitle(title);

@@ -1461,7 +1461,7 @@ async function pollStatus() {
     if (lastErrorText) {
       if (state.ui.lastStatusErrorToastIdentity !== lastErrorText) {
         state.ui.lastStatusErrorToastIdentity = lastErrorText;
-        showToast(`Last scan error: ${escapeHtml(lastErrorText)}`, 'error', 4800);
+      showToast(`Last scan error: ${lastErrorText}`, 'error', 4800);
       }
     } else {
       state.ui.lastStatusErrorToastIdentity = '';

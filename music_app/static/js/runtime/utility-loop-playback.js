@@ -154,6 +154,13 @@ function toggleUtilityLoopPlayback(loopId, options = {}) {
     const finishLoopPlaybackStart = () => {
       if (focusTimelineOnResume) focusUtilityLoopTimeline(loopId);
     };
+    const reportPlaybackFailure = error => {
+      if (audio.isConnected === false) return;
+      const code = String(error?.name || 'PlaybackError');
+      console.warn('[AlbumHaven][Loops] Playback start failed.', { code, mediaErrorCode: audio.error?.code || null });
+      showToast('Unable to start loop playback. Please try again.', 'error', 6000);
+      updateUtilityLoopPlayerUi(loopId);
+    };
     if (
       globalPlayback
       && !globalPlayback.ended
@@ -168,13 +175,13 @@ function toggleUtilityLoopPlayback(loopId, options = {}) {
           audio.muted = priorMuted;
           finishLoopPlaybackStart();
         })
-        .catch(() => {
+        .catch(error => {
           audio.pause();
           audio.muted = priorMuted;
-          updateUtilityLoopPlayerUi(loopId);
+          reportPlaybackFailure(error);
         });
     } else {
-      audio.play().then(finishLoopPlaybackStart).catch(() => {});
+      audio.play().then(finishLoopPlaybackStart).catch(reportPlaybackFailure);
     }
   } else {
     audio.pause();

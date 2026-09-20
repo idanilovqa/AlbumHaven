@@ -9,6 +9,7 @@
   z-index: 108;
 }
 .track-modal[hidden] { display: none; }
+.track-modal.is-above-settings { z-index: 113; }
 .track-modal-dialog {
   width: min(860px, calc(100vw - 32px));
   max-height: min(88vh, 900px);
@@ -128,58 +129,10 @@
   flex-direction: column;
 }
 .track-modal-duplicate-warning {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
   margin: 0 0 10px;
-  padding: 10px 12px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 12px;
-  background: rgba(127, 29, 29, 0.2);
-  color: #fca5a5;
-  font-size: 0.78rem;
-  font-weight: 700;
 }
 .track-modal-duplicate-warning[hidden] {
   display: none;
-}
-.track-modal-duplicate-warning-icons {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.track-modal-duplicate-folder-button {
-  position: relative;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 10px;
-  background: rgba(15, 23, 42, 0.44);
-  color: #fecaca;
-  cursor: pointer;
-}
-.track-modal-duplicate-folder-button.is-active {
-  border-color: rgba(248, 113, 113, 0.9);
-  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.22);
-}
-.track-modal-duplicate-folder-icon {
-  font-size: 1rem;
-  line-height: 1;
-}
-.track-modal-duplicate-folder-badge {
-  position: absolute;
-  right: -5px;
-  top: -5px;
-  min-width: 17px;
-  height: 17px;
-  border-radius: 999px;
-  padding: 0 4px;
-  background: #ef4444;
-  color: #fff5f5;
-  font-size: 0.66rem;
-  font-weight: 800;
-  line-height: 17px;
 }
 .track-modal-duplicate-tabs {
   display: flex;

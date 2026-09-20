@@ -8,6 +8,14 @@ const sourcePath = path.join(
   __dirname, '..', '..', '..', 'music_app', 'static', 'js', 'admin-members.js',
 );
 
+function alertElement() {
+  const message = { textContent: '' };
+  const alert = element({ hidden: true });
+  alert.querySelector = selector => selector === '.on-page-alert__message' ? message : null;
+  Object.defineProperty(alert, 'textContent', { get() { return message.textContent; } });
+  return alert;
+}
+
 function element(initial = {}) {
   const listeners = new Map();
   return {
@@ -32,9 +40,9 @@ function loadRuntime({ mode = 'create', active = true, initialActive = true, lib
   const password = element({ type: 'password', focused: false });
   const toggle = element({ dataset: { passwordToggle: 'admin-new-password' }, textContent: 'Show' });
   const submit = element({ disabled: false, textContent: mode === 'create' ? 'Create user' : 'Save changes' });
-  const error = element({ hidden: true, textContent: '' });
+  const error = alertElement();
   const reauth = { panel: element({ hidden: true }), password: element({ value: '' }), submit: element({ disabled: false }) };
-  const status = element({ hidden: true, textContent: '' });
+  const status = alertElement();
   const activeControl = element({ checked: active });
   const activeAction = element({ dataset: { adminAction: 'toggle-active' } });
   const reset = element({ dataset: { adminAction: 'reset' }, disabled: false });
@@ -142,8 +150,8 @@ function loadRosterRuntime({
     children: [copyInvite, sendInvite, edit],
   });
   menu.querySelector = (selector) => (selector === '[role="menuitem"]' ? copyInvite : null);
-  const status = element({ hidden: true, textContent: '' });
-  const error = element({ hidden: true, textContent: '' });
+  const status = alertElement();
+  const error = alertElement();
   const fallbackInput = element({ value: '', readOnly: true, focused: false, selected: false });
   const fallbackManual = element();
   const fallbackDismiss = element();

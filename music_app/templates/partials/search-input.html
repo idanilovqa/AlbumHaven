@@ -14,7 +14,7 @@
 
 {% macro search_input(input_id, name='q', value='', placeholder='Search artist, album, or track', label='Search music', button_label='Search', button_type='submit', suggestions_id=none) -%}
 <div class="search-input-wrap search-field">
-  <div class="search-field-control">
+  <div class="search-field-control ui-input-action">
     <input type="search" name="{{ name }}" id="{{ input_id }}" value="{{ value }}" placeholder="{{ placeholder }}" aria-label="{{ label }}" autocomplete="off"{% if suggestions_id %} role="combobox" aria-autocomplete="list" aria-controls="{{ suggestions_id }}" aria-expanded="false"{% endif %}>
     <span class="search-field-action">
       {% if caller is defined %}

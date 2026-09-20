@@ -110,6 +110,20 @@ test('updateWaveformAppearance publishes the effective seekbar presentation', as
   assert.equal(wrapClasses.has('is-waveform'), true);
 });
 
+test('saved-loop waveform settings refresh even without a main-player track', async () => {
+  const modes = [];
+  const { context } = loadRuntime();
+  context.refreshUtilityLoopStereoWaveforms = () => {
+    modes.push(context.state.player.appearance.seekbarMode);
+  };
+  assert.equal(context.state.player.current, null);
+  context.state.player.appearance.seekbarMode = 'waveform';
+  await context.updateWaveformAppearance(true);
+  context.state.player.appearance.seekbarMode = 'default';
+  await context.updateWaveformAppearance(true);
+  assert.deepEqual(modes, ['waveform', 'default']);
+});
+
 function loadRuntime(overrides = {}) {
   const context = {
     state: {
@@ -476,7 +490,7 @@ async function run() {
     assert.strictEqual(modalCalls[1][0], album);
     assert.deepEqual(
       JSON.parse(JSON.stringify(modalCalls[1][1])),
-      { coverLightboxGallery: false },
+      { coverLightboxGallery: false, foreground: true },
       'the player cover opens a single-cover lightbox modal',
     );
   }

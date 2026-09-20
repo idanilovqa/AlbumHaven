@@ -1287,6 +1287,7 @@ def validate_staged_named_relationships(
             "neal-morse-approved-family",
             None,
             "everyJourneyAlbumHasCover",
+            None,
         ),
         (
             "ariaFamily",
@@ -1294,6 +1295,7 @@ def validate_staged_named_relationships(
             "aria-approved-family",
             "Ария feat U.D.O.",
             "everyJourneyArtistHasCoveredAlbum",
+            None,
         ),
         (
             "devinTownsendFamily",
@@ -1301,9 +1303,10 @@ def validate_staged_named_relationships(
             "devin-townsend-approved-family",
             None,
             None,
+            "relationshipArtist",
         ),
     )
-    for assertion_key, artists_key, source_family, excluded, cover_flag in families:
+    for assertion_key, artists_key, source_family, excluded, cover_flag, relationship_key in families:
         assertion = assertions.get(assertion_key)
         if not isinstance(assertion, dict):
             continue
@@ -1312,6 +1315,16 @@ def validate_staged_named_relationships(
             isinstance(name, str) for name in artists
         ):
             raise ValueError(f"fixture named relationship mismatch: {assertion_key}")
+        link_artists = artists
+        if relationship_key:
+            primary_artist = assertion.get("primaryArtist")
+            relationship_artist = assertion.get(relationship_key)
+            if not all(
+                isinstance(name, str) and name
+                for name in (primary_artist, relationship_artist)
+            ) or primary_artist not in artists:
+                raise ValueError(f"fixture named relationship mismatch: {assertion_key}")
+            link_artists = [primary_artist, relationship_artist]
         require_covers = bool(cover_flag and assertion.get(cover_flag) is True)
         row = connection.execute(
             """
@@ -1355,10 +1368,10 @@ def validate_staged_named_relationships(
               )
             """,
             (
-                artists,
+                link_artists,
                 source_family,
-                len(artists),
-                2 * (len(artists) - 1),
+                len(link_artists),
+                2 * (len(link_artists) - 1),
                 source_family,
                 excluded,
                 excluded,
@@ -1694,6 +1707,7 @@ def _identity_assertions(assertions: Mapping[str, Any]) -> dict[str, dict[str, A
     artist_scalar_keys = {
         "artist",
         "primaryArtist",
+        "relationshipArtist",
         "combinedArtist",
         "searchFollowUp",
         "query",

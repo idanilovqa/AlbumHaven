@@ -481,10 +481,44 @@ def test_loader_rejects_named_family_relationship_mismatch() -> None:
                 "nealMorseFamily": {"artists": ["Neal Morse", "Cosmic Cathedral"]},
                 "ariaFamily": {"artists": ["Ария", "Кипелов"]},
                 "devinTownsendFamily": {
-                    "familyArtists": ["Devin Townsend", "IR8 / Sexoturica"]
+                    "primaryArtist": "Devin Townsend",
+                    "relationshipArtist": "IR8",
+                    "familyArtists": ["Devin Townsend", "IR8 / Sexoturica"],
                 },
             },
         )
+
+
+def test_loader_uses_devin_relationship_identity_instead_of_visible_group() -> None:
+    loader = _load_fixture_loader_module()
+    statements: list[tuple[str, object]] = []
+
+    class Result:
+        @staticmethod
+        def fetchone() -> tuple[bool]:
+            return (True,)
+
+    class Connection:
+        @staticmethod
+        def execute(statement: str, parameters: object = None) -> Result:
+            statements.append((statement, parameters))
+            return Result()
+
+    loader.validate_staged_named_relationships(
+        Connection(),
+        {
+            "devinTownsendFamily": {
+                "primaryArtist": "Devin Townsend",
+                "relationshipArtist": "IR8",
+                "familyArtists": ["Devin Townsend", "IR8 / Sexoturica"],
+            }
+        },
+    )
+
+    assert len(statements) == 1
+    parameters = statements[0][1]
+    assert isinstance(parameters, tuple)
+    assert parameters[0] == ["Devin Townsend", "IR8"]
 
 
 def test_loader_rejects_connected_database_identity_that_differs_from_url() -> None:
@@ -1416,6 +1450,12 @@ def test_loader_discovers_nested_named_artist_album_and_track_identities() -> No
                 },
                 "searchFollowUp": "БИ-2",
             },
+            "devinTownsendFamily": {
+                "primaryArtist": "Devin Townsend",
+                "relationshipArtist": "IR8",
+                "combinedArtist": "IR8 / Sexoturica",
+                "familyArtists": ["Devin Townsend", "IR8 / Sexoturica"],
+            },
             "ddt": {
                 "albums": [{"title": "Периферия", "year": 1984}],
                 "studioTracks": ["Студийная запись 1"],
@@ -1433,6 +1473,8 @@ def test_loader_discovers_nested_named_artist_album_and_track_identities() -> No
         "Кипелов",
         "БИ-2",
         "Devin Townsend",
+        "IR8",
+        "IR8 / Sexoturica",
     }
     assert {item.get("album") for item in identities.values()} >= {
         "Tribute To Harley-Davidson",

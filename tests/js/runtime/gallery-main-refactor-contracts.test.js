@@ -23,6 +23,10 @@ const galleryMainCssSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'gallery-main.css'),
   'utf8',
 );
+const triggerAnchorCssSource = fs.readFileSync(
+  path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'css', 'runtime', 'trigger-anchor.css'),
+  'utf8',
+);
 const indexTemplateSource = fs.readFileSync(
   path.join(__dirname, '..', '..', '..', 'music_app', 'templates', 'index.html'),
   'utf8',
@@ -218,6 +222,9 @@ test('Combine similar artists sits in its own row directly below the Artist Fami
   const liveCombineRow = livePanel.indexOf('artist-family-panel__combine-row');
   assert.ok(liveHeaderEnd >= 0 && liveHeaderEnd < liveCombineRow);
   assert.doesNotMatch(livePanel.slice(0, liveHeaderEnd), /data-toggle-combine-similar-artists/);
+  assert.match(triggerAnchorCssSource, /:is\([^}]*\.artist-family-panel__combine-row \.gallery-switch[^}]*\)\s*\{[^}]*transition:\s*background-color 150ms ease/);
+  assert.match(triggerAnchorCssSource, /:is\([^}]*\.artist-family-panel__combine-row \.gallery-switch[^}]*\):hover[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background/);
+  assert.match(triggerAnchorCssSource, /\.artist-family-panel__combine-row \.gallery-switch:active[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background[^}]*border-color:\s*transparent/);
 });
 
 test('Artist Family pills disable native dragging while the primary artist stays separated', () => {
@@ -239,7 +246,14 @@ test('Artist Family pills disable native dragging while the primary artist stays
 
   assert.match(markup, /is-primary[^>]*draggable="false"/);
   assert.match(markup, /data-gallery-family-artist="Cosmic Cathedral"[^>]*draggable="false"/);
-  assert.doesNotMatch(markup, /artist-family-panel__primary-divider/);
+  const primaryIndex = markup.indexOf('data-gallery-family-artist="Neal Morse"');
+  const dividerIndex = markup.indexOf('artist-family-panel__primary-divider');
+  const relatedIndex = markup.indexOf('data-gallery-family-artist="Cosmic Cathedral"');
+  assert.ok(primaryIndex >= 0 && primaryIndex < dividerIndex && dividerIndex < relatedIndex);
+  assert.match(
+    galleryMainCssSource,
+    /\.artist-family-panel__primary-divider\s*\{[^}]*width:\s*100%[^}]*margin:/,
+  );
   assert.deepEqual(
     plain(reorderGalleryFamilyArtists(['Cosmic Cathedral', 'The Neal Morse Band'], 'The Neal Morse Band', 'Cosmic Cathedral')),
     ['The Neal Morse Band', 'Cosmic Cathedral'],
@@ -532,7 +546,7 @@ test('family panel heading uses the selected primary artist with an adjacent cou
   assert.match(indexTemplateSource, /data-gallery-family-panel-title>Artist Family<\/h2><span aria-hidden="true">•<\/span><span data-gallery-family-panel-total>/);
 });
 
-test('Artist Family panel reuses the legacy selected and primary visual hierarchy', () => {
+test('Artist Family panel uses fixed-width reusable filter pills with optional artwork', () => {
   const state = {
     view: {
       selected_artist: 'Neal Morse',
@@ -550,17 +564,26 @@ test('Artist Family panel reuses the legacy selected and primary visual hierarch
   };
   const context = loadRuntime({ state });
   const buildGalleryFamilyPanelBody = requireContract(context, 'buildGalleryFamilyPanelBody');
+  const buildFilterPillHtml = requireContract(context, 'buildFilterPillHtml');
 
   const markup = buildGalleryFamilyPanelBody();
+  const textOnlyPill = buildFilterPillHtml({ label: 'Text only', count: 3 });
 
-  assert.match(markup, /class="artist-family-panel__artist is-active is-primary"[^>]*data-gallery-family-artist="Neal Morse"/);
-  assert.match(markup, /class="artist-family-panel__artist is-active"[^>]*data-gallery-family-artist="Cosmic Cathedral"/);
+  assert.match(markup, /class="ui-filter-pill artist-family-panel__artist is-active is-primary"[^>]*data-gallery-family-artist="Neal Morse"/);
+  assert.match(markup, /class="ui-filter-pill artist-family-panel__artist is-active"[^>]*data-gallery-family-artist="Cosmic Cathedral"/);
   assert.match(markup, /title="Cosmic Cathedral"/);
-  assert.match(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*min\(390px, 92vw\)/);
-  assert.match(markup, /artist-family-panel__artwork/);
-  assert.match(markup, /artist-family-panel__marker/);
-  assert.match(markup, /artist-family-panel__count/);
+  assert.match(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*min\(390px, 92vw\)/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel\s*\{[^}]*width:\s*max-content/);
+  assert.match(markup, /ui-filter-pill__artwork artist-family-panel__artwork/);
+  assert.match(markup, /ui-filter-pill__marker artist-family-panel__marker/);
+  assert.match(markup, /ui-filter-pill__count artist-family-panel__count/);
+  assert.match(textOnlyPill, /class="ui-filter-pill"/);
+  assert.match(textOnlyPill, /ui-filter-pill__label/);
+  assert.doesNotMatch(textOnlyPill, /ui-filter-pill__artwork/);
   assert.match(galleryMainCssSource, /\.artist-family-panel__name\s*\{[^}]*text-overflow:\s*ellipsis/);
+  assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist:is\(:hover, :focus-visible\) \.artist-family-panel__name\s*\{[^}]*text-decoration:\s*underline/);
+  assert.match(triggerAnchorCssSource, /:is\([^}]*\.ui-filter-pill[^}]*\)\s*\{[^}]*transition:\s*background-color 150ms ease/);
+  assert.match(triggerAnchorCssSource, /:is\([^}]*\.ui-filter-pill[^}]*\):hover[^}]*\{[^}]*background:\s*var\(--dropdown-item-hover-background/);
   assert.doesNotMatch(galleryMainCssSource, /\.artist-family-panel__artist\.is-primary\s*\{/);
   assert.match(galleryMainCssSource, /height: 60px/);
   assert.match(galleryMainCssSource, /box-shadow: none !important/);
@@ -996,5 +1019,6 @@ test('family rows use available album art and retain independent pressed states'
   assert.match(html, /src="\/cover\/two"/);
   assert.match(html, /data-album-artbox-state="empty"/);
   assert.equal((html.match(/<button /g) || []).length, 3);
-  assert.doesNotMatch(html, /primary-divider|data-open-lightbox/);
+  assert.match(html, /artist-family-panel__primary-divider/);
+  assert.doesNotMatch(html, /data-open-lightbox/);
 });

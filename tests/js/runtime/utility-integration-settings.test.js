@@ -6,12 +6,12 @@ const test = require('node:test');
 const root = path.resolve(__dirname, '../../..');
 function load(overrides = {}) {
   const context = { state: { utility: { integrationDrafts: {lastfm:{}}, librarySettings: {
-    loaded:true, settings:{}, draft:{main_library_roots:[{id:'own',path:'/approved/music',layout_mode:'artist'}],hoarding_library_roots:[],new_arrivals_roots:[],move_policy:{}},
+    loaded:true, settings:{}, draft:{main_library_roots:[{id:'own',path:'/approved/music',layout_mode:'artist'}],hoarding_library_roots:[{id:'hoarding_library_roots-1',path:''}],new_arrivals_roots:[{id:'new_arrivals_roots-1',path:''}],move_policy:{}},
     allowedActions:{'library.settings.manage':true,'library.filesystem.browse':true,'library.paths.read':true}
-  } } }, escapeHtml: value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
+  }, lastfmScrobbles: { summary: null, loading: false, submitting: false } } }, escapeHtml: value => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
     cloneRuntimeJson: value => JSON.parse(JSON.stringify(value)), renderUtilityModalContent(){},
     formatLogHistoryTimestamp: value => value, getDetectedBrowserTimeZone:()=> 'America/Denver',getSupportedBrowserTimeZones:()=>[],
-    showToast(){}, console, ...overrides };
+    showRepairAlert(){}, showToast(){}, console, ...overrides };
   context.window = context; vm.createContext(context);
   for (const file of ['button-component.js','runtime/library-settings.js','runtime/utility-list-builders.js','runtime/utility-renderers-and-actions.js'])
     vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js',file),'utf8'),context);
@@ -19,11 +19,200 @@ function load(overrides = {}) {
   return context;
 }
 
-test('Scrobbling shows real measured statistics and separate connected status without timezone',()=>{
- const c=load();const html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true,username:'listener',listen_history_count:17,pending_scrobble_count:3,playback_statistics:{local_playcount:4,total_listening_seconds:3661}});
- assert.match(html,/Last\.FM/); assert.match(html,/Connected/);assert.match(html,/Scrobbled: 17/);assert.match(html,/Queued: 3/);
+function loadLastfmActions(overrides = {}) {
+  const context = load(overrides);
+  vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js/runtime/utility-loaders-and-cover-lookup.js'),'utf8'),context);
+  return context;
+}
+
+test('connected Scrobbling shows three separate Last.fm counts and an enabled shared Submit button',()=>{
+ const c=load();c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:3,can_submit:true};
+ const html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true,username:'listener',listen_history_count:9,pending_scrobble_count:8,playback_statistics:{local_playcount:4,total_listening_seconds:3661}});
+ assert.match(html,/Last\.FM/); assert.match(html,/Connected/);
+ assert.match(html,/data-lastfm-scrobbled[^>]*>Scrobbled: 17</);
+ assert.match(html,/data-lastfm-total[^>]*>LastFM Total: 12000</);
+ assert.match(html,/data-lastfm-pending[^>]*>Pending: 3</);
+ assert.match(html,/data-submit-lastfm-scrobbles="1"/);
+ assert.doesNotMatch(html,/data-submit-lastfm-scrobbles="1"[^>]*disabled/);
  assert.match(html,/Local playcount/);assert.match(html,/>4</);assert.match(html,/1 hour 1 minute/);
- assert.doesNotMatch(html,/data-lastfm-field="timezone"|Save timezone|Connected as|account connected/i);
+ assert.doesNotMatch(html,/Queued:|data-lastfm-field="timezone"|Save timezone|Connected as|account connected/i);
+});
+
+test('LastFM Total distinguishes loading from provider unavailability',()=>{
+ const c=load();c.state.utility.lastfmScrobbles.loading=true;
+ let html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true,listen_history_count:4,pending_scrobble_count:0});
+ assert.match(html,/data-lastfm-total[^>]*>LastFM Total: Loading\.\.\.</);
+ c.state.utility.lastfmScrobbles.loading=false;
+ c.state.utility.lastfmScrobbles.summary={scrobbled:4,lastfm_total:null,pending:0,can_submit:true};
+ html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true});
+ assert.match(html,/data-lastfm-total[^>]*>LastFM Total: Unavailable</);
+});
+
+test('disconnected Scrobbling hides Last.fm counts and Submit',()=>{
+ const c=load();c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:3,can_submit:true};
+ const html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:false,api_configured:true});
+ assert.doesNotMatch(html,/data-lastfm-(?:scrobbled|total|pending)|data-submit-lastfm-scrobbles/);
+});
+
+test('Submit is disabled when no pending scrobbles exist',()=>{
+ const c=load();c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:0,can_submit:true};
+ const html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true});
+ assert.match(html,/data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.match(html,/>\s*<span class="ui-button__content">Submit<\/span>/);
+});
+
+test('Submit shows disabled in-flight copy while scrobbles are being sent',()=>{
+ const c=load();c.state.utility.lastfmScrobbles={summary:{scrobbled:17,lastfm_total:12000,pending:3,can_submit:true},loading:false,submitting:true};
+ const html=c.buildUtilityIntegrationDetail({key:'lastfm',connected:true,api_configured:true});
+ assert.match(html,/data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.match(html,/Submitting\.\.\./);
+});
+
+test('loading Integrations renders local data before the Last.fm provider summary resolves',async()=>{
+ let resolveProvider;const requests=[];const c=loadLastfmActions({fetch:async(url)=>{
+  requests.push(url);
+  if(url==='/utilities/integrations')return {ok:true,json:async()=>({ok:true,integrations:[{key:'lastfm',connected:true,api_configured:true,username:'listener',user_timezone:'America/Denver'}]})};
+  assert.equal(url,'/utilities/integrations/lastfm/scrobbles');
+  return new Promise(resolve=>{resolveProvider=resolve;});
+ }});
+ await c.loadUtilityIntegrations(true);
+ assert.deepEqual(requests,['/utilities/integrations','/utilities/integrations/lastfm/scrobbles']);
+ assert.equal(c.state.utility.integrationsLoading,false);
+ assert.equal(c.state.utility.lastfmScrobbles.loading,true);
+ assert.match(c.buildUtilityIntegrationDetail(c.state.utility.integrations[0]),/LastFM Total: Loading\.\.\./);
+ const providerLoad=c.state.utility.lastfmScrobbles.loadPromise;
+ resolveProvider({ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:12000,pending:3,can_submit:true})});
+ await providerLoad;
+ assert.equal(c.state.utility.lastfmScrobbles.summary.scrobbled,17);
+});
+
+test('an older Last.fm summary cannot repopulate after disconnect and reconnect',async()=>{
+ let resolveOld,resolveNew,getCount=0;const c=loadLastfmActions({fetch:async()=>{
+  getCount++;
+  return new Promise(resolve=>{if(getCount===1)resolveOld=resolve;else resolveNew=resolve;});
+ }});
+ const oldLoad=c.loadLastfmScrobbleSummary({connected:true,listen_history_count:1,pending_scrobble_count:1});
+ await c.loadLastfmScrobbleSummary({connected:false});
+ const newLoad=c.loadLastfmScrobbleSummary({connected:true,listen_history_count:2,pending_scrobble_count:2});
+ resolveNew({ok:true,json:async()=>({ok:true,scrobbled:22,lastfm_total:220,pending:0,can_submit:true})});
+ await newLoad;
+ resolveOld({ok:true,json:async()=>({ok:true,scrobbled:11,lastfm_total:110,pending:1,can_submit:true})});
+ await oldLoad;
+ assert.equal(getCount,2);
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:22,lastfm_total:220,pending:0,can_submit:true}));
+ assert.equal(c.state.utility.lastfmScrobbles.loading,false);
+});
+
+test('successful Submit refreshes all counts and shows the success notification',async()=>{
+ const requests=[],toasts=[];const c=loadLastfmActions({
+  fetch:async(url,options={})=>{requests.push([url,options.method||'GET']);if(options.method==='POST')return {ok:true,json:async()=>({ok:true,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})};return {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,can_submit:true})};},
+  showToast:(...args)=>toasts.push(args),
+ });
+ c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ await c.submitPendingLastfmScrobbles();
+ assert.deepEqual(requests,[['/utilities/integrations/lastfm/scrobbles/submit','POST'],['/utilities/integrations/lastfm/scrobbles','GET']]);
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
+ assert.equal(c.state.utility.lastfmScrobbles.submitting,false);
+ assert.deepEqual(toasts,[['Pending Last.fm scrobbles submitted.','success',2600]]);
+});
+
+test('Submit replaces an in-flight pre-Submit Last.fm summary refresh',async()=>{
+ let resolveOld,getCount=0;const requests=[];const c=loadLastfmActions({fetch:async(url,options={})=>{
+  requests.push([url,options.method||'GET']);
+  if(options.method==='POST')return {ok:true,json:async()=>({ok:true,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})};
+  getCount++;
+  if(getCount===1)return new Promise(resolve=>{resolveOld=resolve;});
+  return {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,can_submit:true})};
+ }});
+ const lastfm={key:'lastfm',connected:true,api_configured:true};
+ c.state.utility.integrations=[lastfm];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ const oldLoad=c.loadLastfmScrobbleSummary(lastfm);
+ await c.submitPendingLastfmScrobbles();
+ resolveOld({ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:12000,pending:1,can_submit:true})});
+ await oldLoad;
+ assert.equal(getCount,2);
+ assert.deepEqual(requests,[
+  ['/utilities/integrations/lastfm/scrobbles','GET'],
+  ['/utilities/integrations/lastfm/scrobbles/submit','POST'],
+  ['/utilities/integrations/lastfm/scrobbles','GET'],
+ ]);
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
+});
+
+test('failed Submit refreshes counts and uses the regular bottom-right Error alert',async()=>{
+ const alerts=[];let renders=0;const c=loadLastfmActions({
+  fetch:async(url,options={})=>options.method==='POST'
+   ? {ok:false,json:async()=>({ok:false,error:'Last.fm is temporarily unavailable.',attempted:1,succeeded:0,failed:1,pending_before:1,pending_after:1})}
+   : {ok:true,json:async()=>({ok:true,scrobbled:17,lastfm_total:12000,pending:1,can_submit:true})},
+  renderUtilityModalContent:()=>{renders++;},showRepairAlert:(...args)=>alerts.push(args),
+ });
+ c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ await c.submitPendingLastfmScrobbles();
+ assert.equal(c.state.utility.lastfmScrobbles.summary.pending,1);
+ assert.equal(c.state.utility.lastfmScrobbles.submitting,false);
+ assert.equal(c.state.utility.logHistoryLoaded,false);
+ assert.deepEqual(alerts,[['Last.fm is temporarily unavailable.','error',null]]);
+ assert.ok(renders>=2);
+});
+
+test('failed Submit keeps its fresher complete counts and permission when refresh fails',async()=>{
+ const alerts=[];const c=loadLastfmActions({
+  fetch:async(_url,options={})=>options.method==='POST'
+   ? {ok:false,json:async()=>({ok:false,error:'Last.fm is temporarily unavailable.',scrobbled:18,lastfm_total:12001,pending:2,attempted:1,succeeded:0,failed:1,pending_before:2,pending_after:2})}
+   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
+  showRepairAlert:(...args)=>alerts.push(args),
+ });
+ c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:2,can_submit:true};
+ await c.submitPendingLastfmScrobbles();
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:2,can_submit:true}));
+ assert.deepEqual(alerts,[['Last.fm is temporarily unavailable.','error',null]]);
+});
+
+test('partial failed Submit keeps updated pending count actionable when refresh fails',async()=>{
+ const alerts=[];const c=loadLastfmActions({
+  fetch:async(_url,options={})=>options.method==='POST'
+   ? {ok:false,json:async()=>({ok:false,error:'One scrobble failed.',attempted:2,succeeded:1,failed:1,pending_before:2,pending_after:1})}
+   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
+  showRepairAlert:(...args)=>alerts.push(args),
+ });
+ const lastfm={key:'lastfm',connected:true,api_configured:true};
+ c.state.utility.integrations=[lastfm];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:2,can_submit:true};
+ await c.submitPendingLastfmScrobbles();
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:17,lastfm_total:12000,pending:1,can_submit:true}));
+ assert.doesNotMatch(c.buildUtilityIntegrationDetail(lastfm),/data-submit-lastfm-scrobbles="1"[^>]*disabled/);
+ assert.deepEqual(alerts,[['One scrobble failed.','error',null]]);
+});
+
+test('successful Submit keeps its fresher complete counts and permission when refresh fails',async()=>{
+ const toasts=[];const c=loadLastfmActions({
+  fetch:async(_url,options={})=>options.method==='POST'
+   ? {ok:true,json:async()=>({ok:true,scrobbled:18,lastfm_total:12001,pending:0,attempted:1,succeeded:1,failed:0,pending_before:1,pending_after:0})}
+   : {ok:false,json:async()=>({ok:false,error:'status unavailable'})},
+  showToast:(...args)=>toasts.push(args),
+ });
+ c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ await c.submitPendingLastfmScrobbles();
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:18,lastfm_total:12001,pending:0,can_submit:true}));
+ assert.deepEqual(toasts,[['Pending Last.fm scrobbles submitted.','success',2600]]);
+});
+
+test('reopening loaded Integrations explicitly retries the Last.fm summary without erasing existing counts',async()=>{
+ let resolveRefresh;const c=loadLastfmActions({fetch:async()=>new Promise(resolve=>{resolveRefresh=resolve;})});
+ c.state.utility.integrationsLoaded=true;
+ c.state.utility.integrations=[{key:'lastfm',connected:true,api_configured:true}];
+ c.state.utility.lastfmScrobbles.summary={scrobbled:17,lastfm_total:12000,pending:1,can_submit:true};
+ await c.loadUtilityIntegrations();
+ assert.equal(c.state.utility.lastfmScrobbles.loading,true);
+ const refresh=c.state.utility.lastfmScrobbles.loadPromise;
+ resolveRefresh({ok:false,json:async()=>({ok:false,error:'status unavailable'})});
+ await refresh;
+ assert.equal(JSON.stringify(c.state.utility.lastfmScrobbles.summary),JSON.stringify({scrobbled:17,lastfm_total:12000,pending:1,can_submit:true}));
 });
 
 test('missing measured statistics are unavailable rather than invented zero or sample values',()=>{
@@ -174,6 +363,14 @@ test('clicking the selected integration does not reload or replace its detail',a
  let selections=0,renders=0;c.handleLibrarySettingsIntegrationSelection=()=>{selections++;return false;};c.renderUtilityModalContent=()=>{renders++;};
  await c.handleUtilityBootstrapClick({preventDefault(){},target:{closest:selector=>selector==='[data-utility-integration-key]'?{getAttribute:()=> 'foobar'}:null}});
  assert.equal(selections,0);assert.equal(renders,0);
+});
+
+test('clicking Submit dispatches the pending Last.fm scrobble action',async()=>{
+ const c=load({document:{querySelectorAll:()=>[]}});c.state.coverLookup={};
+ vm.runInContext(fs.readFileSync(path.join(root,'music_app/static/js/runtime/bootstrap-utility-event-handlers.js'),'utf8'),c);
+ let submissions=0,prevented=false;c.submitPendingLastfmScrobbles=async()=>{submissions++;};
+ await c.handleUtilityBootstrapClick({preventDefault(){prevented=true;},target:{closest:selector=>selector==='[data-submit-lastfm-scrobbles="1"]'?{}:null}});
+ assert.equal(prevented,true);assert.equal(submissions,1);
 });
 
 

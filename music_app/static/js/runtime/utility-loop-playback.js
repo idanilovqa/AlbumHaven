@@ -10,6 +10,8 @@ function drainUtilityLoopStereoQueue() {
   for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
     const job = utilityLoopStereoQueue[index];
     if (eligible(job)) continue;
+    job.canvas.hidden = true;
+    job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
     utilityLoopStereoQueue.splice(index, 1);
     utilityLoopStereoLoads.delete(job.canvas);
   }
@@ -20,7 +22,12 @@ function drainUtilityLoopStereoQueue() {
     job.entry.loading = false;
     job.entry.peaks = peaks;
     job.entry.retryAt = Date.now() + 5000;
-    if (eligible(job)) updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    if (eligible(job)) {
+      updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    } else {
+      job.canvas.hidden = true;
+      job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
   }).finally(() => {
     utilityLoopStereoLoadActive = false;
     drainUtilityLoopStereoQueue();
@@ -33,9 +40,10 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
   const cached = utilityLoopStereoLoads.get(canvas);
-  const ready = enabled && !editing && Boolean(cached?.peaks);
-  canvas.hidden = !ready;
-  canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
+  const coolingDown = cached && !cached.loading && !cached.peaks && Date.now() < cached.retryAt;
+  const presented = enabled && !editing && !coolingDown;
+  canvas.hidden = !presented;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
   if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
   if (cached?.peaks) {
     const duration = Number(audio.duration) || 0;
@@ -142,11 +150,21 @@ function seekUtilityLoopPlayback(loopId, deltaSeconds) {
   return true;
 }
 
+function pauseOtherUtilityLoopPlayback(activeAudio) {
+  document.querySelectorAll('[data-loop-audio]').forEach(otherAudio => {
+    if (otherAudio === activeAudio || otherAudio.paused) return;
+    otherAudio.pause();
+    const otherLoopId = String(otherAudio.getAttribute?.('data-loop-audio') || '');
+    if (otherLoopId) updateUtilityLoopPlayerUi(otherLoopId);
+  });
+}
+
 function toggleUtilityLoopPlayback(loopId, options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId || '')}"]`);
   if (!audio) return false;
   if (audio.paused || audio.ended) {
+    pauseOtherUtilityLoopPlayback(audio);
     if (audio.ended) audio.currentTime = 0;
     const globalPlayback = typeof getPlayerPlaybackSnapshot === 'function'
       ? getPlayerPlaybackSnapshot()

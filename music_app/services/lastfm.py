@@ -65,6 +65,8 @@ class LastfmSubmissionOutcome:
     outcome: str = "not_sent"
     ignored_code: int | None = None
     message: str = ""
+    attempted: bool | None = None
+    reauthentication_required: bool = False
 
     @property
     def succeeded(self) -> bool:
@@ -411,3 +413,25 @@ def scrobble_track(config: dict[str, Any], payload: dict[str, Any], *, session=_
         ignored_code=ignored_code,
         message=message,
     )
+
+
+def get_lastfm_total_scrobbles(
+    config: dict[str, Any], *, session: LastfmSession,
+) -> int:
+    root = _post_lastfm(config, "user.getInfo", {"user": session.username})
+    raw_playcount = root.findtext("./user/playcount")
+    try:
+        playcount = int(str(raw_playcount or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise LastfmError(
+            "Last.fm user response contained an invalid playcount.",
+            retryable=True,
+            error_kind="malformed_response",
+        ) from exc
+    if playcount < 0:
+        raise LastfmError(
+            "Last.fm user response contained an invalid playcount.",
+            retryable=True,
+            error_kind="malformed_response",
+        )
+    return playcount

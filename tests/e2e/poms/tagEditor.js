@@ -55,6 +55,7 @@ export class TagEditor extends BasePage {
     this.nonAlbumRarityWarningIcon = this.nonAlbumRarityWarning.locator(
       '.on-page-alert__icon',
     );
+    this.nonAlbumRarityWarningIconSvg = this.nonAlbumRarityWarningIcon.locator('svg');
     this.nonAlbumRarityWarningText = this.nonAlbumRarityWarning.locator(
       '.on-page-alert__message',
     );

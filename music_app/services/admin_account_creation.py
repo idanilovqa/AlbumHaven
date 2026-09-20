@@ -35,6 +35,7 @@ MANAGED_CAPABILITY_KEYS = frozenset(
         "library.playlists.manage",
         "library.playlists.items.manage",
         "library.track_preferences.manage",
+        "integration.lastfm.scrobbles.submit",
     }
 )
 

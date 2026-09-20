@@ -171,6 +171,12 @@ export class TrackModalActions {
     await this.waitForClosed(options);
   }
 
+  async closeForegroundWithEscape(options = {}) {
+    await this.trackModal.closeButton.click({ trial: true });
+    await this.trackModal.pressEscape();
+    await this.waitForClosed(options);
+  }
+
   async closeIfOpen(options = {}) {
     if (!(await this.trackModal.dialog.isVisible())) return;
     try {
@@ -499,6 +505,39 @@ export class TrackModalActions {
     const scrobble = await scrobbleResponse.json();
     if (!scrobbleResponse.ok() || scrobble.ok !== true || scrobble.scrobbled !== true) {
       throw new Error(`Expected accepted Last.fm scrobble, received HTTP ${scrobbleResponse.status()}: ${JSON.stringify(scrobble)}`);
+    }
+    const completeResponse = await completeResponsePromise;
+    const completion = await completeResponse.json();
+    if (!completeResponse.ok() || completion.ok !== true) {
+      throw new Error(`Expected persisted playback completion, received HTTP ${completeResponse.status()}: ${JSON.stringify(completion)}`);
+    }
+    return { track, scrobble, completion };
+  }
+
+  async playTrackAtAndWaitForPendingLastfmJourney(index, options = {}) {
+    const expectedTitle = String(options.title || '');
+    const track = await this.readTrackAt(index);
+    if (expectedTitle && track.title !== expectedTitle) {
+      throw new Error(`Expected to play ${JSON.stringify(expectedTitle)}, received ${JSON.stringify(track.title)}.`);
+    }
+    const scrobbleResponsePromise = this.trackModal.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/playback/session/scrobble'
+    ), { timeout: options.timeout || 30000 });
+    const completeResponsePromise = this.trackModal.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/playback/session/complete'
+    ), { timeout: options.timeout || 30000 });
+    await this.trackModal.playButtonAt(index).click();
+    const scrobbleResponse = await scrobbleResponsePromise;
+    const scrobble = await scrobbleResponse.json();
+    if (
+      !scrobbleResponse.ok()
+      || scrobble.ok !== true
+      || scrobble.scrobbled !== false
+      || scrobble.entry?.scrobble_retryable !== true
+    ) {
+      throw new Error(`Expected queued Last.fm scrobble, received HTTP ${scrobbleResponse.status()}: ${JSON.stringify(scrobble)}`);
     }
     const completeResponse = await completeResponsePromise;
     const completion = await completeResponse.json();

@@ -303,6 +303,14 @@ Acceptance covers input focus, pointer-down before/after input focus, independen
 - Selection uses only a crisp 1px green border and marker. Remove the primary-artist divider/glow/fill distinction while retaining its semantic identity for selection logic. No artist-image fetching or database changes.
 - Preserve independent multi-selection, existing artwork fallback, full family heading, and responsive panel bounds. Update test selectors and visual contracts. CI-only verification; no rebuild/restart.
 
+### Owner follow-up: fixed Artist Family width and shared filter pill
+- Replace content-sized Artist Family width with the existing Neal Morse envelope: 390px, capped at 92vw on narrow viewports. Family contents no longer resize the panel.
+- Render artist rows through a reusable `ui-filter-pill` builder. Label and selection marker are standard; count and album artwork are optional. Artist Family keeps its approved 60px geometry and existing selection semantics.
+- Share the dropdown row background transition and hover token. Remove hover underlining; keyboard focus remains visible through the solid interaction treatment.
+- Acceptance: fixed responsive width in the real browser, optional-artwork component markup, unchanged independent selection, animated solid hover without text decoration, and existing artwork/count geometry. Rollback is limited to the component builder, Artist Family presentation, and matching unit/E2E coverage. No review, merge, or publication before the queued owner batch is complete.
+- Owner follow-up restores one full-width horizontal divider between the primary-artist pill and the related-family pills. It appears only when both groups exist, reuses the shared gallery divider line token, and does not change pill geometry or selection behavior.
+- The Combine similar artists switch row now opts into the shared neutral dropdown-row hover/focus treatment. Pointer press explicitly retains that neutral fill and transparent border instead of inheriting the global green action background; the switch track continues to show its enabled state independently.
+
 ### Investigation: saved-loop Play immediately stops
 - Owner reports immediate stop/reset. Exact loop, entry point and browser are pending. Local app log contains a PCM WebSocket disconnect, but no causal link to the loop click is established.
 - Confirmed silent rejection handling in toggleUtilityLoopPlayback: both native play failure and global-player handoff failure were swallowed. Added shared-toast reporting with error name only and bounded media error code in console; no media paths or raw error messages. Playback ownership/architecture remains unchanged.

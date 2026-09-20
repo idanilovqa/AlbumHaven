@@ -138,13 +138,79 @@ export class UtilityIntegrationsActions {
 
   async waitForScrobbledCount(count, options = {}) {
     await this.utilityIntegrationsTab.scrobbling.click();
-    const expectedText = `Scrobbled: ${Number(count)} ·`;
-    await this.utilityIntegrationsTab.waitForPageCondition((expected) => (
-      [...document.querySelectorAll(expected.metaSelector)]
-        .some((element) => String(element.textContent || '').includes(expected.text))
-    ), { timeout: options.timeout || 10000 }, {
-      metaSelector: this.utilityIntegrationsTab.lastfmStatusMetaSelector,
-      text: expectedText,
-    });
+    await expect(this.utilityIntegrationsTab.lastfmScrobbled).toHaveText(
+      `Scrobbled: ${Number(count)}`,
+      { timeout: options.timeout || 10000 },
+    );
+  }
+
+  async waitForLastfmSummary({ scrobbled, pending, lastfmTotal }, options = {}) {
+    await this.utilityIntegrationsTab.scrobbling.click();
+    const timeout = options.timeout || 10000;
+    await expect(this.utilityIntegrationsTab.lastfmScrobbled).toHaveText(
+      `Scrobbled: ${Number(scrobbled)}`,
+      { timeout },
+    );
+    await expect(this.utilityIntegrationsTab.lastfmPending).toHaveText(
+      `Pending: ${Number(pending)}`,
+      { timeout },
+    );
+    await expect(this.utilityIntegrationsTab.lastfmTotal).toHaveText(
+      `LastFM Total: ${lastfmTotal === null ? 'Unavailable' : Number(lastfmTotal)}`,
+      { timeout },
+    );
+  }
+
+  async readLastfmSummary(options = {}) {
+    await this.utilityIntegrationsTab.scrobbling.click();
+    await expect(this.utilityIntegrationsTab.lastfmTotal).not.toHaveText(
+      'LastFM Total: Loading...',
+      { timeout: options.timeout || 10000 },
+    );
+    const readCount = async (locator, label) => {
+      const text = String(await locator.textContent() || '').trim();
+      const value = text.slice(`${label}:`.length).trim();
+      if (value === 'Unavailable') return null;
+      const count = Number(value);
+      if (!Number.isInteger(count) || count < 0) {
+        throw new Error(`Expected a nonnegative ${label} count, received ${JSON.stringify(text)}.`);
+      }
+      return count;
+    };
+    return {
+      scrobbled: await readCount(this.utilityIntegrationsTab.lastfmScrobbled, 'Scrobbled'),
+      pending: await readCount(this.utilityIntegrationsTab.lastfmPending, 'Pending'),
+      lastfmTotal: await readCount(this.utilityIntegrationsTab.lastfmTotal, 'LastFM Total'),
+      submitEnabled: await this.utilityIntegrationsTab.lastfmSubmitButton.isEnabled(),
+    };
+  }
+
+  async submitPendingScrobbles() {
+    const responsePromise = this.utilityIntegrationsTab.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/utilities/integrations/lastfm/scrobbles/submit'
+    ));
+    await this.utilityIntegrationsTab.lastfmSubmitButton.click();
+    const response = await responsePromise;
+    return { response, payload: await response.json() };
+  }
+
+  async waitForSubmitError(message, options = {}) {
+    const timeout = options.timeout || 10000;
+    await expect(this.utilityIntegrationsTab.lastfmSubmitAlert).toBeVisible({ timeout });
+    await expect(this.utilityIntegrationsTab.lastfmSubmitAlert).toHaveClass(/is-error/u);
+    await expect(this.utilityIntegrationsTab.lastfmSubmitAlertMessage).toHaveText(String(message));
+  }
+
+  async readSubmitAlertPlacement() {
+    const [alert, viewport] = await Promise.all([
+      this.utilityIntegrationsTab.lastfmSubmitAlert.boundingBox(),
+      Promise.resolve(this.utilityIntegrationsTab.page.viewportSize()),
+    ]);
+    if (!alert || !viewport) throw new Error('Expected visible Last.fm submit alert geometry.');
+    return {
+      rightHalf: alert.x + (alert.width / 2) > viewport.width / 2,
+      bottomHalf: alert.y + (alert.height / 2) > viewport.height / 2,
+    };
   }
 }

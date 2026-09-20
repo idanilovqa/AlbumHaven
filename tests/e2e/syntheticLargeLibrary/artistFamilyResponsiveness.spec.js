@@ -127,13 +127,27 @@ test.describe(`${CASE_ID} synthetic-large artist family responsiveness`, () => {
       expect(structure.title).toBe(EXPECTED_FAMILY.primary + ' Family');
       expect(structure.totalLeft).toBeGreaterThan(structure.titleRight);
       expect(Math.abs(structure.totalTop - structure.titleTop)).toBeLessThan(6);
-      expect(structure.width).toBeLessThan(390);
-      expect(structure.width).toBeLessThanOrEqual(structure.widthCap);
+      expect(Math.abs(structure.width - structure.widthCap)).toBeLessThanOrEqual(1);
       expect(structure.labelsEllipsize).toBe(true);
-
+      expect(structure.primaryDividerCount).toBe(1);
+      expect(structure.primaryDividerSeparatesFamily).toBe(true);
 
       const source = EXPECTED_FAMILY.resonance;
       const target = EXPECTED_FAMILY.cosmic;
+      await artistFamilyActions.clickChipByName(source);
+      await artistFamilyActions.waitForChipActive(source, false);
+      const hoverState = await artistFamilyActions.readChipHoverState(source);
+      expect(hoverState.after.backgroundColor).not.toBe(hoverState.before.backgroundColor);
+      expect(hoverState.after.labelDecoration).toBe('none');
+      expect(hoverState.after.transitionProperty).toContain('background-color');
+      expect(hoverState.after.transitionDuration).not.toBe('0s');
+      const combineHoverState = await artistFamilyActions.readCombineHoverState();
+      expect(combineHoverState.after.backgroundColor).not.toBe(combineHoverState.before.backgroundColor);
+      expect(combineHoverState.after.backgroundColor).toBe(hoverState.after.backgroundColor);
+      expect(combineHoverState.after.transitionProperty).toContain('background-color');
+      expect(combineHoverState.after.transitionDuration).not.toBe('0s');
+      await artistFamilyActions.clickChipByName(source);
+      await artistFamilyActions.waitForChipActive(source, true);
       await artistFamilyActions.dragAcrossChips(source, target);
       await artistFamilyActions.waitForChipActive(source, false);
       await artistFamilyActions.waitForChipActive(target, false);

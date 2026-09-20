@@ -1926,8 +1926,6 @@ body.modal-open { overflow: hidden; }
 .utility-loop-timeline-wrap.is-stereo-waveform .utility-loop-timeline {
   appearance: none; -webkit-appearance: none; height: 32px; margin: 0; background: transparent; opacity: 0; cursor: pointer;
 }
-.utility-loop-timeline-wrap.is-stereo-waveform:focus-within { outline: 1px solid var(--appearance-waveform-edge, #AFD8C2); outline-offset: 2px; }
-
 /* A restrained palette-colored halo keeps player text crisp. */
 :root .global-player :is(.player-title, .player-time) {
   text-shadow: 0 0 4px color-mix(in srgb, var(--appearance-waveform-edge, #AFD8C2) 24%, transparent),

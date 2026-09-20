@@ -122,6 +122,9 @@ PROBLEMATIC_REQUIRED_TEXT_CANDIDATE_MIGRATION = (
 WAVEFORM_PEAK_CACHE_MIGRATION = (
     MIGRATIONS_DIR / "0043_create_local_track_waveform_peaks.sql"
 )
+SAVED_LOOP_WAVEFORM_PEAK_CACHE_MIGRATION = (
+    MIGRATIONS_DIR / "0074_create_saved_loop_waveform_peaks.sql"
+)
 TAG_EDIT_INTENTS_MIGRATION = (
     MIGRATIONS_DIR / "0044_create_tag_edit_intents.sql"
 )
@@ -429,7 +432,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
 
     assert all(re.fullmatch(r"\d{4}_[a-z0-9_]+\.sql", name) for name in migration_names)
     assert migration_numbers == list(range(1, len(migration_numbers) + 1))
-    assert migration_names[-35:] == [
+    assert migration_names[-36:] == [
         "0039_repair_semantic_album_reconciliation_delete_grants.sql",
         "0040_repair_ignored_repairs_delete_grant.sql",
         "0041_create_local_album_cover_candidate_snapshots.sql",
@@ -465,6 +468,7 @@ def test_postgres_migration_filenames_are_zero_padded_sql_and_lexically_ordered(
         "0071_allow_harbor_mint_appearance_palette.sql",
         "0072_measured_local_listen_sessions.sql",
         "0073_preserve_measured_listen_history.sql",
+        "0074_create_saved_loop_waveform_peaks.sql",
     ]
 
 
@@ -2778,6 +2782,34 @@ def test_waveform_peak_cache_has_bounded_payload_identity_and_least_privilege_gr
     assert "grant select on table" in sql
     assert "to album_haven_readonly" in sql
     assert "grant delete" not in sql
+    assert "grant all" not in sql
+
+
+def test_saved_loop_waveform_peak_cache_is_scoped_rebuildable_and_cascade_owned():
+    sql = _normalized_sql(
+        SAVED_LOOP_WAVEFORM_PEAK_CACHE_MIGRATION.read_text(encoding="utf-8")
+    )
+
+    assert "create table if not exists app.saved_loop_waveform_peaks" in sql
+    assert (
+        "saved_loop_id bigint not null references app.saved_loops(id) on delete cascade"
+        in sql
+    )
+    assert "primary key (saved_loop_id, sample_count)" in sql
+    assert "sample_count integer not null" in sql
+    assert "analyzer_version text not null" in sql
+    assert "file_size_bytes bigint not null" in sql
+    assert "modified_at_ns bigint not null" in sql
+    assert "left_peaks real[] not null" in sql
+    assert "right_peaks real[] not null" in sql
+    assert "sample_count > 0" in sql
+    assert "cardinality(left_peaks) = sample_count" in sql
+    assert "cardinality(right_peaks) = sample_count" in sql
+    assert "grant select, insert, update, delete on table" in sql
+    assert "to album_haven_app" in sql
+    assert "to album_haven_migrator" in sql
+    assert "grant select on table" in sql
+    assert "to album_haven_readonly" in sql
     assert "grant all" not in sql
 
 

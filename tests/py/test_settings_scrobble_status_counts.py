@@ -51,3 +51,61 @@ def test_scoped_counts_preserve_typed_status_when_payload_omits_legacy_flag(ledg
             (owner['account_id'], owner['library_id'], item['id']))
     assert history.build_listen_history_status_counts(ledger['config'], account_id=owner['account_id'],
         library_id=owner['library_id']) == {'listen_history_count': 1, 'pending_scrobble_count': 0}
+
+
+def test_exhausted_receipt_is_not_pending(ledger):
+    owner = ledger['own']
+    item = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+    history.update_listen_history_entry(ledger['config'], item['id'], {
+        'scrobble_retryable': True, 'scrobble_retry_exhausted': True,
+    }, account_id=owner['account_id'], library_id=owner['library_id'])
+
+    counts = history.build_listen_history_status_counts(
+        ledger['config'], account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+    pending = history.load_pending_scrobble_entries(ledger['config'], limit=100)
+
+    assert counts['pending_scrobble_count'] == 0
+    assert item['id'] not in {entry.entry['id'] for entry in pending}
+
+
+def test_scoped_counts_exclude_imported_source_family_rows(ledger):
+    from music_app.services.listen_history_postgres import PostgresListenHistoryAdapter
+
+    owner = ledger['own']
+    accepted = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+    history.update_listen_history_entry(ledger['config'], accepted['id'], {
+        'scrobbled': True,
+        'scrobble_retryable': False,
+        'scrobble_submission_state': 'accepted',
+    }, account_id=owner['account_id'], library_id=owner['library_id'])
+    append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+
+    imported_accepted = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+    history.update_listen_history_entry(ledger['config'], imported_accepted['id'], {
+        'scrobbled': True,
+        'scrobble_retryable': False,
+        'scrobble_submission_state': 'accepted',
+    }, account_id=owner['account_id'], library_id=owner['library_id'])
+    imported_pending = append(ledger, measured(owner, finalized=True, scrobble_eligible=True))
+    adapter = PostgresListenHistoryAdapter(ledger['config'])
+    with adapter._connect_to_database() as connection:
+        connection.execute("""update integration.listen_history
+            set source_family='lastfm_import'
+            where account_id=%s and library_id=%s
+              and metadata->'source_payload'->>'id' = any(%s)""",
+            (owner['account_id'], owner['library_id'], [
+                imported_accepted['id'], imported_pending['id'],
+            ]))
+
+    counts = history.build_listen_history_status_counts(
+        ledger['config'], account_id=owner['account_id'], library_id=owner['library_id'],
+    )
+    pending_ids = {
+        entry.entry['id'] for entry in history.load_pending_scrobble_entries(
+            ledger['config'], limit=100,
+        )
+    }
+
+    assert counts == {'listen_history_count': 1, 'pending_scrobble_count': 1}
+    assert imported_pending['id'] not in pending_ids

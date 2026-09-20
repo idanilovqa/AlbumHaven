@@ -13,6 +13,10 @@ from threading import Barrier
 from urllib.parse import urlparse
 import pytest
 from music_app.services import saved_loops_postgres as module
+from music_app.services.saved_loop_waveform_peak_cache_postgres import (
+    PostgresSavedLoopWaveformPeakCacheRepository,
+)
+from music_app.services.waveform_peaks import WaveformPeaks
 
 @pytest.fixture
 def scoped_store():
@@ -132,6 +136,55 @@ def test_delete_advances_same_song_revision_and_preserves_tombstone(scoped_store
     with store['connect']() as connection:
         row=connection.execute('select metadata from app.saved_loops where account_id=%s and library_id=%s and loop_key=%s', (*args.values(),'a')).fetchone()
     assert row and row['metadata']['source_payload']['original_start_seconds']==10
+
+def test_delete_removes_saved_waveform_cache_for_soft_deleted_loop(scoped_store):
+    store=scoped_store; args=scope_args(store['own'])
+    with store['connect']() as connection:
+        saved_loop_id=connection.execute(
+            'select id from app.saved_loops where account_id=%s and library_id=%s and loop_key=%s',
+            (*args.values(),'a'),
+        ).fetchone()['id']
+        connection.execute(
+            '''insert into app.saved_loop_waveform_peaks
+               (saved_loop_id,sample_count,analyzer_version,file_size_bytes,modified_at_ns,left_peaks,right_peaks)
+               values(%s,2,'test',10,20,array[0.1,0.2]::real[],array[0.3,0.4]::real[])''',
+            (saved_loop_id,),
+        )
+
+    store['adapter'].delete_scoped_loop(**args,loop_id='a')
+
+    with store['connect']() as connection:
+        cached=connection.execute(
+            'select 1 from app.saved_loop_waveform_peaks where saved_loop_id=%s',
+            (saved_loop_id,),
+        ).fetchone()
+    assert cached is None
+
+def test_saved_waveform_cache_round_trips_only_for_its_actor_library_and_media_identity(scoped_store):
+    runtime_url = os.environ['ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL'].strip()
+    repository = PostgresSavedLoopWaveformPeakCacheRepository(
+        {'ALBUM_HAVEN_APP_DATABASE_URL': runtime_url}
+    )
+    scope = scope_args(scoped_store['own'])
+    identity = {
+        **scope,
+        'loop_id': 'a',
+        'file_size_bytes': 2048,
+        'modified_at_ns': 1_786_473_012_345_678_900,
+        'sample_count': 2,
+        'analyzer_version': 'waveform-peaks-v2',
+    }
+    peaks = WaveformPeaks(left=(0.25, 0.75), right=(0.5, 1.0), sample_count=2)
+
+    assert repository.put_for_loop(**identity, peaks=peaks) is True
+    cached = repository.get_for_loop(**identity)
+
+    assert cached is not None
+    assert cached.sample_count == 2
+    assert cached.left == pytest.approx(peaks.left)
+    assert cached.right == pytest.approx(peaks.right)
+    assert repository.get_for_loop(**{**identity, 'library_id': scoped_store['other_library']['library_id']}) is None
+    assert repository.get_for_loop(**{**identity, 'file_size_bytes': 2049}) is None
 
 def test_unresolved_delete_does_not_change_resolved_song_revision(scoped_store):
     store=scoped_store

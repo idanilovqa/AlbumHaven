@@ -11,7 +11,6 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
   galleryActions,
   globalPlayerActions,
   navigationPanelActions,
-  page,
   playbackEvidence,
   searchToolbarActions,
   settingsModalAppBarActions,
@@ -97,9 +96,7 @@ test(`${CASE_ID} player artwork reopens the playing album after selecting an unr
     expect(reopened.title).toContain(PLAYING_ALBUM);
     expect(`${reopened.title} ${reopened.subtitle}`).toContain(PLAYING_ALBUM_ARTIST);
     expect((await trackModalActions.readTrackAt(0)).path).toBe(playedTrack.path);
-    await trackModalActions.trackModal.closeButton.click({ trial: true });
-    await page.keyboard.press('Escape');
-    await expect(trackModalActions.trackModal.dialog).toBeHidden();
+    await trackModalActions.closeForegroundWithEscape();
     await settingsModalAppBarActions.waitForOpen();
     await globalPlayerActions.waitForCurrentTrack({ path: playedTrack.path, trackTitle: playedTrack.title });
     await globalPlayerActions.waitForPlaybackState({ paused: false });

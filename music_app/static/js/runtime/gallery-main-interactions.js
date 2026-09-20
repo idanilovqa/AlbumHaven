@@ -391,7 +391,7 @@ function buildGalleryFamilyPanelBody() {
   ];
   const groupsByArtist = new Map(relatedGroups.map((group) => [galleryMainGroupArtist(group), group]));
   const panelGroups = [...(primaryGroup ? [primaryGroup] : []), ...orderedNames.map((artist) => groupsByArtist.get(artist)).filter(Boolean)];
-  return panelGroups.map((group) => {
+  return panelGroups.map((group, index) => {
     const artist = String(group.artist_display || group.artist || 'Artist');
     const count = albumCounts.get(artist) || 0;
     const active = mainState.familySelectionExplicit !== true || mainState.familyArtists.includes(artist);
@@ -399,7 +399,25 @@ function buildGalleryFamilyPanelBody() {
     const albums = Array.isArray(group.albums) ? group.albums : [];
     const album = albums.find(albumHasDisplayCover) || albums[0];
     const artwork = album ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork` }) : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
-    return `<button class="artist-family-panel__artist${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}" type="button" data-gallery-family-artist="${escapeHtml(artist)}" title="${escapeHtml(artist)}" aria-label="${escapeHtml(artist)}" draggable="false" aria-pressed="${active ? 'true' : 'false'}"><span class="artist-family-panel__marker" aria-hidden="true"></span><span class="artist-family-panel__artwork" aria-hidden="true">${artwork}</span><span class="artist-family-panel__name">${escapeHtml(artist)}</span><span class="artist-family-panel__count">${count}</span></button>`;
+    const divider = primaryGroup && relatedGroups.length > 0 && index === 1
+      ? '<div class="artist-family-panel__primary-divider gallery-divider__line" role="separator" aria-label="Related artists"></div>'
+      : '';
+    return `${divider}${buildFilterPillHtml({
+      label: artist,
+      count,
+      selected: active,
+      className: 'artist-family-panel__artist',
+      modifierClassName: primary ? 'is-primary' : '',
+      partClasses: {
+        marker: 'artist-family-panel__marker',
+        artwork: 'artist-family-panel__artwork',
+        label: 'artist-family-panel__name',
+        count: 'artist-family-panel__count',
+      },
+      artworkHtml: artwork,
+      draggable: false,
+      dataAttributes: { 'gallery-family-artist': artist },
+    })}`;
   }).join('');
 }
 

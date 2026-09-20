@@ -54,3 +54,21 @@ def test_safe_history_preserves_diagnostics_without_preserving_provider_credenti
 @pytest.mark.parametrize("value", ["false", "true", 0, 1, None, {}, []])
 def test_safe_history_does_not_coerce_untrusted_retryable_values(value):
     assert "retryable" not in _normalize_log_history_item({"retryable": value})
+
+
+def test_log_history_preserves_scrobble_submission_summary_counts():
+    item = _normalize_log_history_item({
+        "action": "Last.fm pending scrobble submission failed",
+        "attempted": 3,
+        "succeeded": 2,
+        "failed": 1,
+        "pending_before": 3,
+        "pending_after": 1,
+    })
+
+    assert {key: item[key] for key in (
+        "attempted", "succeeded", "failed", "pending_before", "pending_after",
+    )} == {
+        "attempted": 3, "succeeded": 2, "failed": 1,
+        "pending_before": 3, "pending_after": 1,
+    }

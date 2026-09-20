@@ -18,6 +18,7 @@ export class ArtistFamily extends BasePage {
     this.chipLabels = this.chips.locator(this.chipLabelSelector);
     this.header = page.locator(`${this.boxSelector} > header`);
     this.combineRow = page.locator(`${this.boxSelector} > .artist-family-panel__combine-row`);
+    this.combineSwitch = this.combineRow.getByRole('switch', { name: 'Combine similar artists' });
     this.total = page.locator(`${this.boxSelector} [data-gallery-family-panel-total]`);
   }
 
@@ -45,6 +46,59 @@ export class ArtistFamily extends BasePage {
     return this.chips.filter({
       has: this.page.locator('.artist-family-panel__name').filter({ hasText: exactNormalizedText(name) }),
     }).first();
+  }
+
+  async readPanelStructure() {
+    // parity-check: allow-read-only-measurement-evaluate -- measure Artist Family geometry and owned descendants
+    return this.box.evaluate((panel) => ({
+      anchorEnvelope: panel.dataset.anchorEnvelope || '',
+      anchorWidth: getComputedStyle(panel).getPropertyValue('--gallery-anchor-width').trim(),
+      anchorHeight: getComputedStyle(panel).getPropertyValue('--gallery-anchor-height').trim(),
+      title: panel.querySelector('h2').textContent.trim(),
+      titleRight: panel.querySelector('h2').getBoundingClientRect().right,
+      totalLeft: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().left,
+      totalTop: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().top,
+      titleTop: panel.querySelector('h2').getBoundingClientRect().top,
+      width: parseFloat(getComputedStyle(panel).width),
+      widthCap: Math.min(390, innerWidth * 0.92),
+      labelsEllipsize: [...panel.querySelectorAll('[data-gallery-family-artist] > .artist-family-panel__name')]
+        .every((label) => {
+          const style = getComputedStyle(label);
+          return style.textOverflow === 'ellipsis'
+            && style.whiteSpace === 'nowrap'
+            && style.overflowX === 'hidden';
+        }),
+      primaryDividerCount: panel.querySelectorAll('.artist-family-panel__primary-divider').length,
+      primaryDividerSeparatesFamily: (() => {
+        const primary = panel.querySelector('[data-gallery-family-artist].is-primary');
+        const divider = panel.querySelector('.artist-family-panel__primary-divider');
+        const firstRelated = panel.querySelector('[data-gallery-family-artist]:not(.is-primary)');
+        return Boolean(primary && divider && firstRelated
+          && primary.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING
+          && divider.compareDocumentPosition(firstRelated) & Node.DOCUMENT_POSITION_FOLLOWING);
+      })(),
+    }));
+  }
+
+  async readChipInteractionState(chip) {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect shared filter-pill interaction paint
+    return chip.evaluate((element) => ({
+      backgroundColor: getComputedStyle(element).backgroundColor,
+      labelDecoration: getComputedStyle(
+        element.querySelector('.artist-family-panel__name'),
+      ).textDecorationLine,
+      transitionProperty: getComputedStyle(element).transitionProperty,
+      transitionDuration: getComputedStyle(element).transitionDuration,
+    }));
+  }
+
+  async readCombineInteractionState() {
+    // parity-check: allow-read-only-measurement-evaluate -- inspect shared dropdown-row interaction paint
+    return this.combineSwitch.evaluate((element) => ({
+      backgroundColor: getComputedStyle(element).backgroundColor,
+      transitionProperty: getComputedStyle(element).transitionProperty,
+      transitionDuration: getComputedStyle(element).transitionDuration,
+    }));
   }
 
   async readAppearanceCheckpoint() {

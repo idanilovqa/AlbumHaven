@@ -103,6 +103,15 @@ export class UtilityLogHistoryActions {
     }
   }
 
+  async selectCurrentExportDate(field) {
+    const history = this.utilityLogHistoryTab;
+    const calendar = history.exportCalendar(field);
+    await history.exportCurrentDay(field).click();
+    await expect(calendar).toBeHidden();
+    const input = field === 'from' ? history.exportFrom : history.exportTo;
+    await expect(input).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
+  }
+
   async exportLogs(options = {}) {
     await this.utilityLogHistoryTab.waitForVisible(this.utilityLogHistoryTab.exportButton, {
       timeout: options.timeout || 10000,

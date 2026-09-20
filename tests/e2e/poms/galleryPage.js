@@ -153,6 +153,10 @@ export class GalleryPage extends BasePage {
     this.sidebarArtists = page.locator(this.sidebarArtistSelector);
     this.coverReadyStates = page.locator(this.coverReadyStateSelector);
     this.galleryOptionsButton = page.locator('[data-gallery-bar-action="album-types"]');
+    this.lastCardInFirstAlbumRow = page.locator('#albums-viewport .album-row')
+      .first()
+      .locator(this.albumCardWithinSectionSelector)
+      .last();
     this.productionViewObserver = getProductionViewObserver(page);
   }
 

@@ -14,6 +14,23 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+function buildFilterPillHtml(config = {}) {
+  const label = String(config.label || '');
+  const selected = Boolean(config.selected);
+  const partClass = (part) => {
+    const extra = String(config.partClasses?.[part] || '').trim();
+    return `ui-filter-pill__${part}${extra ? ` ${escapeHtml(extra)}` : ''}`;
+  };
+  const dataAttributes = Object.entries(config.dataAttributes || {})
+    .filter(([name]) => /^[a-z][a-z0-9-]*$/u.test(name))
+    .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
+    .join('');
+  const artwork = String(config.artworkHtml || '');
+  const count = config.count === undefined || config.count === null
+    ? '' : `<span class="${partClass('count')}">${escapeHtml(config.count)}</span>`;
+  return `<button class="ui-filter-pill${config.className ? ` ${escapeHtml(config.className)}` : ''}${selected ? ' is-active' : ''}${config.modifierClassName ? ` ${escapeHtml(config.modifierClassName)}` : ''}" type="button" title="${escapeHtml(config.title || label)}" aria-label="${escapeHtml(config.ariaLabel || label)}" aria-pressed="${selected ? 'true' : 'false'}"${dataAttributes}${config.draggable === false ? ' draggable="false"' : ''}><span class="${partClass('marker')}" aria-hidden="true"></span>${artwork ? `<span class="${partClass('artwork')}" aria-hidden="true">${artwork}</span>` : ''}<span class="${partClass('label')}">${escapeHtml(label)}</span>${count}</button>`;
+}
+
 function buildGalleryBarHtml(config = {}) {
   const isArtist = config.contextKind === 'artist';
   const isFamily = config.contextKind === 'family';

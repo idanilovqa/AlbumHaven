@@ -23,16 +23,41 @@ function resolveLastfmFixtureProviderBaseURL(testInfo) {
   return provider;
 }
 
+async function readJsonResponse(response, label) {
+  if (!response.ok) {
+    throw new Error(`${label} failed with HTTP ${response.status}.`);
+  }
+  return response.json();
+}
+
+export async function controlLastfmProvider(testInfo, action, payload = {}) {
+  const endpoint = new URL(
+    '/lastfm-fixture/control',
+    resolveLastfmFixtureProviderBaseURL(testInfo),
+  );
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: String(action), ...payload }),
+  });
+  return readJsonResponse(response, `Last.fm provider control ${action}`);
+}
+
+export async function readLastfmProviderState(testInfo) {
+  const endpoint = new URL(
+    '/lastfm-fixture/state',
+    resolveLastfmFixtureProviderBaseURL(testInfo),
+  );
+  return readJsonResponse(await fetch(endpoint), 'Last.fm provider state');
+}
+
 export async function readLastfmProviderRequests(testInfo) {
   const endpoint = new URL(
     '/lastfm/requests',
     resolveLastfmFixtureProviderBaseURL(testInfo),
   );
   const response = await fetch(endpoint);
-  if (!response.ok) {
-    throw new Error(`Last.fm provider evidence failed with HTTP ${response.status}.`);
-  }
-  const payload = await response.json();
+  const payload = await readJsonResponse(response, 'Last.fm provider evidence');
   if (!Array.isArray(payload.requests)) {
     throw new Error('Last.fm provider evidence did not contain a requests array.');
   }

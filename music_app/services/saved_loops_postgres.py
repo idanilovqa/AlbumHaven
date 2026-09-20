@@ -153,8 +153,13 @@ class SavedLoopsPostgresAdapter:
                 _lock_song(connection, account_id, library_id, track_id)
             cursor = connection.execute("""update app.saved_loops set metadata=metadata || '{"removed":true}'::jsonb,updated_at=now()
                 where account_id=%s and library_id=%s and loop_key=%s and metadata->>'removed' is distinct from 'true' returning id""", (account_id,library_id,loop_id))
-            if cursor.fetchone() is None:
+            removed_row = cursor.fetchone()
+            if removed_row is None:
                 return False, _scoped_items(connection, account_id, library_id)
+            connection.execute(
+                "delete from app.saved_loop_waveform_peaks where saved_loop_id=%s",
+                (removed_row['id'],),
+            )
             if track_id is not None:
                 remaining = _song_snapshot(connection, account_id, library_id, track_id, 0)['ordered_ids']
                 _write_positions(connection, account_id, library_id, track_id, remaining)

@@ -422,7 +422,7 @@ export class TagEditorActions {
       await expect(this.tagEditor.nonAlbumRarityWarningText).toHaveText(
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon.locator('svg')).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
       await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
       expect(editRequestCount).toBe(0);
       await this.tagEditor.confirmCancelButton.click();
@@ -470,7 +470,7 @@ export class TagEditorActions {
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
         { timeout },
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon.locator('svg')).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
       await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
     }
     await this.tagEditor.confirmButton.click();
@@ -667,7 +667,7 @@ export class TagEditorActions {
           'Applying non-album rarity exception to this track will remove it from the album. You sure?',
           { timeout },
         );
-        await expect(this.tagEditor.nonAlbumRarityWarningIcon.locator('svg')).toBeVisible();
+        await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
         await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
         if (editRequestCount !== 0) {
           throw new Error(

@@ -704,10 +704,95 @@ async function syncUtilityLogHistoryRevision(revision) {
   return { revision: state.utility.logHistoryRevision };
 }
 
+function ensureLastfmScrobbleState() {
+  state.utility.lastfmScrobbles = state.utility.lastfmScrobbles || {
+    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0,
+  };
+  state.utility.lastfmScrobbles.requestGeneration = Number(state.utility.lastfmScrobbles.requestGeneration || 0);
+  return state.utility.lastfmScrobbles;
+}
+
+function invalidateLastfmScrobbleSummary() {
+  const owner = ensureLastfmScrobbleState();
+  owner.requestGeneration += 1;
+  owner.summary = null;
+  owner.loading = false;
+  owner.loadPromise = null;
+  return owner;
+}
+
+function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
+  const nonnegativeInteger = (value, defaultValue = 0) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultValue;
+  };
+  const hasProviderTotal = Object.prototype.hasOwnProperty.call(payload || {}, 'lastfm_total');
+  const providerTotal = hasProviderTotal ? payload.lastfm_total : fallback.lastfm_total;
+  const hasPending = Object.prototype.hasOwnProperty.call(payload || {}, 'pending');
+  const pending = hasPending ? payload.pending : payload?.pending_after;
+  return {
+    scrobbled: nonnegativeInteger(
+      payload?.scrobbled,
+      nonnegativeInteger(fallback.scrobbled, nonnegativeInteger(fallback.listen_history_count)),
+    ),
+    lastfm_total: providerTotal == null ? null : nonnegativeInteger(providerTotal, null),
+    pending: nonnegativeInteger(
+      pending,
+      nonnegativeInteger(fallback.pending, nonnegativeInteger(fallback.pending_scrobble_count)),
+    ),
+    can_submit: typeof payload?.can_submit === 'boolean'
+      ? payload.can_submit
+      : fallback.can_submit === true,
+  };
+}
+
+async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
+  const owner = ensureLastfmScrobbleState();
+  if (!lastfm?.connected) {
+    invalidateLastfmScrobbleSummary();
+    return null;
+  }
+  if (owner.loading && !replace) return owner.loadPromise;
+  const requestGeneration = ++owner.requestGeneration;
+  owner.loading = true;
+  renderUtilityModalContent();
+  const loadPromise = (async () => {
+    try {
+      const response = await fetch('/utilities/integrations/lastfm/scrobbles', { headers: { Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+      }
+      return owner.summary;
+    } catch (error) {
+      console.error('[AlbumHaven][Integrations] Failed to load Last.fm scrobble status.', error);
+      if (
+        state.utility.lastfmScrobbles === owner
+        && owner.requestGeneration === requestGeneration
+        && !(preserveOnError && owner.summary)
+      ) {
+        owner.summary = normalizeLastfmScrobbleSummary({}, lastfm);
+      }
+      return owner.summary;
+    } finally {
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.loading = false;
+        owner.loadPromise = null;
+        renderUtilityModalContent();
+      }
+    }
+  })();
+  owner.loadPromise = loadPromise;
+  return loadPromise;
+}
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
     renderUtilityModalContent();
+    const lastfm = state.utility.integrations.find((item) => String(item?.key || '') === 'lastfm');
+    void loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
     return;
   }
   state.utility.integrationsLoading = true;
@@ -723,6 +808,9 @@ async function loadUtilityIntegrations(force = false) {
         state.utility.integrationDrafts.lastfm.username = String(lastfm.username || '');
       }
       await reconcileLastfmTimeZoneDraft(lastfm);
+      state.utility.integrationsLoading = false;
+      renderUtilityModalContent();
+      void loadLastfmScrobbleSummary(lastfm);
     } catch (error) {
       console.error('[AlbumHaven][Integrations] Failed to load integrations.', error);
       state.utility.integrations = [];
@@ -1106,7 +1194,7 @@ async function saveLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || draft.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
-    renderUtilityModalContent();
+    await loadLastfmScrobbleSummary(data.integration, { replace: true });
     showToast('Last.fm connected.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to connect Last.fm.', error);
@@ -1174,11 +1262,55 @@ async function disconnectLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || state.utility.integrationDrafts?.lastfm?.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
+    invalidateLastfmScrobbleSummary();
     renderUtilityModalContent();
     showToast('Last.fm disconnected.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to disconnect Last.fm.', error);
     showToast(error.message || 'Failed to disconnect Last.fm.', 'error', 3600);
+  }
+}
+
+async function submitPendingLastfmScrobbles() {
+  const owner = ensureLastfmScrobbleState();
+  const lastfm = (state.utility.integrations || []).find((item) => String(item?.key || '') === 'lastfm');
+  if (owner.submitting || !lastfm?.connected || Number(owner.summary?.pending) <= 0 || owner.summary?.can_submit !== true) return false;
+  const submitGeneration = ++owner.requestGeneration;
+  owner.loading = false;
+  owner.loadPromise = null;
+  owner.submitting = true;
+  renderUtilityModalContent();
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles/submit', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+      renderUtilityModalContent();
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    if (!response.ok || !data.ok) {
+      state.utility.logHistoryLoaded = false;
+      showRepairAlert(data.error || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+      return false;
+    }
+    showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Integrations] Failed to submit pending Last.fm scrobbles.', error);
+    state.utility.logHistoryLoaded = false;
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    showRepairAlert(error.message || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+    return false;
+  } finally {
+    if (state.utility.lastfmScrobbles === owner) {
+      owner.submitting = false;
+      renderUtilityModalContent();
+    }
   }
 }
 

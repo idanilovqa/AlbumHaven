@@ -230,6 +230,13 @@ const state = {
     integrationsLoaded: false,
     integrationsLoading: false,
     integrationsLoadPromise: null,
+    lastfmScrobbles: {
+      summary: null,
+      loading: false,
+      submitting: false,
+      loadPromise: null,
+      requestGeneration: 0,
+    },
     localPlaylistImport: {
       selectedFile: null,
       selectedFileName: '',

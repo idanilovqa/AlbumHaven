@@ -886,13 +886,14 @@ test('combined waveform averages L and R peaks into discrete pixel-symmetric mon
   const { context } = loadSharedControls();
   assert.equal(typeof context.drawCombinedLoopWaveform, 'function', 'combined waveform renderer must exist');
   const rects = [];
+  const paints = [];
   const strokes = [];
   const dots = [];
   let currentPath = [];
   const canvas = {
     width: 100, height: 32, clientWidth: 100, clientHeight: 32,
     getContext: () => ({
-      clearRect() {}, fillRect(...args) { rects.push(args); },
+      clearRect() {}, fillRect(...args) { rects.push(args); paints.push({ alpha: this.globalAlpha, blur: this.blur || 0 }); },
       save() {}, restore() {}, clip() {}, fill() {},
       beginPath() { currentPath = []; },
       rect(...args) { currentPath.push(['rect', ...args]); },
@@ -912,17 +913,20 @@ test('combined waveform averages L and R peaks into discrete pixel-symmetric mon
     right: [0.08, 0.02, 0.4],
   }, 0.25);
 
-  assert.equal(rects.length, 3, 'one averaged mono bar is rendered per stereo bin');
+  assert.equal(rects.length, 6, 'unplayed and clipped played passes retain one averaged mono bar per stereo bin');
   assert.equal(rects[0][3], rects[1][3], 'equal 0.05 channel averages produce equal bar heights');
   assert.ok(rects[2][3] > rects[0][3], 'the larger 0.3 channel average produces a taller bar');
+  assert.deepEqual(rects.slice(3), rects.slice(0, 3), 'played pass must preserve saved-loop bar geometry');
   assert.ok(rects.every(([, , , height]) => height <= 32), 'combined mono bars stay within the canvas height');
-  for (const [, y, , height] of rects) {
+  for (const [, y, , height] of rects.slice(0, 3)) {
     assert.ok(Number.isInteger(y), 'each bar starts on a discrete pixel row');
     assert.ok(Number.isInteger(height), 'each bar covers a discrete number of pixel rows');
     assert.equal(height % 2, 1, 'each bar has an odd height so it can share the center pixel');
     assert.equal(y + Math.floor(height / 2), 16, 'each bar is exactly centered on the 32px canvas');
     assert.equal(16 - y, (y + height - 1) - 16, 'each bar covers equal rows above and below center');
   }
+  assert.ok(paints.slice(0, 3).every(({ alpha, blur }) => alpha === 0.6 && blur === 0));
+  assert.ok(paints.slice(3).every(({ alpha, blur }) => alpha === 0.95 && blur > 0));
   assert.deepEqual(strokes.at(-1), [['moveTo', 25, 0], ['lineTo', 25, 32]]);
   assert.deepEqual(dots.at(-1)?.slice(0, 3), [25, 16, 3.2]);
 });

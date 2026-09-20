@@ -466,6 +466,44 @@ test('saved-loop playback waits for active global-player ownership to release be
   assert.equal(secondAudio.muted, false);
 });
 
+test('starting another saved loop pauses the previously playing saved loop first', async () => {
+  const events = [];
+  const firstAudio = new FakeAudio({ paused: false, duration: 12, src: '/loops/media/loop-1' });
+  const secondAudio = new FakeAudio({ paused: true, duration: 12, src: '/loops/media/loop-2' });
+  firstAudio.setAttribute('data-loop-audio', 'loop-1');
+  secondAudio.setAttribute('data-loop-audio', 'loop-2');
+  firstAudio.pause = () => {
+    events.push('first-pause');
+    firstAudio.pauseCalls += 1;
+    firstAudio.paused = true;
+  };
+  secondAudio.play = () => {
+    events.push('second-play');
+    secondAudio.playCalls += 1;
+    secondAudio.paused = false;
+    return Promise.resolve();
+  };
+  const context = loadHelper({
+    getPlayerPlaybackSnapshot: () => null,
+    document: {
+      querySelector(selector) {
+        if (selector === '[data-loop-audio="loop-1"]') return firstAudio;
+        if (selector === '[data-loop-audio="loop-2"]') return secondAudio;
+        return null;
+      },
+      querySelectorAll: selector => selector === '[data-loop-audio]' ? [firstAudio, secondAudio] : [],
+    },
+  });
+  context.updateUtilityLoopPlayerUi = loopId => events.push(`refresh-${loopId}`);
+
+  assert.equal(context.toggleUtilityLoopPlayback('loop-2'), true);
+  await Promise.resolve();
+
+  assert.deepEqual(events.slice(0, 3), ['first-pause', 'refresh-loop-1', 'second-play']);
+  assert.equal(firstAudio.paused, true);
+  assert.equal(secondAudio.paused, false);
+});
+
 function loadOwnedLoopKeyboardHelper() {
   const audio = new FakeAudio({ paused: false, duration: 12, src: '/loops/media/loop-1' });
   const entry = new FakeElement({
@@ -1973,22 +2011,38 @@ test('successful saved-loop deletion stops the editor expiry once after confirma
 });
 
  test('saved loop uses the combined L+R renderer and reuses peaks across progress updates', async () => {
-  const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } };
+  let waveformMode = false;
+  const canvas = {
+    hidden: true,
+    isConnected: true,
+    parentElement: { classList: { toggle(_name, enabled) { waveformMode = enabled; } } },
+  };
   const audio = { duration: 20, currentTime: 5 };
   const peaks = { left: [0.2, 0.8], right: [0.7, 0.3] };
+  let resolvePeaks;
   let loads = 0;
   const draws = [];
   const state = { player: { appearance: { seekbarMode: 'default' } }, utility: { loopEditors: {} } };
   const context = loadHelper({ state, document: { querySelector: () => canvas },
-    loadSavedLoopWaveformPeaks: async () => { loads++; return peaks; },
+    loadSavedLoopWaveformPeaks: async () => {
+      loads++;
+      return new Promise(resolve => { resolvePeaks = resolve; });
+    },
     drawCombinedLoopWaveform: (...args) => draws.push(args),
   });
-  context.loadSavedLoopWaveformPeaks = async () => { loads++; return peaks; };
+  context.loadSavedLoopWaveformPeaks = async () => {
+    loads++;
+    return new Promise(resolve => { resolvePeaks = resolve; });
+  };
   context.updateUtilityLoopStereoWaveform('loop', audio);
   assert.equal(loads, 0);
   assert.equal(canvas.hidden, true);
   state.player.appearance.seekbarMode = 'waveform';
   context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, false, 'waveform mode must replace the regular seekbar while peaks load');
+  assert.equal(waveformMode, true, 'waveform geometry must apply before peaks load');
+  assert.equal(draws.length, 0);
+  resolvePeaks(peaks);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(canvas.hidden, false);
   assert.equal(draws[0][1], peaks);

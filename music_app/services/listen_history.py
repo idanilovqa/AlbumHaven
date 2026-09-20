@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 import uuid
 import math
 
-from music_app.services.listen_history_postgres import PendingListenEntry, PostgresListenHistoryAdapter
+from music_app.services.listen_history_postgres import (
+    LASTFM_SCROBBLE_SOURCE_FAMILIES,
+    PendingListenEntry,
+    PostgresListenHistoryAdapter,
+)
 from music_app.services.persistence_selection import select_runtime_persistence_adapter
 
 _MIN_RECORDED_LISTEN_SECONDS = 10.0
@@ -45,18 +49,21 @@ def build_listen_history_status_counts(config: dict, *, account_id=None, library
                         coalesce(case when metadata->'source_payload' ? 'scrobbled'
                             then metadata->'source_payload'->>'scrobbled' = 'true'
                             else scrobble_status = 'scrobbled' end, false) as accepted
-                    from integration.listen_history where account_id = %s and library_id = %s
+                    from integration.listen_history
+                    where account_id = %s and library_id = %s
+                      and source_family = any(%s)
                 )
                 select count(*) filter (where accepted) as scrobbled,
                     count(*) filter (
                         where metadata->'source_payload'->>'scrobble_eligible' = 'true'
                         and not accepted
                         and coalesce(metadata->'source_payload'->>'scrobble_retryable', 'true') = 'true'
+                        and coalesce(metadata->'source_payload'->>'scrobble_retry_exhausted', 'false') != 'true'
                         and coalesce(metadata->'source_payload'->>'scrobble_submission_state', '')
                             not in ('attempting', 'sent', 'uncertain', 'accepted')
                     ) as pending
                 from scoped
-            """, (account_id, library_id)).fetchone()
+            """, (account_id, library_id, list(LASTFM_SCROBBLE_SOURCE_FAMILIES))).fetchone()
         return {"listen_history_count": int(row["scrobbled"]), "pending_scrobble_count": int(row["pending"])}
     items = load_listen_history(config)
     return {
@@ -75,6 +82,9 @@ def is_pending_scrobble_entry(item: object) -> bool:
         and bool(item.get("scrobble_eligible"))
         and not bool(item.get("scrobbled"))
         and bool(item.get("scrobble_retryable", True))
+        and not bool(item.get("scrobble_retry_exhausted"))
+        and str(item.get("scrobble_submission_state") or "")
+            not in {"attempting", "sent", "uncertain", "accepted"}
     )
 
 

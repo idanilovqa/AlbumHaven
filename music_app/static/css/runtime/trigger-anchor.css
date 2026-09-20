@@ -145,17 +145,25 @@
 :root.panel-text-selection-active .panel-selection-origin *::selection { background: Highlight; color: HighlightText; }
 
 /* Shared dropdown rows. Themes may override --dropdown-item-hover-background. */
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill) {
   outline: none !important;
   box-shadow: none !important;
   transition: background-color 150ms ease;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option):hover:not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
   border-color: transparent !important;
 }
-:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option):focus-visible:not(:disabled):not([aria-disabled="true"]) {
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):focus-visible:not(:disabled):not([aria-disabled="true"]) {
   background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):focus-visible:not(:disabled):not([aria-disabled="true"]) {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+:root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+  border-color: transparent !important;
 }

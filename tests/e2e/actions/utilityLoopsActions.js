@@ -22,6 +22,31 @@ export class UtilityLoopsActions {
     await expect(audio).toHaveJSProperty('paused', true);
   }
 
+  async observeGroupWaveformLoad(title, expectedNames) {
+    const frames = this.utilityLoopsTab.observeWaveformPresentationFrames(expectedNames);
+    await this.selectGroupByTitle(title);
+    return frames;
+  }
+
+  async startLoopAndExpectExclusive(previousLoopId, next) {
+    const card = this.utilityLoopsTab.loopEntryCard;
+    await card.playButtonForEntry(next.entry).click();
+    await this.waitForLoopPlayback(next.loopId);
+    await expect(card.audioByLoopId(previousLoopId)).toHaveJSProperty('paused', true);
+    await expect(card.audioByLoopId(next.loopId)).toHaveJSProperty('paused', false);
+    const previousPaused = await this.readLoopPlaybackSnapshot(previousLoopId);
+    const nextStarted = await this.readLoopPlaybackSnapshot(next.loopId);
+    const nextProgressed = await this.waitForLoopProgress(next.loopId, {
+      afterCurrentTime: nextStarted.currentTime,
+      allowWrap: false,
+    });
+    const previousAfterNextProgress = await this.readLoopPlaybackSnapshot(previousLoopId);
+    expect(previousAfterNextProgress.currentTime).toBeCloseTo(previousPaused.currentTime, 3);
+    expect(nextProgressed.currentTime).toBeGreaterThan(nextStarted.currentTime);
+    expect(await card.readPlayingAudioCount()).toBe(1);
+    return { previousPaused, previousAfterNextProgress, nextStarted, nextProgressed };
+  }
+
   constructor(utilityLoopsTab) {
     this.utilityLoopsTab = utilityLoopsTab;
   }

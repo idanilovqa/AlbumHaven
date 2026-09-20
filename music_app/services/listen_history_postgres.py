@@ -20,6 +20,8 @@ except ImportError:  # pragma: no cover - allows import-time diagnostics without
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_listen_history_adapter"
 _BACKFILL_SOURCE = "phase_6_json_file_backfill"
+_MEASURED_SOURCE = "rendered_local_listen_session"
+LASTFM_SCROBBLE_SOURCE_FAMILIES = (_SOURCE, _BACKFILL_SOURCE, _MEASURED_SOURCE)
 
 
 def is_listen_history_postgres_available(config: dict[str, object] | None) -> bool:
@@ -121,9 +123,10 @@ class PostgresListenHistoryAdapter:
             measured_rows = connection.execute("""
                 select * from integration.listen_history
                 where measurement_version = 'rendered-pcm-v1'
+                  and source_family = %s
                   and scrobble_status is distinct from 'scrobbled'
                 order by played_at, id
-            """).fetchall()
+            """, (_MEASURED_SOURCE,)).fetchall()
             rows.extend(measured_rows)
         result = []
         for row in rows:
@@ -352,7 +355,7 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
           select h.id,h.track_id,h.track_key,h.measurement_version
           from integration.listen_history h join bootstrap_context b
             on b.library_id=h.library_id and b.account_id=h.account_id
-          where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', 'rendered_local_listen_session')
+          where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', '{_MEASURED_SOURCE}')
             and h.scrobble_status='scrobbled'
         )
         select requested.track_ref as track_key,count(distinct h.id)::int as scrobble_count

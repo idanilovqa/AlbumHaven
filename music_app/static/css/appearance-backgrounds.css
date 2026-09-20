@@ -214,18 +214,18 @@ html .cover-lookup-drawer {
   background: var(--appearance-item-action-hover-background, var(--appearance-control));
   border-color: var(--appearance-interaction-outline, var(--appearance-accent));
 }
-:root[data-appearance-palette] .related-chip {
+:root[data-appearance-palette] :is(.related-chip, .artist-family-panel__artist) {
   background: var(--appearance-control);
   border-color: var(--appearance-line);
   color: var(--appearance-ink);
 }
-:root:is([data-appearance-palette], [data-appearance-item-hover]) .related-chip:hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
-:root[data-appearance-palette] .related-chip:hover {
+:root:is([data-appearance-palette], [data-appearance-item-hover]) :is(.related-chip, .artist-family-panel__artist):hover { background: var(--appearance-item-hover, var(--appearance-hover)); }
+:root[data-appearance-palette] :is(.related-chip, .artist-family-panel__artist):hover {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
 }
-:root:is([data-appearance-palette], [data-appearance-item-selected]) .related-chip.active { background: var(--appearance-item-selected, var(--appearance-hover)); }
-:root[data-appearance-palette] .related-chip.active {
+:root:is([data-appearance-palette], [data-appearance-item-selected]) :is(.related-chip.active, .artist-family-panel__artist.is-active) { background: var(--appearance-item-selected, var(--appearance-hover)); }
+:root[data-appearance-palette] :is(.related-chip.active, .artist-family-panel__artist.is-active) {
   border-color: var(--appearance-accent);
   color: var(--appearance-ink);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--appearance-accent) 30%, transparent);

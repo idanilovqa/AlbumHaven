@@ -1117,6 +1117,34 @@
   {
     "config": "playwright.config.js",
     "project": "functional",
+    "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
+    "case": "FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery",
+    "profile": "functional-core",
+    "setupScope": "isolated",
+    "stateMode": "owned-mutation",
+    "executionWave": 1,
+    "databaseScenarios": [
+      "lastfm:manual-pending-submit"
+    ],
+    "filesystemScenarios": [
+      "audio-copy:lastfm-submit-recovery"
+    ],
+    "expectedContracts": [
+      "pending-scrobble-count",
+      "manual-scrobble-retry",
+      "bottom-right-error-alert",
+      "persisted-safe-failure-log",
+      "lastfm-provider-total"
+    ],
+    "mutationOwnership": {
+      "databaseIdentity": "case:lastfm-submit-recovery",
+      "filesystemCopy": "media/cases/lastfm-submit-recovery"
+    },
+    "ownerApproval": "approved"
+  },
+  {
+    "config": "playwright.config.js",
+    "project": "functional",
     "test": "tests/e2e/specs/loop-edit-expiry.functional.spec.js",
     "case": "FTC-PLAYER-017 / FTC-UTIL-LOOPS-024 loop creation expires through the shared production session controller",
     "profile": "functional-core",

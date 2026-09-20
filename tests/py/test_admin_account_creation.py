@@ -6,6 +6,12 @@ from music_app.services.auth_tokens import issue_opaque_token
 from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
 
+def test_lastfm_pending_submit_is_a_managed_capability():
+    from music_app.services.admin_account_creation import MANAGED_CAPABILITY_KEYS
+
+    assert "integration.lastfm.scrobbles.submit" in MANAGED_CAPABILITY_KEYS
+
+
 def _owner():
     return CurrentActor(
         state=ActorState.ACTIVE,

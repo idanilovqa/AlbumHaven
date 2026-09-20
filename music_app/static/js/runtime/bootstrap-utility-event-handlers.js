@@ -248,6 +248,13 @@ async function handleUtilityBootstrapClick(event) {
     return;
   }
 
+  const submitLastfmScrobblesButton = event.target.closest('[data-submit-lastfm-scrobbles="1"]');
+  if (submitLastfmScrobblesButton) {
+    event.preventDefault();
+    await submitPendingLastfmScrobbles();
+    return;
+  }
+
   const utilityLoopCollapseButton = event.target.closest('[data-utility-loop-collapse]');
   if (utilityLoopCollapseButton) {
     event.preventDefault();

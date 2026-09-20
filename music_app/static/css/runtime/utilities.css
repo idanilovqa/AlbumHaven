@@ -1779,6 +1779,10 @@
 .settings-integration-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 8px; margin-top: 12px; }
 .settings-scrobbling-heading { display: flex; align-items: center; gap: 32px; flex-wrap: wrap; }
 .settings-connected-status { display: inline-flex; align-items: center; gap: 8px; font-size: .9rem; color: var(--success, var(--accent)); }
+.lastfm-scrobble-status { display: grid; gap: 6px; }
+.lastfm-scrobble-status p { margin: 0; }
+.settings-lastfm-submit-action { display: flex; justify-content: flex-end; margin-top: auto; padding-top: 12px; }
+.settings-lastfm-submit-action .ui-button:disabled { opacity: .42; }
 .settings-playback-statistics dl { display: grid; gap: 12px; }
 .settings-playback-statistics dl > div { display: flex; gap: 24px; justify-content: space-between; }
 .settings-playback-statistics dd { margin: 0; }

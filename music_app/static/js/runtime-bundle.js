@@ -3872,6 +3872,23 @@ function buildGalleryInfoGlyphHtml() {
   return '<span class="gallery-info-button__glyph" aria-hidden="true">i</span>';
 }
 
+function buildFilterPillHtml(config = {}) {
+  const label = String(config.label || '');
+  const selected = Boolean(config.selected);
+  const partClass = (part) => {
+    const extra = String(config.partClasses?.[part] || '').trim();
+    return `ui-filter-pill__${part}${extra ? ` ${escapeHtml(extra)}` : ''}`;
+  };
+  const dataAttributes = Object.entries(config.dataAttributes || {})
+    .filter(([name]) => /^[a-z][a-z0-9-]*$/u.test(name))
+    .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
+    .join('');
+  const artwork = String(config.artworkHtml || '');
+  const count = config.count === undefined || config.count === null
+    ? '' : `<span class="${partClass('count')}">${escapeHtml(config.count)}</span>`;
+  return `<button class="ui-filter-pill${config.className ? ` ${escapeHtml(config.className)}` : ''}${selected ? ' is-active' : ''}${config.modifierClassName ? ` ${escapeHtml(config.modifierClassName)}` : ''}" type="button" title="${escapeHtml(config.title || label)}" aria-label="${escapeHtml(config.ariaLabel || label)}" aria-pressed="${selected ? 'true' : 'false'}"${dataAttributes}${config.draggable === false ? ' draggable="false"' : ''}><span class="${partClass('marker')}" aria-hidden="true"></span>${artwork ? `<span class="${partClass('artwork')}" aria-hidden="true">${artwork}</span>` : ''}<span class="${partClass('label')}">${escapeHtml(label)}</span>${count}</button>`;
+}
+
 function buildGalleryBarHtml(config = {}) {
   const isArtist = config.contextKind === 'artist';
   const isFamily = config.contextKind === 'family';
@@ -4546,6 +4563,13 @@ const state = {
     integrationsLoaded: false,
     integrationsLoading: false,
     integrationsLoadPromise: null,
+    lastfmScrobbles: {
+      summary: null,
+      loading: false,
+      submitting: false,
+      loadPromise: null,
+      requestGeneration: 0,
+    },
     localPlaylistImport: {
       selectedFile: null,
       selectedFileName: '',
@@ -5554,7 +5578,7 @@ function buildGalleryFamilyPanelBody() {
   ];
   const groupsByArtist = new Map(relatedGroups.map((group) => [galleryMainGroupArtist(group), group]));
   const panelGroups = [...(primaryGroup ? [primaryGroup] : []), ...orderedNames.map((artist) => groupsByArtist.get(artist)).filter(Boolean)];
-  return panelGroups.map((group) => {
+  return panelGroups.map((group, index) => {
     const artist = String(group.artist_display || group.artist || 'Artist');
     const count = albumCounts.get(artist) || 0;
     const active = mainState.familySelectionExplicit !== true || mainState.familyArtists.includes(artist);
@@ -5562,7 +5586,25 @@ function buildGalleryFamilyPanelBody() {
     const albums = Array.isArray(group.albums) ? group.albums : [];
     const album = albums.find(albumHasDisplayCover) || albums[0];
     const artwork = album ? buildUtilityAlbumArtbox(album, { label: `${artist} album artwork` }) : buildAlbumArtboxHtml({ state: 'empty', label: `${artist} album artwork` });
-    return `<button class="artist-family-panel__artist${active ? ' is-active' : ''}${primary ? ' is-primary' : ''}" type="button" data-gallery-family-artist="${escapeHtml(artist)}" title="${escapeHtml(artist)}" aria-label="${escapeHtml(artist)}" draggable="false" aria-pressed="${active ? 'true' : 'false'}"><span class="artist-family-panel__marker" aria-hidden="true"></span><span class="artist-family-panel__artwork" aria-hidden="true">${artwork}</span><span class="artist-family-panel__name">${escapeHtml(artist)}</span><span class="artist-family-panel__count">${count}</span></button>`;
+    const divider = primaryGroup && relatedGroups.length > 0 && index === 1
+      ? '<div class="artist-family-panel__primary-divider gallery-divider__line" role="separator" aria-label="Related artists"></div>'
+      : '';
+    return `${divider}${buildFilterPillHtml({
+      label: artist,
+      count,
+      selected: active,
+      className: 'artist-family-panel__artist',
+      modifierClassName: primary ? 'is-primary' : '',
+      partClasses: {
+        marker: 'artist-family-panel__marker',
+        artwork: 'artist-family-panel__artwork',
+        label: 'artist-family-panel__name',
+        count: 'artist-family-panel__count',
+      },
+      artworkHtml: artwork,
+      draggable: false,
+      dataAttributes: { 'gallery-family-artist': artist },
+    })}`;
   }).join('');
 }
 
@@ -12104,32 +12146,36 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
   const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
   const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const drawBars = () => {
+    for (let index = 0; index < count; index += 1) {
+      const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
+      const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
+      const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
+      const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
+      context.fillRect(
+        index * barWidth,
+        center - halfHeight,
+        Math.max(1, barWidth * 0.72),
+        (2 * halfHeight) + 1,
+      );
+    }
+  };
   context.fillStyle = fill;
-  context.globalAlpha = 0.42;
-  for (let index = 0; index < count; index += 1) {
-    const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
-    const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
-    const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
-    const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
-    context.fillRect(
-      index * barWidth,
-      center - halfHeight,
-      Math.max(1, barWidth * 0.72),
-      (2 * halfHeight) + 1,
-    );
-  }
-  context.globalAlpha = 1;
+  context.globalAlpha = 0.6;
+  context.shadowBlur = 0;
+  drawBars();
 
   const clampedProgress = Math.max(0, Math.min(1, Number(progressRatio) || 0));
   const playheadX = width * clampedProgress;
   if (playheadX > 0) {
     context.save();
-    context.globalCompositeOperation = 'source-atop';
-    context.globalAlpha = 0.4;
-    context.fillStyle = fill;
     context.beginPath();
     context.rect(0, 0, playheadX, height);
-    context.fill();
+    context.clip();
+    context.globalAlpha = 0.95;
+    context.shadowColor = fill;
+    context.shadowBlur = 6;
+    drawBars();
     context.restore();
   }
 
@@ -15610,16 +15656,34 @@ function buildUtilityIntegrationDetail(item) {
   const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
   const duration = Number.isFinite(seconds) && seconds >= 0
     ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  const scrobbleState = state.utility.lastfmScrobbles || {};
+  const summary = scrobbleState.summary;
+  const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
+  const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
+  const lastfmTotal = scrobbleState.loading
+    ? 'Loading...'
+    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
+      <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
+      <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
+      <p data-lastfm-pending>Pending: ${escapeHtml(String(pending))}</p>
+    </div>` : '';
+  const submitScrobbles = item.connected ? `<div class="settings-lastfm-submit-action">${button({
+    label: scrobbleState.submitting ? 'Submitting...' : 'Submit',
+    disabled: scrobbleState.submitting || Number(pending) <= 0 || summary?.can_submit !== true,
+    attributes: { 'data-submit-lastfm-scrobbles': '1' },
+  })}</div>` : '';
   return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
       ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
-    <p class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(item.listen_history_count ?? 0))} · Queued: ${escapeHtml(String(item.pending_scrobble_count ?? 0))}</p>
+    ${scrobbleStatus}
     <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
       <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
       <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
       <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
       ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
       ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
-      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section></div>`;
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section>
+      ${submitScrobbles}</div>`;
 }
 
 function matchesUtilityRuleSearch(item) {
@@ -20671,6 +20735,8 @@ function drainUtilityLoopStereoQueue() {
   for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
     const job = utilityLoopStereoQueue[index];
     if (eligible(job)) continue;
+    job.canvas.hidden = true;
+    job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
     utilityLoopStereoQueue.splice(index, 1);
     utilityLoopStereoLoads.delete(job.canvas);
   }
@@ -20681,7 +20747,12 @@ function drainUtilityLoopStereoQueue() {
     job.entry.loading = false;
     job.entry.peaks = peaks;
     job.entry.retryAt = Date.now() + 5000;
-    if (eligible(job)) updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    if (eligible(job)) {
+      updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    } else {
+      job.canvas.hidden = true;
+      job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
   }).finally(() => {
     utilityLoopStereoLoadActive = false;
     drainUtilityLoopStereoQueue();
@@ -20694,9 +20765,10 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
   const cached = utilityLoopStereoLoads.get(canvas);
-  const ready = enabled && !editing && Boolean(cached?.peaks);
-  canvas.hidden = !ready;
-  canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
+  const coolingDown = cached && !cached.loading && !cached.peaks && Date.now() < cached.retryAt;
+  const presented = enabled && !editing && !coolingDown;
+  canvas.hidden = !presented;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
   if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
   if (cached?.peaks) {
     const duration = Number(audio.duration) || 0;
@@ -20803,11 +20875,21 @@ function seekUtilityLoopPlayback(loopId, deltaSeconds) {
   return true;
 }
 
+function pauseOtherUtilityLoopPlayback(activeAudio) {
+  document.querySelectorAll('[data-loop-audio]').forEach(otherAudio => {
+    if (otherAudio === activeAudio || otherAudio.paused) return;
+    otherAudio.pause();
+    const otherLoopId = String(otherAudio.getAttribute?.('data-loop-audio') || '');
+    if (otherLoopId) updateUtilityLoopPlayerUi(otherLoopId);
+  });
+}
+
 function toggleUtilityLoopPlayback(loopId, options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId || '')}"]`);
   if (!audio) return false;
   if (audio.paused || audio.ended) {
+    pauseOtherUtilityLoopPlayback(audio);
     if (audio.ended) audio.currentTime = 0;
     const globalPlayback = typeof getPlayerPlaybackSnapshot === 'function'
       ? getPlayerPlaybackSnapshot()
@@ -22427,10 +22509,95 @@ async function syncUtilityLogHistoryRevision(revision) {
   return { revision: state.utility.logHistoryRevision };
 }
 
+function ensureLastfmScrobbleState() {
+  state.utility.lastfmScrobbles = state.utility.lastfmScrobbles || {
+    summary: null, loading: false, submitting: false, loadPromise: null, requestGeneration: 0,
+  };
+  state.utility.lastfmScrobbles.requestGeneration = Number(state.utility.lastfmScrobbles.requestGeneration || 0);
+  return state.utility.lastfmScrobbles;
+}
+
+function invalidateLastfmScrobbleSummary() {
+  const owner = ensureLastfmScrobbleState();
+  owner.requestGeneration += 1;
+  owner.summary = null;
+  owner.loading = false;
+  owner.loadPromise = null;
+  return owner;
+}
+
+function normalizeLastfmScrobbleSummary(payload, fallback = {}) {
+  const nonnegativeInteger = (value, defaultValue = 0) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : defaultValue;
+  };
+  const hasProviderTotal = Object.prototype.hasOwnProperty.call(payload || {}, 'lastfm_total');
+  const providerTotal = hasProviderTotal ? payload.lastfm_total : fallback.lastfm_total;
+  const hasPending = Object.prototype.hasOwnProperty.call(payload || {}, 'pending');
+  const pending = hasPending ? payload.pending : payload?.pending_after;
+  return {
+    scrobbled: nonnegativeInteger(
+      payload?.scrobbled,
+      nonnegativeInteger(fallback.scrobbled, nonnegativeInteger(fallback.listen_history_count)),
+    ),
+    lastfm_total: providerTotal == null ? null : nonnegativeInteger(providerTotal, null),
+    pending: nonnegativeInteger(
+      pending,
+      nonnegativeInteger(fallback.pending, nonnegativeInteger(fallback.pending_scrobble_count)),
+    ),
+    can_submit: typeof payload?.can_submit === 'boolean'
+      ? payload.can_submit
+      : fallback.can_submit === true,
+  };
+}
+
+async function loadLastfmScrobbleSummary(lastfm, { replace = false, preserveOnError = false } = {}) {
+  const owner = ensureLastfmScrobbleState();
+  if (!lastfm?.connected) {
+    invalidateLastfmScrobbleSummary();
+    return null;
+  }
+  if (owner.loading && !replace) return owner.loadPromise;
+  const requestGeneration = ++owner.requestGeneration;
+  owner.loading = true;
+  renderUtilityModalContent();
+  const loadPromise = (async () => {
+    try {
+      const response = await fetch('/utilities/integrations/lastfm/scrobbles', { headers: { Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to load Last.fm scrobble status');
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.summary = normalizeLastfmScrobbleSummary(data, lastfm);
+      }
+      return owner.summary;
+    } catch (error) {
+      console.error('[AlbumHaven][Integrations] Failed to load Last.fm scrobble status.', error);
+      if (
+        state.utility.lastfmScrobbles === owner
+        && owner.requestGeneration === requestGeneration
+        && !(preserveOnError && owner.summary)
+      ) {
+        owner.summary = normalizeLastfmScrobbleSummary({}, lastfm);
+      }
+      return owner.summary;
+    } finally {
+      if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === requestGeneration) {
+        owner.loading = false;
+        owner.loadPromise = null;
+        renderUtilityModalContent();
+      }
+    }
+  })();
+  owner.loadPromise = loadPromise;
+  return loadPromise;
+}
+
 async function loadUtilityIntegrations(force = false) {
   if (state.utility.integrationsLoading) return state.utility.integrationsLoadPromise;
   if (state.utility.integrationsLoaded && !force) {
     renderUtilityModalContent();
+    const lastfm = state.utility.integrations.find((item) => String(item?.key || '') === 'lastfm');
+    void loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
     return;
   }
   state.utility.integrationsLoading = true;
@@ -22446,6 +22613,9 @@ async function loadUtilityIntegrations(force = false) {
         state.utility.integrationDrafts.lastfm.username = String(lastfm.username || '');
       }
       await reconcileLastfmTimeZoneDraft(lastfm);
+      state.utility.integrationsLoading = false;
+      renderUtilityModalContent();
+      void loadLastfmScrobbleSummary(lastfm);
     } catch (error) {
       console.error('[AlbumHaven][Integrations] Failed to load integrations.', error);
       state.utility.integrations = [];
@@ -22829,7 +22999,7 @@ async function saveLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || draft.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
-    renderUtilityModalContent();
+    await loadLastfmScrobbleSummary(data.integration, { replace: true });
     showToast('Last.fm connected.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to connect Last.fm.', error);
@@ -22897,11 +23067,55 @@ async function disconnectLastfmIntegration() {
       timezone: String(data.integration?.user_timezone || state.utility.integrationDrafts?.lastfm?.timezone || getDetectedBrowserTimeZone() || 'UTC'),
     };
     markLastfmTimeZoneDraftSaved(state.utility.integrationDrafts.lastfm.timezone);
+    invalidateLastfmScrobbleSummary();
     renderUtilityModalContent();
     showToast('Last.fm disconnected.', 'success', 2600);
   } catch (error) {
     console.error('[AlbumHaven][Integrations] Failed to disconnect Last.fm.', error);
     showToast(error.message || 'Failed to disconnect Last.fm.', 'error', 3600);
+  }
+}
+
+async function submitPendingLastfmScrobbles() {
+  const owner = ensureLastfmScrobbleState();
+  const lastfm = (state.utility.integrations || []).find((item) => String(item?.key || '') === 'lastfm');
+  if (owner.submitting || !lastfm?.connected || Number(owner.summary?.pending) <= 0 || owner.summary?.can_submit !== true) return false;
+  const submitGeneration = ++owner.requestGeneration;
+  owner.loading = false;
+  owner.loadPromise = null;
+  owner.submitting = true;
+  renderUtilityModalContent();
+  try {
+    const response = await fetch('/utilities/integrations/lastfm/scrobbles/submit', {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      owner.summary = normalizeLastfmScrobbleSummary(data, owner.summary || lastfm);
+      renderUtilityModalContent();
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    if (!response.ok || !data.ok) {
+      state.utility.logHistoryLoaded = false;
+      showRepairAlert(data.error || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+      return false;
+    }
+    showToast('Pending Last.fm scrobbles submitted.', 'success', 2600);
+    return true;
+  } catch (error) {
+    console.error('[AlbumHaven][Integrations] Failed to submit pending Last.fm scrobbles.', error);
+    state.utility.logHistoryLoaded = false;
+    if (state.utility.lastfmScrobbles === owner && owner.requestGeneration === submitGeneration) {
+      await loadLastfmScrobbleSummary(lastfm, { replace: true, preserveOnError: true });
+    }
+    showRepairAlert(error.message || 'Album Haven could not submit pending Last.fm scrobbles.', 'error', null);
+    return false;
+  } finally {
+    if (state.utility.lastfmScrobbles === owner) {
+      owner.submitting = false;
+      renderUtilityModalContent();
+    }
   }
 }
 
@@ -34311,6 +34525,13 @@ async function handleUtilityBootstrapClick(event) {
   if (disconnectLastfmButton) {
     event.preventDefault();
     disconnectLastfmIntegration();
+    return;
+  }
+
+  const submitLastfmScrobblesButton = event.target.closest('[data-submit-lastfm-scrobbles="1"]');
+  if (submitLastfmScrobblesButton) {
+    event.preventDefault();
+    await submitPendingLastfmScrobbles();
     return;
   }
 

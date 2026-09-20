@@ -91,7 +91,7 @@ _TEXT_FIELDS = frozenset((
     'artist', 'album', 'title', 'event_type', 'track_number', 'integration',
     'status', 'failure_stage', 'error_kind',
 ))
-_NUMBER_FIELDS = frozenset(('count', 'file_count', 'processed', 'downloaded', 'not_touched', 'not_found', 'failed', 'skipped', 'updated', 'created', 'deleted', 'retry_count', 'elapsed_seconds', 'error_code'))
+_NUMBER_FIELDS = frozenset(('count', 'file_count', 'processed', 'downloaded', 'not_touched', 'not_found', 'failed', 'skipped', 'updated', 'created', 'deleted', 'retry_count', 'elapsed_seconds', 'error_code', 'attempted', 'succeeded', 'pending_before', 'pending_after'))
 _BOOLEAN_FIELDS = frozenset(('retryable',))
 
 

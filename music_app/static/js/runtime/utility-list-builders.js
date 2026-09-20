@@ -198,16 +198,34 @@ function buildUtilityIntegrationDetail(item) {
   const minutes = Math.floor(seconds / 60), hours = Math.floor(minutes / 60);
   const duration = Number.isFinite(seconds) && seconds >= 0
     ? `${hours ? `${hours} ${hours === 1 ? 'hour' : 'hours'} ` : ''}${minutes % 60} ${minutes % 60 === 1 ? 'minute' : 'minutes'}` : 'Unavailable';
+  const scrobbleState = state.utility.lastfmScrobbles || {};
+  const summary = scrobbleState.summary;
+  const scrobbled = summary?.scrobbled ?? item.listen_history_count ?? 0;
+  const pending = summary?.pending ?? item.pending_scrobble_count ?? 0;
+  const lastfmTotal = scrobbleState.loading
+    ? 'Loading...'
+    : summary?.lastfm_total == null ? 'Unavailable' : String(summary.lastfm_total);
+  const scrobbleStatus = item.connected ? `<div class="lastfm-scrobble-status" aria-label="Last.fm scrobble status">
+      <p data-lastfm-scrobbled>Scrobbled: ${escapeHtml(String(scrobbled))}</p>
+      <p data-lastfm-total>LastFM Total: ${escapeHtml(lastfmTotal)}</p>
+      <p data-lastfm-pending>Pending: ${escapeHtml(String(pending))}</p>
+    </div>` : '';
+  const submitScrobbles = item.connected ? `<div class="settings-lastfm-submit-action">${button({
+    label: scrobbleState.submitting ? 'Submitting...' : 'Submit',
+    disabled: scrobbleState.submitting || Number(pending) <= 0 || summary?.can_submit !== true,
+    attributes: { 'data-submit-lastfm-scrobbles': '1' },
+  })}</div>` : '';
   return `<div class="utility-rule-detail"><h3 class="utility-rule-title settings-scrobbling-heading">Last.FM
       ${item.connected ? '<span class="settings-connected-status"><span aria-hidden="true">&#10003;</span><span>Connected</span></span>' : ''}</h3>
-    <p class="utility-rule-album-meta">Scrobbled: ${escapeHtml(String(item.listen_history_count ?? 0))} · Queued: ${escapeHtml(String(item.pending_scrobble_count ?? 0))}</p>
+    ${scrobbleStatus}
     <form class="lastfm-integration-form" data-lastfm-integration-form="1"><div class="lastfm-credentials-grid">
       <label class="lastfm-inline-field"><span>Username</span><input class="utility-search-input" type="text" value="${escapeHtml(draft.username || item.username || '')}" data-lastfm-field="username" autocomplete="username" placeholder="Username or email" ${enabled ? '' : 'disabled'}></label>
       <label class="lastfm-inline-field"><span>Password</span><input class="utility-search-input" type="password" value="${escapeHtml(draft.password || '')}" data-lastfm-field="password" autocomplete="current-password" placeholder="${item.connected ? 'Disconnect to reconnect' : 'Password'}" ${enabled ? '' : 'disabled'}></label></div>
       <div class="settings-integration-actions">${button({ label: 'Connect Last.FM', type: 'submit', disabled: !enabled, attributes: { 'data-save-lastfm-integration': '1' } })}
       ${button({ label: 'Disconnect', disabled: !item.connected, attributes: { 'data-disconnect-lastfm-integration': '1' } })}</div></form>
       ${!item.api_configured ? '<p class="utility-rule-album-meta">Last.FM connection is unavailable on this server.</p>' : ''}
-      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section></div>`;
+      <section class="library-settings-section settings-playback-statistics"><h4>Playback statistics</h4><dl><div><dt>Local playcount</dt><dd>${escapeHtml(plays)}</dd></div><div><dt>Total listening time</dt><dd>${escapeHtml(duration)}</dd></div></dl></section>
+      ${submitScrobbles}</div>`;
 }
 
 function matchesUtilityRuleSearch(item) {

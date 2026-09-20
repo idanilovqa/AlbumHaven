@@ -8,6 +8,10 @@ function exactNormalizedText(value) {
 }
 
 export class TrackModal extends BasePage {
+  async pressEscape() {
+    await this.page.keyboard.press('Escape');
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.dialog = page.locator(this.dialogSelector);

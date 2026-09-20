@@ -18,6 +18,12 @@ export class UtilityIntegrationsTab extends BasePage {
     this.lastfmTimeZone = page.locator(this.lastfmTimeZoneSelector);
     this.lastfmConnectButton = page.locator('[data-save-lastfm-integration="1"]');
     this.lastfmStatusMeta = page.locator(this.lastfmStatusMetaSelector);
+    this.lastfmScrobbled = page.locator('[data-lastfm-scrobbled]');
+    this.lastfmTotal = page.locator('[data-lastfm-total]');
+    this.lastfmPending = page.locator('[data-lastfm-pending]');
+    this.lastfmSubmitButton = page.locator('[data-submit-lastfm-scrobbles="1"]');
+    this.lastfmSubmitAlert = page.locator('#repair-alert');
+    this.lastfmSubmitAlertMessage = page.locator('#repair-alert-message');
     this.errorToasts = page.locator('#toast-layer .toast.is-error');
     this.libraryRootInputs = page.locator('[data-library-root-id]');
   }

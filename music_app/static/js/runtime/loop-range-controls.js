@@ -435,32 +435,36 @@ function drawCombinedLoopWaveform(canvas, waveform, progressRatio = 0) {
   const savedColors = typeof getSavedAppearancePlayerColors === 'function' ? getSavedAppearancePlayerColors() : null;
   const fill = savedColors?.fill || (typeof state !== 'undefined' && state.player?.appearance?.waveformFillColor) || '#9be18a';
   const edge = savedColors?.edge || (typeof state !== 'undefined' && state.player?.appearance?.waveformEdgeColor) || '#86efac';
+  const drawBars = () => {
+    for (let index = 0; index < count; index += 1) {
+      const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
+      const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
+      const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
+      const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
+      context.fillRect(
+        index * barWidth,
+        center - halfHeight,
+        Math.max(1, barWidth * 0.72),
+        (2 * halfHeight) + 1,
+      );
+    }
+  };
   context.fillStyle = fill;
-  context.globalAlpha = 0.42;
-  for (let index = 0; index < count; index += 1) {
-    const leftPeak = Math.abs(Number(left[index] ?? right[index] ?? 0));
-    const rightPeak = Math.abs(Number(right[index] ?? left[index] ?? 0));
-    const peak = Math.max(0.025, Math.min(1, (leftPeak + rightPeak) / 2));
-    const halfHeight = Math.min(maxHalfHeight, Math.max(1, Math.round(peak * height * 0.46)));
-    context.fillRect(
-      index * barWidth,
-      center - halfHeight,
-      Math.max(1, barWidth * 0.72),
-      (2 * halfHeight) + 1,
-    );
-  }
-  context.globalAlpha = 1;
+  context.globalAlpha = 0.6;
+  context.shadowBlur = 0;
+  drawBars();
 
   const clampedProgress = Math.max(0, Math.min(1, Number(progressRatio) || 0));
   const playheadX = width * clampedProgress;
   if (playheadX > 0) {
     context.save();
-    context.globalCompositeOperation = 'source-atop';
-    context.globalAlpha = 0.4;
-    context.fillStyle = fill;
     context.beginPath();
     context.rect(0, 0, playheadX, height);
-    context.fill();
+    context.clip();
+    context.globalAlpha = 0.95;
+    context.shadowColor = fill;
+    context.shadowBlur = 6;
+    drawBars();
     context.restore();
   }
 

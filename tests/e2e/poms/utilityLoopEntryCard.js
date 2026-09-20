@@ -544,6 +544,60 @@ export class UtilityLoopEntryCard extends BasePage {
     }));
   }
 
+  async readPlayingAudioCount() {
+    // parity-check: allow-read-only-measurement-evaluate -- count connected native saved-loop players that remain unpaused
+    return this.page.locator('[data-loop-audio]').evaluateAll(elements => (
+      elements.filter(element => element.isConnected && !element.paused).length
+    ));
+  }
+
+  async readWaveformBrightnessBalance(entry) {
+    const waveform = this.ordinaryWaveformForEntry(entry);
+    const timeline = this.ordinaryTimelineForEntry(entry);
+    // parity-check: allow-read-only-measurement-evaluate -- read the semantic timeline progress used by the canvas
+    const progressRatio = await timeline.evaluate((element) => {
+      const maximum = Number(element.max || 0);
+      return maximum > 0 ? Number(element.value || 0) / maximum : 0;
+    });
+    // parity-check: allow-read-only-measurement-evaluate -- compare rendered canvas opacity on either side of the live playhead
+    return waveform.evaluate((element, progress) => {
+      const context = element.getContext('2d');
+      const pixels = context?.getImageData(0, 0, element.width, element.height).data || [];
+      const playheadX = Math.round(element.width * progress);
+      const margin = Math.max(4, Math.round(element.width * 0.02));
+      const measure = (startX, endX) => {
+        let alphaTotal = 0;
+        const paintedAlphas = [];
+        for (let y = 0; y < element.height; y += 1) {
+          for (let x = startX; x < endX; x += 1) {
+            const alpha = pixels[((y * element.width + x) * 4) + 3];
+            if (alpha <= 0) continue;
+            alphaTotal += alpha;
+            paintedAlphas.push(alpha);
+          }
+        }
+        paintedAlphas.sort((left, right) => left - right);
+        const paintedPixels = paintedAlphas.length;
+        return {
+          meanAlpha: paintedPixels ? alphaTotal / paintedPixels : 0,
+          paintedPixels,
+          strongAlpha: paintedPixels
+            ? paintedAlphas[Math.floor((paintedPixels - 1) * 0.9)]
+            : 0,
+        };
+      };
+      return {
+        played: measure(0, Math.max(0, playheadX - margin)),
+        unplayed: measure(Math.min(element.width, playheadX + margin), element.width),
+        progressRatio: progress,
+      };
+    }, progressRatio);
+  }
+
+  errorToastByText(message) {
+    return this.page.locator('#toast-layer .toast.is-error').filter({ hasText: message }).last();
+  }
+
   async captureAudioHandle(loopId) {
     const handle = await this.audioByLoopId(loopId).elementHandle();
     if (!handle) throw new Error('Expected saved-loop audio for ' + loopId + '.');

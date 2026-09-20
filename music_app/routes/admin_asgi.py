@@ -73,6 +73,7 @@ _CAPABILITY_GROUPS = (
             ("library.loops.read", "View saved loops"),
             ("library.loops.media.read", "Play saved loop media"),
             ("library.opinions.read", "View album opinions"),
+            ("integration.lastfm.scrobbles.submit", "Submit pending Last.fm scrobbles"),
         ),
     ),
     (

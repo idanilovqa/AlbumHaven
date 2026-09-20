@@ -49,6 +49,19 @@
 }
 .ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: not-allowed; }
 
+/* Reusable selection pill. Consumers own dimensions, colors, and optional artwork. */
+.ui-filter-pill {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.ui-filter-pill__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Shared app-bar-style specialization for compact icon actions. */
 .action-button {
   box-sizing: border-box;

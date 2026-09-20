@@ -145,6 +145,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.waveform_peak_cache_postgres import (
         PostgresWaveformPeakCacheRepository,
     )
+    from music_app.services.saved_loop_waveform_peak_cache_postgres import (
+        PostgresSavedLoopWaveformPeakCacheRepository,
+    )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
     from music_app.services.private_route_boundary import install_private_route_boundary
     from music_app.services.library_watch_health import (
@@ -177,6 +180,11 @@ def _configure_asgi_app(app, runtime) -> None:
     )
     app.state.waveform_peaks_registry = WaveformPeaksRegistry(
         cache_repository=waveform_cache_repository
+    )
+    app.state.saved_loop_waveform_peak_cache_repository = (
+        PostgresSavedLoopWaveformPeakCacheRepository(runtime.config)
+        if str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else None
     )
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()

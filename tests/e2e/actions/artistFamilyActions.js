@@ -95,23 +95,7 @@ export class ArtistFamilyActions {
       this.artistFamily.box.boundingBox(),
       this.artistFamily.toggle.boundingBox(),
     ]);
-    // parity-check: allow-read-only-measurement-evaluate -- measure the shared trigger envelope
-    const envelope = await this.artistFamily.box.evaluate((panel) => ({
-      anchorEnvelope: panel.dataset.anchorEnvelope || '',
-      anchorWidth: getComputedStyle(panel).getPropertyValue('--gallery-anchor-width').trim(),
-      anchorHeight: getComputedStyle(panel).getPropertyValue('--gallery-anchor-height').trim(),
-      title: panel.querySelector('h2').textContent.trim(),
-      titleRight: panel.querySelector('h2').getBoundingClientRect().right,
-      totalLeft: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().left,
-      totalTop: panel.querySelector('[data-gallery-family-panel-total]').getBoundingClientRect().top,
-      titleTop: panel.querySelector('h2').getBoundingClientRect().top,
-      width: parseFloat(getComputedStyle(panel).width),
-      widthCap: Math.min(390, innerWidth * 0.92),
-      labelsEllipsize: [...panel.querySelectorAll('[data-gallery-family-artist] > .artist-family-panel__name')].every(label => {
-        const style = getComputedStyle(label);
-        return style.textOverflow === 'ellipsis' && style.whiteSpace === 'nowrap' && style.overflowX === 'hidden';
-      }),
-    }));
+    const envelope = await this.artistFamily.readPanelStructure();
     return {
       headerBox,
       combineBox,
@@ -121,6 +105,30 @@ export class ArtistFamilyActions {
       primaryDraggable: await this.artistFamily.primaryChip.getAttribute('draggable'),
       ...envelope,
     };
+  }
+
+  async readChipHoverState(name) {
+    const chip = this.artistFamily.chipByName(name);
+    await this.artistFamily.header.hover();
+    await this.artistFamily.page.waitForTimeout(200);
+    const before = await this.artistFamily.readChipInteractionState(chip);
+    await chip.hover();
+    await this.artistFamily.page.waitForTimeout(200);
+    const after = await this.artistFamily.readChipInteractionState(chip);
+    await this.artistFamily.header.hover();
+    return { before, after };
+  }
+
+  async readCombineHoverState() {
+    const control = this.artistFamily.combineSwitch;
+    await this.artistFamily.header.hover();
+    await this.artistFamily.page.waitForTimeout(200);
+    const before = await this.artistFamily.readCombineInteractionState();
+    await control.hover();
+    await this.artistFamily.page.waitForTimeout(200);
+    const after = await this.artistFamily.readCombineInteractionState();
+    await this.artistFamily.header.hover();
+    return { before, after };
   }
 
   async dragAcrossChips(sourceName, targetName) {

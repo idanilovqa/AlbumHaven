@@ -10,7 +10,6 @@ import math
 import logging
 
 import mimetypes
-import logging
 import uuid
 from datetime import datetime, timezone
 from email import policy
@@ -21,7 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
-from music_app.services.lastfm import get_saved_lastfm_session
+from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
     parse_pitch_semitones,
@@ -49,7 +48,11 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
-from music_app.services.lastfm_retry import pending_scrobble_count, retry_pending_lastfm_scrobbles
+from music_app.services.lastfm_retry import (
+    LastfmRetryBatchError,
+    pending_scrobble_count,
+    retry_pending_lastfm_scrobbles,
+)
 from music_app.services.lastfm_sync_bridge import (
     build_lastfm_integration_status,
     record_playback_session_complete,
@@ -83,6 +86,7 @@ from music_app.services.loops import (
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.track_preferences import save_track_preference
+from music_app.services.policy_asgi import allowed_actions_for_request
 
 
 router = APIRouter()
@@ -239,6 +243,48 @@ def _safe_lastfm_connection_error(error: LastfmError) -> str:
     return "Last.fm rejected the connection."
 
 
+def _lastfm_scrobble_summary(
+    config: dict[str, Any], *, account_id: int, library_id: int, session: object | None,
+) -> JsonDict:
+    counts = build_listen_history_status_counts(
+        config, account_id=account_id, library_id=library_id,
+    )
+    lastfm_total = None
+    if session is not None:
+        try:
+            lastfm_total = get_lastfm_total_scrobbles(config, session=session)
+        except LastfmError:
+            lastfm_total = None
+    return {
+        "scrobbled": int(counts["listen_history_count"]),
+        "pending": int(counts["pending_scrobble_count"]),
+        "lastfm_total": lastfm_total,
+    }
+
+
+def _log_lastfm_pending_submit_failure(
+    config: dict[str, Any], logger: Any, history_scope: Any, error: str,
+    *, summary: dict[str, int], failure_stage: str,
+) -> None:
+    log_app_event(
+        config,
+        logger,
+        "Last.fm pending scrobble submission failed",
+        level="error",
+        history=True,
+        history_scope=history_scope,
+        integration="Last.fm",
+        status="failed",
+        failure_stage=failure_stage,
+        error=error,
+        attempted=int(summary.get("attempted") or 0),
+        succeeded=int(summary.get("succeeded") or 0),
+        failed=int(summary.get("failed") or 0),
+        pending_before=int(summary.get("pending_before") or 0),
+        pending_after=int(summary.get("pending_after") or 0),
+    )
+
+
 def _lastfm_submission_response(result: object, *, success_key: str) -> dict[str, object]:
     if result is None:
         return {"ok": True}
@@ -354,6 +400,143 @@ async def utilities_integrations(request: Request) -> JSONResponse:
         (item.get("playback_statistics") for item in result.get("integrations", [])
          if item.get("key") == "lastfm"), None)
     return JSONResponse(result)
+
+
+@router.get("/utilities/integrations/lastfm/scrobbles")
+async def utilities_lastfm_scrobbles(request: Request) -> JSONResponse:
+    config = _app_config(request)
+    scope = await history_scope_for_request(request)
+    session = await run_in_threadpool(
+        get_saved_lastfm_session, config, account_id=scope.account_id,
+    )
+    summary = await run_in_threadpool(
+        _lastfm_scrobble_summary,
+        config,
+        account_id=scope.account_id,
+        library_id=scope.library_id,
+        session=session,
+    )
+    can_submit = allowed_actions_for_request(
+        request, ("integration.lastfm.scrobbles.submit",),
+    ).allows("integration.lastfm.scrobbles.submit")
+    return JSONResponse({"ok": True, **summary, "can_submit": can_submit})
+
+
+@router.post("/utilities/integrations/lastfm/scrobbles/submit")
+async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
+    config = _app_config(request)
+    logger = _app_logger(request)
+    scope = await history_scope_for_request(request)
+    retry_summary = {
+        "pending_before": 0,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 0,
+    }
+    try:
+        counts = await run_in_threadpool(
+            build_listen_history_status_counts,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+        )
+        pending_before = int(counts["pending_scrobble_count"])
+        retry_summary["pending_before"] = pending_before
+        retry_summary["pending_after"] = pending_before
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    if not lastfm_api_enabled(config):
+        error = "Last.fm API credentials are not configured on the server."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 503))
+    try:
+        session = await run_in_threadpool(
+            get_saved_lastfm_session, config, account_id=scope.account_id,
+        )
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    if session is None:
+        error = "Last.fm account is not connected."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 409))
+    try:
+        retry_summary = await run_in_threadpool(
+            retry_pending_lastfm_scrobbles,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+            bypass_backoff=True,
+            limit=1_000_000,
+        )
+    except LastfmRetryBatchError as exc:
+        retry_summary = exc.summary
+        try:
+            counts = await run_in_threadpool(
+                build_listen_history_status_counts,
+                config,
+                account_id=scope.account_id,
+                library_id=scope.library_id,
+            )
+            retry_summary["pending_after"] = int(counts["pending_scrobble_count"])
+        except Exception:
+            pass
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    try:
+        status_summary = await run_in_threadpool(
+            _lastfm_scrobble_summary,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+            session=session,
+        )
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="status_refresh",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    retry_summary = {**retry_summary, "pending_after": int(status_summary["pending"])}
+    result = {
+        **status_summary,
+        **{key: int(retry_summary[key]) for key in (
+            "pending_before", "attempted", "succeeded", "failed", "pending_after",
+        )},
+    }
+    if result["failed"] or result["pending"]:
+        error = "Some pending scrobbles could not be submitted to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config,
+            logger,
+            scope,
+            error,
+            summary={**retry_summary, "pending_after": result["pending"]},
+            failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **result}, 502))
+    return JSONResponse({"ok": True, **result})
 
 
 @router.get("/utilities/integrations/foobar/help")

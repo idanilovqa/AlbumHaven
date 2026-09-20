@@ -484,6 +484,13 @@
               "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
               "case": "FTC-PLAYBACK-LASTFM-016 consecutive tracks each scrobble exactly once in order",
               "area": "playback"
+            },
+            {
+              "config": "playwright.config.js",
+              "project": "functional",
+              "test": "tests/e2e/specs/lastfmProductionPath.spec.js",
+              "case": "FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submit after recovery",
+              "area": "playback"
             }
           ]
         },

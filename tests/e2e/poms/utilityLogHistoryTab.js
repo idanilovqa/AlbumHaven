@@ -45,6 +45,10 @@ export class UtilityLogHistoryTab extends BasePage {
     return this.exportDialog.getByRole('dialog', { name: 'Choose ' + field + ' date', exact: true });
   }
 
+  exportCurrentDay(field) {
+    return this.exportCalendar(field).locator('[data-calendar-date][aria-current=date]');
+  }
+
   async readDateFocusOutline(input) {
     // parity-check: allow-read-only-measurement-evaluate -- verify the focused date outline remains inside every clipping ancestor
     return input.evaluate(inputNode => {

@@ -551,6 +551,62 @@ test('Artist Family resolves an IR8 member identity to its visible split-release
   assert.doesNotMatch(markup, /data-gallery-family-artist="IR8"/);
 });
 
+test('Artist Family prefers nonempty exact groups over broad album-credit alias matches', () => {
+  const state = {
+    view: {
+      selected_artist: 'Control Signal Lead',
+      related_artists: [
+        'Control Signal Lead / Control Signal Partner',
+        'Control Signal Partner',
+      ],
+      primary_artist_groups: [{
+        artist: 'Control Signal Lead',
+        albums: [{
+          key: 'compilation-credit',
+          artists: [
+            'Control Signal Lead',
+            'Control Signal Lead / Control Signal Partner',
+            'Control Signal Partner',
+          ],
+        }, { key: 'lead-solo' }],
+      }],
+      family_artist_groups: [{
+        artist: 'Control Signal Partner',
+        albums: [{ key: 'partner-solo' }],
+      }, {
+        artist: 'Control Signal Lead / Control Signal Partner',
+        albums: [{ key: 'shared-release' }],
+      }],
+    },
+    gallery: {
+      mainState: {
+        sources: { main_library: true, new_arrivals: true, hoard: true },
+        albumTypes: ['studio', 'ep'],
+        view: 'cards',
+        familyArtists: [],
+      },
+    },
+  };
+  const context = loadRuntime({
+    state,
+    groupMatchesRelatedArtists: (group, artists) => (
+      (group.albums || []).some((album) => (
+        (album.artists || []).some((artist) => artists.has(artist))
+      ))
+    ),
+  });
+  const getGalleryFamilyPanelGroups = requireContract(context, 'getGalleryFamilyPanelGroups');
+
+  assert.deepEqual(
+    plain(getGalleryFamilyPanelGroups()).map((group) => group.artist),
+    [
+      'Control Signal Lead',
+      'Control Signal Lead / Control Signal Partner',
+      'Control Signal Partner',
+    ],
+  );
+});
+
 test('GalleryBar scroll context uses absolute virtual section coordinates instead of mounted DOM offsets', () => {
   const context = loadRuntime({
     virtualGrid: {

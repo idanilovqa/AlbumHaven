@@ -4692,13 +4692,23 @@ def _selected_artist_family_group_filter_key(
     alias_to_canonical: Mapping[str, str],
     family_artists: Iterable[object],
 ) -> str:
+    from music_app.services.selected_artist_membership import collaboration_alias_of
+
     group_artist = str(group.get("artist") or "").strip()
     group_key = _artist_display_dedupe_key(group_artist)
-    family_artist_keys = {
-        _artist_display_dedupe_key(artist)
+    family_artist_entries = [
+        (artist, key)
         for artist in family_artists
-        if _artist_display_dedupe_key(artist)
+        if (key := _artist_display_dedupe_key(artist))
+    ]
+    family_artist_keys = {key for _, key in family_artist_entries}
+    collaboration_family_keys = {
+        key
+        for artist, key in family_artist_entries
+        if collaboration_alias_of(group_artist, artist)
     }
+    if len(collaboration_family_keys) == 1:
+        return next(iter(collaboration_family_keys))
     if group_key in family_artist_keys:
         return group_key
     canonical_artist = str(

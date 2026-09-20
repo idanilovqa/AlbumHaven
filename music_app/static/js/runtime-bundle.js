@@ -5354,15 +5354,21 @@ function getGalleryFamilyPanelGroups() {
   const familyArtists = relatedArtists.length ? relatedArtists : fallbackArtists;
   const names = [primaryArtist, ...familyArtists.filter((artist) => artist !== primaryArtist)];
   const resolvedGroups = names.map((artist) => {
+    const exactGroup = candidates.reduce((best, group) => {
+      if (galleryMainGroupArtist(group) !== artist || !(group.albums?.length > 0)) return best;
+      return !best || group.albums.length > (best.albums?.length || 0) ? group : best;
+    }, null);
+    if (exactGroup) return exactGroup;
     const matchingArtist = new Set([artist]);
-    return candidates.reduce((best, group) => {
+    const aliasGroup = candidates.reduce((best, group) => {
       const matches = galleryMainGroupArtist(group) === artist || (
         typeof groupMatchesRelatedArtists === 'function'
         && groupMatchesRelatedArtists(group, matchingArtist)
       );
       if (!matches) return best;
       return !best || (group.albums?.length || 0) > (best.albums?.length || 0) ? group : best;
-    }, null) || { artist, artist_display: artist, albums: [] };
+    }, null);
+    return aliasGroup || { artist, artist_display: artist, albums: [] };
   });
   return resolvedGroups.filter((group, index) => (
     resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index
@@ -7072,6 +7078,16 @@ function handleStreamingWorkletMessage(message) {
         || !Number.isInteger(message.timelineFrame) || message.timelineFrame < 0
         || current.endedNotified) {
       engine.diagnostics.staleMessages += 1;
+      return;
+    }
+    const pendingReplacement = engine.pendingSeek;
+    if (pendingReplacement?.kind === 'replacement'
+        && pendingReplacement.generation === message.generation
+        && pendingReplacement.currentStreamId === current.streamId
+        && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
+      if (!engine.snapshot.paused) {
+        engine.node.port.postMessage({ type: 'play', generation: engine.generation });
+      }
       return;
     }
     current.endedNotified = true;
@@ -31914,7 +31930,8 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
-  onUserScrollIntent() {
+  onUserScrollIntent(event) {
+    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
   }
 

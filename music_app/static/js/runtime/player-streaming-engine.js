@@ -1089,6 +1089,16 @@ function handleStreamingWorkletMessage(message) {
       engine.diagnostics.staleMessages += 1;
       return;
     }
+    const pendingReplacement = engine.pendingSeek;
+    if (pendingReplacement?.kind === 'replacement'
+        && pendingReplacement.generation === message.generation
+        && pendingReplacement.currentStreamId === current.streamId
+        && pendingReplacement.streamId === engine.roles.continuity?.streamId) {
+      if (!engine.snapshot.paused) {
+        engine.node.port.postMessage({ type: 'play', generation: engine.generation });
+      }
+      return;
+    }
     current.endedNotified = true;
     const timelineFrame = streamingAbsoluteTimelineFrame(current, message.timelineFrame);
     const currentTime = timelineFrame / STREAMING_SAMPLE_RATE;

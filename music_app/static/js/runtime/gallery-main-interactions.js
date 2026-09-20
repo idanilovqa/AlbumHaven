@@ -157,15 +157,21 @@ function getGalleryFamilyPanelGroups() {
   const familyArtists = relatedArtists.length ? relatedArtists : fallbackArtists;
   const names = [primaryArtist, ...familyArtists.filter((artist) => artist !== primaryArtist)];
   const resolvedGroups = names.map((artist) => {
+    const exactGroup = candidates.reduce((best, group) => {
+      if (galleryMainGroupArtist(group) !== artist || !(group.albums?.length > 0)) return best;
+      return !best || group.albums.length > (best.albums?.length || 0) ? group : best;
+    }, null);
+    if (exactGroup) return exactGroup;
     const matchingArtist = new Set([artist]);
-    return candidates.reduce((best, group) => {
+    const aliasGroup = candidates.reduce((best, group) => {
       const matches = galleryMainGroupArtist(group) === artist || (
         typeof groupMatchesRelatedArtists === 'function'
         && groupMatchesRelatedArtists(group, matchingArtist)
       );
       if (!matches) return best;
       return !best || (group.albums?.length || 0) > (best.albums?.length || 0) ? group : best;
-    }, null) || { artist, artist_display: artist, albums: [] };
+    }, null);
+    return aliasGroup || { artist, artist_display: artist, albums: [] };
   });
   return resolvedGroups.filter((group, index) => (
     resolvedGroups.findIndex((candidate) => galleryMainGroupArtist(candidate) === galleryMainGroupArtist(group)) === index

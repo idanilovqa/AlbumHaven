@@ -1096,7 +1096,8 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
-  onUserScrollIntent() {
+  onUserScrollIntent(event) {
+    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
   }
 

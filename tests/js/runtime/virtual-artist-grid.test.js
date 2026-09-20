@@ -1412,6 +1412,52 @@ test('a newer user scroll invalidates a pending absolute setGroups restoration',
   );
 });
 
+test('an album-card click does not surrender pending absolute scroll restoration', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 890;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.cancelBrowserAnimationFrame = (frameId) => {
+    context.canceledBrowserAnimationFrames.push(frameId);
+    scheduledFrames.delete(frameId);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  scrollEl.scrollTop = 2036;
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 2036 },
+  });
+  const restoreFrameId = virtualGrid._scrollRestoreRaf;
+  const restoreFrame = scheduledFrames.get(restoreFrameId);
+  assert.equal(typeof restoreFrame, 'function');
+
+  scrollEl.dispatchEvent({
+    type: 'pointerdown',
+    target: { closest: () => ({ dataset: { albumKey: 'studio-records' } }) },
+  });
+  scrollEl.scrollTop = 1272;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  restoreFrame();
+
+  assert.ok(
+    !context.canceledBrowserAnimationFrames.includes(restoreFrameId),
+    'clicking a gallery card must not cancel edit-owned scroll restoration',
+  );
+  assert.equal(
+    scrollEl.scrollTop,
+    2036,
+    'browser reveal scrolling for a clicked card must not replace the edit-owned coordinate',
+  );
+});
+
 test('setGroups absolute scroll mode skips discarded relative anchor capture work', () => {
   const { context, scrollEl } = createRuntimeContext();
   const virtualGrid = vm.runInContext('virtualGrid', context);

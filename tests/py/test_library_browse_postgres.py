@@ -11262,6 +11262,20 @@ def test_family_group_restores_preferred_punctuation_for_ordinary_alias():
     }]
 
 
+def test_family_group_filter_uses_relationship_identity_for_collaboration_display():
+    from music_app.services.library_browse_postgres import (
+        _selected_artist_family_group_filter_key,
+    )
+
+    filter_key = _selected_artist_family_group_filter_key(
+        {"artist": "IR8 / Sexoturica"},
+        {},
+        iter(["IR8", "IR8 / Sexoturica"]),
+    )
+
+    assert filter_key == "ir8"
+
+
 def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 

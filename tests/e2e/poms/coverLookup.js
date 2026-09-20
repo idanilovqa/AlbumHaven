@@ -185,7 +185,10 @@ export class CoverLookup extends BasePage {
     const timeout = options.timeout || 30000;
     await this.waitForPageCondition((selectors) => {
       const toast = Array.from(document.querySelectorAll(selectors.toastSelector))
-        .filter((candidate) => candidate.textContent?.trim() === selectors.toastText)
+        .filter((candidate) => (
+          candidate.querySelector('.on-page-alert__message')?.textContent?.trim()
+            === selectors.toastText
+        ))
         .at(-1);
       if (!(toast instanceof HTMLElement)) return false;
       const style = getComputedStyle(toast);

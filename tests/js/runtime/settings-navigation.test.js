@@ -164,7 +164,7 @@ test('a rejected protected-page response leaves the current content and history 
 });
 
 test('navigation failure reuses its in-flow alert in the visible gallery and replaced settings outlet', async () => {
-  const app = harness({ library: true });
+  const app = harness({ library: true, initialPath: '/' });
   const error = app.document.querySelector('[data-settings-navigation-error]');
   app.respond('Unavailable', 'http://localhost:5000/account', 503);
   assert.equal(await app.navigation.navigate('/account'), false);

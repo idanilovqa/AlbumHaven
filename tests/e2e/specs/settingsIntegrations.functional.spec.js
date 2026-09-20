@@ -38,13 +38,13 @@ test('FTC-SETTINGS-I01 real folder picking preserves Cancel and validates saved 
       ['Move to Hoard', 'Hoard', 'hoarding_library_roots', 'move_new_arrivals_to'],
     ]) {
       await ui.enableMovePolicy(label);
-      if ((await ui.roots(title).allInputValues()).filter(value => value.trim()).length === 1) {
+      if ((await ui.rootValues(title)).filter(value => value.trim()).length === 1) {
         await expect(ui.policyTrigger(label)).toHaveCount(0);
         continue;
       }
       await ui.choosePolicy(label, await ui.roots(title).last().inputValue());
       const original = before[category].find(root => root.id === before.move_policy[key]);
-      await ui.choosePolicy(label, original ? original.path : (await ui.roots(title).allInputValues()).find(value => value.trim()));
+      await ui.choosePolicy(label, original ? original.path : (await ui.rootValues(title)).find(value => value.trim()));
     }
     const chosen = await ui.roots('Main Library').last().inputValue();
     await ui.add('Main Library');

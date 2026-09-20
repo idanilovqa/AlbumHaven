@@ -358,11 +358,15 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
       expect(row.badgeHeight).toBe(32);
       expect(row.badgeBackground).toBe('rgb(41, 43, 47)');
     }
-    await artistFamilyActions.artistFamily.firstInactiveChip.hover();
-    await expect(artistFamilyActions.artistFamily.firstInactiveChip)
-      .toHaveCSS('background-color', 'rgb(17, 21, 23)');
-    const familyHover = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
-    expect(familyHover.firstInactive.backgroundColor).toBe('rgb(17, 21, 23)');
+    const inactiveName = await artistFamilyActions.artistFamily.firstInactiveChip
+      .getAttribute('data-gallery-family-artist');
+    expect(inactiveName).toBeTruthy();
+    const familyHover = await artistFamilyActions.readChipHoverState(inactiveName);
+    const combineHover = await artistFamilyActions.readCombineHoverState();
+    expect(familyHover.before.backgroundColor).toBe(familySelected.firstInactive.backgroundColor);
+    expect(familyHover.after.backgroundColor).not.toBe(familyHover.before.backgroundColor);
+    expect(familyHover.after.backgroundColor).toBe(combineHover.after.backgroundColor);
+    expect(familyHover.after.labelDecoration).toBe('none');
 
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');

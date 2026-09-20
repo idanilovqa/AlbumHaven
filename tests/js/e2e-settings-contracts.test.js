@@ -94,6 +94,7 @@ test('Log History filter locates the shared Date range form and its explicit dat
       description,
       locator: selector => locator(`${description} ${selector}`),
       getByRole: (role, options) => locator(`${description} ${role}:${options.name}`),
+      getByLabel: label => locator(`${description} label:${label}`),
       getByText: text => locator(`${description} text:${text}`),
       first() { return this; },
     };
@@ -123,6 +124,19 @@ test('unavailable-root scenario acknowledges the visible watcher warning using i
   assert.equal(typeof ui.acknowledgeUnavailableRootWarning, 'function');
   await ui.acknowledgeUnavailableRootWarning();
   assert.deepEqual(calls, ['visible', 'click', 'hidden']);
+});
+
+test('library root values use locator primitives supported by the pinned Playwright version', async () => {
+  const Pom = loadPom('settingsIntegrations.js', 'SettingsIntegrations', {
+    BasePage: class {},
+  });
+  const values = ['C:\\Music', 'D:\\Archive'];
+  const ui = Object.create(Pom.prototype);
+  ui.roots = () => ({
+    count: async () => values.length,
+    nth: index => ({ inputValue: async () => values[index] }),
+  });
+  assert.deepEqual(Array.from(await ui.rootValues('Main Library')), values);
 });
 
 

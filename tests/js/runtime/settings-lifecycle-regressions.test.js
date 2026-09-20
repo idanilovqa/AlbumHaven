@@ -18,7 +18,7 @@ function click(selector, attributes) {
   return { preventDefault() {}, target: { closest: query => query === selector ? button : null } };
 }
 function mountedHarness(utility = {}) {
-  const document = { activeElement: null, querySelectorAll: () => [], body: { classList: { add() {} } } };
+  const document = { activeElement: null, getElementById: () => null, querySelectorAll: () => [], body: { classList: { add() {} } } };
   let mounted;
   const mount = () => {
     if (mounted) { mounted.row.isConnected = false; mounted.audio.paused = true; document.activeElement = document.body; }

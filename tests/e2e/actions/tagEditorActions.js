@@ -31,6 +31,7 @@ export class TagEditorActions {
   }
 
   async readSummary() {
+    const alertMessages = await this.tagEditor.repairAlertMessage.allTextContents();
     return {
       subtitle: String(await this.tagEditor.subtitle.textContent() || '').trim(),
       trackFilenames: (await this.tagEditor.trackTitles.allTextContents())
@@ -38,7 +39,7 @@ export class TagEditorActions {
         .filter(Boolean),
       activeTrackCount: await this.tagEditor.activeTrackButtons.count(),
       exceptionType: String(await this.tagEditor.exceptionSelect.inputValue() || ''),
-      alertText: String(await this.tagEditor.repairAlertMessage.textContent() || '').trim(),
+      alertText: String(alertMessages[0] || '').trim(),
     };
   }
 

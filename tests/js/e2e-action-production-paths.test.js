@@ -2533,6 +2533,28 @@ test('terminal tag-edit failure waits for the failure notification before readin
   assert.equal(result.alertText, 'Failed to edit tags.');
 });
 
+test('tag-editor summary treats an absent transient repair alert as empty', async () => {
+  const moduleUrl = pathToFileURL(
+    path.join(repoRoot, 'tests/e2e/actions/tagEditorActions.js'),
+  ).href;
+  const { TagEditorActions } = await import(moduleUrl);
+  const text = value => ({ textContent: async () => value });
+  const actions = new TagEditorActions({
+    subtitle: text('Edit tracks'),
+    trackTitles: { allTextContents: async () => ['01 - Track.mp3'] },
+    activeTrackButtons: { count: async () => 1 },
+    exceptionSelect: { inputValue: async () => '' },
+    repairAlertMessage: { allTextContents: async () => [] },
+  });
+  assert.deepEqual(await actions.readSummary(), {
+    subtitle: 'Edit tracks',
+    trackFilenames: ['01 - Track.mp3'],
+    activeTrackCount: 1,
+    exceptionType: '',
+    alertText: '',
+  });
+});
+
 test('FTC-OPS-003C proves the enabled cover cancel action is rendered only while production cover work is active', async () => {
   const helperUrl = pathToFileURL(path.join(repoRoot, 'tests/e2e/helpers/scanPerformanceHelpers.js')).href;
   const { waitForStatusCoverScan } = await import(helperUrl);

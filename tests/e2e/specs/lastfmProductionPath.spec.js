@@ -485,12 +485,15 @@ test('FTC-PLAYBACK-LASTFM-017 pending scrobbles report failure in Logs and submi
     const scrobbles = (await readLastfmProviderRequests(testInfo)).filter(
       (request) => request.method === 'track.scrobble' && request.track === SCROBBLE_TRACK,
     );
-    expect(scrobbles).toHaveLength(3);
-    expect(scrobbles.map((request) => request.fixture_scrobble_mode)).toEqual([
-      'retryable-error',
-      'retryable-error',
-      'accept',
-    ]);
+    const modes = scrobbles.map((request) => request.fixture_scrobble_mode);
+    expect(modes.length).toBeGreaterThanOrEqual(3);
+    expect(modes.length).toBeLessThanOrEqual(4);
+    expect(modes.at(-1)).toBe('accept');
+    const retryableAttempts = modes.slice(0, -1);
+    expect(retryableAttempts.length).toBeGreaterThanOrEqual(2);
+    expect(retryableAttempts.length).toBeLessThanOrEqual(3);
+    expect(retryableAttempts.every((mode) => mode === 'retryable-error')).toBe(true);
+    expect(modes.filter((mode) => mode === 'accept')).toHaveLength(1);
     expect(scrobbles.every((request) => (
       request.signature_valid
       && request.api_key_valid

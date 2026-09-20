@@ -14,12 +14,14 @@ function renderLibraryWarning(data = {}, options = {}) {
   const hidden = !model.warning || !model.dismissed || !scanPageVisible;
   if (scanNotice.hidden !== hidden) scanNotice.hidden = hidden;
   if (hidden) return;
-  const unavailable = (health.problems || []).some(problem => problem.state === 'root_unavailable');
+  const problems = health.problems || [];
+  const unavailable = problems.some(problem => problem.state === 'root_unavailable');
+  const canRefresh = problems.some(problem => problem.allowed_actions?.['library.refresh'] === true);
   const message = unavailable
-    ? 'A watched library folder became unavailable. Reconnect the drive or network share, check that the folder is accessible, then run Full Rescan.'
-    : 'Some library changes may have been missed. Run a full rescan to reconcile the library. Dismissing the alert does not resolve the warning.';
+    ? `A watched library folder became unavailable. Reconnect the drive or network share and check that the folder is accessible${canRefresh ? ', then run Full Rescan' : ''}.`
+    : `Some library changes may have been missed.${canRefresh ? ' Run a full rescan to reconcile the library.' : ''} Dismissing the alert does not resolve the warning.`;
   const notice = buildOnPageAlertHtml({severity:'warning',title:'Library watcher needs attention',message,
-    actionsHtml: (health.problems || []).some(p => p.allowed_actions?.['library.refresh'] === true)
+    actionsHtml: canRefresh
       ? ButtonComponent.renderButton({label:'Full Rescan',attributes:{'data-status-action':'full-rescan'}}) : ''});
   if (scanNotice.innerHTML !== notice) scanNotice.innerHTML = notice;
 }

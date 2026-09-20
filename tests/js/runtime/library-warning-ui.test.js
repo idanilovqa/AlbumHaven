@@ -54,7 +54,7 @@ test('watcher health keeps the Library notice but omits the action for a read-on
       message: 'Private Music C:\\Private Music', allowed_actions,
     });
     assert.match(html, /role="alert"/);
-    assert.match(html, /Some library changes may have been missed\./);
+    assert.match(html, /A watched library folder became unavailable\./);
     assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321|Private Music|[A-Z]:\\/);
   }
 });

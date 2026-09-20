@@ -56,6 +56,7 @@ const EDITABLE_CAPABILITIES = Object.freeze([
   'View saved loops',
   'Play saved loop media',
   'View album opinions',
+  'Submit pending Last.fm scrobbles',
   'View library rules',
   'View operational logs',
   'Export operational logs',

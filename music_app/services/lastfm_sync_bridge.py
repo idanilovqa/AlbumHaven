@@ -276,6 +276,7 @@ def process_pending_scrobble_attempt(
     entry_id = str(entry.get("id") or "").strip()
     if not entry_id:
         return {"attempted": False, "succeeded": False, "failed": False}
+    tracks_legacy_sync_state = entry.get("measurement_version") != "rendered-pcm-v1"
 
     if (
         bool(entry.get("scrobbled"))
@@ -303,7 +304,8 @@ def process_pending_scrobble_attempt(
                 },
             },
         )
-        clear_pending_scrobble(config, listen_id=entry_id)
+        if tracks_legacy_sync_state:
+            clear_pending_scrobble(config, listen_id=entry_id)
         return {"attempted": False, "succeeded": False, "failed": True}
     if bool(entry.get("scrobble_reauthentication_required")) and not reauthenticated:
         return {"attempted": False, "succeeded": False, "failed": False}
@@ -336,6 +338,7 @@ def process_pending_scrobble_attempt(
             payload=payload,
             error=validation_error,
             retryable=False,
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
@@ -354,6 +357,7 @@ def process_pending_scrobble_attempt(
             error=str(exc),
             retryable=bool(exc.retryable or exc.reauthentication_required),
             reauthentication_required=exc.reauthentication_required,
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
@@ -372,6 +376,7 @@ def process_pending_scrobble_attempt(
             reauthentication_required=bool(
                 getattr(submission, "reauthentication_required", False)
             ),
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
@@ -392,7 +397,8 @@ def process_pending_scrobble_attempt(
             retry_count=retry_count,
         ),
     )
-    clear_pending_scrobble(config, listen_id=entry_id)
+    if tracks_legacy_sync_state:
+        clear_pending_scrobble(config, listen_id=entry_id)
     log_lastfm_scrobble_event(
         "Last.fm scrobble retry succeeded",
         level="info",
@@ -413,6 +419,7 @@ def _record_failed_pending_scrobble(
     error: str,
     retryable: bool,
     reauthentication_required: bool = False,
+    tracks_legacy_sync_state: bool = True,
     update_listen_history_entry: ListenHistoryUpdater,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
 ) -> None:
@@ -450,7 +457,7 @@ def _record_failed_pending_scrobble(
         entry_id,
         updates,
     )
-    if should_retry:
+    if should_retry and tracks_legacy_sync_state:
         record_pending_scrobble(
             config,
             listen_id=entry_id,
@@ -458,7 +465,7 @@ def _record_failed_pending_scrobble(
             retry_count=retry_count,
             error=error,
         )
-    else:
+    elif tracks_legacy_sync_state:
         clear_pending_scrobble(config, listen_id=entry_id)
     log_lastfm_scrobble_event(
         "Last.fm scrobble retry failed",

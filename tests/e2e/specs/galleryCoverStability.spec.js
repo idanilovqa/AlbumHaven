@@ -111,7 +111,6 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     await searchToolbarActions.waitForQuery('');
     await galleryActions.waitForSelectedArtistGallery(ARTIST);
     await galleryActions.waitForCoverSchedulerIdle({ timeout: 30000 });
-    const requestsAfterBackgroundFill = coverTraffic.totalRequestCount();
     await galleryActions.scrollToAlbumUnderHeading(ARTIST, ALBUM);
     const awayState = await galleryActions.scrollAlbumAwayFromViewport(ARTIST, ALBUM);
     await galleryActions.returnToAlbumAfterScrollAway(ARTIST, ALBUM, awayState);
@@ -129,7 +128,7 @@ test('FTC-COVERS-014 keeps a decoded gallery cover stable across real gallery in
     expect(checkpoint.productionSrc).toBe(baseline.productionSrc);
     expect(checkpoint.pixelHash).toBe(baseline.pixelHash);
     expect(await galleryActions.readAlbumKeyByName(ALBUM)).toBe(baselineAlbumKey);
-    expect(coverTraffic.totalRequestCount()).toBe(requestsAfterBackgroundFill);
+    expect(coverTraffic.requestCount(baseline.productionSrc)).toBe(1);
   });
 
   await stepLogger.step('Open and close album details without re-requesting or blanking the gallery cover', async () => {

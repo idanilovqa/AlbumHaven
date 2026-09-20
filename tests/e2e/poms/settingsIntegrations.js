@@ -22,6 +22,14 @@ export class SettingsIntegrations {
   navigation(label) { return this.page.locator('[data-utility-integration-key]').filter({ hasText: new RegExp(`^${label}$`, 'u') }); }
   section(title) { return this.detail.locator('.library-settings-section').filter({ has: this.page.getByRole('heading', { name: title, exact: true }) }); }
   roots(title) { return this.section(title).getByRole('textbox'); }
+  async rootValues(title) {
+    const roots = this.roots(title);
+    const values = [];
+    for (let index = 0; index < await roots.count(); index += 1) {
+      values.push(await roots.nth(index).inputValue());
+    }
+    return values;
+  }
   policyTrigger(label) { return this.detail.getByRole('button', { name: label, exact: true }); }
   policyMenu(label) { return this.page.getByRole('menu', { name: label, exact: true }); }
   async enableMovePolicy(label) {

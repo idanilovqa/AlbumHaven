@@ -561,7 +561,13 @@ def test_manual_measured_retry_uses_shared_guards_and_retry_bookkeeping(monkeypa
         ),
     )
     monkeypatch.setattr(lastfm_retry, "pending_scrobble_count", lambda *_args, **_kwargs: 2)
-    monkeypatch.setattr(lastfm_sync_bridge, "clear_pending_scrobble", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "clear_pending_scrobble",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Measured retries must not mutate the legacy sync-state collection"
+        ),
+    )
 
     summary = lastfm_retry.retry_pending_lastfm_scrobbles(
         {"LASTFM_API_ENABLED": True},
@@ -629,8 +635,20 @@ def test_manual_measured_retry_counts_retryable_provider_failure_as_attempted(mo
     monkeypatch.setattr(lastfm_retry, "scrobble_track", fail_scrobble)
     monkeypatch.setattr(measured_listen_history, "normalize_measurement", lambda item, **_scope: item)
     monkeypatch.setattr(lastfm_sync_bridge, "measured_provider_guard", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(lastfm_sync_bridge, "record_pending_scrobble", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(lastfm_sync_bridge, "clear_pending_scrobble", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "record_pending_scrobble",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Measured retries must not mutate the legacy sync-state collection"
+        ),
+    )
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "clear_pending_scrobble",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Measured retries must not mutate the legacy sync-state collection"
+        ),
+    )
 
     summary = lastfm_retry.retry_pending_lastfm_scrobbles(
         {"LASTFM_API_ENABLED": True},
@@ -704,8 +722,20 @@ def test_manual_measured_retry_persists_code_9_guard_and_does_not_resubmit(monke
     monkeypatch.setattr(lastfm_retry, "scrobble_track", code_9_scrobble)
     monkeypatch.setattr(measured_listen_history, "normalize_measurement", lambda item, **_scope: item)
     monkeypatch.setattr(lastfm_sync_bridge, "measured_provider_guard", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(lastfm_sync_bridge, "record_pending_scrobble", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(lastfm_sync_bridge, "clear_pending_scrobble", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "record_pending_scrobble",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Measured retries must not mutate the legacy sync-state collection"
+        ),
+    )
+    monkeypatch.setattr(
+        lastfm_sync_bridge,
+        "clear_pending_scrobble",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Measured retries must not mutate the legacy sync-state collection"
+        ),
+    )
 
     first = lastfm_retry.retry_pending_lastfm_scrobbles(
         {"LASTFM_API_ENABLED": True},

@@ -484,6 +484,11 @@ test('managed cover-start assertion proves center-point stacking above the activ
 test('managed cover-start assertion waits for settled toast geometry and preserves modal geometry', () => {
   assert.match(
     coverLookupPomSource,
+    /waitForCoverLookupStartedToastFinalState[\s\S]*querySelector\('\.on-page-alert__message'\)[\s\S]*toastText/u,
+    'toast identity must come from the message node because shared notification actions add container text',
+  );
+  assert.match(
+    coverLookupPomSource,
     /waitForCoverLookupStartedToastFinalState[\s\S]*classList\.contains\('is-visible'\)[\s\S]*opacity[\s\S]*getAnimations/u,
   );
   assert.match(

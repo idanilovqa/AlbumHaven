@@ -35,21 +35,27 @@ export class SettingsModalAppBar extends BasePage {
   }
 
   async readAdminHoverTheme() {
-    // FTC-PERMISSIONS-011 protects the approved navy menu; explicit saved row themes override it.
+    // FTC-PERMISSIONS-011 protects the shared neutral dropdown treatment.
     // parity-check: allow-read-only-measurement-evaluate -- compare approved/saved colors without changing page styles
     const colors = await this.adminPanelMenuItem.evaluate(async element => {
       await Promise.all(element.getAnimations()
         .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
         .map(animation => animation.finished));
       const style = getComputedStyle(element);
-      const root = element.ownerDocument.documentElement;
-      const themed = root.hasAttribute('data-appearance-palette') || root.hasAttribute('data-appearance-item-hover');
-      const expected = themed
-        ? style.getPropertyValue('--appearance-item-hover').trim() || style.getPropertyValue('--appearance-hover').trim()
-        : '#172d43';
-      return { expected, actual: style.backgroundColor };
+      const rootStyle = getComputedStyle(element.ownerDocument.documentElement);
+      return {
+        expected: style.getPropertyValue('--dropdown-item-hover-background').trim(),
+        text: rootStyle.getPropertyValue('--text').trim() || '#eee',
+        panel: rootStyle.getPropertyValue('--panel').trim() || '#171717',
+        actual: style.backgroundColor,
+      };
     });
-    return { expected: readThemeColorChannels(colors.expected), actual: readThemeColorChannels(colors.actual) };
+    const text = readThemeColorChannels(colors.text);
+    const panel = readThemeColorChannels(colors.panel);
+    const expected = colors.expected
+      ? readThemeColorChannels(colors.expected)
+      : text.map((channel, index) => channel * 0.08 + panel[index] * 0.92);
+    return { expected, actual: readThemeColorChannels(colors.actual) };
   }
 
   get titleSelector() {

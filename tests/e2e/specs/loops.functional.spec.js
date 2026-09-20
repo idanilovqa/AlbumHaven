@@ -743,8 +743,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       const controlCenterY = bounds.y + (bounds.height / 2);
       expect(Math.abs(controlCenterY - savedLoopTimelineCenterY)).toBeLessThanOrEqual(1);
     });
-    expect(compactLayout.firstEntryGap).toBeGreaterThanOrEqual(0);
-    expect(compactLayout.firstEntryGap).toBeLessThanOrEqual(16);
+    // The detail's 10px flex gap plus the list's 10px block-start padding is intentional.
+    expect(compactLayout.firstEntryGap).toBe(20);
     expect(compactLayout.scissorsBounds.x).toBeGreaterThan(compactLayout.playBounds.x);
     expect(compactLayout.scissorsBounds.y).toBeGreaterThan(compactLayout.playBounds.y);
     warmupIdleAction = await utilityLoopsActions.readLoopActionVisualStateByName('Warmup Loop');

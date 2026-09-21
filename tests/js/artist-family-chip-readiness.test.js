@@ -38,6 +38,45 @@ test('family selection fails when the requested chip never becomes visible', asy
   await assert.rejects(actions.selectOnlyChipByName('Control Signal Lead'), /missing exact chip/);
 });
 
+test('family panel readiness waits for deferred cover activation to settle', async () => {
+  const { ArtistFamilyActions } = await import(actionsUrl);
+  const previousDocument = global.document;
+  const previousHTMLElement = global.HTMLElement;
+  class FakeHTMLElement {}
+  const toggle = new FakeHTMLElement();
+  const list = new FakeHTMLElement();
+  list.childElementCount = 2;
+  let deferredCoverPending = true;
+  list.querySelector = (selector) => {
+    assert.equal(selector, '[data-owned-pending-cover]');
+    return deferredCoverPending ? {} : null;
+  };
+  global.HTMLElement = FakeHTMLElement;
+  global.document = {
+    querySelector(selector) {
+      if (selector === '[data-family-toggle]') return toggle;
+      if (selector === '[data-family-list]') return list;
+      return null;
+    },
+  };
+  try {
+    const actions = new ArtistFamilyActions({
+      toggleSelector: '[data-family-toggle]',
+      listSelector: '[data-family-list]',
+      pendingCoverSelector: '[data-owned-pending-cover]',
+      async waitForPageCondition(predicate, _options, selectors) {
+        assert.equal(predicate(selectors), false);
+        deferredCoverPending = false;
+        assert.equal(predicate(selectors), true);
+      },
+    });
+    await actions.waitForVisible();
+  } finally {
+    global.document = previousDocument;
+    global.HTMLElement = previousHTMLElement;
+  }
+});
+
 test('gallery playback evidence uses the exact clicked production row path and rejects missing identity', async () => {
   const { GalleryRegressions } = await import(galleryUrl);
   const readPath = GalleryRegressions.prototype.readTrackPath;

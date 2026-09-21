@@ -1,0 +1,12 @@
+[
+    {
+        "Suite":  "auth",
+        "ExitCode":  null,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-phase7-auth.log"
+    },
+    {
+        "Suite":  "admin",
+        "ExitCode":  null,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-phase7-admin.log"
+    }
+]

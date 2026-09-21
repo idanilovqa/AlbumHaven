@@ -81,6 +81,21 @@ test('shared popup ownership closes the previous surface before opening another'
   assert.deepEqual(events, ['first closed'], 'repositioning the same popup must not dismiss it');
 });
 
+test('nested menu preserves its parent and closing it restores the parent ownership',()=>{
+  const events=[];const child={},sibling={},unrelated={};
+  const parent={contains:node=>node===child||node===sibling};
+  context.activateTriggerSurface(parent,()=>events.push('parent'));
+  context.activateTriggerSurface(child,()=>events.push('child'));
+  assert.deepEqual(events,[]);
+  context.activateTriggerSurface(parent,()=>events.push('parent refreshed'));
+  assert.deepEqual(events,[],'parent resize cannot close the open nested menu');
+  context.clearTriggerAnchor(child);
+  context.activateTriggerSurface(sibling,()=>events.push('sibling'));
+  assert.deepEqual(events,[],'closing a child retains parent ownership');
+  context.activateTriggerSurface(unrelated,()=>events.push('unrelated'));
+  assert.deepEqual(events,['sibling','parent']);
+});
+
 test('text selection extending beyond its originating panel is clamped to the panel boundary', () => {
   const inside = {};
   const outside = {};

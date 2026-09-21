@@ -426,6 +426,119 @@ async function flushMicrotasks() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('player Album Details takes foreground without closing Settings or its draft', () => {
+  const { context, trackModal, utilityModal, documentListeners } = loadHelper({ utilityLoaded: true });
+  const draft = { title: 'Unsaved appearance' };
+  context.state.utility.appearanceDraft = draft;
+  utilityModal.hidden = false;
+  context.attachModalEvents();
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] }, {
+    coverLightboxGallery: false, foreground: true,
+  });
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  const keydown = documentListeners.get('keydown')[0];
+  keydown({ key: 'Escape', defaultPrevented: true });
+  assert.equal(trackModal.hidden, false, 'a consumed Escape leaves the foreground dialog open');
+  keydown({ key: 'Escape' });
+  assert.equal(trackModal.hidden, true);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.closeUtilityModalCalls, 0);
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.utility.appearanceDraft, draft);
+  assert.equal(context.document.body.classList.contains('modal-open'), true);
+  context.openTrackModal({ key: 'alpha', name: 'Album Alpha', tracks: [] });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, true);
+});
+
+test('Settings reopening stays above a player details request that hydrates later', async () => {
+  let resolveDetails;
+  const preview = { key: 'alpha', name: 'Album Alpha', preview_only: true, tracks: [] };
+  const { context, trackModal, utilityModal } = loadHelper({
+    initialAlbums: [preview], utilityLoaded: true,
+    onFetchAlbumDetails: () => new Promise(resolve => { resolveDetails = resolve; }),
+  });
+  utilityModal.hidden = false;
+  context.openTrackModal(preview, { coverLightboxGallery: false, foreground: true });
+  assert.equal(trackModal.classList.contains('is-above-settings'), true);
+  const utilityPath = path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js');
+  vm.runInContext(fs.readFileSync(utilityPath, 'utf8'), context, { filename: utilityPath });
+  context.deferActiveStartupViewForUtilityModal = () => {};
+  context.renderUtilityModalContent = () => {};
+  context.openUtilityModal({ resetSearch: false, resetSelection: false, forceLoad: false });
+  assert.equal(trackModal.classList.contains('is-above-settings'), false);
+  resolveDetails({ ok: true, status: 200, json: async () => ({
+    ok: true, album: { ...preview, preview_only: false, tracks: [{ path: 'track.flac' }] },
+  }) });
+  await flushMicrotasks();
+  assert.equal(trackModal.hidden, false);
+  assert.equal(trackModal.classList.contains('is-above-settings'), false,
+    'late detail hydration cannot take foreground back from Settings');
+  assert.equal(utilityModal.hidden, false);
+  assert.equal(context.state.ui.trackModalCoverLightboxGallery, false);
+});
+
+function lightboxFocusHarness() {
+  const result = loadHelper();
+  const { context, lightboxOverlay } = result;
+  const close = new FakeHtmlElement('image-lightbox-close');
+  const next = new FakeHtmlElement('image-lightbox-next');
+  const trigger = new FakeHtmlElement('settings-artwork');
+  for (const element of [close, next, trigger]) {
+    element.hidden = false;
+    element.disabled = false;
+    element.isConnected = true;
+    element.tabIndex = 0;
+    element.focus = () => { context.document.activeElement = element; };
+    element.getClientRects = () => [{}];
+  }
+  context.document.activeElement = trigger;
+  context.document.removeEventListener = (type, listener) => {
+    result.documentListeners.set(type, (result.documentListeners.get(type) || []).filter(item => item !== listener));
+  };
+  const getLightboxElements = context.getLightboxElements;
+  context.getLightboxElements = () => ({ ...getLightboxElements(), close, next });
+  lightboxOverlay.querySelectorAll = () => [next, close];
+  lightboxOverlay.contains = (element) => [close, next].includes(element);
+  context.attachModalEvents();
+  const keydown = (properties) => {
+    let prevented = false;
+    const event = { target: context.document.activeElement, ...properties, preventDefault() { prevented = true; }, stopPropagation() {} };
+    for (const listener of result.documentListeners.get('keydown') || []) listener(event);
+    return prevented;
+  };
+  return { ...result, close, next, trigger, keydown };
+}
+
+test('S05 opening artwork focuses lightbox Close and closing restores its original trigger', () => {
+  const { context, close, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  assert.equal(context.document.activeElement, close);
+  context.closeImageLightbox();
+  assert.equal(context.document.activeElement, trigger);
+});
+
+test('S05 lightbox wraps Tab and Shift+Tab inside its enabled controls', () => {
+  const { context, close, next, keydown } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  close.focus();
+  assert.equal(keydown({ key: 'Tab' }), true);
+  assert.equal(context.document.activeElement, next);
+  assert.equal(keydown({ key: 'Tab', shiftKey: true }), true);
+  assert.equal(context.document.activeElement, close);
+});
+
+test('S05 closing artwork never restores focus to a detached trigger', () => {
+  const { context, trigger } = lightboxFocusHarness();
+  context.openImageLightbox('/cover.png', 'Test artwork');
+  trigger.isConnected = false;
+  trigger.focus = () => { assert.fail('detached artwork trigger cannot receive focus'); };
+  assert.doesNotThrow(() => context.closeImageLightbox());
+});
+
 async function flushAlbumDetailsHydration() {
   await Promise.resolve();
   await Promise.resolve();
@@ -616,7 +729,9 @@ async function run() {
       fetchedAlbum: hydratedAlbum,
     });
 
-    context.openTrackModal(previewAlbum, { coverLightboxGallery: false });
+    context.document.getElementById('utility-modal').hidden = false;
+    context.openTrackModal(previewAlbum, { coverLightboxGallery: false, foreground: true });
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true);
     assert.equal(
       context.state.ui.trackModalCoverLightboxGallery,
       false,
@@ -630,6 +745,8 @@ async function run() {
       false,
       'detail hydration must preserve the player-origin single-cover mode',
     );
+    assert.equal(context.document.getElementById('track-modal').classList.contains('is-above-settings'), true,
+      'normal detail hydration retains the player-requested foreground order');
 
     context.openTrackModal({ key: 'beta', name: 'Album Beta', tracks: [] });
     assert.equal(

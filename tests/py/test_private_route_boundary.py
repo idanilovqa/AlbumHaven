@@ -76,6 +76,12 @@ def test_private_routes_have_explicit_action_classification():
         ("POST", "/refresh-api", "library.refresh"),
         ("POST", "/utilities/edit-tags", "library.files.edit_tags"),
         ("POST", "/playback/session/scrobble", "integration.lastfm.scrobble"),
+        ("GET", "/utilities/integrations/lastfm/scrobbles", "integration.settings.read"),
+        (
+            "POST",
+            "/utilities/integrations/lastfm/scrobbles/submit",
+            "integration.lastfm.scrobbles.submit",
+        ),
         ("POST", "/loops/delete", "library.loops.delete"),
         ("POST", "/playlists/{playlist_ref}/items", "library.playlists.items.manage"),
         ("POST", "/logout", "auth.session.logout"),

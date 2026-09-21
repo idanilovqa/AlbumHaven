@@ -91,6 +91,7 @@ def test_canonical_compact_write_inserts_revision_but_no_unprovided_aggregate_co
     sql, _params = connection.operations[0]
     insert_columns = sql.split("select account_id", 1)[0]
     assert "revision" in insert_columns
+    assert "revision = saved.revision + 1" in sql
     assert "interaction_overrides" not in insert_columns
 
 

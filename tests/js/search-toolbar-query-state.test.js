@@ -78,3 +78,42 @@ test('Home sidebar observation preserves explicit runtime clearing and real empt
   assert.equal(hasAppliedCanonicalSidebar([], [], { loaderVisible: false, payloadPresent: false }), false);
   assert.equal(hasAppliedCanonicalSidebar([], ['Stale Artist'], { loaderVisible: false, payloadPresent: true }), false);
 });
+
+
+test('local clear settlement reads supported current-view family base groups without mutating state', async () => {
+  const { readRuntimeCanonicalView, resolveCurrentCanonicalView } = await import(searchToolbarUrl);
+  const { hasAppliedCanonicalArtistSurface } = await import(new URL('../helpers/productionViewObserver.js', searchToolbarUrl));
+  const runtime = {
+    view: { query: '', surface: { active: 'albums' }, selected_artist: 'Primary',
+      artist_groups: [{ artist: 'Primary' }],
+      related_filter_base_primary_groups: [{ artist: 'Primary' }],
+      related_filter_base_family_groups: [{ artist: 'Family', albums: [{ name: 'Retained' }] }],
+    },
+    ui: { viewStateRevision: 1 }, busy: false,
+  };
+  const before = JSON.stringify(runtime);
+  assert.equal(typeof readRuntimeCanonicalView, 'function');
+  const snapshot = readRuntimeCanonicalView(runtime);
+  const canonical = resolveCurrentCanonicalView({ query: 'Primary', artist_groups: [{ artist: 'Primary' }] }, snapshot);
+  assert.deepEqual(canonical.artists, ['Primary', 'Family']);
+  assert.equal(hasAppliedCanonicalArtistSurface(canonical.artists, ['Family']), true);
+  assert.equal(hasAppliedCanonicalArtistSurface(canonical.artists, ['Unrelated']), false);
+  assert.equal(hasAppliedCanonicalArtistSurface(canonical.artists, []), false);
+  assert.equal(JSON.stringify(runtime), before);
+});
+
+test('runtime canonical evidence rejects unrelated gallery cache scope and query', async () => {
+  const { readRuntimeCanonicalView } = await import(searchToolbarUrl);
+  assert.equal(typeof readRuntimeCanonicalView, 'function');
+  for (const cache of [
+    { relatedFilterBaseArtist: 'Other owner', relatedFilterBaseQuery: '' },
+    { relatedFilterBaseArtist: 'Primary', relatedFilterBaseQuery: 'old query' },
+    { relatedFilterBaseArtist: 'Primary', relatedFilterBaseQuery: '', accountId: 'foreign', libraryId: 'foreign' },
+  ]) {
+    const snapshot = readRuntimeCanonicalView({
+      view: { query: '', selected_artist: 'Primary', artist_groups: [{ artist: 'Primary' }] },
+      gallery: { ...cache, relatedFilterBaseFamilyGroups: [{ artist: 'Foreign cache' }] },
+    });
+    assert.deepEqual(snapshot.artists, ['Primary']);
+  }
+});

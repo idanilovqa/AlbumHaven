@@ -50,7 +50,7 @@ test('shared Button CSS centers content on both axes and EditorFooter composes t
   const bootstrap = fs.readFileSync(path.join(repoRoot, 'music_app', 'templates', 'partials', 'appearance-bootstrap.html'), 'utf8');
   assert.match(css, /\.ui-button\s*\{[^}]*display:\s*inline-flex[^}]*align-items:\s*center[^}]*justify-content:\s*center[^}]*line-height:\s*1/s);
   assert.match(css, /\.ui-button\[hidden\]\s*\{[^}]*display:\s*none\s*!important/s);
-  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
+  assert.match(css, /\.ui-button\s*\{[^}]*outline:\s*1px solid transparent[^}]*outline-offset:\s*-1px[^}]*transition:[^;}]*outline-color 150ms ease/s);
   assert.match(css, /\.ui-button:hover:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
   assert.match(css, /\.ui-button:active:not\(:disabled\):not\(\[aria-disabled='true'\]\)\s*\{[^}]*background:\s*var\(--appearance-item-action-pressed,/s);
   assert.match(css, /\.ui-button:focus-visible\s*\{[^}]*outline-color:\s*var\(--appearance-interaction-outline,/s);
@@ -156,4 +156,17 @@ test('Jinja ActionButton macro shares the JavaScript contract and accepts struct
   assert.match(macro, /for attribute_name, attribute_value in attributes\.items\(\)/);
   assert.match(macro, /action-button__content/);
   assert.match(macro, /caller\(\)/);
+});
+
+test('shared Button state changes update both native and accessible disabled state', () => {
+  const { setDisabled } = require(componentPath);
+  const attributes = new Map([['aria-disabled', 'true']]);
+  const element = { disabled: true, setAttribute(name, value) { attributes.set(name, value); } };
+  assert.equal(typeof setDisabled, 'function');
+  setDisabled(element, false);
+  assert.equal(element.disabled, false);
+  assert.equal(attributes.get('aria-disabled'), 'false');
+  setDisabled(element, true);
+  assert.equal(element.disabled, true);
+  assert.equal(attributes.get('aria-disabled'), 'true');
 });

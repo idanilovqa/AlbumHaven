@@ -6,6 +6,20 @@
   --trigger-anchor-background: var(--appearance-panel-background, var(--panel));
 }
 @property --trigger-anchor-cap { syntax: '<color>'; inherits: true; initial-value: #55c7ff; }
+:root .trigger-anchor-open,
+#utility-modal .utility-tab.is-active {
+  --trigger-anchor-border-fill: linear-gradient(var(--trigger-anchor-direction, to bottom),
+    var(--trigger-anchor-cap) 0%,
+    color-mix(in srgb, var(--trigger-anchor-cap) 85%, var(--trigger-anchor-accent)) 20%,
+    color-mix(in srgb, var(--trigger-anchor-cap) 50%, var(--trigger-anchor-accent)) 45%,
+    color-mix(in srgb, var(--trigger-anchor-cap) 15%, var(--trigger-anchor-accent)) 70%,
+    var(--trigger-anchor-accent) 100%);
+}
+:root .trigger-anchor-surface,
+.utility-modal-header {
+  --trigger-anchor-line-left: linear-gradient(to left, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+  --trigger-anchor-line-right: linear-gradient(to right, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%);
+}
 :root .trigger-anchor-open {
   --trigger-anchor-cap: var(--trigger-anchor-accent);
   transition: --trigger-anchor-cap 220ms ease;
@@ -18,12 +32,7 @@
   box-shadow: none !important;
   background:
     linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box,
-    linear-gradient(var(--trigger-anchor-direction),
-      var(--trigger-anchor-cap) 0%,
-      color-mix(in srgb, var(--trigger-anchor-cap) 85%, var(--trigger-anchor-accent)) 20%,
-      color-mix(in srgb, var(--trigger-anchor-cap) 50%, var(--trigger-anchor-accent)) 45%,
-      color-mix(in srgb, var(--trigger-anchor-cap) 15%, var(--trigger-anchor-accent)) 70%,
-      var(--trigger-anchor-accent) 100%) border-box !important;
+    var(--trigger-anchor-border-fill) border-box !important;
   color: var(--trigger-anchor-accent) !important;
 }
 :root .trigger-anchor-surface {
@@ -43,8 +52,8 @@
 :root .trigger-anchor-surface::after {
   content: ''; position: absolute; inset: 0 0 auto; height: 2px; padding: 0;
   border: 0; border-radius: 0; pointer-events: none; mask: none; clip-path: none;
-  background: linear-gradient(to left, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%) left top / calc(var(--trigger-anchor-left) + 1px) var(--trigger-top-line-width, 2px) no-repeat,
-    linear-gradient(to right, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%) right top / calc(var(--trigger-anchor-right) + 1px) var(--trigger-top-line-width, 2px) no-repeat;
+  background: var(--trigger-anchor-line-left) left top / calc(var(--trigger-anchor-left) + 1px) var(--trigger-top-line-width, 2px) no-repeat,
+    var(--trigger-anchor-line-right) right top / calc(var(--trigger-anchor-right) + 1px) var(--trigger-top-line-width, 2px) no-repeat;
 }
 :root .trigger-anchor-open[data-trigger-anchor-edge="bottom"] {
   border-top: 0 !important; border-bottom: 2px solid transparent !important;
@@ -66,7 +75,7 @@
 :root .trigger-anchor-surface::before { display: none; }
 :root .trigger-anchor-open::after {
   content: ''; position: absolute; left: -2px; right: -2px; top: 100%;
-  height: calc(var(--trigger-anchor-gap, 0px) + 2px);
+  height: var(--trigger-anchor-gap, 0px);
   border-inline: 2px solid var(--trigger-anchor-accent); box-sizing: border-box;
   background: var(--trigger-anchor-background); pointer-events: none;
 }
@@ -104,6 +113,13 @@
 }
 
 /* Share the gallery divider's pixel row and thickness. */
+:root .artist-family-panel.trigger-anchor-surface {
+  /* The button owns the bridge; do not expose the panel shadow above its edge. */
+  clip-path: inset(-1px 0 100% 0);
+}
+:root .artist-family-panel.trigger-anchor-surface.is-open {
+  clip-path: inset(-1px 0 0 0);
+}
 :root .artist-family-panel.trigger-anchor-surface::after {
   top: -1px;
   height: 1px;
@@ -127,3 +143,27 @@
 
 :root.panel-text-selection-active .panel-selection-origin::selection,
 :root.panel-text-selection-active .panel-selection-origin *::selection { background: Highlight; color: HighlightText; }
+
+/* Shared dropdown rows. Themes may override --dropdown-item-hover-background. */
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill) {
+  outline: none !important;
+  box-shadow: none !important;
+  transition: background-color 150ms ease;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: transparent !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch, .ui-filter-pill):focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+}
+:root :is(.account-menu-item, .gallery-anchored-menu button, [role="menu"] [role^="menuitem"], [role="listbox"] [role="option"], .album-card-context-menu button, .status-context-menu button, .gallery-options-menu button, .utility-problem-filter-option, .utility-loop-speed-menu button, .recent-search-option, .artist-family-panel__combine-row .gallery-switch):focus-visible:not(:disabled):not([aria-disabled="true"]) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+:root .artist-family-panel__combine-row .gallery-switch:active:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))) !important;
+  border-color: transparent !important;
+}

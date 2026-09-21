@@ -3,6 +3,7 @@
   'use strict';
   const catalog = typeof module !== 'undefined' && module.exports ? require('./appearance-palettes.js') : scope.AlbumHavenAppearancePalettes;
   const ButtonComponent = typeof module !== 'undefined' && module.exports ? require('./button-component.js') : scope.ButtonComponent;
+  const AlertComponent = typeof module !== 'undefined' && module.exports ? require('./runtime/alert-components.js') : scope.AlertComponent;
   const { palettes, resolveAppearance, normalizePlayerOverride, nativePlayerStyle, nativePlayerComponents } = catalog;
   const keys = ['main_surface_color', 'panel_background_color'];
   const defaults = { main_surface_color: '#111C2C', panel_background_color: '#0E1B2B' };
@@ -14,7 +15,7 @@
     { id: 'soft-black', name: 'Soft black', description: 'A quiet neutral player with silver detail.', style: { surface: { mode: 'gradient', angle: 0, start: '#171817', end: '#050606' }, controls: { fill: '#BFC4C1', border: '#F0F2F1' }, waveform: { fill: '#8E9691', edge: '#E5E8E6' }, handles: { color: '#E5E8E6' } } },
   ];
   const empty = () => ({ main_surface_color: null, panel_background_color: null });
-  const canonicalEmpty = () => ({ ...empty(), palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked', album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled', alert_family: 'ember' });
+  const canonicalEmpty = () => ({ ...empty(), palette_id: null, panel_index: 0, player_override: null, compact_player_style: 'docked', album_details_layout: 'classic_bar', album_playing_row_animation: 'enabled', alert_family: 'ember', loop_control_style: 'capsule' });
   const isCanonical = value => ['palette_id', 'panel_index', 'player_override'].some(key => Object.hasOwn(value, key));
   const copy = value => value == null ? value : JSON.parse(JSON.stringify(value));
   const isAggregate = value => Boolean(value && ['revision', 'interaction_overrides', 'selection_accent', 'player_style_override', 'player_recent_sets'].some(key => Object.hasOwn(value, key)));
@@ -153,7 +154,9 @@
     if (!['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(albumDetailsLayout)) throw new TypeError('Unknown Album Details layout.');
     if (!['enabled', 'disabled'].includes(albumPlayingRowAnimation)) throw new TypeError('Unknown playing-row animation.');
     if (!['ember', 'signal', 'quiet'].includes(alertFamily)) throw new TypeError('Unknown alert family.');
-    const preference = { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override), compact_player_style: compactStyle, album_details_layout: albumDetailsLayout, album_playing_row_animation: albumPlayingRowAnimation, alert_family: alertFamily };
+    const loopControlStyle = value.loop_control_style === undefined ? 'capsule' : value.loop_control_style;
+    if (!['capsule', 'companion'].includes(loopControlStyle)) throw new TypeError('Unknown loop control style.');
+    const preference = { ...(id === null ? normalized : empty()), palette_id: id, panel_index: value.panel_index, player_override: normalizePlayerOverride(value.player_override), compact_player_style: compactStyle, album_details_layout: albumDetailsLayout, album_playing_row_animation: albumPlayingRowAnimation, alert_family: alertFamily, loop_control_style: loopControlStyle };
     if (!isAggregate(value)) return preference;
     const interaction = value.interaction_overrides;
     const accent = value.selection_accent;
@@ -304,13 +307,15 @@
     editor.setAttribute('data-alert-family', value.alert_family || 'ember');
   }
   function clearTheme(rootElement) { applyTheme(empty(), rootElement); }
-  function createController({ initial = empty(), request, apply = () => {} }) {
+  function createController({ initial = empty(), request, apply = () => {}, loopCreateAllowed = false }) {
     let aggregate = isAggregate(initial), revision = aggregate && Number.isInteger(initial.revision) ? initial.revision : 0;
     let playerRecentSets = aggregate ? normalizePlayerSets(initial.player_recent_sets) : [], pendingPlayerSet = null, activeSection = 'backgrounds';
     let saved = normalizePreferences(initial), draft = copy(saved), errors = {}, inputValues = {};
     let recentColors = normalizeRecentColors(initial.waveform_recent_colors), waveformColorUpdates = [];
     let loading = false, saving = false, error = '', loadFailed = false, generation = 0;
     const listeners = new Set(), busy = () => loading || saving || loadFailed;
+    let savedSeekbarMode = 'default', draftSeekbarMode = 'default', applySeekbarMode = () => {}, seekbarConfigured = false;
+    const mayChangeLoopStyle = () => (typeof loopCreateAllowed === 'function' ? loopCreateAllowed() : loopCreateAllowed) === true;
     const syncInputs = (preserveErrors = false) => {
       const next = Object.fromEntries(keys.map(key => [key, draft[key] || defaults[key]]));
       const effective = resolveAppearance({ ...draft, player_override: draft.player_style_override || draft.player_override });
@@ -322,7 +327,7 @@
     };
     syncInputs();
     const getState = () => {
-      const dirty = JSON.stringify(draft) !== JSON.stringify(saved) || Object.keys(errors).length > 0 || waveformColorUpdates.length > 0;
+      const dirty = draftSeekbarMode !== savedSeekbarMode || JSON.stringify(draft) !== JSON.stringify(saved) || Object.keys(errors).length > 0 || waveformColorUpdates.length > 0;
       const effective = resolveAppearance({ ...draft, player_override: draft.player_style_override || draft.player_override }), warnings = [];
       if (!draft.palette_id) for (const key of keys) {
         const label = key === 'main_surface_color' ? 'Main surface' : 'App bar and panels';
@@ -331,8 +336,8 @@
         }
       }
       const canSave = dirty && !busy() && !Object.keys(errors).length;
-      return { saved: copy(saved), draft: copy(draft), revision, activeSection, playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
-        recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave, error, loadFailed, warnings,
+      return { seekbarMode: draftSeekbarMode, saved: copy(saved), draft: copy(draft), revision, activeSection, playerRecentSets: copy(playerRecentSets), errors: { ...errors }, inputValues: { ...inputValues }, effective,
+        recentColors: [...recentColors], waveformColorUpdates: [...waveformColorUpdates], loading, saving, dirty, canSave, error, loadFailed, warnings, canChangeLoopStyle: mayChangeLoopStyle(),
         footer: { dirty, canSave, canRetry: dirty && Boolean(error), status: dirty ? 'Unsaved appearance changes' : 'Saved to your account' } };
     };
     const notify = () => listeners.forEach(listener => listener(getState()));
@@ -399,6 +404,18 @@
       if (!['docked', 'floating'].includes(style)) throw new TypeError('Unknown compact player style.');
       if (busy()) return;
       promote(); draft.compact_player_style = style; error = ''; notify();
+    };
+    const setLoopControlStyle = style => {
+      if (!['capsule', 'companion'].includes(style)) throw new TypeError('Unknown loop control style.');
+      if (busy() || !mayChangeLoopStyle()) return;
+      promoteAggregate(); draft.loop_control_style = style; error = ''; notify();
+    };
+    const reconcileLoopCapability = () => {
+      if (!mayChangeLoopStyle() && draft.loop_control_style !== saved.loop_control_style) {
+        if (Object.hasOwn(saved, 'loop_control_style')) draft.loop_control_style = saved.loop_control_style;
+        else delete draft.loop_control_style;
+      }
+      notify();
     };
     const setAlbumDetailsLayout = layout => {
       if (!['classic_bar', 'stacked_bar', 'editorial_canvas'].includes(layout)) throw new TypeError('Unknown Album Details layout.');
@@ -519,10 +536,10 @@
       if (!['backgrounds', 'seekbar', 'selection-accent', 'alerts', 'album-page'].includes(value)) throw new TypeError('Unknown Appearance section.');
       activeSection = value; notify();
     };
-    const cancel = () => { if (loading || saving) return; draft = copy(saved); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; syncInputs(); notify(); };
+    const cancel = () => { if (loading || saving) return; draftSeekbarMode = savedSeekbarMode; draft = copy(saved); pendingPlayerSet = null; errors = {}; waveformColorUpdates = []; error = ''; syncInputs(); notify(); };
     const reset = () => {
       if (busy()) return;
-      draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null } : empty();
+      draft = isCanonical(draft) ? { ...canonicalEmpty(), player_override: draft.player_override ? { ...draft.player_override } : null, loop_control_style: draft.loop_control_style || 'capsule' } : empty();
       keys.forEach(key => delete errors[key]); error = ''; syncInputs(true); notify();
     };
     const resetSection = (section = activeSection) => {
@@ -533,6 +550,7 @@
       } else if (section === 'seekbar') {
         draft.player_style_override = null; draft.player_override = null; draft.compact_player_style = 'docked'; pendingPlayerSet = null; waveformColorUpdates = [];
         delete errors.player_background; delete errors.player_fill; delete errors.player_edge; clearPlayerStyleErrors();
+        if (mayChangeLoopStyle()) draft.loop_control_style = 'capsule';
       } else if (section === 'selection-accent') {
         const paletteAccent = palettes.find(palette => palette.id === draft.palette_id)?.selectionAccent;
         draft.selection_accent = { enabled: true, color: paletteAccent || defaultSelectionAccent.color };
@@ -561,6 +579,7 @@
       } finally { if (ownGeneration === generation) { loading = false; notify(); } }
     };
     const save = async () => {
+      reconcileLoopCapability();
       if (!getState().canSave) return false;
       const ownGeneration = ++generation, submitted = aggregate
         ? {
@@ -576,7 +595,9 @@
         const preference = normalizePreferences(response), history = normalizeRecentColors(response.waveform_recent_colors);
         if (ownGeneration !== generation) return false;
         if (aggregate) { revision = response.revision; playerRecentSets = normalizePlayerSets(response.player_recent_sets); }
-        saved = preference; draft = copy(saved); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved)); return true;
+        saved = preference; draft = copy(saved); pendingPlayerSet = null; recentColors = history; waveformColorUpdates = []; errors = {}; syncInputs(); apply(copy(saved));
+        if (draftSeekbarMode !== savedSeekbarMode) { applySeekbarMode(draftSeekbarMode); savedSeekbarMode = draftSeekbarMode; }
+        return true;
       } catch (failure) {
         if (ownGeneration === generation) {
           if (failure?.status === 409 && Number.isInteger(failure?.data?.appearance?.revision)) {
@@ -607,9 +628,11 @@
       recentColors = []; waveformColorUpdates = []; playerRecentSets = []; pendingPlayerSet = null; revision = 0;
       error = typeof message === 'string' ? message : ''; loading = false; saving = false; loadFailed = true; syncInputs(); notify();
     };
-    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
+    return { getState, setColor, setPalette, setPanelIndex, setPlayerMode, setCompactPlayerStyle, setLoopControlStyle, setAlbumDetailsLayout, setAlbumPlayingRowAnimation, setAlertFamily, setPlayerColor, setWaveformColor, restoreWaveformColors,
+      configureSeekbar(mode, applyMode) { if (!seekbarConfigured) { savedSeekbarMode = draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; seekbarConfigured = true; } applySeekbarMode = applyMode; },
+      setSeekbarMode(mode) { if (busy()) return; draftSeekbarMode = mode === 'waveform' ? 'waveform' : 'default'; notify(); },
       setPlayerStyle, setPlayerStyleColor, restorePlayerSet, setSelectionAccent, setInteractionOverrides, setItemOutline, useThemeInteractions, setActiveSection, cancel, reset, resetSection, load, save, clear,
-      subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
+      reconcileLoopCapability, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   }
   function colorField(field, label) {
     return `<div class="background-color-field"><label for="appearance-player-${field}-hex">${label}</label>
@@ -617,13 +640,25 @@
       <input type="text" id="appearance-player-${field}-hex" data-player-hex="${field}" maxlength="7" spellcheck="false" autocomplete="off" aria-describedby="appearance-player-${field}-error"></div>
       <div class="background-field-error" id="appearance-player-${field}-error" data-player-error="${field}" role="status"></div></div>`;
   }
-  const previewAlertIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path></svg>';
-  const previewInfoIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6"></path><path d="M12 7.5h.01"></path></svg>';
   const previewPencilIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 4.5-1 10-10-3.5-3.5-10 10L4 20Z"></path><path d="m13.8 6.7 3.5 3.5"></path></svg>';
   const previewFolderIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7.5h7l2-2h9v14H3Z"></path></svg>';
   const previewCloseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>';
+  function previewPageAlert(severity = 'error', title = 'Album details unavailable', message = 'This album cannot be found under the current libraries. Its library entry is still saved.', disabled = false) {
+    return AlertComponent.buildOnPageAlertHtml({
+      severity, title, message, role: 'status',
+      actionsHtml: ButtonComponent.renderButton({ label: 'Remove from library', variant: 'primary', disabled, attributes: { tabindex: '-1' } })
+        + ButtonComponent.renderButton({ label: 'Keep as missing', disabled, attributes: { tabindex: '-1' } }),
+    });
+  }
   function previewOnPageAlertMarkup() {
-    return `<section class="on-page-alert on-page-alert--error appearance-alert-preview__page" role="presentation"><span class="on-page-alert__icon" data-alert-preview-icon>${previewAlertIcon}</span><div class="on-page-alert__content"><strong class="on-page-alert__title" data-alert-preview-title>Album details unavailable</strong><p class="on-page-alert__message" data-alert-preview-copy>This album cannot be found under the current libraries. Its library entry is still saved.</p><div class="on-page-alert__actions"><button class="ui-button ui-button--primary" type="button" tabindex="-1">Remove from library</button><button class="ui-button ui-button--secondary" type="button" tabindex="-1">Keep as missing</button></div></div></section>`;
+    return `<div class="appearance-alert-preview__page" aria-hidden="true">${previewPageAlert()}</div>`;
+  }
+  function syncAppearanceAlert(host, message, severity = 'error') {
+    host.hidden = !message;
+    if (!message) { host.innerHTML = ''; return; }
+    if (host.querySelector('.on-page-alert__message')?.textContent !== message) {
+      host.innerHTML = AlertComponent.buildOnPageAlertHtml({ severity, title: 'Appearance settings', message });
+    }
   }
   function alertsMarkup() {
     const families = [
@@ -631,7 +666,7 @@
       ['signal', 'Signal', 'Clear color with a cooler surface'],
       ['quiet', 'Quiet', 'Low-glare cues for long sessions'],
     ];
-    return `<section class="appearance-background-editor appearance-alerts" aria-labelledby="appearance-alerts-title"><div class="appearance-section-heading"><div><h3 id="appearance-alerts-title">Alerts</h3><p class="background-intro">Choose one coordinated treatment for errors, warnings, and information.</p></div><span>Draft preview</span></div><section class="appearance-alerts__families" aria-labelledby="appearance-alert-family-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-alert-family-title">Alert family</h4><p class="background-help">Every family preserves severity meaning and readable contrast.</p></div><small>3 curated families</small></div><div class="appearance-alert-family-grid">${families.map(([value, label, description]) => `<button class="appearance-alert-family-card" type="button" data-alert-family="${value}" aria-pressed="false"><span><strong>${label}</strong><small>${description}</small></span><i aria-hidden="true">✓</i><span class="appearance-alert-family-card__chord"><b>Error</b><b>Warning</b><b>Info</b></span></button>`).join('')}</div></section><section class="appearance-live-preview appearance-alert-live-preview" data-alert-live-preview><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">See the selected family at page and artbox scale.</p></div><div class="appearance-segmented" role="group" aria-label="Preview severity"><button type="button" data-alert-preview-severity="error" aria-pressed="true">Error</button><button type="button" data-alert-preview-severity="warning" aria-pressed="false">Warning</button><button type="button" data-alert-preview-severity="info" aria-pressed="false">Info</button></div></div><div class="appearance-alert-preview-grid">${previewOnPageAlertMarkup()}<div class="appearance-alert-preview__small"><div><strong>Artbox action</strong><small>Compact and expanded</small></div><div class="appearance-alert-preview__small-pair"><span class="small-alert small-alert--error" data-alert-preview-small-compact><span class="small-alert__icon" data-small-alert-preview-icon>${previewAlertIcon}</span></span><span class="small-alert small-alert--error appearance-alert-preview__small-expanded" data-alert-preview-small-expanded><span class="small-alert__icon" data-small-alert-preview-icon>${previewAlertIcon}</span><span class="small-alert__text" data-alert-preview-small-label>Album not found</span></span></div></div></div></section><p class="background-request-error" data-background-request-error role="alert" hidden></p><div class="background-actions"></div></section>`;
+    return `<section class="appearance-background-editor appearance-alerts" aria-labelledby="appearance-alerts-title"><div class="appearance-section-heading"><div><h3 id="appearance-alerts-title">Alerts</h3><p class="background-intro">Choose one coordinated treatment for errors, warnings, and information.</p></div><span>Draft preview</span></div><section class="appearance-alerts__families" aria-labelledby="appearance-alert-family-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-alert-family-title">Alert family</h4><p class="background-help">Every family preserves severity meaning and readable contrast.</p></div><small>3 curated families</small></div><div class="appearance-alert-family-grid">${families.map(([value, label, description]) => `<button class="appearance-alert-family-card" type="button" data-alert-family="${value}" aria-pressed="false"><span><strong>${label}</strong><small>${description}</small></span><i aria-hidden="true">✓</i><span class="appearance-alert-family-card__chord"><b>Error</b><b>Warning</b><b>Info</b></span></button>`).join('')}</div></section><section class="appearance-live-preview appearance-alert-live-preview" data-alert-live-preview><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">See the selected family at page and artbox scale.</p></div><div class="appearance-segmented" role="group" aria-label="Preview severity"><button type="button" data-alert-preview-severity="error" aria-pressed="true">Error</button><button type="button" data-alert-preview-severity="warning" aria-pressed="false">Warning</button><button type="button" data-alert-preview-severity="info" aria-pressed="false">Info</button></div></div><div class="appearance-alert-preview-grid">${previewOnPageAlertMarkup()}<div class="appearance-alert-preview__small"><div><strong>Artbox action</strong><small>Compact and expanded</small></div><div class="appearance-alert-preview__small-pair"><span data-alert-preview-small-compact aria-hidden="true">${AlertComponent.buildSmallAlertHtml({ severity: 'error', message: 'Album not found' })}</span><span data-alert-preview-small-expanded aria-hidden="true">${AlertComponent.buildSmallAlertHtml({ severity: 'error', message: 'Album not found', className: 'appearance-alert-preview__small-expanded' })}</span></div></div></div></section><div class="background-request-error" data-background-request-error hidden></div><div class="background-actions"></div></section>`;
   }
   function albumPreviewTableMarkup() {
     const tracks = [['1', 'Mystery Train', '6:53'], ['2', 'My New World', '16:20'], ['3', 'We All Need Some Light', '5:45'], ['4', 'Duel With The Devil', '26:43']];
@@ -643,7 +678,7 @@
       ['stacked_bar', 'Stacked Bar', 'Identity and metadata use two header lines.'],
       ['editorial_canvas', 'Editorial Canvas', 'Art and large album identity lead the page.'],
     ];
-    return `<section class="appearance-background-editor appearance-album-page" aria-labelledby="appearance-album-page-title"><div class="appearance-section-heading"><div><h3 id="appearance-album-page-title">Album page</h3><p class="background-intro">Choose the Album Details composition and current-track motion.</p></div><span>Draft preview</span></div><div class="appearance-album-page__workspace"><section class="appearance-album-page__controls" aria-labelledby="appearance-album-layout-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-album-layout-title">Album Details layout</h4><p class="background-help">Choose how the header, art, and album information are arranged.</p></div></div><div class="appearance-album-layout-grid">${layouts.map(([value, label, description]) => `<button class="appearance-album-layout-card" type="button" data-album-details-layout="${value}" aria-pressed="false"><span class="appearance-album-layout-card__diagram appearance-album-layout-card__diagram--${value}" aria-hidden="true"><i></i><b></b><em></em><u></u></span><strong>${label}</strong><small>${description}</small></button>`).join('')}</div><div class="appearance-album-motion"><div><strong>Currently playing animation</strong><p class="background-help">Use perimeter motion on the active track. Reduced motion keeps a static accent outline.</p></div><div class="appearance-segmented" role="group" aria-label="Currently playing animation"><button type="button" data-album-playing-row-animation="enabled" aria-pressed="false">On</button><button type="button" data-album-playing-row-animation="disabled" aria-pressed="false">Off</button></div></div></section><section class="appearance-live-preview appearance-album-page__preview"><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">The state switch previews behavior; it is not saved.</p></div><div class="appearance-segmented" role="group" aria-label="Album preview state"><button type="button" data-album-preview-state="present" aria-pressed="true">Present</button><button type="button" data-album-preview-state="missing" aria-pressed="false">Missing</button></div></div><div class="appearance-album-preview" data-album-page-live-preview data-layout="classic_bar" data-preview-state="present"><header class="appearance-album-preview__bar"><div class="appearance-album-preview__identity"><strong><span>Transatlantic</span><i>•</i><span>SMPTe - The Roine Stolt Mixes</span><i>•</i><span>2003</span></strong><small><span>2003</span><i>•</i><span>ALBUM</span></small></div><span class="appearance-album-preview__type">ALBUM</span><div class="appearance-album-preview__actions"><button type="button" data-album-preview-file-action aria-label="Edit tags">${previewPencilIcon}</button><button type="button" data-album-preview-file-action aria-label="Open folder">${previewFolderIcon}</button><button type="button" aria-label="Close">${previewCloseIcon}</button></div></header><div class="appearance-album-preview__body"><div class="appearance-album-preview__art" aria-label="Missing album artwork"><span></span></div><div class="appearance-album-preview__content"><div class="appearance-album-preview__editorial-copy"><h5>SMPTe - The Roine Stolt Mixes</h5><p>Transatlantic <i>•</i> 2003 <i>•</i> ALBUM</p></div><div data-album-preview-present>${albumPreviewTableMarkup()}</div><div data-album-preview-missing hidden>${previewOnPageAlertMarkup()}</div></div></div></div></section></div><p class="background-request-error" data-background-request-error role="alert" hidden></p><div class="background-actions"></div></section>`;
+    return `<section class="appearance-background-editor appearance-album-page" aria-labelledby="appearance-album-page-title"><div class="appearance-section-heading"><div><h3 id="appearance-album-page-title">Album page</h3><p class="background-intro">Choose the Album Details composition and current-track motion.</p></div><span>Draft preview</span></div><div class="appearance-album-page__workspace"><section class="appearance-album-page__controls" aria-labelledby="appearance-album-layout-title"><div class="appearance-subsection-heading"><div><h4 id="appearance-album-layout-title">Album Details layout</h4><p class="background-help">Choose how the header, art, and album information are arranged.</p></div></div><div class="appearance-album-layout-grid">${layouts.map(([value, label, description]) => `<button class="appearance-album-layout-card" type="button" data-album-details-layout="${value}" aria-pressed="false"><span class="appearance-album-layout-card__diagram appearance-album-layout-card__diagram--${value}" aria-hidden="true"><i></i><b></b><em></em><u></u></span><strong>${label}</strong><small>${description}</small></button>`).join('')}</div><div class="appearance-album-motion"><div><strong>Currently playing animation</strong><p class="background-help">Use perimeter motion on the active track. Reduced motion keeps a static accent outline.</p></div><div class="appearance-segmented" role="group" aria-label="Currently playing animation"><button type="button" data-album-playing-row-animation="enabled" aria-pressed="false">On</button><button type="button" data-album-playing-row-animation="disabled" aria-pressed="false">Off</button></div></div></section><section class="appearance-live-preview appearance-album-page__preview"><div class="appearance-preview-heading"><div><h4>Live preview</h4><p class="background-help">The state switch previews behavior; it is not saved.</p></div><div class="appearance-segmented" role="group" aria-label="Album preview state"><button type="button" data-album-preview-state="present" aria-pressed="true">Present</button><button type="button" data-album-preview-state="missing" aria-pressed="false">Missing</button></div></div><div class="appearance-album-preview" data-album-page-live-preview data-layout="classic_bar" data-preview-state="present"><header class="appearance-album-preview__bar"><div class="appearance-album-preview__identity"><strong><span>Transatlantic</span><i>•</i><span>SMPTe - The Roine Stolt Mixes</span><i>•</i><span>2003</span></strong><small><span>2003</span><i>•</i><span>ALBUM</span></small></div><span class="appearance-album-preview__type">ALBUM</span><div class="appearance-album-preview__actions"><button type="button" data-album-preview-file-action aria-label="Edit tags">${previewPencilIcon}</button><button type="button" data-album-preview-file-action aria-label="Open folder">${previewFolderIcon}</button><button type="button" aria-label="Close">${previewCloseIcon}</button></div></header><div class="appearance-album-preview__body"><div class="appearance-album-preview__art" aria-label="Missing album artwork"><span></span></div><div class="appearance-album-preview__content"><div class="appearance-album-preview__editorial-copy"><h5>SMPTe - The Roine Stolt Mixes</h5><p>Transatlantic <i>•</i> 2003 <i>•</i> ALBUM</p></div><div data-album-preview-present>${albumPreviewTableMarkup()}</div><div data-album-preview-missing hidden>${previewOnPageAlertMarkup()}</div></div></div></div></section></div><div class="background-request-error" data-background-request-error hidden></div><div class="background-actions"></div></section>`;
   }
   const defaultSelectionAccent = { enabled: true, color: '#34CA78' };
   const mutedInteractionColors = ['#35506B', '#526B8B', '#4F665D', '#737548', '#785568', '#855F4F', '#666B72'];
@@ -702,10 +737,13 @@
       <div class="background-preview-player"><span class="background-preview-play">▶</span><span>Waveform</span><svg viewBox="0 0 160 28" role="img" aria-label="Waveform color preview"><path d="M0 14 L8 9 L16 6 L24 4 L32 2 L40 9 L48 11 L56 3 L64 10 L72 1 L80 10 L88 6 L96 3 L104 11 L112 5 L120 2 L128 10 L136 9 L144 7 L152 12 L160 14 L152 16 L144 21 L136 19 L128 18 L120 26 L112 23 L104 17 L96 25 L88 22 L80 18 L72 27 L64 18 L56 25 L48 17 L40 19 L32 26 L24 24 L16 22 L8 19 Z"/></svg></div>
       <div class="background-preview-actions" role="group" aria-labelledby="appearance-button-preview-label" aria-describedby="appearance-button-preview-help"><span><strong id="appearance-button-preview-label">Buttons</strong><small id="appearance-button-preview-help">Hover, press, or use Tab to preview interactions.</small></span><div>${previewCancel}${previewSave}</div></div></div>
       <div class="background-pair-summary"><strong data-background-pair-title></strong><p class="background-help" data-background-pair-description></p></div></aside></div>
-      <p class="background-warning" data-background-warning role="status" hidden></p><p class="background-request-error" data-background-request-error role="alert" hidden></p>
+      <div class="background-warning" data-background-warning hidden></div><div class="background-request-error" data-background-request-error hidden></div>
       <div class="background-actions"><button class="button button-secondary background-reset" type="button" data-background-reset>Reset backgrounds</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
-  function seekbarMarkup(seekbarMode = 'default') {
+  function loopControlStyleMarkup() {
+    return `<h4>Loop controls</h4><div class="background-player-modes" role="group" aria-label="Loop control style">${[['capsule', 'A · Joined capsule'], ['companion', 'B · Companion button']].map(([value, label]) => ButtonComponent.renderButton({ label, attributes: { 'data-loop-control-style-choice': value, 'aria-pressed': 'false' } })).join('')}</div>`;
+  }
+  function seekbarMarkup(seekbarMode = 'default', { loopCreateAllowed = false } = {}) {
     const waveformSelected = seekbarMode === 'waveform';
     return `<section class="appearance-background-editor appearance-seekbar-editor" aria-labelledby="appearance-waveform-title">
       <h3 id="appearance-waveform-title">Player &amp; Seekbar</h3><p class="background-intro">Adjust relative colors without changing the real stereo waveform, loop selection, or handle behavior.</p>
@@ -716,11 +754,11 @@
           ${waveformSelected ? `<svg class="player-preview-waveform" viewBox="0 0 600 42" preserveAspectRatio="none" role="img" aria-label="Stereo waveform using the selected colors">
             <g class="player-preview-unplayed"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g>
             <g class="player-preview-played"><path class="player-preview-channel is-left" d="M0 10 L20 8 L40 5 L60 9 L80 3 L100 7 L120 4 L140 8 L160 2 L180 6 L200 4 L220 9 L240 5 L260 7 L280 3 L300 8 L320 4 L340 6 L360 2 L380 7 L400 5 L420 9 L440 4 L460 6 L480 3 L500 8 L520 5 L540 7 L560 4 L580 8 L600 10 L580 12 L560 16 L540 13 L520 15 L500 12 L480 17 L460 14 L440 16 L420 11 L400 15 L380 13 L360 18 L340 14 L320 16 L300 12 L280 17 L260 13 L240 15 L220 11 L200 16 L180 14 L160 18 L140 12 L120 16 L100 13 L80 17 L60 11 L40 15 L20 12 Z"/><path class="player-preview-channel is-right" d="M0 31 L20 28 L40 25 L60 30 L80 24 L100 27 L120 23 L140 29 L160 25 L180 22 L200 28 L220 24 L240 30 L260 26 L280 23 L300 28 L320 25 L340 21 L360 27 L380 24 L400 29 L420 23 L440 26 L460 22 L480 28 L500 24 L520 30 L540 25 L560 27 L580 24 L600 31 L580 34 L560 36 L540 33 L520 38 L500 34 L480 37 L460 32 L440 36 L420 33 L400 39 L380 35 L360 37 L340 31 L320 36 L300 34 L280 39 L260 35 L240 37 L220 32 L200 38 L180 34 L160 37 L140 33 L120 39 L100 35 L80 38 L60 32 L40 37 L20 34 Z"/></g><line class="player-preview-playhead" x1="246" x2="246" y1="0" y2="42"/><circle class="player-preview-playhead-dot" cx="246" cy="21" r="2.5"/><g class="player-preview-loop-handles" aria-hidden="true"><line x1="145" x2="145" y1="0" y2="42"/><line x1="475" x2="475" y1="0" y2="42"/></g>
-          </svg>` : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
+          </svg>` : ''}${waveformSelected ? '' : `<div class="player-preview-seekbar" aria-label="Default seekbar preview"><span></span></div>`}
         </div>
       </div>
       </div>
-      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Display mode applies immediately in this browser.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section>
+      <section class="player-seekbar-mode" aria-labelledby="appearance-seekbar-style-label"><h4 id="appearance-seekbar-style-label">Seekbar style</h4><p class="background-help">Choose the player seekbar style. Changes apply after Save.</p><div class="appearance-section player-seekbar-options"><label class="appearance-option"><input type="radio" name="seekbar-mode" value="default" ${waveformSelected ? '' : 'checked'} data-appearance-seekbar-mode="default"><span>Default seekbar</span></label><label class="appearance-option"><input type="radio" name="seekbar-mode" value="waveform" ${waveformSelected ? 'checked' : ''} data-appearance-seekbar-mode="waveform"><span>Waveform seekbar</span></label></div></section>
       <div class="player-editor-workspace">
         <div class="player-editor-controls">
           <section class="player-theme-suggestions" aria-labelledby="appearance-player-themes-label"><h4 id="appearance-player-themes-label">Player themes</h4><p class="background-help">Choose a complete starting style, then adjust any individual color below.</p><div class="player-theme-grid">${playerThemes.map(theme => `<button type="button" class="player-theme-card" data-player-theme="${theme.id}" aria-pressed="false" title="${theme.description}" style="--theme-surface-start:${theme.style.surface.start};--theme-surface-end:${theme.style.surface.end};--theme-surface-angle:${theme.style.surface.angle}deg;--theme-control:${theme.style.controls.fill};--theme-wave-fill:${theme.style.waveform.fill};--theme-wave-edge:${theme.style.waveform.edge}"><span class="player-theme-swatch"><i></i><b></b></span><strong>${theme.name}</strong></button>`).join('')}</div></section>
@@ -735,19 +773,19 @@
         <aside class="player-set-history"><strong>Recent sets</strong><p class="background-help">Choose one of your five latest saved player configurations to restore.</p><div data-player-set-history></div></aside>
       </div>
       <section class="compact-player-style-section player-compact-setting" aria-labelledby="appearance-compact-player-label"><h4 id="appearance-compact-player-label">Compact player</h4><p class="background-help">Choose the desktop layout used when the player is collapsed.</p><div class="background-player-modes" role="group" aria-label="Compact player style"><button type="button" data-compact-player-style="docked" aria-pressed="true">Docked</button><button type="button" data-compact-player-style="floating" aria-pressed="false">Floating</button></div></section>
-      <button class="button button-secondary background-editor-link" type="button" data-utility-appearance-key="backgrounds">Back to Main elements</button>
+      <section class="compact-player-style-section player-loop-style-setting" data-loop-style-setting${loopCreateAllowed ? '' : ' hidden'}>${loopCreateAllowed ? loopControlStyleMarkup() : ''}</section>
       <p class="background-field-error" data-background-other-errors hidden></p><p class="background-help">Save applies all pending Backgrounds and waveform colors together. Cancel restores your saved colors.</p>
-      <p class="background-request-error" data-background-request-error role="alert" hidden></p>
+      <div class="background-request-error" data-background-request-error hidden></div>
       <div class="background-actions"><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button><button class="button button-secondary" type="button" data-background-retry hidden>Try again</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function selectionAccentMarkup() {
-    return `<section class="appearance-background-editor selection-accent-editor" aria-labelledby="appearance-selection-title"><h3 id="appearance-selection-title">Selection &amp; Hover</h3><p class="background-intro">Control selection, hover, pressed, and keyboard-focus colors for navigation, lists, and buttons.</p><div class="selection-hover-workspace"><div class="selection-hover-controls"><section class="selection-accent-section" aria-labelledby="selection-accent-color-title"><h4 id="selection-accent-color-title"><span>1</span>Selection accent</h4><label class="selection-accent-toggle"><input type="checkbox" data-aggregate-accent-enabled>Show selection accent</label><div class="appearance-muted-spectrum appearance-accent-spectrum">${selectionAccentColors.map(color => `<button type="button" data-aggregate-accent-color="${color}" style="--swatch:${color}" aria-label="Use selection accent ${color}"></button>`).join('')}<label class="appearance-spectrum-picker" aria-label="Choose any selection accent color"><input type="color" value="${defaultSelectionAccent.color}" data-aggregate-accent-custom aria-label="Choose any selection accent color"></label></div></section>${interactionControlsMarkup()}</div><aside class="selection-hover-preview" aria-labelledby="selection-hover-preview-title"><div class="selection-hover-preview-heading"><strong id="selection-hover-preview-title">Preview</strong><small>Updates immediately</small></div><div class="selection-preview-stack"><div class="selection-preview-example" style="border-top:2px solid var(--appearance-selected-accent);border-left:2px solid transparent;border-image:linear-gradient(to bottom,var(--appearance-selected-accent),transparent) 1"><strong>Panel &amp; dropdown outline</strong><small>Fades into the panel edge</small></div><div class="selection-preview-example is-navigation-hover" data-preview-state="navigation-hover"><strong>Navigation hover</strong><small>Artist item</small></div><div class="selection-preview-example is-navigation-selected" data-preview-state="navigation-selected"><strong>Navigation selected</strong><small>Selected artist</small></div><div class="selection-preview-example is-item-hover-background" data-preview-state="item-hover-background"><strong>Item hover background</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-outline" data-preview-state="item-outline"><strong>Item hover &amp; keyboard focus outline</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-pressed" data-preview-state="item-pressed"><strong>Item pressed</strong><small>Pressed action</small></div></div></aside></div><div class="selection-hover-revert"><button class="button button-secondary" type="button" data-interaction-use-theme>Use theme</button></div><p class="background-request-error" data-background-request-error role="alert" hidden></p><div class="background-actions"><button class="button button-secondary background-reset" type="button" data-selection-reset>Reset Selection &amp; Hover</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button></div><p class="background-status" data-background-status role="status"></p></section>`;
+    return `<section class="appearance-background-editor selection-accent-editor" aria-labelledby="appearance-selection-title"><h3 id="appearance-selection-title">Selection &amp; Hover</h3><p class="background-intro">Control selection, hover, pressed, and keyboard-focus colors for navigation, lists, and buttons.</p><div class="selection-hover-workspace"><div class="selection-hover-controls"><section class="selection-accent-section" aria-labelledby="selection-accent-color-title"><h4 id="selection-accent-color-title"><span>1</span>Selection accent</h4><label class="selection-accent-toggle"><input type="checkbox" data-aggregate-accent-enabled>Show selection accent</label><div class="appearance-muted-spectrum appearance-accent-spectrum">${selectionAccentColors.map(color => `<button type="button" data-aggregate-accent-color="${color}" style="--swatch:${color}" aria-label="Use selection accent ${color}"></button>`).join('')}<label class="appearance-spectrum-picker" aria-label="Choose any selection accent color"><input type="color" value="${defaultSelectionAccent.color}" data-aggregate-accent-custom aria-label="Choose any selection accent color"></label></div></section>${interactionControlsMarkup()}</div><aside class="selection-hover-preview" aria-labelledby="selection-hover-preview-title"><div class="selection-hover-preview-heading"><strong id="selection-hover-preview-title">Preview</strong><small>Updates immediately</small></div><div class="selection-preview-stack"><div class="selection-preview-example" style="border-top:2px solid var(--appearance-selected-accent);border-left:2px solid transparent;border-image:linear-gradient(to bottom,var(--appearance-selected-accent),transparent) 1"><strong>Panel &amp; dropdown outline</strong><small>Fades into the panel edge</small></div><div class="selection-preview-example is-navigation-hover" data-preview-state="navigation-hover"><strong>Navigation hover</strong><small>Artist item</small></div><div class="selection-preview-example is-navigation-selected" data-preview-state="navigation-selected"><strong>Navigation selected</strong><small>Selected artist</small></div><div class="selection-preview-example is-item-hover-background" data-preview-state="item-hover-background"><strong>Item hover background</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-outline" data-preview-state="item-outline"><strong>Item hover &amp; keyboard focus outline</strong><small>Actionable item</small></div><div class="selection-preview-example is-item-pressed" data-preview-state="item-pressed"><strong>Item pressed</strong><small>Pressed action</small></div></div></aside></div><div class="selection-hover-revert"><button class="button button-secondary" type="button" data-interaction-use-theme>Use theme</button></div><div class="background-request-error" data-background-request-error hidden></div><div class="background-actions"><button class="button button-secondary background-reset" type="button" data-selection-reset>Reset Selection &amp; Hover</button><button class="button button-secondary" type="button" data-background-cancel>Cancel</button><button class="button background-save" type="button" data-background-save>Save</button></div><p class="background-status" data-background-status role="status"></p></section>`;
   }
   function installBrowser(window, document) {
     if (window.AlbumHavenAppearance?.instance) return window.AlbumHavenAppearance.instance;
     const root = document.documentElement;
     let initial = empty(), csrfToken = '', loaded = false, mounted = null, unsubscribe = null, sessionGeneration = 0;
-    let activePlayerTab = 'surface', activeWaveformTab = 'waveform';
+    let activePlayerTab = 'surface', activeWaveformTab = 'waveform', loopCreateAllowed = false;
     try {
       const bootstrap = JSON.parse(document.getElementById('appearance-bootstrap')?.textContent || '{}');
       const preference = normalizePreferences(bootstrap);
@@ -777,10 +815,11 @@
       const response = await originalFetch('/account/appearance', { method, credentials: 'same-origin', cache: 'no-store', headers,
         ...(method === 'PUT' ? { body: JSON.stringify(payload) } : {}) });
       if (ownSession !== sessionGeneration) throw new Error('Session changed.');
-      if (response.status === 401 || response.status === 403 || (response.redirected && new URL(response.url, window.location.href).pathname === '/login')) clearSession('Your session changed or expired. Sign in again, then try loading backgrounds again.');
       if (!response.ok || response.redirected) {
         let failureData = null;
         try { failureData = await response.json(); } catch (_error) {}
+        if (ownSession !== sessionGeneration) throw new Error('Session changed.');
+        if (response.status === 401 || (response.status === 403 && failureData?.error !== 'loop_style_forbidden') || (response.redirected && new URL(response.url, window.location.href).pathname === '/login')) clearSession('Your session changed or expired. Sign in again, then try loading backgrounds again.');
         const failure = new Error('Appearance unavailable.'); failure.status = response.status; failure.data = failureData; throw failure;
       }
       const data = await response.json();
@@ -788,7 +827,7 @@
       if (method === 'GET') csrfToken = typeof data.csrf_token === 'string' ? data.csrf_token : '';
       return data;
     };
-    const controller = createController({ initial, request, apply: applySavedTheme });
+    const controller = createController({ initial, request, apply: applySavedTheme, loopCreateAllowed: () => loopCreateAllowed });
     const load = async () => { const result = await controller.load(); if (result) loaded = true; return result; };
     let footerDispose = null, mountedFooter = null, restoreFooterTheme = null;
     const mountSharedFooter = (localHost, options) => {
@@ -839,8 +878,6 @@
         const panel = palette?.panels[preference.panel_index];
         find('[data-background-pair-title]').textContent = palette ? palette.name + ' + ' + panel[0] : legacy ? 'Current custom colors' : 'Theme defaults';
         find('[data-background-pair-description]').textContent = panel?.[2] || 'Saved backgrounds remain unchanged until Save.';
-        applyDraftEditorTheme(state.saved, editor);
-        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-background-preview]');
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--preview-main', effective.main); preview.style.setProperty('--preview-panels', effective.panel);
@@ -857,9 +894,8 @@
         }
         const otherErrors = find('[data-background-other-errors]'); otherErrors.hidden = !state.errors.player_fill && !state.errors.player_edge; otherErrors.textContent = 'Fix the waveform color errors in Seekbar before saving.';
         find('[data-background-player-summary]').innerHTML = ['background', 'fill', 'edge'].map(field => { const color = effective.player[field]; return `<span><i style="background:${color}"></i>${({ background: 'Background', fill: 'Fill', edge: 'Edge' })[field]} <b>${color}</b></span>`; }).join('');
-        const warning = find('[data-background-warning]'); warning.hidden = !state.warnings.length;
-        warning.textContent = state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '';
-        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        syncAppearanceAlert(find('[data-background-warning]'), state.warnings.length ? `Low contrast: ${state.warnings.join('; ')}. Some text may be hard to read. You can still save these colors.` : '', 'warning');
+        syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         footerFind('[data-background-reset]').disabled = disabled;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave; footerFind('[data-background-save]').textContent = state.saving ? 'Saving…' : 'Save';
@@ -906,22 +942,15 @@
         editor.querySelectorAll('button').forEach(button => { button.disabled = disabled; });
         editor.querySelectorAll('.appearance-alert-family-card').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-family') === state.draft.alert_family)));
         editor.querySelectorAll('[data-alert-preview-severity]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-alert-preview-severity') === previewSeverity)));
-        applyDraftEditorTheme(state.saved, editor);
-        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-alert-live-preview]');
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-alert-family', state.draft.alert_family || 'ember');
         preview.setAttribute('data-alert-preview-active-severity', previewSeverity);
-        const pageAlert = find('.appearance-alert-preview__page');
-        pageAlert.className = `on-page-alert on-page-alert--${previewSeverity} appearance-alert-preview__page`;
-        editor.querySelectorAll('.small-alert').forEach(alert => { alert.classList.remove('small-alert--error', 'small-alert--warning', 'small-alert--info'); alert.classList.add(`small-alert--${previewSeverity}`); });
-        const icon = previewSeverity === 'info' ? previewInfoIcon : previewAlertIcon;
-        find('[data-alert-preview-icon]').innerHTML = icon;
-        editor.querySelectorAll('[data-small-alert-preview-icon]').forEach(host => { host.innerHTML = icon; });
-        find('[data-alert-preview-title]').textContent = previewCopy[previewSeverity][0];
-        find('[data-alert-preview-copy]').textContent = previewCopy[previewSeverity][1];
-        find('[data-alert-preview-small-label]').textContent = previewCopy[previewSeverity][2];
-        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        const [title, message, smallMessage] = previewCopy[previewSeverity];
+        find('.appearance-alert-preview__page').innerHTML = previewPageAlert(previewSeverity, title, message, disabled);
+        find('[data-alert-preview-small-compact]').innerHTML = AlertComponent.buildSmallAlertHtml({ severity: previewSeverity, message: smallMessage });
+        find('[data-alert-preview-small-expanded]').innerHTML = AlertComponent.buildSmallAlertHtml({ severity: previewSeverity, message: smallMessage, className: 'appearance-alert-preview__small-expanded' });
+        syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
         findFooter('[data-background-reset]').disabled = disabled;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
@@ -956,8 +985,6 @@
         editor.querySelectorAll('[data-album-details-layout]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-details-layout') === state.draft.album_details_layout)));
         editor.querySelectorAll('[data-album-playing-row-animation]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-playing-row-animation') === state.draft.album_playing_row_animation)));
         editor.querySelectorAll('[data-album-preview-state]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-album-preview-state') === previewState)));
-        applyDraftEditorTheme(state.saved, editor);
-        applyDraftEditorTheme(state.saved, footerHost);
         const preview = editor.querySelector('[data-album-page-live-preview]');
         applyDraftEditorTheme(state.draft, preview);
         preview.setAttribute('data-layout', state.draft.album_details_layout || 'classic_bar');
@@ -966,7 +993,7 @@
         editor.querySelector('[data-album-preview-missing]').hidden = previewState !== 'missing';
         editor.querySelectorAll('[data-album-preview-file-action]').forEach(button => { button.disabled = disabled || previewState === 'missing'; });
         preview.setAttribute('data-album-playing-row-animation', state.draft.album_playing_row_animation || 'enabled');
-        const failure = editor.querySelector('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        syncAppearanceAlert(editor.querySelector('[data-background-request-error]'), state.error);
         const findFooter = selector => footerHost.querySelector(selector);
         findFooter('[data-background-reset]').disabled = disabled;
         findFooter('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
@@ -1010,13 +1037,11 @@
         const outline = state.draft.interaction_overrides?.item_outline || defaultItemOutline;
         editor.querySelectorAll('[data-item-outline-color]').forEach(button => button.setAttribute('aria-pressed', String(outline.source === 'custom' && outline.color === button.getAttribute('data-color'))));
         find('[data-item-outline-source="player"]').setAttribute('aria-pressed', String(outline.source === 'player'));
-        applyDraftEditorTheme(state.saved, editor);
-        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('.selection-hover-preview');
         applyDraftEditorTheme(state.draft, preview);
         preview.style.setProperty('--navigation-tree-selection-accent-color', accent.color);
         preview.style.setProperty('--navigation-tree-selection-accent-width', accent.enabled ? '3px' : '0px');
-        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         footerFind('[data-background-reset]').disabled = disabled;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         footerFind('[data-background-save]').disabled = !state.canSave;
@@ -1045,9 +1070,10 @@
       });
       unsubscribe = controller.subscribe(sync); sync(controller.getState()); if (!loaded) void load(); return unmount;
     };
-    const mountSeekbar = (host, { getLegacyColors = () => null, getSeekbarMode = () => 'default' } = {}) => {
-      const waveformSelected = getSeekbarMode() === 'waveform';
-      unmount(); host.innerHTML = seekbarMarkup(waveformSelected ? 'waveform' : 'default'); mounted = host.querySelector('.appearance-background-editor');
+    const mountSeekbar = (host, { getLegacyColors = () => null, getSeekbarMode = () => 'default', applySeekbarMode = () => {} } = {}) => {
+      controller.configureSeekbar(getSeekbarMode(), applySeekbarMode);
+      const waveformSelected = controller.getState().seekbarMode === 'waveform';
+      unmount(); host.innerHTML = seekbarMarkup(waveformSelected ? 'waveform' : 'default', { loopCreateAllowed }); mounted = host.querySelector('.appearance-background-editor');
       controller.setActiveSection('seekbar');
       const editor = mounted, find = selector => editor.querySelector(selector);
       let recoveryMessage = '';
@@ -1062,7 +1088,15 @@
       find('.background-status').hidden = true;
       const sync = state => {
         if (mounted !== editor) return;
+        if ((state.seekbarMode === 'waveform') !== waveformSelected) {
+          const restoreModeFocus = editor.contains?.(document.activeElement)
+            && document.activeElement?.hasAttribute?.('data-appearance-seekbar-mode');
+          mountSeekbar(host, { getLegacyColors, getSeekbarMode, applySeekbarMode });
+          if (restoreModeFocus) mounted.querySelector(`[data-appearance-seekbar-mode="${state.seekbarMode}"]`)?.focus();
+          return;
+        }
         const disabled = state.loading || state.saving || state.loadFailed, custom = Boolean(state.draft.player_style_override || state.draft.player_override);
+        editor.querySelectorAll('[data-appearance-seekbar-mode]').forEach(radio => { radio.checked = radio.value === state.seekbarMode; });
         editor.setAttribute('aria-busy', String(state.loading || state.saving));
         editor.querySelectorAll('button,input').forEach(element => { element.disabled = disabled; });
         editor.querySelectorAll('[data-background-player-mode]').forEach(button => button.setAttribute('aria-pressed', String((button.getAttribute('data-background-player-mode') === 'custom') === custom)));
@@ -1080,10 +1114,15 @@
           find('[data-waveform-recents-help]').textContent = history.length ? 'Recent colors' : 'Your five most recent waveform colors will appear here.';
         }
         const style = effectivePlayerStyle(state);
-        applyDraftEditorTheme(state.saved, editor);
-        applyDraftEditorTheme(state.saved, footerHost);
         const preview = find('[data-player-live-preview]');
         applyDraftEditorTheme(state.draft, preview);
+        const waveformPreview = find('.player-preview-waveform');
+        const regularPreview = find('.player-preview-seekbar');
+        if (waveformPreview) {
+          if (state.seekbarMode !== 'waveform') waveformPreview.setAttribute('hidden', '');
+          else waveformPreview.removeAttribute('hidden');
+        }
+        if (regularPreview) regularPreview.hidden = state.seekbarMode === 'waveform';
         preview.style.setProperty('--preview-player-start', style.surface.start); preview.style.setProperty('--preview-player-end', style.surface.mode === 'solid' ? style.surface.start : style.surface.end); preview.style.setProperty('--preview-player-angle', `${style.surface.angle}deg`);
         preview.style.setProperty('--preview-control-fill', style.controls.fill); preview.style.setProperty('--preview-control-border', style.controls.border);
         preview.style.setProperty('--preview-waveform-fill', style.waveform.fill); preview.style.setProperty('--preview-waveform-edge', style.waveform.edge);
@@ -1111,6 +1150,13 @@
         editor.querySelectorAll('[data-player-surface-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-player-surface-mode') === (style.surface.mode === 'solid' ? 'solid' : 'gradient'))));
         editor.querySelectorAll('[data-player-theme]').forEach(button => { const theme = playerThemes.find(item => item.id === button.getAttribute('data-player-theme')); button.setAttribute('aria-pressed', String(Boolean(theme) && JSON.stringify(theme.style) === JSON.stringify(style))); });
         editor.querySelectorAll('[data-compact-player-style]').forEach(button => button.setAttribute('aria-pressed', String(button.getAttribute('data-compact-player-style') === state.draft.compact_player_style)));
+        const loopSetting = find('[data-loop-style-setting]');
+        if (loopSetting) {
+          loopSetting.hidden = !state.canChangeLoopStyle;
+          if (!state.canChangeLoopStyle) loopSetting.innerHTML = '';
+          else if (!loopSetting.querySelector('[data-loop-control-style-choice]')) loopSetting.innerHTML = loopControlStyleMarkup();
+          loopSetting.querySelectorAll('[data-loop-control-style-choice]').forEach(button => { button.disabled = disabled; button.setAttribute('aria-pressed', String(button.getAttribute('data-loop-control-style-choice') === state.draft.loop_control_style)); });
+        }
         editor.querySelectorAll('[data-player-tab-group="player"]').forEach(button => button.setAttribute('aria-selected', String(button.getAttribute('data-player-tab') === activePlayerTab)));
         editor.querySelectorAll('[data-player-panel-group="player"][data-player-panel]').forEach(panel => { panel.hidden = panel.getAttribute('data-player-panel') !== activePlayerTab; });
         editor.querySelectorAll('[data-player-tab-group="waveform"]').forEach(button => button.setAttribute('aria-selected', String(button.getAttribute('data-player-tab') === activeWaveformTab)));
@@ -1126,7 +1172,7 @@
           backgroundErrors ? 'Fix the color errors in Backgrounds before saving.' : '',
           hiddenWaveformErrors ? 'Select Waveform seekbar above to correct its color errors before saving. Your entered values are retained.' : '',
         ].filter(Boolean).join(' ');
-        const failure = find('[data-background-request-error]'); failure.hidden = !state.error; failure.textContent = state.error;
+        syncAppearanceAlert(find('[data-background-request-error]'), state.error);
         footerFind('[data-background-reset]').disabled = disabled;
         footerFind('[data-background-cancel]').disabled = state.loading || state.saving || !state.dirty;
         const saveButton = footerFind('[data-background-save]'); saveButton.disabled = !state.canSave; (saveButton.querySelector('.ui-button__content') || saveButton).textContent = state.saving ? 'Saving…' : 'Save';
@@ -1134,6 +1180,7 @@
         footerFind('.editor-footer-status').textContent = state.loading ? 'Loading your appearance…' : state.saving ? 'Saving appearance…' : (state.error || state.loadFailed) ? '' : state.dirty ? 'Unsaved appearance changes' : 'Saved to your account';
       };
       editor.addEventListener('input', event => {
+        if (event.target.hasAttribute('data-appearance-seekbar-mode')) { controller.setSeekbarMode(event.target.value); return; }
         const stylePath = event.target.getAttribute('data-player-style-color') || event.target.getAttribute('data-player-style-hex');
         if (stylePath) { controller.setPlayerStyleColor(stylePath, event.target.value); return; }
         if (event.target.hasAttribute('data-player-style-angle')) { const style = effectivePlayerStyle(controller.getState()); style.surface.angle = Number(event.target.value); makePlayerComponentsExplicit(style, 'surface'); controller.setPlayerStyle(style, { preserveColorErrors: true }); return; }
@@ -1159,6 +1206,7 @@
         else if (button.hasAttribute('data-player-theme')) { const theme = playerThemes.find(item => item.id === button.getAttribute('data-player-theme')); if (theme) controller.setPlayerStyle(theme.style); }
             else if (button.hasAttribute('data-player-surface-mode')) { const style = effectivePlayerStyle(controller.getState()); style.surface.mode = button.getAttribute('data-player-surface-mode'); if (style.surface.mode === 'solid') style.surface.end = style.surface.start; makePlayerComponentsExplicit(style, 'surface'); controller.setPlayerStyle(style, { preserveColorErrors: true }); }
             else if (button.hasAttribute('data-compact-player-style')) controller.setCompactPlayerStyle(button.getAttribute('data-compact-player-style'));
+        else if (button.hasAttribute('data-loop-control-style-choice')) controller.setLoopControlStyle(button.getAttribute('data-loop-control-style-choice'));
         else if (button.hasAttribute('data-background-player-mode')) { recoveryMessage = ''; controller.setPlayerMode(button.getAttribute('data-background-player-mode')); }
         else if (button.hasAttribute('data-waveform-restore')) {
           try { const pair = getLegacyColors(); controller.restoreWaveformColors(pair); recoveryMessage = 'Previous browser colors restored. Save to apply them.'; }
@@ -1201,7 +1249,10 @@
     });
     window.addEventListener('pagehide', () => clearSession());
     window.addEventListener('pageshow', event => { if (event.persisted) { clearSession(); void load(); } });
-    return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load, getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
+    return { controller, mount, mountSeekbar, mountSelectionAccent, mountAlerts, mountAlbumPage, unmount, allowLeave, clearSession, load,
+      setLoopCreateAllowed(value) { const next = value === true; if (next === loopCreateAllowed) return; loopCreateAllowed = next; controller.reconcileLoopCapability(); },
+      getSavedLoopControlStyle: () => controller.getState().saved.loop_control_style === 'companion' ? 'companion' : 'capsule',
+      getSavedPlayerColors: () => savedPlayerColors ? { ...savedPlayerColors } : null };
   }
   const api = { normalizeColor, normalizeInteractionOverrides, resolveInteractionOutline, derivePairedPlayerColor, setPlayerStylePath, colorToRgb, contrastRatio, applyTheme, clearTheme, createController, installBrowser, palettes, playerThemes, editorMarkup, seekbarMarkup, selectionAccentMarkup, alertsMarkup, albumPageMarkup, resolveAppearance, selectionAccentColors, brightAccentColors, interactionColorFamilies, interactionControlsMarkup, getSavedPlayerColors: () => api.instance?.getSavedPlayerColors() || null };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

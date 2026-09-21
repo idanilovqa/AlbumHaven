@@ -118,6 +118,27 @@ class _InventoryCursor:
         return list(self._rows)
 
 
+
+def _is_missing_album_query(sql):
+    from music_app.services.library_browse_postgres import _missing_albums_sql
+
+    return str(sql) == _missing_albums_sql()
+
+
+class _EmptyMissingAlbumConnection:
+    """No missing inventory in these otherwise fully stubbed browse fixtures."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, sql, params=None):
+        assert _is_missing_album_query(sql)
+        assert not params
+        return _InventoryCursor()
+
 class _InventoryAwareConnection:
     def __init__(self, delegate, state):
         self._delegate = delegate
@@ -444,7 +465,7 @@ def test_inventory_backed_root_full_and_non_album_detail_preserve_raw_rows_and_e
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
             "MUSIC_DIR": r"D:\Music",
         },
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
     )
     monkeypatch.setattr(repository, "_load_root_album_browse_rows", lambda _state: [])
     monkeypatch.setattr(album_details, "_safe_scrobble_count_lookup", lambda _config, _refs: {})
@@ -1141,7 +1162,9 @@ def test_postgres_root_counts_preserve_alias_deduplication_and_category_filters(
     }
 
 
-def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(monkeypatch):
+def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_back(
+    monkeypatch, default_empty_missing_album_projection,
+):
     from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
 
     connections = []
@@ -1177,6 +1200,11 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
         connect=connect,
         album_ratings_service=SnapshotAlbumRatingsService(),
+    )
+    monkeypatch.setattr(
+        repository,
+        "_load_missing_album_rows",
+        lambda **kwargs: default_empty_missing_album_projection(repository, **kwargs),
     )
 
     def relation_alias_maps(*, connection):
@@ -1219,9 +1247,12 @@ def test_postgres_root_sidebar_reads_one_repeatable_read_snapshot_and_rolls_it_b
     assert len(connections) == 1
     connection = connections[0]
     assert read_connections == [connection, connection, connection, connection]
-    assert connection.commands == [
+    assert connection.commands[:1] == [
         ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY", {}),
     ]
+    assert len(connection.commands) == 2
+    assert _is_missing_album_query(connection.commands[1][0])
+    assert connection.commands[1][1] == {"album_key": None}
     assert connection.rollback_count == 1
     assert connection.close_count == 1
     assert payload["artists_sidebar"] == [
@@ -1294,6 +1325,8 @@ def test_postgres_library_browse_omits_category_filter_for_all_visible_categorie
             return False
 
         def execute(self, _sql, params=None):
+            if _is_missing_album_query(_sql):
+                return _InventoryCursor()
             if str(_sql).startswith("SET TRANSACTION"):
                 return FakeCursor()
             captured_params.append(dict(params or {}))
@@ -1461,6 +1494,8 @@ def test_postgres_root_album_browse_payload_applies_category_filter_params():
             return False
 
         def execute(self, _sql, params=None):
+            if _is_missing_album_query(_sql):
+                return _InventoryCursor()
             captured_params.append(dict(params or {}))
             return FakeCursor()
 
@@ -2676,7 +2711,7 @@ def test_postgres_root_full_alias_group_deduplicates_album_and_global_count(monk
 
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(
@@ -3065,6 +3100,7 @@ def test_postgres_library_browse_builds_direct_album_search_payload():
         "direct_match_artists": ["Tender Forever", "Broadcast"],
         "artist_name_match_artists": ["Tender Forever"],
         "related_match_artists": [],
+        "artist_name_match_artists": ["Tender Forever"],
     }
 
     assert str(executed[0]).strip() == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -6213,6 +6249,8 @@ def test_postgres_album_detail_payload_loads_tracks_for_album_key():
             return False
 
         def execute(self, sql, params=None):
+            if _is_missing_album_query(sql):
+                return _InventoryCursor()
             executed.extend([sql, params])
             return FakeCursor()
 
@@ -6614,7 +6652,7 @@ def test_postgres_album_detail_payload_excludes_persisted_non_album_override_and
     sibling_path = r"D:\Music\Exception Artist\Exception Album\02 Album Track.flac"
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(
@@ -6669,7 +6707,7 @@ def test_postgres_album_detail_blank_override_masks_embedded_non_album_value(
     row["exception_override_present"] = True
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(
@@ -6693,7 +6731,7 @@ def test_postgres_album_detail_payload_omits_album_when_all_tracks_have_persiste
 
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(
@@ -6821,7 +6859,7 @@ def test_postgres_album_projections_mark_full_scope_for_incomplete_track_order(m
 
     repository = PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(repository, "_load_album_detail_rows", lambda _album_key: projection_rows)
@@ -6915,7 +6953,7 @@ def test_postgres_album_detail_preserves_raw_featured_title_and_projects_track_a
             "ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app",
             "MUSIC_DIR": r"X:\SyntheticMusic",
         },
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
         album_ratings_service=_EmptyAlbumRatingsService(),
     )
     monkeypatch.setattr(
@@ -7665,6 +7703,8 @@ def test_postgres_library_browse_builds_problematic_files_projection_from_rows()
             return False
 
         def execute(self, sql, params=None):
+            if _is_missing_album_query(sql):
+                return _InventoryCursor()
             executed.append(sql)
             executed.append(dict(params or {}))
             return FakeCursor()
@@ -9381,6 +9421,8 @@ class _ProblematicSnapshotConnectionStub:
         return False
 
     def execute(self, sql, params=None):
+        if _is_missing_album_query(sql):
+            return _InventoryCursor()
         assert str(sql) in {
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
             "SET LOCAL work_mem = '16MB'",
@@ -9688,6 +9730,8 @@ def test_problematic_files_caches_summary_and_initial_detail_from_the_same_selec
             return False
 
         def execute(self, sql, params=None):
+            if _is_missing_album_query(sql):
+                return _InventoryCursor()
             nonlocal data_query_count
             if str(sql).startswith("SET"):
                 return FakeCursor([])
@@ -9791,6 +9835,8 @@ def test_postgres_library_browse_ignores_e2e_seed_env_and_queries_product_tables
             return False
 
         def execute(self, sql, params=None):
+            if _is_missing_album_query(sql):
+                return _InventoryCursor()
             executed.append((str(sql), dict(params or {})))
             return FakeCursor()
 
@@ -10118,6 +10164,28 @@ def test_targeted_problem_ignore_projection_returns_full_canonical_item_with_dur
     assert params == {"album_keys": [durable_album_key], "file_paths": []}
 
 
+@pytest.mark.parametrize('scope', ['file', 'album'])
+def test_structured_encoding_exclusion_suppresses_generated_suggestion(scope):
+    from music_app.services.library_browse_postgres import (
+        _problem_identity_row_key,
+        _problematic_album_detail_payload,
+        _problematic_album_projection_payloads,
+    )
+
+    row = _healthy_problematic_order_rows([1])[0]
+    row['file_entry']['artist'] = 'JosÃ©'
+    row['album_cover_path'] = None
+    album = _problematic_album_projection_payloads([row])[0]
+    initial = _problematic_album_detail_payload(album)
+    assert initial is not None
+    proposal = next(item for item in initial['suggested_edits'] if item['field'] == 'artist')
+    target = proposal['path'] if scope == 'file' else album['album_ref']
+    album['_ignored_repair_keys'] = {_problem_identity_row_key(target, 'Encoding problem', scope=scope)}
+    detail = _problematic_album_detail_payload(album)
+    assert detail is not None, 'unrelated missing cover still keeps the album visible'
+    assert not any(item['id'] == proposal['id'] for item in detail['suggested_edits'])
+
+
 def test_split_release_album_exclusion_round_trips_unsplit_postgres_album_identity_into_rules():
     from music_app.services.library_browse_postgres import (
         _problematic_album_detail_payload,
@@ -10262,6 +10330,8 @@ def test_postgres_library_browse_caches_problematic_files_payload_per_database_u
             return False
 
         def execute(self, _sql, _params=None):
+            if _is_missing_album_query(_sql):
+                return _InventoryCursor()
             executed["count"] += 1
             return FakeCursor()
 
@@ -10327,6 +10397,8 @@ def test_postgres_library_browse_problematic_files_prewarm_and_foreground_share_
             return False
 
         def execute(self, _sql, _params=None):
+            if _is_missing_album_query(_sql):
+                return _InventoryCursor()
             with counter_lock:
                 counters["queries"] += 1
                 query_number = counters["queries"]
@@ -11190,6 +11262,44 @@ def test_family_group_restores_preferred_punctuation_for_ordinary_alias():
     }]
 
 
+def test_family_group_filter_uses_relationship_identity_for_collaboration_display():
+    from music_app.services.library_browse_postgres import (
+        _selected_artist_family_group_filter_key,
+    )
+
+    filter_key = _selected_artist_family_group_filter_key(
+        {"artist": "IR8 / Sexoturica"},
+        {},
+        iter(["IR8", "IR8 / Sexoturica"]),
+    )
+
+    assert filter_key == "ir8"
+
+
+def test_family_group_exposes_collaboration_relationship_identity_as_variation():
+    from music_app.services.library_browse_postgres import (
+        _expose_selected_artist_family_group_filter_variations,
+    )
+
+    groups = _expose_selected_artist_family_group_filter_variations(
+        [{
+            "artist": "IR8 / Sexoturica",
+            "artist_display": "IR8 / Sexoturica",
+            "variation_names": ["IR8 / Sexoturica"],
+            "albums": [{"name": "IR8 vs Sexoturica"}],
+        }],
+        {"IR8 / Sexoturica": "IR8"},
+        ["IR8"],
+    )
+
+    assert groups == [{
+        "artist": "IR8 / Sexoturica",
+        "artist_display": "IR8 / Sexoturica",
+        "variation_names": ["IR8 / Sexoturica", "IR8"],
+        "albums": [{"name": "IR8 vs Sexoturica"}],
+    }]
+
+
 def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 
@@ -11201,7 +11311,7 @@ def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypa
     )
     repository = browse_module.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
     )
     monkeypatch.setattr(
         repository._inventory_repository,
@@ -11314,7 +11424,7 @@ def test_postgres_album_detail_batch_loads_private_rating_and_keeps_tag_rating(m
     _install_recording_album_ratings_service(monkeypatch)
     repository = browse_module.PostgresLibraryBrowseRepository(
         {"ALBUM_HAVEN_APP_DATABASE_URL": "postgresql://album_haven_app@localhost/app"},
-        connect=lambda _database_url: None,
+        connect=lambda _database_url: _EmptyMissingAlbumConnection(),
     )
     detail_row = _album_rating_overlay_test_row(
         artist="Rating Artist",

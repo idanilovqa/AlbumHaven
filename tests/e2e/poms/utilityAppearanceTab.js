@@ -8,6 +8,11 @@ import { UtilityMainBody } from './utilityMainBody.js';
 import { UtilitySidebarSection } from './utilitySidebarSection.js';
 
 export class UtilityAppearanceTab extends BasePage {
+  async isRetainedEditor(handle) {
+    // parity-check: allow-read-only-measurement-evaluate -- compare the mounted draft editor after shared search
+    return handle.evaluate(node => node.isConnected && node === document.querySelector('.appearance-background-editor'));
+  }
+
   constructor(page, testInfo = null) {
     super(page, testInfo);
     this.sidebar = new UtilitySidebarSection(page, testInfo);
@@ -37,7 +42,9 @@ export class UtilityAppearanceTab extends BasePage {
     this.recentSetsHeading = this.editor.getByText('Recent sets', { exact: true });
     this.latestPlayerSetButton = this.editor.getByRole('button', { name: 'Restore latest set', exact: true });
     this.useThemeInteractionsButton = this.editor.getByRole('button', { name: 'Use theme', exact: true });
-    this.requestError = this.editor.locator('[data-background-request-error]');
+    this.requestError = this.editor.locator(
+      '[data-background-request-error] .on-page-alert__message',
+    );
     this.editorFooter = new EditorFooter(page.locator('#utility-modal-footer'));
     this.appBar = new AppBar(page, testInfo);
     this.navigationRail = page.locator('#shell-navigation-rail');
@@ -63,6 +70,14 @@ export class UtilityAppearanceTab extends BasePage {
 
   compactStyleButton(style) {
     return this.compactPlayerStyle.button(style);
+  }
+
+  loopStyleButton(style) {
+    return this.editor.locator(`[data-loop-control-style-choice="${style}"]`);
+  }
+
+  get liveLoopCluster() {
+    return this.globalPlayer.locator('[data-playback-control-cluster][data-loop-control-style]');
   }
 
   sectionButton(key) {

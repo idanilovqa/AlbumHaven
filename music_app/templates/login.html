@@ -1,3 +1,4 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -6,6 +7,7 @@
   <title>Album Haven sign in</title>
   <link rel="stylesheet" href="/static/css/login.css">
   <script src="/static/js/login.js" defer></script>
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
 </head>
 <body>
   <main class="login-glow">
@@ -13,7 +15,7 @@
       <img class="login-mark" src="/static/images/album-haven-cloud-vinyl.png" alt="Album Haven">
 
       {% if failed %}
-      <p class="login-alert" role="alert">Sign-in failed. Check your credentials and try again.</p>
+      {{ on_page_alert('Sign-in failed. Check your credentials and try again.', severity='error', class_name='login-alert') }}
       {% endif %}
 
       <div class="login-field">

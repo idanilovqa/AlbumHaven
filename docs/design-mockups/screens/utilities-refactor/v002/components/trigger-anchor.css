@@ -1,0 +1,126 @@
+/* Shared connected trigger/popup treatment. Colors follow the approved family anchor. */
+:root {
+  --appearance-selected-accent: #55c7ff;
+  --trigger-anchor-accent: var(--appearance-selected-accent);
+  --trigger-anchor-cap: var(--trigger-anchor-accent);
+  --trigger-anchor-background: var(--appearance-panel-background, var(--panel));
+}
+@property --trigger-anchor-cap { syntax: '<color>'; inherits: true; initial-value: #55c7ff; }
+:root .trigger-anchor-open {
+  --trigger-anchor-cap: var(--trigger-anchor-accent);
+  transition: --trigger-anchor-cap 220ms ease;
+  position: relative;
+  border: 2px solid transparent !important;
+  --trigger-anchor-direction: to bottom;
+  border-bottom: 0 !important;
+  border-radius: 8px 8px 0 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background:
+    linear-gradient(var(--trigger-anchor-background), var(--trigger-anchor-background)) padding-box,
+    linear-gradient(var(--trigger-anchor-direction),
+      var(--trigger-anchor-cap) 0%,
+      color-mix(in srgb, var(--trigger-anchor-cap) 85%, var(--trigger-anchor-accent)) 20%,
+      color-mix(in srgb, var(--trigger-anchor-cap) 50%, var(--trigger-anchor-accent)) 45%,
+      color-mix(in srgb, var(--trigger-anchor-cap) 15%, var(--trigger-anchor-accent)) 70%,
+      var(--trigger-anchor-accent) 100%) border-box !important;
+  color: var(--trigger-anchor-accent) !important;
+}
+:root .trigger-anchor-surface {
+  border-top: 0;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  background: var(--trigger-anchor-background);
+}
+:root .trigger-anchor-surface::before {
+  content: ''; position: absolute; inset: auto;
+  top: calc(-1 * var(--trigger-anchor-gap) - 2px);
+  left: calc(var(--trigger-anchor-left) - 1px);
+  width: var(--trigger-anchor-width); height: calc(var(--trigger-anchor-gap) + 4px);
+  box-sizing: border-box; border: 0; border-inline: 2px solid var(--trigger-anchor-accent);
+  border-radius: 0; background: var(--trigger-anchor-background); pointer-events: none;
+}
+:root .trigger-anchor-surface::after {
+  content: ''; position: absolute; inset: 0 0 auto; height: 2px; padding: 0;
+  border: 0; border-radius: 0; pointer-events: none; mask: none; clip-path: none;
+  background: linear-gradient(to left, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%) left top / calc(var(--trigger-anchor-left) + 1px) var(--trigger-top-line-width, 2px) no-repeat,
+    linear-gradient(to right, var(--trigger-anchor-accent), color-mix(in srgb, var(--trigger-anchor-accent) 65%, var(--border)) 25%, color-mix(in srgb, var(--trigger-anchor-accent) 20%, var(--border)) 65%, var(--border) 100%) right top / calc(var(--trigger-anchor-right) + 1px) var(--trigger-top-line-width, 2px) no-repeat;
+}
+:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"] {
+  border-top: 0 !important; border-bottom: 2px solid transparent !important;
+  --trigger-anchor-direction: to top;
+  border-radius: 0 0 8px 8px !important;
+}
+:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"] { border-top: 1px solid var(--border); border-bottom: 0; }
+:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"]::before { top: auto; bottom: calc(-1 * var(--trigger-anchor-gap) - 2px); }
+:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: 0; }
+@keyframes trigger-anchor-unfold {
+  from { clip-path: inset(calc(-1 * var(--trigger-anchor-gap, 0px) - 2px) 0 100%); }
+  to { clip-path: inset(calc(-1 * var(--trigger-anchor-gap, 0px) - 2px) 0 0); }
+}
+:root .trigger-anchor-surface:not(.artist-family-panel) { animation: trigger-anchor-unfold 200ms cubic-bezier(.22, 1, .36, 1); }
+@media (prefers-reduced-motion: reduce) {
+  :root .trigger-anchor-surface { animation: none; transition: none; }
+}
+/* Keep the bridge outside scrollable menu contents. */
+:root .trigger-anchor-surface::before { display: none; }
+:root .trigger-anchor-open::after {
+  content: ''; position: absolute; left: -2px; right: -2px; top: 100%;
+  height: calc(var(--trigger-anchor-gap, 0px) + 2px);
+  border-inline: 2px solid var(--trigger-anchor-accent); box-sizing: border-box;
+  background: var(--trigger-anchor-background); pointer-events: none;
+}
+:root .trigger-anchor-open[data-trigger-anchor-edge="bottom"]::after { top: auto; bottom: 100%; }
+:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"] { animation-name: trigger-anchor-unfold-up; }
+@keyframes trigger-anchor-unfold-up {
+  from { clip-path: inset(100% 0 0); }
+  to { clip-path: inset(0); }
+}
+:root .trigger-anchor-surface { border-color: var(--border); }
+
+/* Selected accents stay separate from the chosen interaction color. */
+:root .trigger-anchor-open:is(:hover, :focus-visible) { --trigger-anchor-cap: var(--appearance-interaction-outline, var(--appearance-play)); }
+/* One shared edge fade for every connected panel/dropdown. The regular border
+   stays underneath; the accent becomes transparent without a terminal seam. */
+:root .trigger-anchor-surface[data-trigger-anchor-side]:not([data-trigger-anchor-side="none"])::before {
+  display: block;
+  top: 0; bottom: auto; left: -1px;
+  width: 2px; height: min(210px, 100%);
+  border: 0;
+  --trigger-edge-direction: to bottom;
+  background: linear-gradient(var(--trigger-edge-direction),
+    var(--trigger-anchor-accent) 0,
+    color-mix(in srgb, var(--trigger-anchor-accent) 65%, transparent) 17%,
+    color-mix(in srgb, var(--trigger-anchor-accent) 25%, transparent) 43%,
+    color-mix(in srgb, var(--trigger-anchor-accent) 5%, transparent) 71%,
+    transparent 100%);
+}
+:root .trigger-anchor-surface[data-trigger-anchor-side="right"]:not([data-trigger-anchor-side="none"])::before {
+  left: auto; right: -1px;
+}
+:root .trigger-anchor-surface[data-trigger-anchor-edge="bottom"][data-trigger-anchor-side]::before {
+  top: auto; bottom: 0;
+  --trigger-edge-direction: to top;
+}
+
+/* Share the gallery divider's pixel row and thickness. */
+:root .artist-family-panel.trigger-anchor-surface::after {
+  top: -1px;
+  height: 1px;
+  --trigger-top-line-width: 1px;
+}
+
+/* Suppress selection paint outside the origin before the browser draws a drag. */
+:root.panel-text-selection-active body *:not(.panel-selection-origin):not(.panel-selection-origin *) {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+:root.panel-text-selection-active .panel-selection-origin,
+:root.panel-text-selection-active .panel-selection-origin * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+:root.panel-text-selection-active *:not(.panel-selection-origin):not(.panel-selection-origin *)::selection {
+  background: transparent;
+  color: inherit;
+}

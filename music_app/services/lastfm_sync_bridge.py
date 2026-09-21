@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from music_app.services.lastfm import LastfmError
+from music_app.services.measured_listen_history import measured_provider_guard
 from music_app.services.lastfm_listen_sync import (
     build_playback_complete_entry,
     build_scrobble_result_updates,
@@ -51,6 +52,9 @@ def record_playback_session_complete(
     payload: JsonDict,
     *,
     user_timezone: str,
+    account_id: int | None = None,
+    library_id: int | None = None,
+    lastfm_session=None,
     normalize_playback_track_payload: PlaybackTrackNormalizer,
     is_meaningful_listen_session: ListenHistoryMeaningChecker,
     append_listen_history_entry: ListenHistoryAppender,
@@ -62,6 +66,82 @@ def record_playback_session_complete(
         **payload,
         "user_timezone": user_timezone,
     })
+    if payload.get("measurement_version") is not None:
+        from music_app.services.measured_listen_history import normalize_measurement
+        for key in ("measurement_version", "device_id", "session_id", "sequence",
+                    "measured_listened_seconds", "max_measured_contiguous_seconds"):
+            entry[key] = payload.get(key)
+        entry["finalized"] = payload.get("finalized", True)
+        entry = normalize_measurement(entry, account_id=account_id, library_id=library_id)
+        if not is_meaningful_listen_session(entry):
+            return {"ok": True, "entry": None, "scrobbled": False, "scrobble_error": "", "ignored": True}, 200
+        with measured_provider_guard(config, account_id=account_id, library_id=library_id,
+                                     device_id=entry["device_id"], session_id=entry["session_id"]):
+            provider_attempted = False
+            error = "Account-scoped Last.fm credential is unavailable"
+            entry.update({"scrobbled": False, "scrobble_error": error, "scrobble_retryable": True,
+                          "sync_problem": {"provider": "lastfm", "kind": "scrobble",
+                                           "status": "account_credential_unavailable", "message": error}})
+            stored = append_listen_history_entry(config, entry, account_id=account_id, library_id=library_id)
+            scrobbled = bool(stored.get("scrobbled"))
+            if scrobbled:
+                error = ""
+            elif stored.get("scrobble_submission_state") in ("attempting", "sent", "uncertain"):
+                error = str(stored.get("scrobble_error") or "Previous Last.fm submission outcome is uncertain")
+            elif entry["scrobble_eligible"] and lastfm_session is not None:
+                retryable = False
+                reauthentication_required = False
+                submission_state = "uncertain"
+                stored = update_listen_history_entry(config, stored["id"], {
+                    "scrobble_submission_state": "attempting", "scrobble_retryable": False,
+                    "scrobble_error": "Last.fm submission outcome is uncertain",
+                }, account_id=account_id, library_id=library_id) or stored
+                try:
+                    normalized_payload = normalize_playback_track_payload(payload)
+                    provider_attempted = True
+                    submission = scrobble_track(config, normalized_payload, session=lastfm_session)
+                    scrobbled = submission is None or bool(getattr(submission, "succeeded", False))
+                    error = "" if scrobbled else str(getattr(submission, "message", "Last.fm did not accept this listen"))
+                    sent = submission is None or bool(getattr(submission, "sent", False))
+                    submission_state = "accepted" if scrobbled else "sent" if sent else "not_sent"
+                    retryable = not sent
+                except LastfmError as exc:
+                    error = str(exc)
+                    reauthentication_required = exc.reauthentication_required
+                    retryable = bool(exc.reauthentication_required or (
+                        exc.retryable and exc.error_kind == "provider_error"
+                        and exc.code is not None
+                    ))
+                    submission_state = "not_sent" if retryable else "uncertain"
+                stored = update_listen_history_entry(config, stored["id"], {
+                    "scrobbled": scrobbled, "scrobble_error": error, "scrobble_retryable": retryable,
+                    "scrobble_reauthentication_required": reauthentication_required,
+                    "scrobble_submission_state": submission_state,
+                    "sync_problem": None if scrobbled else {
+                        "provider": "lastfm",
+                        "kind": "scrobble",
+                        "status": (
+                            "reauthentication_required"
+                            if reauthentication_required
+                            else "pending_retry"
+                            if retryable
+                            else "permanent_failure"
+                        ),
+                        "message": error,
+                    },
+                }, account_id=account_id, library_id=library_id) or stored
+                log_lastfm_scrobble_event(
+                    "Last.fm scrobble succeeded" if scrobbled else "Last.fm scrobble failed",
+                    level="info" if scrobbled else "warning", payload=payload, error=error,
+                )
+            public = {key: value for key, value in stored.items() if key not in ("path", "track_ref")}
+            return {
+                "ok": True,
+                "entry": public,
+                "scrobbled": scrobbled,
+                "scrobble_error": error,
+                "scrobble_attempted": provider_attempted,
+            }, 200
     if not is_meaningful_listen_session(entry):
         return ({
             "ok": True,
@@ -191,9 +271,21 @@ def process_pending_scrobble_attempt(
     scrobble_track: LastfmScrobbler,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
     reauthenticated: bool = False,
+    bypass_backoff: bool = False,
 ) -> dict[str, object]:
     entry_id = str(entry.get("id") or "").strip()
     if not entry_id:
+        return {"attempted": False, "succeeded": False, "failed": False}
+    tracks_legacy_sync_state = entry.get("measurement_version") != "rendered-pcm-v1"
+
+    if (
+        bool(entry.get("scrobbled"))
+        or not bool(entry.get("scrobble_eligible", True))
+        or not bool(entry.get("scrobble_retryable", True))
+        or bool(entry.get("scrobble_retry_exhausted"))
+        or str(entry.get("scrobble_submission_state") or "")
+        in {"attempting", "sent", "uncertain", "accepted"}
+    ):
         return {"attempted": False, "succeeded": False, "failed": False}
 
     previous_attempts = int(entry.get("scrobble_retry_count") or 0)
@@ -212,12 +304,13 @@ def process_pending_scrobble_attempt(
                 },
             },
         )
-        clear_pending_scrobble(config, listen_id=entry_id)
+        if tracks_legacy_sync_state:
+            clear_pending_scrobble(config, listen_id=entry_id)
         return {"attempted": False, "succeeded": False, "failed": True}
     if bool(entry.get("scrobble_reauthentication_required")) and not reauthenticated:
         return {"attempted": False, "succeeded": False, "failed": False}
     last_attempt_text = str(entry.get("last_scrobble_attempt_at") or "").strip()
-    if previous_attempts and last_attempt_text and not reauthenticated:
+    if previous_attempts and last_attempt_text and not (reauthenticated or bypass_backoff):
         try:
             last_attempt_at = datetime.fromisoformat(last_attempt_text.replace("Z", "+00:00"))
             if last_attempt_at.tzinfo is None:
@@ -245,10 +338,11 @@ def process_pending_scrobble_attempt(
             payload=payload,
             error=validation_error,
             retryable=False,
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
-        return {"attempted": True, "succeeded": False, "failed": True}
+        return {"attempted": False, "succeeded": False, "failed": True}
 
     try:
         submission = scrobble_track(config, payload)
@@ -263,6 +357,7 @@ def process_pending_scrobble_attempt(
             error=str(exc),
             retryable=bool(exc.retryable or exc.reauthentication_required),
             reauthentication_required=exc.reauthentication_required,
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
@@ -278,10 +373,19 @@ def process_pending_scrobble_attempt(
             payload=payload,
             error=str(getattr(submission, "message", "") or "Last.fm scrobble was not accepted."),
             retryable=not bool(getattr(submission, "sent", False)),
+            reauthentication_required=bool(
+                getattr(submission, "reauthentication_required", False)
+            ),
+            tracks_legacy_sync_state=tracks_legacy_sync_state,
             update_listen_history_entry=update_listen_history_entry,
             log_lastfm_scrobble_event=log_lastfm_scrobble_event,
         )
-        return {"attempted": bool(getattr(submission, "sent", False)), "succeeded": False, "failed": True}
+        attempted = getattr(submission, "attempted", None)
+        return {
+            "attempted": bool(getattr(submission, "sent", False) if attempted is None else attempted),
+            "succeeded": False,
+            "failed": True,
+        }
 
     update_listen_history_entry(
         config,
@@ -293,7 +397,8 @@ def process_pending_scrobble_attempt(
             retry_count=retry_count,
         ),
     )
-    clear_pending_scrobble(config, listen_id=entry_id)
+    if tracks_legacy_sync_state:
+        clear_pending_scrobble(config, listen_id=entry_id)
     log_lastfm_scrobble_event(
         "Last.fm scrobble retry succeeded",
         level="info",
@@ -314,6 +419,7 @@ def _record_failed_pending_scrobble(
     error: str,
     retryable: bool,
     reauthentication_required: bool = False,
+    tracks_legacy_sync_state: bool = True,
     update_listen_history_entry: ListenHistoryUpdater,
     log_lastfm_scrobble_event: LastfmScrobbleLogger,
 ) -> None:
@@ -351,7 +457,7 @@ def _record_failed_pending_scrobble(
         entry_id,
         updates,
     )
-    if should_retry:
+    if should_retry and tracks_legacy_sync_state:
         record_pending_scrobble(
             config,
             listen_id=entry_id,
@@ -359,7 +465,7 @@ def _record_failed_pending_scrobble(
             retry_count=retry_count,
             error=error,
         )
-    else:
+    elif tracks_legacy_sync_state:
         clear_pending_scrobble(config, listen_id=entry_id)
     log_lastfm_scrobble_event(
         "Last.fm scrobble retry failed",

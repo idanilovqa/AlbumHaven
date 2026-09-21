@@ -33,6 +33,7 @@ function loadHelper(overrides = {}) {
     ...overrides,
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -1850,6 +1851,16 @@ function createDrawerHarness(overrides = {}) {
     /data-select-remote-cover="partial-candidate"/,
     'running lookup should render its selectable partial candidates',
   );
+  context.state.coverLookup.tasks[0].status = 'failed';
+  context.state.coverLookup.modal.statusTone = 'error';
+  context.state.coverLookup.modal.statusText = 'Lookup unavailable';
+  context.renderCoverLookupModal();
+  assert.match(statusElement.innerHTML, /data-on-page-alert="error"/);
+  assert.match(statusElement.innerHTML, /Lookup unavailable/);
+  context.state.coverLookup.modal.statusTone = 'neutral';
+  context.state.coverLookup.modal.statusText = 'Clipboard image added.';
+  context.renderCoverLookupModal();
+  assert.equal(statusElement.textContent, 'Clipboard image added.');
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

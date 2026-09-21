@@ -10,6 +10,8 @@ function drainUtilityLoopStereoQueue() {
   for (let index = utilityLoopStereoQueue.length - 1; index >= 0; index -= 1) {
     const job = utilityLoopStereoQueue[index];
     if (eligible(job)) continue;
+    job.canvas.hidden = true;
+    job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
     utilityLoopStereoQueue.splice(index, 1);
     utilityLoopStereoLoads.delete(job.canvas);
   }
@@ -20,7 +22,12 @@ function drainUtilityLoopStereoQueue() {
     job.entry.loading = false;
     job.entry.peaks = peaks;
     job.entry.retryAt = Date.now() + 5000;
-    if (eligible(job)) updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    if (eligible(job)) {
+      updateUtilityLoopStereoWaveform(job.loopId, job.audio);
+    } else {
+      job.canvas.hidden = true;
+      job.canvas.parentElement?.classList.toggle('is-stereo-waveform', false);
+    }
   }).finally(() => {
     utilityLoopStereoLoadActive = false;
     drainUtilityLoopStereoQueue();
@@ -33,9 +40,10 @@ function updateUtilityLoopStereoWaveform(loopId, audio) {
   const enabled = state.player.appearance?.seekbarMode === 'waveform';
   const editing = Boolean(state.utility.loopEditors?.[loopId]?.active);
   const cached = utilityLoopStereoLoads.get(canvas);
-  const ready = enabled && !editing && Boolean(cached?.peaks);
-  canvas.hidden = !ready;
-  canvas.parentElement?.classList.toggle('is-stereo-waveform', ready);
+  const coolingDown = cached && !cached.loading && !cached.peaks && Date.now() < cached.retryAt;
+  const presented = enabled && !editing && !coolingDown;
+  canvas.hidden = !presented;
+  canvas.parentElement?.classList.toggle('is-stereo-waveform', presented);
   if (!enabled || editing) { drainUtilityLoopStereoQueue(); return; }
   if (cached?.peaks) {
     const duration = Number(audio.duration) || 0;
@@ -102,6 +110,7 @@ function setUtilityActiveTab(nextTab, skipAppearanceGuard = false) {
     if (typeof renderUtilityModalContent === 'function') renderUtilityModalContent();
   })) return state.utility.activeTab;
   if (state.utility.activeTab === 'loops' && normalizedTab !== 'loops') {
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(getUtilityModalElements()?.detail);
     clearUtilityLoopSpaceOwner();
   }
   if (state.utility.activeTab !== 'loops' && normalizedTab === 'loops') {
@@ -141,17 +150,34 @@ function seekUtilityLoopPlayback(loopId, deltaSeconds) {
   return true;
 }
 
+function pauseOtherUtilityLoopPlayback(activeAudio) {
+  document.querySelectorAll('[data-loop-audio]').forEach(otherAudio => {
+    if (otherAudio === activeAudio || otherAudio.paused) return;
+    otherAudio.pause();
+    const otherLoopId = String(otherAudio.getAttribute?.('data-loop-audio') || '');
+    if (otherLoopId) updateUtilityLoopPlayerUi(otherLoopId);
+  });
+}
+
 function toggleUtilityLoopPlayback(loopId, options = {}) {
   const focusTimelineOnResume = options.focusTimelineOnResume !== false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId || '')}"]`);
   if (!audio) return false;
   if (audio.paused || audio.ended) {
+    pauseOtherUtilityLoopPlayback(audio);
     if (audio.ended) audio.currentTime = 0;
     const globalPlayback = typeof getPlayerPlaybackSnapshot === 'function'
       ? getPlayerPlaybackSnapshot()
       : null;
     const finishLoopPlaybackStart = () => {
       if (focusTimelineOnResume) focusUtilityLoopTimeline(loopId);
+    };
+    const reportPlaybackFailure = error => {
+      if (audio.isConnected === false) return;
+      const code = String(error?.name || 'PlaybackError');
+      console.warn('[AlbumHaven][Loops] Playback start failed.', { code, mediaErrorCode: audio.error?.code || null });
+      showToast('Unable to start loop playback. Please try again.', 'error', 6000);
+      updateUtilityLoopPlayerUi(loopId);
     };
     if (
       globalPlayback
@@ -167,13 +193,13 @@ function toggleUtilityLoopPlayback(loopId, options = {}) {
           audio.muted = priorMuted;
           finishLoopPlaybackStart();
         })
-        .catch(() => {
+        .catch(error => {
           audio.pause();
           audio.muted = priorMuted;
-          updateUtilityLoopPlayerUi(loopId);
+          reportPlaybackFailure(error);
         });
     } else {
-      audio.play().then(finishLoopPlaybackStart).catch(() => {});
+      audio.play().then(finishLoopPlaybackStart).catch(reportPlaybackFailure);
     }
   } else {
     audio.pause();
@@ -216,7 +242,11 @@ function initializeUtilityLoopPlayer(loop) {
   if (!loop) return;
   const loopId = String(loop.id || '');
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(loopId)}"]`);
-  if (!audio || audio.dataset.bound === '1') return;
+  if (!audio) return;
+  if (audio.dataset.bound === '1') {
+    mountSavedLoopControls(loopId);
+    return;
+  }
   const playButton = document.querySelector(`[data-loop-play="${cssEscape(loopId)}"]`);
   const timeline = document.querySelector(`[data-loop-timeline="${cssEscape(loopId)}"]`);
   const loopEntry = playButton?.closest?.('[data-utility-loop-entry]')
@@ -261,6 +291,7 @@ function initializeUtilityLoopPlayer(loop) {
     }
     updateUtilityLoopPlayerUi(loopId);
   });
+  mountSavedLoopControls(loopId);
   updateUtilityLoopRepeatButton(loopId);
   updateUtilityLoopPlayerUi(loopId);
   if (!state.utility.loopKeyboardSeekBound) {
@@ -475,8 +506,11 @@ function noteSavedLoopWholeRangePlaybackProgress(loopId, audio) {
 function getSavedLoopRangeDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   const audioDuration = Number(elements.audio?.duration);
-  if (Number.isFinite(audioDuration) && audioDuration > 0) return audioDuration;
-  return Math.max(0, Number(loop?.duration_seconds) || 0);
+  const sourceDuration = Number(loop?.duration_seconds);
+  if (Number.isFinite(audioDuration) && audioDuration > 0) {
+    return Number.isFinite(sourceDuration) && sourceDuration > 0 ? Math.min(audioDuration, sourceDuration) : audioDuration;
+  }
+  return Number.isFinite(sourceDuration) ? Math.max(0, sourceDuration) : 0;
 }
 
 function getSavedLoopEditDuration(loopId, elements = getSavedLoopRangeElements(loopId)) {
@@ -497,7 +531,7 @@ function setSavedLoopEditorBusy(loopId, busy) {
   else delete state.utility.savedLoopEditorBusy[id];
   const actionRoot = getSavedLoopRangeElements(id).actionRoot;
   actionRoot?._loopActionController?.update({
-    enabled: true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
+    enabled: true, canCreate: state.loopCreateAllowed === true, active: Boolean(state.utility.loopEditors?.[id]?.active), busy: Boolean(busy),
   });
   actionRoot?.setAttribute('aria-busy', busy ? 'true' : 'false');
 }
@@ -575,6 +609,7 @@ function setSavedLoopEditMode(loopId, active) {
   if (elements.boundaryTimes) elements.boundaryTimes.hidden = true;
   elements.actionRoot?._loopActionController?.update({
     enabled: true,
+    canCreate: state.loopCreateAllowed === true,
     active: editor.active,
     busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
   });
@@ -622,6 +657,11 @@ function handleSavedLoopEditKeydown(event) {
   const target = event.target instanceof HTMLElement ? event.target : null;
   const tagName = String(target?.tagName || '').toUpperCase();
   const inputType = String(target?.getAttribute?.('type') || target?.type || '').toLowerCase();
+  const rangeHandle = target?.getAttribute?.('data-loop-range-handle');
+  const nativeAction = ['BUTTON', 'A', 'SELECT'].includes(tagName)
+    || (tagName === 'INPUT' && inputType !== 'range')
+    || Boolean(target?.closest?.('button:not([data-loop-range-handle]), a, select, [role="button"], [role="menuitem"]'));
+  if (nativeAction && !rangeHandle) return false;
   const isTextEntry = tagName === 'TEXTAREA'
     || Boolean(target?.isContentEditable)
     || (tagName === 'INPUT'
@@ -642,6 +682,7 @@ function mountSavedLoopControls(loopId) {
     elements.actionRoot._loopActionController = mountLoopEditActionControl({
       root: elements.actionRoot,
       enabled: true,
+      canCreate: state.loopCreateAllowed === true,
       active: Boolean(state.utility.loopEditors?.[id]?.active),
       busy: Boolean(state.utility.savedLoopEditorBusy?.[id]),
       onEnter: () => openSavedLoopCreation(id),
@@ -685,6 +726,7 @@ function mountSavedLoopControls(loopId) {
 }
 
 async function openSavedLoopCreation(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const id = String(loopId || '');
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
   if (!loop || state.utility.savedLoopEditorBusy?.[id]) return false;
@@ -702,9 +744,13 @@ async function openSavedLoopCreation(loopId) {
   try {
     elements = mountSavedLoopControls(id);
     syncSavedLoopRange(id, { startSeconds: 0, endSeconds: sessionDurationSeconds });
+    const mountedActionController = elements.actionRoot?._loopActionController;
     const waveform = await loadSavedLoopWaveformPeaks(id);
+    if (elements.actionRoot?._loopActionController !== mountedActionController) return false;
     if (!waveform) throw new Error('Failed to load saved loop waveform.');
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     const currentElements = getSavedLoopRangeElements(id);
     if (currentElements.root !== elements.root) {
       elements = mountSavedLoopControls(id);
@@ -721,7 +767,9 @@ async function openSavedLoopCreation(loopId) {
     startSavedLoopExpirySession(id);
     return true;
   } catch (error) {
-    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch) return false;
+    if (state.utility.savedLoopOpenEpoch[id] !== openEpoch
+        || (typeof getUtilityModalElements === 'function' && getUtilityModalElements()?.overlay?.hidden)
+        || (state.utility.activeTab && state.utility.activeTab !== 'loops')) return false;
     setSavedLoopEditMode(id, false);
     console.error('[AlbumHaven][Loops] Failed to open saved-loop editor.', error);
     showToast(error.message || 'Failed to open loop editor.', 'error', 4200);
@@ -732,6 +780,7 @@ async function openSavedLoopCreation(loopId) {
 }
 
 async function createLoopFromSavedLoop(loopId) {
+  if (state.loopCreateAllowed === false) return;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === String(loopId || ''));
   if (!loop) return;
   const id = String(loopId || '');
@@ -772,11 +821,13 @@ async function createLoopFromSavedLoop(loopId) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to save loop');
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : state.utility.loops;
     state.utility.selectedLoopId = String(data.loop?.id || state.utility.selectedLoopId || '');
     state.utility.selectedLoopGroupKey = data.loop ? buildUtilityLoopGroupKey(data.loop) : state.utility.selectedLoopGroupKey;
     state.utility.selectedLoopDetailMode = 'group';
     state.utility.loopsLoaded = true;
+    setSavedLoopEditMode(id, false);
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
     renderUtilityModalContent();
     showToast('Loop saved.', 'success', 2600);
@@ -788,13 +839,14 @@ async function createLoopFromSavedLoop(loopId) {
   }
 }
 
-async function deleteSavedLoop(loopId) {
+async function deleteSavedLoop(loopId, { confirmed = false } = {}) {
   const id = String(loopId || '');
-  if (!id) return;
+  if (!id || state.utility.allowedActions?.['library.loops.delete'] === false) return false;
   const loop = (state.utility.loops || []).find((item) => String(item.id || '') === id);
+  if (!loop) return false;
   const deletedGroupKey = loop ? buildUtilityLoopGroupKey(loop) : '';
   const name = loop?.name || 'this loop';
-  if (!await showLoopDeleteConfirmDialog(name)) return;
+  if (!confirmed && !await showLoopDeleteConfirmDialog(name)) return false;
   const audio = document.querySelector(`[data-loop-audio="${cssEscape(id)}"]`);
   audio?.pause();
   try {
@@ -806,6 +858,7 @@ async function deleteSavedLoop(loopId) {
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to remove loop');
     loopEditSessionExpiryController.stop(getSavedLoopExpiryOwnerId(id));
+    state.utility.loopMutationGeneration = Number(state.utility.loopMutationGeneration || 0) + 1;
     state.utility.loops = Array.isArray(data.loops) ? data.loops : (state.utility.loops || []).filter((item) => String(item.id || '') !== id);
     state.utility.loopsLoaded = true;
     const replacementInGroup = deletedGroupKey
@@ -816,90 +869,207 @@ async function deleteSavedLoop(loopId) {
     state.utility.selectedLoopDetailMode = 'group';
     renderUtilityModalContent();
     showToast('Loop removed.', 'success', 2400);
+    return true;
   } catch (error) {
     console.error('[AlbumHaven][Loops] Failed to remove loop.', error);
     showToast(error.message || 'Failed to remove loop.', 'error', 4200);
+    return false;
   }
+}
+
+function getUtilityLoopOrderScope(songKey, loops = state.utility.loops || []) {
+  const members = loops.filter(loop => loop.song_key === songKey);
+  const revision = members[0]?.order_revision;
+  if (!members.length || !members.every(loop => canReorderUtilityLoop(loop) && loop.order_revision === revision)) return null;
+  return { songKey, revision, loops: members };
+}
+
+function replaceUtilityLoopSong(loops, songKey, members) {
+  const next = [];
+  let inserted = false;
+  for (const loop of loops) {
+    if (loop.song_key !== songKey) next.push(loop);
+    else if (!inserted) { next.push(...members); inserted = true; }
+  }
+  if (!inserted) next.push(...members);
+  return next;
 }
 
 function buildReorderedUtilityLoops(loops, draggedItem, targetItem, position) {
-  const dragType = String(draggedItem?.type || '');
-  const fromId = String(draggedItem?.id || '');
-  const fromGroupKey = String(draggedItem?.groupKey || '');
-  const targetType = String(targetItem?.type || '');
-  const toId = String(targetItem?.id || '');
-  const toGroupKey = String(targetItem?.groupKey || '');
-  const insertPosition = position === 'before' ? 'before' : 'after';
-  if (!fromId || !toId || (fromId === toId && dragType === targetType) || !Array.isArray(loops) || loops.length < 2) return null;
-  const groups = groupUtilityLoops(loops);
-  if (dragType === 'group' && targetType === 'group') {
-    const fromIndex = groups.findIndex((group) => String(group?.key || '') === fromId);
-    const targetIndex = groups.findIndex((group) => String(group?.key || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const nextGroups = groups.slice();
-    const [draggedGroup] = nextGroups.splice(fromIndex, 1);
-    if (!draggedGroup) return null;
-    const nextTargetIndex = nextGroups.findIndex((group) => String(group?.key || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    nextGroups.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedGroup);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  if (dragType === 'loop' && targetType === 'loop' && fromGroupKey && fromGroupKey === toGroupKey) {
-    const nextGroups = groups.map((group) => ({
-      ...group,
-      loops: Array.isArray(group.loops) ? group.loops.slice() : [],
-    }));
-    const targetGroup = nextGroups.find((group) => String(group?.key || '') === fromGroupKey);
-    if (!targetGroup || !Array.isArray(targetGroup.loops)) return null;
-    const fromIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === fromId);
-    const targetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (fromIndex < 0 || targetIndex < 0) return null;
-    const [draggedLoop] = targetGroup.loops.splice(fromIndex, 1);
-    if (!draggedLoop) return null;
-    const nextTargetIndex = targetGroup.loops.findIndex((loop) => String(loop?.id || '') === toId);
-    if (nextTargetIndex < 0) return null;
-    targetGroup.loops.splice(insertPosition === 'before' ? nextTargetIndex : nextTargetIndex + 1, 0, draggedLoop);
-    return nextGroups.flatMap((group) => group.loops || []);
-  }
-  return null;
+  if (!['before', 'after'].includes(position) || draggedItem?.type !== 'loop' || targetItem?.type !== 'loop') return null;
+  const songKey = String(draggedItem.groupKey || '');
+  if (!songKey || songKey !== targetItem.groupKey || draggedItem.id === targetItem.id) return null;
+  const scope = getUtilityLoopOrderScope(songKey, loops);
+  if (!scope) return null;
+  const members = scope.loops.slice();
+  const from = members.findIndex(loop => String(loop.id) === String(draggedItem.id));
+  if (from < 0 || !members.some(loop => String(loop.id) === String(targetItem.id))) return null;
+  const [moving] = members.splice(from, 1);
+  const to = members.findIndex(loop => String(loop.id) === String(targetItem.id));
+  members.splice(to + (position === 'after' ? 1 : 0), 0, moving);
+  if (members.every((loop, index) => loop.id === scope.loops[index].id)) return null;
+  return replaceUtilityLoopSong(loops, songKey, members);
 }
 
-function rerenderUtilityLoopListOnly() {
-  if (state.utility.activeTab !== 'loops') return;
+function captureUtilityLoopOrderView(songKey) {
   const els = getUtilityModalElements();
-  if (!els.overlay || els.overlay.hidden) return;
-  renderUtilityModalContent();
+  return { songKey, panel: els.detail?.querySelector('.utility-loop-entry-list'), detail: els.detail,
+    generation: Number(state.utility.loopViewGeneration || 0) };
+}
+
+function isUtilityLoopOrderViewCurrent(view) {
+  const els = getUtilityModalElements();
+  return state.utility.activeTab === 'loops' && !els.overlay?.hidden
+    && String(state.utility.selectedLoopGroupKey || '') === view.songKey
+    && Number(state.utility.loopViewGeneration || 0) === view.generation
+    && view.panel && els.detail === view.detail
+    && els.detail?.querySelector('.utility-loop-entry-list') === view.panel;
+}
+
+function createUtilityLoopMarkupNode(html) {
+  const host = document.createElement('div');
+  host.innerHTML = html;
+  return host.firstElementChild;
+}
+
+function moveUtilityLoopNode(parent, node, before = null) {
+  if (node === before || (node.parentNode === parent && node.nextElementSibling === before)) return;
+  if (typeof parent.moveBefore === 'function' && node.parentNode === parent) {
+    parent.moveBefore(node, before);
+    return;
+  }
+  // Native media retains playback across this synchronous move; do not seek or restart it.
+  parent.insertBefore(node, before);
+}
+
+function reconcileUtilityLoopOrderView(view, members) {
+  if (!isUtilityLoopOrderViewCurrent(view)) return;
+  const els = getUtilityModalElements();
+  const focused = document.activeElement;
+  const scrolls = [els.list, els.detail].filter(Boolean).map(node => [node, node.scrollTop]);
+  const before = new Map(Array.from(view.panel.children, node => [node, node.getBoundingClientRect().top]));
+  const ids = new Set(members.map(loop => String(loop.id)));
+  const panels = new Map(Array.from(view.panel.querySelectorAll('[data-utility-loop-entry]'), node => [node.getAttribute('data-utility-loop-entry'), node]));
+  for (const [id, node] of panels) {
+    if (ids.has(id)) continue;
+    if (typeof disposeMountedLoopActions === 'function') disposeMountedLoopActions(node);
+    if (typeof loopEditSessionExpiryController !== 'undefined') loopEditSessionExpiryController.stop(`saved-loop-${id}`);
+    node.querySelector('[data-loop-audio]')?.pause();
+    node.remove();
+    delete state.utility.loopEditors?.[id];
+  }
+  let panelCursor = view.panel.firstElementChild;
+  for (const loop of members) {
+    const id = String(loop.id);
+    const node = panels.get(id) || createUtilityLoopMarkupNode(buildUtilityLoopEntry(loop));
+    if (!node) continue;
+    moveUtilityLoopNode(view.panel, node, panelCursor);
+    panelCursor = node.nextElementSibling;
+    if (!panels.has(id)) initializeUtilityLoopPlayer(loop);
+  }
+  const treeChildren = Array.from(els.list?.querySelectorAll('[data-utility-loop-id]') || [])
+    .filter(node => node.getAttribute('data-utility-loop-group-key') === view.songKey);
+  const treeParent = treeChildren[0]?.parentNode || Array.from(els.list?.querySelectorAll('[data-loop-tree-song]') || [])
+    .find(node => node.getAttribute('data-loop-tree-song') === view.songKey);
+  if (treeParent) {
+    const existing = new Map(treeChildren.map(node => [node.getAttribute('data-utility-loop-id'), node]));
+    const visibleIds = new Set(getFilteredUtilityLoops().map(loop => String(loop.id)));
+    for (const [id, node] of existing) if (!ids.has(id) || !visibleIds.has(id)) node.remove();
+    let treeCursor = treeParent.firstElementChild;
+    for (const loop of members) {
+      if (!visibleIds.has(String(loop.id))) continue;
+      const node = existing.get(String(loop.id)) || createUtilityLoopMarkupNode(buildUtilityLoopTreeChild(loop, view.songKey));
+      if (node) {
+        moveUtilityLoopNode(treeParent, node, treeCursor);
+        treeCursor = node.nextElementSibling;
+      }
+    }
+  }
+  if (!(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+    for (const node of Array.from(view.panel.children)) {
+      const delta = before.has(node) ? before.get(node) - node.getBoundingClientRect().top : 0;
+      if (delta) node.animate?.([{ transform: `translateY(${delta}px)` }, { transform: 'translateY(0)' }], { duration: 220, easing: 'ease-out' });
+    }
+  }
+  if (focused && document.activeElement !== focused && els.overlay?.contains?.(focused)) focused.focus?.({ preventScroll: true });
+  scrolls.forEach(([node, scrollTop]) => { node.scrollTop = scrollTop; });
+  syncUtilityLoopPanelVisibility();
+  bindUtilityLoopDragAndDrop();
+  syncUtilityLoopMoveButtons();
+}
+
+function normalizeUtilityLoopOrderResponse(data, songKey) {
+  if (data?.song_key !== songKey || !Number.isSafeInteger(data.order_revision) || data.order_revision < 0
+      || !Array.isArray(data.ordered_ids) || !Array.isArray(data.loops)) return null;
+  const ids = data.ordered_ids;
+  if (ids.some(id => typeof id !== 'string' || !id) || new Set(ids).size !== ids.length || data.loops.length !== ids.length) return null;
+  const byId = new Map(data.loops.map(loop => [String(loop?.id || ''), loop]));
+  if (byId.size !== ids.length || ids.some(id => !byId.has(id) || byId.get(id).song_key !== songKey)) return null;
+  return ids.map(id => ({ ...byId.get(id), order_revision: data.order_revision }));
+}
+
+async function moveUtilityLoop(loopId, direction) {
+  if (!['up', 'down'].includes(direction)) return false;
+  const loop = (state.utility.loops || []).find(item => String(item.id) === String(loopId));
+  const scope = loop && getUtilityLoopOrderScope(loop.song_key);
+  if (!scope) return false;
+  const index = scope.loops.findIndex(item => item.id === loop.id);
+  const target = scope.loops[index + (direction === 'up' ? -1 : 1)];
+  if (!target) return false;
+  return reorderUtilityLoops({ type: 'loop', id: loop.id, groupKey: scope.songKey },
+    { type: 'loop', id: target.id, groupKey: scope.songKey }, direction === 'up' ? 'before' : 'after');
 }
 
 async function reorderUtilityLoops(draggedItem, targetItem, position) {
-  const previousLoops = Array.isArray(state.utility.loops) ? state.utility.loops.slice() : [];
+  const previousLoops = (state.utility.loops || []).slice();
   const nextLoops = buildReorderedUtilityLoops(previousLoops, draggedItem, targetItem, position);
   if (!nextLoops) return false;
-
+  const songKey = String(draggedItem.groupKey);
+  const scope = getUtilityLoopOrderScope(songKey, previousLoops);
+  state.utility.loopOrderPending ||= {};
+  if (state.utility.loopOrderPending[songKey]) return false;
+  const utilityOwner = state.utility;
+  const dataGeneration = Number(utilityOwner.loopDataGeneration || 0);
+  utilityOwner.loopMutationGeneration = Number(utilityOwner.loopMutationGeneration || 0) + 1;
+  const ownsCache = () => state.utility === utilityOwner && Number(state.utility.loopDataGeneration || 0) === dataGeneration;
+  const token = {};
+  state.utility.loopOrderPending[songKey] = token;
+  const view = captureUtilityLoopOrderView(songKey);
+  const ordered = nextLoops.filter(loop => loop.song_key === songKey);
   state.utility.loops = nextLoops;
-  state.utility.loopsLoaded = true;
-  rerenderUtilityLoopListOnly();
-
+  reconcileUtilityLoopOrderView(view, ordered);
   try {
     const response = await fetch('/loops/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ordered_ids: nextLoops.map((item) => String(item?.id || '')).filter(Boolean),
+        song_key: songKey, expected_revision: scope.revision,
+        ordered_ids: ordered.map(loop => String(loop.id)),
       }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error(data.error || 'Failed to reorder loops');
-    state.utility.loops = Array.isArray(data.loops) ? data.loops : nextLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
-    return true;
+    const authoritative = normalizeUtilityLoopOrderResponse(data, songKey);
+    if ((!response.ok || !data.ok) && response.status !== 409) throw new Error(data.error || 'Failed to reorder loops');
+    if (!authoritative) throw new Error('Unable to reconcile saved loop order. Reload Loops and try again.');
+    const currentRevision = (state.utility.loops || []).find(loop => loop.song_key === songKey)?.order_revision;
+    if (ownsCache() && Number.isSafeInteger(currentRevision) && data.order_revision >= currentRevision) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, authoritative);
+      reconcileUtilityLoopOrderView(view, authoritative);
+    }
+    if (response.status === 409) showToast('Loop order changed. The latest order is shown; try your move again.', 'error', 4200);
+    return response.ok && data.ok === true;
   } catch (error) {
-    console.error('[AlbumHaven][Loops] Failed to reorder loops.', error);
-    state.utility.loops = previousLoops;
-    state.utility.loopsLoaded = true;
-    rerenderUtilityLoopListOnly();
+    const current = (state.utility.loops || []).filter(loop => loop.song_key === songKey);
+    if (ownsCache() && current.length && current.every(loop => loop.order_revision === scope.revision)) {
+      state.utility.loops = replaceUtilityLoopSong(state.utility.loops || [], songKey, scope.loops);
+      reconcileUtilityLoopOrderView(view, scope.loops);
+    }
     showToast(error.message || 'Failed to reorder loops.', 'error', 4200);
     return false;
+  } finally {
+    if (utilityOwner.loopOrderPending[songKey] === token) delete utilityOwner.loopOrderPending[songKey];
+    syncUtilityLoopMoveButtons();
+    clearUtilityLoopDragState();
+    syncUtilityLoopDragUi();
   }
 }

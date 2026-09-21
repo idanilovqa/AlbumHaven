@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const test = require('node:test');
 
 const helperPath = path.join(__dirname, '..', '..', '..', 'music_app', 'static', 'js', 'runtime', 'response-state-helpers.js');
 const helperSource = fs.readFileSync(helperPath, 'utf8');
@@ -16,6 +17,50 @@ require('node:test')('search normalization preserves, inherits, and explicitly c
   assert.deepEqual(matches({}, { artist_name_match_artists: ['Broadcast'] }), ['Broadcast']);
   assert.deepEqual(matches({ artist_name_match_artists: [] },
     { artist_name_match_artists: ['Broadcast'] }), []);
+});
+
+function cacheAutomaticSearchSelection(context, { artist, query, nameMatches }) {
+  const primary = { artist, albums: [{ key: 'direct-content-match', name: 'Matching record' }] };
+  const family = { artist: 'Connected Artist', albums: [{ key: 'unrelated-family-record', name: 'Unrelated record' }] };
+  return context.applyViewPayload({
+    surface: { active: 'albums' }, query, selected_artist: artist,
+    related_filter_artists: [], primary_filter_active: false,
+    primary_artist_groups: [primary], family_artist_groups: [family],
+    artist_groups: [primary, family], related_artists: ['Connected Artist'],
+    search_context: {
+      committed_query: query, selected_artist: artist,
+      selected_artist_source: 'auto_top_match', artist_name_match_artists: nameMatches,
+    },
+  }, { trackSidebarReveal: false });
+}
+
+test('explicit same-primary content selection cannot reuse automatic family search results', () => {
+  const context = loadHelpers();
+  const automatic = cacheAutomaticSearchSelection(context, {
+    artist: 'Neal Morse', query: 'transatlantic', nameMatches: ['Transatlantic'],
+  });
+  assert.ok(context.getReusableSelectedArtistBrowseView(automatic), 'automatic search remains reusable for its own scope');
+  const explicit = {
+    ...automatic,
+    search_context: { ...automatic.search_context, selected_artist_source: 'requested_artist' },
+  };
+  assert.equal(context.getReusableSelectedArtistBrowseView(explicit), null,
+    'explicit content-only selection must obtain the narrow selected-artist view instead of cached family records');
+});
+
+test('explicit same-primary artist-name selection can reuse complete automatic family results', () => {
+  const context = loadHelpers();
+  const automatic = cacheAutomaticSearchSelection(context, {
+    artist: 'Transatlantic', query: 'transatlantic', nameMatches: ['Transatlantic'],
+  });
+  const explicit = {
+    ...automatic,
+    search_context: { ...automatic.search_context, selected_artist_source: 'requested_artist' },
+  };
+  const reused = context.getReusableSelectedArtistBrowseView(explicit);
+  assert.ok(reused, 'artist-name match retains the complete family contract');
+  assert.equal(reused.primary_artist_groups[0].albums[0].key, 'direct-content-match');
+  assert.equal(reused.family_artist_groups[0].albums[0].key, 'unrelated-family-record');
 });
 
 function loadHelpers() {
@@ -522,6 +567,7 @@ function loadHelpers() {
   })));
   assert.deepEqual(normalized, {
     scan_in_progress: true,
+    allowed_actions: {},
     scan_processed: 7,
     scan_total: 0,
     scan_percent: 0,

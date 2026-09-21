@@ -1,0 +1,33 @@
+{
+    "Started":  "2026-09-10T10:32:16.5174873Z",
+    "RunnerPid":  30436,
+    "TempRoot":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.tmp\\task9-scan-metadata-repair-dc90e2b3",
+    "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-scan-metadata-repair.log",
+    "Ports":  [
+                  5760,
+                  5761,
+                  5762,
+                  5763,
+                  5764,
+                  5765,
+                  5766,
+                  5767,
+                  5768,
+                  5769,
+                  5770,
+                  5771,
+                  5772,
+                  5773,
+                  5774,
+                  5775,
+                  5776,
+                  5777,
+                  5778,
+                  5779,
+                  5780,
+                  5781,
+                  5782,
+                  5783,
+                  5784
+              ]
+}

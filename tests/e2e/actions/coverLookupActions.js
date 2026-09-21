@@ -172,7 +172,7 @@ export class CoverLookupActions {
     const finalVisualState = await this.coverLookup
       .waitForCoverLookupStartedToastFinalState({ timeout });
     await expect(this.coverLookup.coverLookupStartedToast).toBeVisible({ timeout });
-    await expect(this.coverLookup.coverLookupStartedToast).toHaveText('Cover art lookup started.');
+    await expect(this.coverLookup.coverLookupStartedToastMessage).toHaveText('Cover art lookup started.');
     await expect(this.coverLookup.searchProgress).toBeVisible({ timeout });
     const toastOcclusionTargets = this.coverLookup.toastOcclusionTargets();
     const targetEntries = Object.entries(toastOcclusionTargets);
@@ -212,7 +212,7 @@ export class CoverLookupActions {
         underlyingCenterElement,
       );
       const underlyingOverlay = underlyingCenterElement instanceof Element
-        ? underlyingCenterElement.closest('#cover-lookup-modal, [role="dialog"]')
+        ? underlyingCenterElement.closest('#cover-lookup-modal')
         : null;
       return {
         pointerEvents: toastLayerStyle.pointerEvents,
@@ -650,7 +650,7 @@ export class CoverLookupActions {
   }
 
   async pressSpaceOnFocusedDrawerOpener(options = {}) {
-    await this.openDrawer(options);
+    await this.closeDrawer(options);
     await this.coverLookup.drawerButton.focus();
     await expect(this.coverLookup.drawerButton).toBeFocused();
     await this.coverLookup.drawerButton.press('Space');
@@ -670,9 +670,8 @@ export class CoverLookupActions {
     await this.coverLookup.drawerCloseButton.focus();
     await expect(this.coverLookup.drawerCloseButton).toBeFocused();
     await this.coverLookup.drawerCloseButton.press('Space');
-    await this.coverLookup.waitForDrawerState(true, { timeout: options.timeout || 30000 });
+    await this.coverLookup.waitForDrawerState(false, { timeout: options.timeout || 30000 });
     await options.afterSpace?.();
-    await expect(this.coverLookup.drawerCloseButton).toBeFocused();
   }
 
   async waitForDrawerOpen(options = {}) {

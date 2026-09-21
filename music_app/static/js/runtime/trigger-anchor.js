@@ -13,16 +13,29 @@ function getTriggerAnchorGeometry(anchor, surface) {
 
 let activeTriggerSurface = null;
 function activateTriggerSurface(surface, close) {
-  if (activeTriggerSurface?.surface === surface) return;
-  const previous = activeTriggerSurface;
-  activeTriggerSurface = null;
-  previous?.close();
-  activeTriggerSurface = { surface, close };
+  for (let owner = activeTriggerSurface; owner; owner = owner.parent) {
+    if (owner.surface === surface) return;
+  }
+  while (activeTriggerSurface && !activeTriggerSurface.surface.contains?.(surface)) {
+    const previous = activeTriggerSurface;
+    activeTriggerSurface = previous.parent || null;
+    previous.close();
+  }
+  activeTriggerSurface = { surface, close, parent: activeTriggerSurface };
 }
 
 const triggerAnchorBindings = new WeakMap();
 function clearTriggerAnchor(surface) {
-  if (activeTriggerSurface?.surface === surface) activeTriggerSurface = null;
+  let owner = activeTriggerSurface;
+  while (owner && owner.surface !== surface) owner = owner.parent;
+  if (owner) {
+    while (activeTriggerSurface !== owner) {
+      const child = activeTriggerSurface;
+      activeTriggerSurface = child.parent;
+      child.close();
+    }
+    activeTriggerSurface = owner.parent || null;
+  }
   const binding = triggerAnchorBindings.get(surface);
   if (!binding) return;
   binding.observer?.disconnect();

@@ -288,6 +288,24 @@ jobs:
             -AppPrivilegeMode Inherited `
             -SkipFixtureLoad
 
+      - name: Capture destructive Python database contracts
+        run: |
+          "PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PYTEST_DESTRUCTIVE_PGPASSFILE=$env:PGPASSFILE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Provision pristine PostgreSQL for persistent Python contracts
+        run: |
+          .\scripts\ci\bootstrap-windows-postgres.ps1 `
+            -Mode Provision `
+            -ExpectedMajorVersion 17 `
+            -Pgbin $env:PGBIN `
+            -HostName 127.0.0.1 `
+            -DatabaseSuffix "py_contract_${{ github.run_id }}_${{ github.run_attempt }}" `
+            -StatePath "${{ runner.temp }}\album-haven-python-contract-postgres.state.json" `
+            -AppPrivilegeMode Inherited `
+            -SkipFixtureLoad
+
       - name: Write Python foundation version manifest
         env:
           PLAYWRIGHT_CHROME_EXECUTABLE: ${{ steps.setup_python_chrome.outputs.chrome-path }}
@@ -297,8 +315,17 @@ jobs:
 
       - name: Export isolated Python database contracts
         run: |
-          "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:DATABASE_MIGRATOR_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $combinedPgpass = "${{ runner.temp }}\album-haven-python-combined.pgpass"
+          $pgpassLines = @(
+            (Get-Content -LiteralPath $env:PYTEST_DESTRUCTIVE_PGPASSFILE)
+            (Get-Content -LiteralPath $env:PGPASSFILE)
+          )
+          [IO.File]::WriteAllLines($combinedPgpass, $pgpassLines, [Text.UTF8Encoding]::new($false))
+          "PGPASSFILE=$combinedPgpass" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_FAKE_E2E_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_SCAN_PERFORMANCE_SETUP_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_SETUP_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ALBUM_HAVEN_SCAN_PERFORMANCE_DATABASE_URL=$env:PYTEST_DESTRUCTIVE_DATABASE_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "ALBUM_HAVEN_POSTGRES_CONTRACT_DATABASE_URL=$env:DATABASE_APP_URL" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Collect Python test inventory
@@ -321,6 +348,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/ci/validate-foundation-gates.cjs --pytest-junit=${{ runner.temp }}\pytest-results.xml --allowed-skips=tests/ci/pytest-allowed-skips.json
 
+      - name: Teardown pristine PostgreSQL for persistent Python contracts
+        if: ${{ always() }}
+        run: |
+          $statePath = "${{ runner.temp }}\album-haven-python-contract-postgres.state.json"
+          if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+            .\scripts\ci\bootstrap-windows-postgres.ps1 `
+              -Mode Teardown `
+              -ExpectedMajorVersion 17 `
+              -Pgbin $env:PGBIN `
+              -HostName 127.0.0.1 `
+              -DatabaseSuffix "py_contract_${{ github.run_id }}_${{ github.run_attempt }}" `
+              -StatePath $statePath
+          }
+
       - name: Teardown isolated PostgreSQL for Python tests
         if: ${{ always() }}
         run: |
@@ -333,6 +374,14 @@ jobs:
               -HostName 127.0.0.1 `
               -DatabaseSuffix "py_${{ github.run_id }}_${{ github.run_attempt }}" `
               -StatePath $statePath
+          }
+
+      - name: Remove combined Python test credentials
+        if: ${{ always() }}
+        run: |
+          $combinedPgpass = "${{ runner.temp }}\album-haven-python-combined.pgpass"
+          if (Test-Path -LiteralPath $combinedPgpass -PathType Leaf) {
+            Remove-Item -LiteralPath $combinedPgpass -Force
           }
 
       - name: Upload Python foundation evidence
@@ -600,9 +649,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.23 `
+            -Release fixtures-v1.0.24 `
             -Profile functional-core `
-            -ManifestSha256 e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2
+            -ManifestSha256 1b68ff21620663c500a3869c74f01565ecbcd38f906a5c7eb690ac75581db8f6
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -784,9 +833,9 @@ jobs:
           ALBUM_HAVEN_FIXTURES_TOKEN: ${{ secrets.ALBUM_HAVEN_FIXTURES_TOKEN }}
         run: |
           & ".trusted-ci\scripts\ci\fetch-test-fixtures.ps1" `
-            -Release fixtures-v1.0.23 `
+            -Release fixtures-v1.0.24 `
             -Profile ${{ matrix.shard == 'utility-problematic-files' && 'utility-problematic-files' || 'synthetic-large-library' }} `
-            -ManifestSha256 e3ad2c100a77af2cb25dca2894dbf2c5e8decbc6925acf54c2749f6d3be000c2
+            -ManifestSha256 1b68ff21620663c500a3869c74f01565ecbcd38f906a5c7eb690ac75581db8f6
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

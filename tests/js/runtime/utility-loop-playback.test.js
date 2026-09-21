@@ -466,6 +466,44 @@ test('saved-loop playback waits for active global-player ownership to release be
   assert.equal(secondAudio.muted, false);
 });
 
+test('starting another saved loop pauses the previously playing saved loop first', async () => {
+  const events = [];
+  const firstAudio = new FakeAudio({ paused: false, duration: 12, src: '/loops/media/loop-1' });
+  const secondAudio = new FakeAudio({ paused: true, duration: 12, src: '/loops/media/loop-2' });
+  firstAudio.setAttribute('data-loop-audio', 'loop-1');
+  secondAudio.setAttribute('data-loop-audio', 'loop-2');
+  firstAudio.pause = () => {
+    events.push('first-pause');
+    firstAudio.pauseCalls += 1;
+    firstAudio.paused = true;
+  };
+  secondAudio.play = () => {
+    events.push('second-play');
+    secondAudio.playCalls += 1;
+    secondAudio.paused = false;
+    return Promise.resolve();
+  };
+  const context = loadHelper({
+    getPlayerPlaybackSnapshot: () => null,
+    document: {
+      querySelector(selector) {
+        if (selector === '[data-loop-audio="loop-1"]') return firstAudio;
+        if (selector === '[data-loop-audio="loop-2"]') return secondAudio;
+        return null;
+      },
+      querySelectorAll: selector => selector === '[data-loop-audio]' ? [firstAudio, secondAudio] : [],
+    },
+  });
+  context.updateUtilityLoopPlayerUi = loopId => events.push(`refresh-${loopId}`);
+
+  assert.equal(context.toggleUtilityLoopPlayback('loop-2'), true);
+  await Promise.resolve();
+
+  assert.deepEqual(events.slice(0, 3), ['first-pause', 'refresh-loop-1', 'second-play']);
+  assert.equal(firstAudio.paused, true);
+  assert.equal(secondAudio.paused, false);
+});
+
 function loadOwnedLoopKeyboardHelper() {
   const audio = new FakeAudio({ paused: false, duration: 12, src: '/loops/media/loop-1' });
   const entry = new FakeElement({
@@ -606,11 +644,8 @@ test('repeat state leaves native media looping disabled so the app can restart s
     'after',
   );
 
-  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [
-    { id: 'beta' },
-    { id: 'gamma' },
-    { id: 'alpha' },
-  ]);
+  // Task 5 intentionally supersedes global song-group ordering with scoped loop ordering.
+  assert.equal(reordered, null);
 }
 
 {
@@ -620,7 +655,9 @@ test('repeat state leaves native media looping disabled so the app can restart s
     { id: 'beta', artist: 'Neal Morse', title: 'The Door', album: 'One' },
     { id: 'gamma', artist: 'Neal Morse', title: 'The Door', album: 'One' },
   ];
-  const groupKey = 'neal morse::the door::one';
+  const groupKey = 'track:1';
+  loops.forEach(loop => { loop.song_key = groupKey; loop.order_revision = 7; });
+  context.canReorderUtilityLoop = loop => loop.song_key === groupKey;
 
   const reordered = context.buildReorderedUtilityLoops(
     loops,
@@ -629,11 +666,7 @@ test('repeat state leaves native media looping disabled so the app can restart s
     'before',
   );
 
-  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [
-    { id: 'gamma', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-    { id: 'alpha', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-    { id: 'beta', artist: 'Neal Morse', title: 'The Door', album: 'One' },
-  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(reordered)), [loops[2], loops[0], loops[1]]);
 }
 
 {
@@ -1410,6 +1443,25 @@ test('saved-loop editor stays hidden and busy until waveform draw succeeds, and 
   assert.deepEqual(failed.fetchCalls, []);
 });
 
+test('saved-loop scissors can reopen after unavailable waveform media is repaired', async () => {
+  const harness = createSavedLoopEditorHarness();
+  let loads = 0;
+  harness.context.loadSavedLoopWaveformPeaks = async () => {
+    loads += 1;
+    return loads === 1 ? null : harness.waveform;
+  };
+
+  assert.equal(await harness.context.createLoopFromSavedLoop('loop-1'), false);
+  assert.equal(harness.editor.hidden, true);
+  assert.equal(harness.actionRoot.getAttribute('aria-busy'), 'false');
+  assert.equal(await harness.context.createLoopFromSavedLoop('loop-1'), true);
+  assert.equal(harness.editor.hidden, false);
+  assert.equal(harness.boundaryTimes.hidden, true, 'the obsolete timestamp row stays hidden');
+  assert.equal(harness.waveformDraws.length, 1);
+  assert.equal(loads, 2);
+  assert.deepEqual(harness.fetchCalls, [], 'opening the editor must not save a loop');
+});
+
 test('cancel during pending saved-loop waveform load invalidates stale completion without side effects', async () => {
   let resolveWaveform;
   const harness = createSavedLoopEditorHarness({
@@ -1796,6 +1848,7 @@ test('second activation names and posts the validated editor range with source_l
   assert.equal(harness.context.state.utility.selectedLoopId, 'loop-2');
   assert.equal(harness.context.state.utility.selectedLoopGroupKey, 'artist::song::album');
   assert.equal(harness.context.state.utility.selectedLoopDetailMode, 'group');
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false, 'successful Save closes only its completed parent edit');
   assert.deepEqual(harness.renderCalls, [{
     loopIds: ['loop-2', 'loop-1'],
     selectedLoopId: 'loop-2',
@@ -1865,7 +1918,7 @@ test('saved-loop create and cancel preserve one audio node and one pending POST'
   assert.match(helperSource, /savedLoopEditorBusy/);
   assert.match(helperSource, /if\s*\([^)]*savedLoopEditorBusy[^)]*\)\s*return/);
   assert.doesNotMatch(
-    helperSource,
+    helperSource.slice(helperSource.indexOf('function mountSavedLoopControls'), helperSource.indexOf('async function createLoopFromSavedLoop')),
     /on(?:Enter|Cancel)[^]*?\.remove\s*\(\)|on(?:Enter|Cancel)[^]*?replaceWith\s*\(/,
     'enter and cancel must retain the existing audio element',
   );
@@ -1958,22 +2011,38 @@ test('successful saved-loop deletion stops the editor expiry once after confirma
 });
 
  test('saved loop uses the combined L+R renderer and reuses peaks across progress updates', async () => {
-  const canvas = { hidden: true, isConnected: true, parentElement: { classList: { toggle() {} } } };
+  let waveformMode = false;
+  const canvas = {
+    hidden: true,
+    isConnected: true,
+    parentElement: { classList: { toggle(_name, enabled) { waveformMode = enabled; } } },
+  };
   const audio = { duration: 20, currentTime: 5 };
   const peaks = { left: [0.2, 0.8], right: [0.7, 0.3] };
+  let resolvePeaks;
   let loads = 0;
   const draws = [];
   const state = { player: { appearance: { seekbarMode: 'default' } }, utility: { loopEditors: {} } };
   const context = loadHelper({ state, document: { querySelector: () => canvas },
-    loadSavedLoopWaveformPeaks: async () => { loads++; return peaks; },
+    loadSavedLoopWaveformPeaks: async () => {
+      loads++;
+      return new Promise(resolve => { resolvePeaks = resolve; });
+    },
     drawCombinedLoopWaveform: (...args) => draws.push(args),
   });
-  context.loadSavedLoopWaveformPeaks = async () => { loads++; return peaks; };
+  context.loadSavedLoopWaveformPeaks = async () => {
+    loads++;
+    return new Promise(resolve => { resolvePeaks = resolve; });
+  };
   context.updateUtilityLoopStereoWaveform('loop', audio);
   assert.equal(loads, 0);
   assert.equal(canvas.hidden, true);
   state.player.appearance.seekbarMode = 'waveform';
   context.updateUtilityLoopStereoWaveform('loop', audio);
+  assert.equal(canvas.hidden, false, 'waveform mode must replace the regular seekbar while peaks load');
+  assert.equal(waveformMode, true, 'waveform geometry must apply before peaks load');
+  assert.equal(draws.length, 0);
+  resolvePeaks(peaks);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(canvas.hidden, false);
   assert.equal(draws[0][1], peaks);
@@ -2115,5 +2184,115 @@ for (const failure of ['null', 'reject']) {
     assert.equal(loads, 2);
     assert.equal(canvas.hidden, false);
     assert.equal(waveformMode, true);
+  });
+}
+
+test('saved-panel initialization mounts reveal controls before any hidden action is clicked', () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.audio.dataset.bound, '1');
+  assert.equal(harness.actionRoot.dataset.loopActionsBound, '1');
+  assert.ok(harness.actionRoot._loopActionController);
+  assert.equal(harness.rangeControllerMounts.length, 1);
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.rangeControllerMounts.length, 1, 'reinitialization retains the controller');
+});
+
+test('saved-panel initialization mounts replacement controls when audio is already bound', () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.audio.dataset.bound = '1';
+  harness.context.initializeUtilityLoopPlayer(harness.context.state.utility.loops[0]);
+  assert.equal(harness.actionRoot.dataset.loopActionsBound, '1');
+  assert.equal(harness.rangeControllerMounts.length, 1);
+});
+
+test('encoder padding cannot extend editable saved-loop bounds or change ordinary media duration', async () => {
+  const harness = createSavedLoopEditorHarness();
+  harness.audio.duration = 12.04;
+  await harness.context.openSavedLoopCreation('loop-1');
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].durationSeconds, 12);
+  assert.equal(harness.context.state.utility.loopEditors['loop-1'].endSeconds, 12);
+  assert.equal(harness.rangeControllerMounts[0].getDuration(), 12);
+  assert.equal(harness.audio.duration, 12.04);
+  harness.context.cancelSavedLoopCreation('loop-1');
+  harness.audio.duration = 11.98;
+  assert.equal(harness.context.getSavedLoopRangeDuration('loop-1'), 11.98);
+});
+
+for (const departure of ['closed Settings', 'changed tab', 'closed and reopened Settings']) {
+  test(`pending saved waveform cannot revive controls after ${departure}`, async () => {
+    let resolveWaveform;
+    const harness = createSavedLoopEditorHarness({ waveformPromise: new Promise(resolve => { resolveWaveform = resolve; }) });
+    const overlay = { hidden: false };
+    harness.context.getUtilityModalElements = () => ({ overlay });
+    const pending = harness.context.openSavedLoopCreation('loop-1');
+    if (departure === 'closed Settings') overlay.hidden = true;
+    else if (departure === 'changed tab') harness.context.state.utility.activeTab = 'rules';
+    delete harness.actionRoot._loopActionController;
+    delete harness.editor._loopRangeController;
+    harness.context.state.utility.loopEditors['loop-1'].active = false;
+    resolveWaveform(harness.waveform);
+    assert.equal(await pending, false);
+    assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false);
+    assert.equal(harness.actionRoot._loopActionController, undefined);
+    assert.equal(harness.editor._loopRangeController, undefined);
+    assert.equal(harness.waveformDraws.length, 0);
+  });
+}
+
+test('saved-panel disposal destroys mounted range controller while preserving pending range state', async () => {
+  const harness = createSavedLoopEditorHarness();
+  await harness.context.openSavedLoopCreation('loop-1');
+  const retained = harness.context.state.utility.loopEditors['loop-1'];
+  let rangeDestructions = 0;
+  harness.editor._loopRangeController.destroy = () => { rangeDestructions += 1; };
+  harness.actionRoot._loopActionController.destroy = () => {};
+  harness.actionRoot.setAttribute('data-loop-action-owner', 'saved-loop-loop-1');
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-loop-playback.js'), 'utf8'), harness.context);
+  harness.context.disposeMountedLoopActions({ querySelectorAll: selector => selector === '[data-loop-action-owner]' ? [harness.actionRoot] : [harness.editor] });
+  assert.equal(rangeDestructions, 1);
+  assert.equal(harness.editor._loopRangeController, undefined);
+  assert.strictEqual(harness.context.state.utility.loopEditors['loop-1'], retained);
+});
+
+for (const action of ['cancel', 'create', 'play', 'delete']) {
+  test(`native Enter on saved-loop ${action} keeps button ownership instead of invoking the global save shortcut`, async () => {
+    const harness = createSavedLoopEditorHarness({ hidden: false });
+    const button = new FakeElement({ tagName: 'BUTTON', attributes: { 'data-loop-action': action } });
+    let prevented = false;
+    const handled = harness.context.handleSavedLoopEditKeydown({ key: 'Enter', target: button, preventDefault() { prevented = true; } });
+    assert.equal(handled, false);
+    assert.equal(prevented, false);
+    assert.deepEqual(harness.dialogCalls, []);
+    if (action === 'cancel') {
+      button.addEventListener('click', () => harness.context.cancelSavedLoopCreation('loop-1'));
+      button.dispatch('click');
+      assert.equal(harness.context.state.utility.loopEditors['loop-1'].active, false);
+      assert.deepEqual(harness.dialogCalls, []);
+      assert.deepEqual(harness.fetchCalls, []);
+    }
+  });
+}
+
+
+for (const handoff of [false, true]) {
+  test('loop start reports rejection without exposing media paths; handoff=' + handoff, async () => {
+    const audio = new FakeAudio({ paused: true, duration: 12, src: '/loops/media/loop-1' });
+    const messages = [];
+    audio.play = () => Promise.reject(Object.assign(new Error('private media location'), { name: 'NotSupportedError' }));
+    const context = loadHelper({
+      document: { querySelector: () => audio, querySelectorAll: () => [] },
+      getPlayerPlaybackSnapshot: () => handoff ? { paused: false, ended: false } : null,
+      pausePlayerPlaybackForHandoff: () => Promise.resolve(true),
+      showToast: message => messages.push(message),
+      console: { warn() {} },
+    });
+    context.updateUtilityLoopPlayerUi = () => {};
+    context.toggleUtilityLoopPlayback('loop-1');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(messages.length, 1);
+    assert.match(messages[0], /Unable to start loop playback/);
+    assert.doesNotMatch(messages[0], /private media location/);
+    assert.equal(audio.paused, true);
   });
 }

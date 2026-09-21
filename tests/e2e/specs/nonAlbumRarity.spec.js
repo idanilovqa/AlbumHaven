@@ -179,25 +179,24 @@ test('FTC-TAGS-005 keeps a failed physical tag write visible and records it in L
       expect(presentation.whiteSpace).toBe('nowrap');
     });
 
-    await stepLogger.step('Open the exact Log History entry and retain the complete failure diagnostic', async () => {
-      await tagEditorActions.openLogHistoryFromFailure();
-      await utilityLogHistoryActions.waitForReady();
-      const entryId = await utilityLogHistoryActions.readSelectedEntryId();
-      expect(entryId).not.toBe('');
-      expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(failure.payload.error);
-      const stored = await utilityLogHistoryActions.readBrowserStoredEntry(entryId);
-      expect(stored.entry).toMatchObject({
-        id: entryId,
-        action: 'Tag edit failed',
-        error: failure.payload.error,
-        file_count: 1,
-        source: 'this_browser',
-        source_label: 'This browser',
-      });
-      expect(stored.entry.files).toEqual(expect.arrayContaining([
-        expect.stringContaining(RARITY_TRACK_FILENAME),
-      ]));
+  await stepLogger.step('Open the exact durable Log History entry and retain its sanitized failure diagnostic', async () => {
+    await tagEditorActions.openLogHistoryFromFailure();
+    await utilityLogHistoryActions.waitForReady();
+    const entryId = await utilityLogHistoryActions.readSelectedEntryId();
+    expect(entryId).not.toBe('');
+    const stored = await utilityLogHistoryActions.readPersistedEntry(entryId);
+    expect(stored.entry).toMatchObject({
+      id: entryId,
+      action: 'Tag edit failed',
+      file_count: 1,
     });
+    expect(stored.entry.error).toBeTruthy();
+    expect(await utilityLogHistoryActions.readVisibleHistoryText()).toContain(stored.entry.error);
+    expect(stored.entry.error).not.toMatch(/[A-Za-z]:[\\/]|\\\\[^\\\s]+\\|\/Users\/|\/home\//u);
+    expect(stored.entry).not.toHaveProperty('files');
+    expect(stored.entry).not.toHaveProperty('path');
+    expect(stored.snapshot).toBeTruthy();
+  });
   } finally {
     await galleryActions.goto('/?surface=albums');
     await galleryActions.waitForGalleryReady();
@@ -461,7 +460,7 @@ test('FTC-NON-ALBUM-011 permits a nonempty Album rename from post-rarity Problem
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
       const rarityAlbumIndex = problematicItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(rarityAlbumIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(rarityAlbumIndex);
@@ -570,7 +569,7 @@ test('FTC-NON-ALBUM-014 clears Album durably and refreshes Problematic Files', {
       await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
       const sourceItems = await utilityProblematicFilesActions.readVisibleListItems();
       const sourceIndex = sourceItems.findIndex((item) => (
-        item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+        item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
       ));
       expect(sourceIndex).toBeGreaterThanOrEqual(0);
       await utilityProblematicFilesActions.selectListItemByIndex(sourceIndex);
@@ -903,7 +902,7 @@ test('FTC-NON-ALBUM-010 / FTC-NON-ALBUM-009 / FTC-NON-ALBUM-008 / FTC-NON-ALBUM-
     await utilityProblematicFilesActions.waitForReady({ requirePopulated: true });
     const problematicItems = await utilityProblematicFilesActions.readVisibleListItems();
     const looseProblemIndex = problematicItems.findIndex((item) => (
-      item.meta === RARITY_ARTIST && item.title.startsWith(RARITY_ALBUM)
+      item.meta === `${RARITY_ARTIST} · ${RARITY_YEAR}` && item.title === RARITY_ALBUM
     ));
     expect(looseProblemIndex).toBeGreaterThanOrEqual(0);
     await utilityProblematicFilesActions.selectListItemByIndex(looseProblemIndex);

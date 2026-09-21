@@ -13,9 +13,11 @@ export {
   selectedPerformanceContractName,
 } from './timingBudget.js';
 export {
+  controlLastfmProvider,
   LASTFM_CONSECUTIVE_PLAYBACK_TRACKS,
   LASTFM_PLAYBACK_TARGET,
   readLastfmProviderRequests,
+  readLastfmProviderState,
 } from './lastfmProviderHelpers.js';
 export {
   ALL_ARTISTS_LOCAL_BENCHMARK,

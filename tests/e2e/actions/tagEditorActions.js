@@ -31,6 +31,7 @@ export class TagEditorActions {
   }
 
   async readSummary() {
+    const alertMessages = await this.tagEditor.repairAlertMessage.allTextContents();
     return {
       subtitle: String(await this.tagEditor.subtitle.textContent() || '').trim(),
       trackFilenames: (await this.tagEditor.trackTitles.allTextContents())
@@ -38,7 +39,7 @@ export class TagEditorActions {
         .filter(Boolean),
       activeTrackCount: await this.tagEditor.activeTrackButtons.count(),
       exceptionType: String(await this.tagEditor.exceptionSelect.inputValue() || ''),
-      alertText: String(await this.tagEditor.repairAlertMessage.textContent() || '').trim(),
+      alertText: String(alertMessages[0] || '').trim(),
     };
   }
 
@@ -376,20 +377,17 @@ export class TagEditorActions {
       await expect(this.tagEditor.applyButton).toBeEnabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'pointer');
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '1');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgba(239, 68, 68, 0.12)',
-      );
     } else {
       await expect(this.tagEditor.applyButton).toBeDisabled();
       await expect(this.tagEditor.applyButton).toHaveCSS('cursor', 'not-allowed');
+      // Ordinary Button consumers retain their approved disabled surface and ink.
       await expect(this.tagEditor.applyButton).toHaveCSS('opacity', '0.55');
-      await expect(this.tagEditor.applyButton).toHaveCSS(
-        'background-color',
-        'rgb(55, 65, 81)',
-      );
+      await expect(this.tagEditor.applyButton).toHaveCSS('background-color', 'rgb(55, 65, 81)');
       await expect(this.tagEditor.applyButton).toHaveCSS('color', 'rgb(148, 163, 184)');
+      await expect(this.tagEditor.applyButton).toHaveCSS('border-top-color', 'rgb(75, 85, 99)');
     }
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-ui-button-action', 'primary');
+    await expect(this.tagEditor.applyButton).toHaveAttribute('data-editor-footer-action', 'primary');
   }
 
   async readTrackNumberAndDiscByFilename(filename) {
@@ -425,7 +423,8 @@ export class TagEditorActions {
       await expect(this.tagEditor.nonAlbumRarityWarningText).toHaveText(
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
       expect(editRequestCount).toBe(0);
       await this.tagEditor.confirmCancelButton.click();
       await expect(this.tagEditor.confirmOverlay).toBeHidden();
@@ -472,11 +471,8 @@ export class TagEditorActions {
         'Applying non-album rarity exception to this track will remove it from the album. You sure?',
         { timeout },
       );
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
-      await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveCSS(
-        'color',
-        'rgb(250, 204, 21)',
-      );
+      await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+      await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
     }
     await this.tagEditor.confirmButton.click();
     const response = await editResponsePromise;
@@ -672,11 +668,8 @@ export class TagEditorActions {
           'Applying non-album rarity exception to this track will remove it from the album. You sure?',
           { timeout },
         );
-        await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveText('!');
-        await expect(this.tagEditor.nonAlbumRarityWarningIcon).toHaveCSS(
-          'color',
-          'rgb(250, 204, 21)',
-        );
+        await expect(this.tagEditor.nonAlbumRarityWarningIconSvg).toBeVisible();
+        await expect(this.tagEditor.nonAlbumRarityWarning).toHaveAttribute('data-on-page-alert', 'warning');
         if (editRequestCount !== 0) {
           throw new Error(
             `Expected the non-album rarity confirmation to send no edit request before acceptance; observed ${editRequestCount}.`,

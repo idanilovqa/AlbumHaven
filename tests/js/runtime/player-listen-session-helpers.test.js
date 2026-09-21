@@ -115,6 +115,7 @@ async function run() {
     context.closeListenSegment();
 
     assert.deepEqual(JSON.parse(JSON.stringify(context.state.player.listenSession)), {
+      measurement: { deviceId: '', sessionId: '', total: 0, contiguous: 0, longest: 0 },
       track: {
         path: 'C:/Music/song.flac',
         title: 'Song',

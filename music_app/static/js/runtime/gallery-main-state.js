@@ -217,7 +217,7 @@ function resolveGallerySummaryTotals(view, mountedTotals, filterState, groups) {
     }));
     rootTotals = { ...mountedTotals, albumCount: keys.size + unkeyedCount };
   }
-  if (!view.initial_view_partial || view.query) return rootTotals;
+  if (view.query) return rootTotals;
   if (filterState && (
     filterState.familySelectionExplicit || filterState.familyArtists?.length
     || filterState.albumTypes?.length !== 2

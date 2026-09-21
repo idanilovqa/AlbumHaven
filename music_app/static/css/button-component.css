@@ -1,4 +1,8 @@
 /* Shared current-web Button primitive. Consumer variants own colors and dimensions. */
+:root :is(.button, .ui-button),
+:root .ui-button__content {
+  white-space: nowrap;
+}
 .ui-icon {
   width: 1em;
   height: 1em;
@@ -18,7 +22,7 @@
   vertical-align: middle;
   cursor: pointer;
   outline: 1px solid transparent;
-  outline-offset: 1px;
+  outline-offset: -1px;
   transition: background 150ms ease, border-color 150ms ease, color 150ms ease, outline-color 150ms ease;
 }
 .ui-button[hidden] { display: none !important; }
@@ -44,6 +48,19 @@
   background: color-mix(in srgb, currentColor 10%, transparent);
 }
 .ui-button:disabled, .ui-button[aria-disabled='true'] { cursor: not-allowed; }
+
+/* Reusable selection pill. Consumers own dimensions, colors, and optional artwork. */
+.ui-filter-pill {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+}
+.ui-filter-pill__label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Shared app-bar-style specialization for compact icon actions. */
 .action-button {
@@ -96,6 +113,7 @@
   outline-color: var(--appearance-interaction-outline, var(--appearance-accent, #72baff));
 }
 .action-button--destructive {
+  --appearance-interaction-outline: var(--appearance-error, #ef5350);
   color: var(--alert-error-ink, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, white 28%));
   border-color: var(--alert-error-edge, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent));
 }
@@ -111,6 +129,12 @@
 .action-button--destructive:focus-visible {
   outline-color: var(--alert-error-focus, color-mix(in srgb, var(--appearance-error, #ef5350) 72%, transparent)) !important;
 }
+:root :is(.action-button--destructive, .on-page-alert__dismiss):is(:hover, :active, :focus-visible):not(:disabled):not([aria-disabled='true']) {
+  border-color: var(--appearance-error, #df8f96) !important;
+  outline: 1px solid var(--appearance-error, #df8f96) !important;
+  outline-offset: -1px !important;
+  box-shadow: none;
+}
 .action-button:disabled,
 .action-button[aria-disabled='true'] {
   opacity: 0.38;
@@ -120,4 +144,26 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ui-button, .action-button { transition: none; }
+}
+
+/* Explicit compound fields share focus ownership; embedded actions own their own focus. */
+:root .ui-input-action:has(> input:focus):not(:has(button:active, .trigger-anchor-open, > input[aria-expanded="true"])) {
+  outline: var(--ui-input-action-focus-outline, 1px solid var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  outline-offset: var(--ui-input-action-focus-offset, -1px) !important;
+  border-color: var(--ui-input-action-focus-border, var(--muted, var(--appearance-muted, #9ca3af))) !important;
+  box-shadow: var(--ui-input-action-focus-shadow, none) !important;
+}
+:root .ui-input-action button:focus-visible:not(.trigger-anchor-open) {
+  outline: 2px solid var(--ui-input-action-button-focus, var(--focus-ring, var(--accent))) !important;
+  outline-offset: -3px !important;
+}
+
+:root .ui-input-action > input:focus { outline: none !important; box-shadow: none !important; }
+
+/* Text-entry controls share the calendar's muted inset focus edge. */
+:root :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"], [type="file"], [type="hidden"]):not(.ui-input-action > input):focus {
+  outline: 1px solid var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  outline-offset: -1px !important;
+  border-color: var(--muted, var(--appearance-muted, #9ca3af)) !important;
+  box-shadow: none !important;
 }

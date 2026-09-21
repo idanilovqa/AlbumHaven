@@ -26,6 +26,7 @@ async function openAppearanceAlbumPage({
 }
 
 test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Album Details components', { tag: '@area:album-details' }, async ({
+  appearancePreferenceIsolation,
   galleryActions,
   page,
   searchToolbarActions,
@@ -38,7 +39,10 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
   test.setTimeout(240000);
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
-
+  await appearancePreferenceIsolation.capture();
+  const originalLayout = await utilityAppearanceActions.utilityAppearanceTab.documentRoot.getAttribute('data-album-details-layout') || 'classic_bar';
+  const originalViewport = page.viewportSize();
+  try {
   for (const layout of ['stacked_bar', 'editorial_canvas', 'classic_bar']) {
     await stepLogger.step(`Save and inspect the ${layout} Album Details layout`, async () => {
       await openAppearanceAlbumPage({
@@ -140,9 +144,18 @@ test('FTC-ALBUM-DETAILS-019 keeps all persisted layouts on the shared compact Al
     expect(problemBounds.x + problemBounds.width).toBeLessThanOrEqual(durationBounds.x);
     await trackModalActions.close();
   });
+  } finally {
+    if (originalViewport) await page.setViewportSize(originalViewport);
+    if (await trackModalActions.trackModal.dialog.isVisible()) await trackModalActions.close();
+    await openAppearanceAlbumPage({ settingsModalAppBarActions, utilityAppearanceActions, utilityTabBarActions });
+    await utilityAppearanceActions.selectAlbumLayout(originalLayout);
+    await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+  }
 });
 
 test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motion states', { tag: '@area:album-details' }, async ({
+  appearancePreferenceIsolation,
   galleryActions,
   globalPlayerActions,
   page,
@@ -157,6 +170,7 @@ test('FTC-ALBUM-DETAILS-020 preserves search, hover, playback, and reduced-motio
   test.setTimeout(240000);
   await galleryActions.goto('/?surface=albums');
   await galleryActions.waitForGalleryReady();
+  await appearancePreferenceIsolation.capture();
 
   await stepLogger.step('Enable persisted playing-row animation for this owned scenario', async () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });

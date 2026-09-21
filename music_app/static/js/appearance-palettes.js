@@ -79,6 +79,34 @@
     ]
   },
   {
+    "id": "harbor-mint",
+    "name": "Harbor Mint",
+    "desc": "Deep blue surfaces with a fresh mint accent",
+    "main": "#111E2C",
+    "mode": "dark",
+    "tokens": {
+      "ink": "#E6EDF5",
+      "muted": "#9AAFC2",
+      "card": "#1D3445",
+      "control": "#203043",
+      "line": "#FFFFFF12",
+      "hover": "#FFFFFF10",
+      "accent": "#52D7AA",
+      "player": "#0E1B29",
+      "player-ink": "#9AAFC2",
+      "play": "#52D7AA",
+      "play-ink": "#0E1B29",
+      "waveform-fill": "#52D7AA",
+      "waveform-edge": "#9AAFC2",
+      "stars": "#CEB97B"
+    },
+    "panels": [
+      ["Blue frame", "#0E1B29", "The original mockup companion"],
+      ["Deep harbor", "#091522", "An almost-black blue frame"],
+      ["Lifted slate", "#1D3445", "Lighter blue panels"]
+    ]
+  },
+  {
     "id": "powderblue",
     "name": "Powder Blue",
     "desc": "Soft blue · airy surfaces with dark blue text",
@@ -386,7 +414,7 @@
   };
   const selectionAccents = {
     steelblue: '#8BAED1',
-    navy: '#91B4E3',
+    navy: '#91B4E3', 'harbor-mint': '#52D7AA',
     powderblue: '#4F7398',
     graphite: '#8A96A3',
     slate: '#7896B4',

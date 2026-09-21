@@ -189,6 +189,8 @@ function loadHelpers() {
     lastMergedPayload: null,
   };
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(
     orderAlbumTracksHelperSource,
     context,
@@ -393,6 +395,7 @@ function loadLoopBuilderHelpers() {
   };
   vm.createContext(context);
   vm.runInContext(playbackControlClusterSource, context, { filename: playbackControlClusterPath });
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'player-and-waveform.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return context;
 }
@@ -490,6 +493,8 @@ function loadProblematicTrackNavigationHelpers() {
     { filename: compactDataTablePath },
   );
   vm.runInContext(alertComponentsSource, context, { filename: alertComponentsPath });
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { album, context, trackPath };
 }
@@ -2200,6 +2205,47 @@ test('applyUpdatedAlbumsToCurrentView restores compact source membership from th
     [sourceAlias],
     'the compact gallery index must fall back to the hydrated modal cache by the same alias',
   );
+});
+
+test('album-name merge keeps all sixteen tracks visible before canonical refresh', () => {
+  const context = loadHelpers();
+  const artist = 'DDT';
+  const name = 'Studio Records';
+  const makeAlbum = (albumName, start, count) => ({
+    key: `ddt::${albumName.toLowerCase()}`,
+    album_ref: `ddt::${albumName.toLowerCase()}`,
+    name: albumName, album_artist: artist, artists: [artist], display_artist: artist,
+    year: 1988, edition: null, preview_only: false, track_count_preview: count,
+    total_duration_seconds: count * 4,
+    tracks: Array.from({ length: count }, (_, index) => ({
+      path: `owned-track-${start + index}.mp3`, title: `Track ${start + index}`,
+      album: albumName, album_artist: artist, artist, year: 1988, edition: null,
+      track_number: start + index, disc_number: 1, duration_seconds: 4,
+    })),
+  });
+  const destination = makeAlbum(name, 1, 13);
+  const original = makeAlbum(`${name} merge candidate`, 14, 3);
+  const groups = [{ artist, albums: [destination, original] }];
+  context.state.view = {
+    ...context.state.view, selected_artist: artist, related_artists: [],
+    artist_groups: groups, primary_artist_groups: groups, family_artist_groups: [],
+  };
+  context.getAlbumRequestKey = album => album.album_ref || album.key;
+  context.getAlbumIdentity = album => album.key;
+  context.deepCloneJson = value => JSON.parse(JSON.stringify(value));
+  context.formatAlbumDuration = () => '';
+  context.findVisibleAlbumByTrackPaths = () => original;
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-loaders-and-cover-lookup.js'), 'utf8'), context);
+  const updates = Object.fromEntries(original.tracks.map(track => [track.path, { album: name }]));
+  const candidates = context.buildOptimisticUpdatedAlbumsFromEdits(original, updates);
+  context.applyUpdatedAlbumsToCurrentView(candidates, { originalAlbum: original, tagEdits: updates, skipRender: true });
+  for (const key of ['artist_groups', 'primary_artist_groups']) {
+    const albums = context.state.view[key].flatMap(group => group.albums);
+    assert.equal(albums.length, 1);
+    assert.equal(albums[0].tracks.length, 16);
+    assert.equal(albums[0].track_count_preview, 16);
+    assert.equal(new Set(albums[0].tracks.map(track => track.path)).size, 16);
+  }
 });
 
 test('applyUpdatedAlbumsToCurrentView reconciles duplicate selected-artist source projections during restore', () => {
@@ -6020,6 +6066,7 @@ test('detected problem rows expose their track path as stable DOM identity', () 
 
 test('detected problem rows preserve each server-owned disc missing-number label', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const discOnePath = 'C:\\Music\\Artist Alpha\\Album Alpha\\Disc 1\\03 Third.flac';
   const discTwoPath = 'C:\\Music\\Artist Alpha\\Album Alpha\\Disc 2\\04 Fourth.flac';
   const album = {
@@ -6055,6 +6102,7 @@ test('detected problem rows preserve each server-owned disc missing-number label
 
 test('detected problems do not promote track reasons into an empty album-level section', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
     problem_reasons: ['Undecoded characters'],
     album_problem_rows: [],
@@ -6070,16 +6118,17 @@ test('detected problems do not promote track reasons into an empty album-level s
   });
 
   const albumSection = html.slice(
-    html.indexOf('utility-album-problem-content'),
-    html.indexOf('utility-track-problem-table'),
+    html.indexOf('utility-album-problem-labels'),
+    html.indexOf('utility-detected-table'),
   );
   assert.doesNotMatch(albumSection, /Undecoded characters/);
   assert.match(html, /01 The Temple of the Living God\.flac/);
   assert.match(html, /Undecoded characters/);
 });
 
-test('album-only detected problems explain the tag context and omit the empty track section', () => {
+test('album-only detected problems retain their disabled exception action without an empty table or unused Apply action', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   const html = context.buildDetectedProblemsHtml({
     problem_reasons: ['Undecoded characters'],
     album_problem_rows: [{
@@ -6091,12 +6140,12 @@ test('album-only detected problems explain the tag context and omit the empty tr
   });
 
   assert.match(html, /Undecoded characters \("\?" in Album\)/);
-  assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS|problematic-track-problems/);
-  assert.equal((html.match(/>Exclude the problem</g) || []).length, 1);
-  assert.ok(
-    html.indexOf('utility-detected-actions') > html.indexOf('utility-album-problem-list'),
-    'the shared exclusion action must follow the album-level problem section',
-  );
+  assert.doesNotMatch(html, /TRACK-LEVEL PROBLEMS/);
+  assert.match(html, /Only album-level problems found\. No per-track problems\./);
+  assert.doesNotMatch(html, /problematic-track-problems|utility-detected-table/);
+  assert.match(html, /data-open-exclusion-confirm="1" disabled aria-disabled="true"/);
+  assert.match(html, />Create Exception</);
+  assert.doesNotMatch(html, />Apply All</);
 });
 
 test('problem exclusion selection stays independent from Suggested Edits Apply or ignore state', () => {
@@ -6124,8 +6173,14 @@ test('problem exclusion selection stays independent from Suggested Edits Apply o
   );
 });
 
-test('Problematic Files detail renders the approved album-first compact table contract', () => {
+test('Problematic Files detail renders the approved three-column compact table contract', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
+  context.state.coverLookup = { optimisticAlbumCovers: {} };
+  for (const file of ['modal-and-overlay-helpers.js', 'album-artbox.js']) {
+    const sourcePath = path.join(__dirname, '../../../music_app/static/js/runtime', file);
+    vm.runInContext(fs.readFileSync(sourcePath, 'utf8'), context, { filename: sourcePath });
+  }
   context.getProblematicAlbumDisplayValue = (album, field) => (
     field === 'album' ? album.name : album.album_artist
   );
@@ -6175,35 +6230,32 @@ test('Problematic Files detail renders the approved album-first compact table co
     1,
     'the expanded detail must expose exactly one visible Detected Problems heading',
   );
-  assert.ok(html.indexOf('ALBUM-LEVEL PROBLEMS') < html.indexOf('TRACK-LEVEL PROBLEMS'));
-  assert.match(
-    html,
-    /TRACK-LEVEL PROBLEMS[^]*>1</,
-    'the track-level badge must count visible track rows rather than aggregate problem reasons',
-  );
+  assert.doesNotMatch(html, /ALBUM-LEVEL PROBLEMS|TRACK-LEVEL PROBLEMS/);
+  assert.ok(html.indexOf('Missing cover art') < html.indexOf('role="table"'));
   assert.deepEqual(
     album.album_problem_rows.map((row) => row.reason),
     ['Missing cover art', 'Missing year', 'Missing track number'],
   );
-  assert.equal(context.lastCompactTableConfig.frame, 'inset');
+  assert.equal(context.lastCompactTableConfig.frame, 'outline');
   assert.equal(context.lastCompactTableConfig.mobile, 'preserve');
   assert.equal(context.lastCompactTableConfig.overflow, 'local');
-  assert.equal(context.lastCompactTableConfig.columns, 'minmax(220px,.42fr) minmax(300px,.58fr)');
+  assert.equal(context.lastCompactTableConfig.columnsConfig.length, 3);
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.columnsConfig, (column) => column.label),
-    ['Filename', 'Reason'],
+    ['Track / file', 'Problems', 'Suggested edits'],
   );
   assert.deepEqual(
     Array.from(context.lastCompactTableConfig.rows, (row) => row.key),
     ['C:\\Music\\Artist Alpha\\Album Alpha\\01 First.flac'],
   );
   assert.ok(html.indexOf('Missing year') < html.indexOf('Missing track number'));
-  assert.equal((html.match(/>Exclude the problem</g) || []).length, 1);
-  assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|>Problems<|overflow menu|Not a problem|data-open-repair-confirm/);
+  assert.equal((html.match(/>Create Exception</g) || []).length, 1);
+  assert.doesNotMatch(html, /utility-file-type-chip|>FLAC<|overflow menu|Not a problem|data-open-repair-confirm/);
 });
 
 test('Problematic Files routes static and selectable reasons through AlertLabel', () => {
   const { context } = loadProblematicTrackNavigationHelpers();
+  context.state.utility.selectedProblemFilters = [];
   context.state.utility.problemExclusionSelections = {
     'opaque-album-cover': true,
     'opaque-file-year': true,
@@ -6225,7 +6277,7 @@ test('Problematic Files routes static and selectable reasons through AlertLabel'
   });
 
   assert.equal((html.match(/alert-label alert-label--error/g) || []).length, 4);
-  assert.match(html, /alert-label--error[^>]*utility-problem-exclusion-pill is-active[^>]*data-problem-exclusion-row-key="opaque-album-cover"[^>]*aria-pressed="true"/);
+  assert.match(html, /alert-label--error[^>]*utility-problem-exclusion-pill is-active[^>]*data-album-problem-type="Missing cover art"[^>]*aria-pressed="true"/);
   assert.match(html, /data-problem-exclusion-scope="file"[^>]*data-problem-exclusion-row-key="opaque-file-year"[^>]*aria-pressed="true"/);
   assert.match(html, /data-problem-exclusion-reason="Missing track number"[^>]*aria-pressed="false"[^>]*aria-disabled="true" disabled/);
 });
@@ -6278,42 +6330,6 @@ test('missing album Problematic Files detail gives read-only reviewers explanato
 
   assert.match(html, /Ask an owner or administrator to remove it\./);
   assert.doesNotMatch(html, /data-remove-missing-album|Exclude the problem/);
-});
-
-test('watcher health renders one path-free operational row with the authorized full scan action', () => {
-  const context = loadHelpers();
-  context.escapeHtml = (value) => String(value ?? '');
-
-  const html = context.buildLibraryWatchHealthProblemRow({
-    state: 'overflow',
-    root_key: 'root_1234567890abcdef',
-    detected_at: '2026-09-04T12:00:00+00:00',
-    message: 'Some library changes may have been missed.',
-    allowed_actions: { 'library.refresh': true },
-  });
-
-  assert.match(html, /role="status"/);
-  assert.match(html, /Some library changes may have been missed\./);
-  assert.match(html, /class="[^"]*button[^"]*"/);
-  assert.match(html, /data-status-action="full-rescan"/);
-  assert.match(html, />Full Rescan</);
-  assert.doesNotMatch(html, /Private Music|[A-Z]:\\|root_1234567890abcdef/);
-});
-
-test('watcher health keeps the operational message but omits the action for a read-only reviewer', () => {
-  const context = loadHelpers();
-  context.escapeHtml = (value) => String(value ?? '');
-
-  const html = context.buildLibraryWatchHealthProblemRow({
-    state: 'root_unavailable',
-    root_key: 'root_fedcba0987654321',
-    detected_at: '2026-09-04T12:00:00+00:00',
-    message: 'Some library changes may have been missed.',
-    allowed_actions: {},
-  });
-
-  assert.match(html, /Some library changes may have been missed\./);
-  assert.doesNotMatch(html, /data-status-action|Full Rescan|root_fedcba0987654321/);
 });
 
 test('Problematic Files accepts a path-free targeted reconciliation failure warning', () => {
@@ -6374,7 +6390,7 @@ test('Problematic Files accepts a path-free stable-write warning', () => {
   );
 });
 
-test('Problematic Files keeps watcher health mounted when there are zero problematic albums', () => {
+test('Problematic Files excludes library-wide warnings from album rows and counts', () => {
   const elements = {
     overlay: {},
     list: { innerHTML: '', scrollTop: 0 },
@@ -6413,9 +6429,8 @@ test('Problematic Files keeps watcher health mounted when there are zero problem
 
   context.renderProblematicFiles();
 
-  assert.equal(elements.count.textContent, '1');
-  assert.match(elements.list.innerHTML, /Some library changes may have been missed\./);
-  assert.match(elements.list.innerHTML, /data-status-action="full-rescan"/);
+  assert.equal(elements.count.textContent, '0');
+  assert.doesNotMatch(elements.list.innerHTML, /Some library changes may have been missed|data-status-action/);
   assert.match(elements.list.innerHTML, /No matching problematic albums found\./);
   assert.doesNotMatch(elements.list.innerHTML, /root_1234567890abcdef/);
 });
@@ -6658,34 +6673,42 @@ test('saved loop layout keeps edit timestamps in a dedicated row above the mono 
     /pointer-events:\s*none/,
     'the saved range remains a real pointer-driven editing surface',
   );
-  assert.doesNotMatch(
-    `${savedPodRule}\n${savedActionRule}`,
-    /pointer-events:\s*none/,
-    'the overlaid pod and its buttons must retain their normal pointer hit behavior',
-  );
+  assert.match(savedPodRule, /pointer-events:\s*none/,
+    'the structural overlay must not intercept the native Play button');
+  assert.doesNotMatch(savedActionRule, /pointer-events:\s*none/,
+    'visible saved action buttons inherit the engaged action owner hit behavior');
+  assert.match(playRule, /pointer-events:\s*auto/);
+  assert.match(css, /\.loop-edit-actions\s*\{[^}]*pointer-events:\s*none/s,
+    'folded actions remain inert');
+  assert.match(css, /\.loop-edit-actions\[data-loop-action-engaged="true"\]\s*\{[^}]*pointer-events:\s*auto/s,
+    'only the engaged action owner restores native action hit behavior');
   assert.doesNotMatch(playRule, /(?:top|inset-block-start):\s*-\d/);
-  assert.match(playRule, /top:\s*0/);
+  assert.match(playRule, /top:\s*4px/);
+  assert.match(css, /\[data-loop-control-style="companion"\]\s+\.loop-play-control-button\s*\{[^}]*top:\s*0/s);
   assert.match(playRule, /width:\s*var\(--loop-play-control-size\)/);
   assert.match(css, /\.utility-loop-main\.is-loop-editing\s+\.utility-loop-pitch-control\s*\{[^}]*display:\s*none/s);
   assert.doesNotMatch(css, /\.utility-loop-main\.is-loop-editing\s+\.utility-loop-time\s*\{[^}]*display:\s*none/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*border:\s*0/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*background:\s*transparent/s);
   assert.match(css, /\.utility-loop-pitch-control\s*\{[^}]*box-shadow:\s*none/s);
-  assert.match(css, /\.utility-loop-entry:first-child\s*\{[^}]*padding-top:\s*0/s);
+  assert.doesNotMatch(css, /\.utility-loop-entry:first-child\s*\{[^}]*padding-top:\s*0/s);
   assert.match(css, /\.utility-loop-group-main\s*\{[^}]*padding-top:\s*0/s);
-  assert.match(css, /\.utility-loop-entry:first-child\s+\.utility-loop-shell\s*\{[^}]*padding-top:\s*0/s);
-  assert.match(css, /\.utility-loop-entry\s*\{[^}]*padding:\s*11px\s+0/s);
+  assert.doesNotMatch(css, /\.utility-loop-entry:first-child\s+\.utility-loop-shell\s*\{[^}]*padding-top:\s*0/s);
+  assert.match(css, /\.utility-loop-entry\s*\{[^}]*padding:\s*16px\s+18px\s+24px/s);
 });
 
 function loadLogHistoryBuilderHelpers() {
   const persistedEntries = [];
+  const stale = [];
   const context = {
+    window: {},
     state: {
       utility: {
         activeTab: 'log-history',
         logHistory: [],
         logHistoryLoaded: false,
         selectedLogHistoryId: '',
+        logHistoryController: { markStale: revision => stale.push(revision) },
       },
     },
     escapeHtml(value) {
@@ -6712,11 +6735,13 @@ function loadLogHistoryBuilderHelpers() {
     renderUtilityModalContent() {},
   };
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'utility-log-history-ui.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
-  return { context, persistedEntries };
+  return { context, persistedEntries, stale };
 }
 
-test('log history detail identifies the browser source and exposes explicit export', () => {
+test('log history detail identifies the sanitized server source and exposes Copy log', () => {
   const { context } = loadLogHistoryBuilderHelpers();
   const html = context.buildUtilityLogHistoryDetail({
     id: 'entry-1',
@@ -6726,21 +6751,20 @@ test('log history detail identifies the browser source and exposes explicit expo
     source_label: 'This browser',
     files: [],
   });
-  assert.match(html, /This browser/);
-  assert.match(html, /data-export-log-history="1"/);
-  assert.match(html, />Export Logs</);
+  assert.match(html, /this_browser/);
+  assert.match(html, /data-log-history-action="copy"/);
+  assert.match(html, /aria-label="Copy log"/);
 });
 
-test('immediate operation events are persisted before updating the visible log history', async () => {
-  const { context, persistedEntries } = loadLogHistoryBuilderHelpers();
+test('immediate operation events mark the captured history stale without persisting or inserting them', async () => {
+  const { context, persistedEntries, stale } = loadLogHistoryBuilderHelpers();
   const entry = {
     id: 'operation-entry-1',
     action: 'Cover update completed',
     timestamp: '2026-07-24T18:19:20.000Z',
   };
   await context.prependUtilityLogHistoryEntry(entry);
-  assert.deepEqual(persistedEntries, [entry]);
-  assert.equal(context.state.utility.logHistory.length, 1);
-  assert.equal(context.state.utility.logHistory[0].source, 'this_browser');
-  assert.equal(context.state.utility.logHistoryStorageStatus.persistent, true);
+  assert.deepEqual(persistedEntries, []);
+  assert.equal(context.state.utility.logHistory.length, 0);
+  assert.deepEqual(stale, ['new-activity']);
 });

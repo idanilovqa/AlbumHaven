@@ -45,6 +45,8 @@ function loadHelpers(overrides = {}) {
       wasCoverPollingBusy: false,
       status: {},
       utility: {
+        activeTab: 'integrations',
+        selectedIntegrationKey: 'library',
         loaded: true,
         problematicFiles: [{ key: 'old-problem' }],
         integrations: [{
@@ -64,6 +66,7 @@ function loadHelpers(overrides = {}) {
           albumRatingImportBusy: false,
           albumRatingImportResult: null,
           error: '',
+          allowedActions: {'library.settings.manage':true,'library.filesystem.browse':true,'library.paths.read':true},
         },
       },
       view: {
@@ -79,6 +82,7 @@ function loadHelpers(overrides = {}) {
     showToast(message, tone, duration) {
       calls.toasts.push([message, tone, duration]);
     },
+    getUtilityModalElements: () => ({ overlay: { hidden: false } }),
     renderUtilityModalContent() {
       calls.renders += 1;
     },
@@ -141,10 +145,171 @@ function loadHelpers(overrides = {}) {
     },
   };
   Object.assign(context, overrides);
+  context.window = context;
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), '../button-component.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'alert-components.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), 'gallery-main-components.js'), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
+
+test('empty library sections retain one draft path and Add appends a second', () => {
+  const { context } = loadHelpers();
+  const settings = context.normalizeLibrarySettingsPayload({});
+  context.state.utility.librarySettings.settings = settings;
+  for (const category of ['main_library_roots', 'hoarding_library_roots', 'new_arrivals_roots']) {
+    const draft = context.getLibrarySettingsDraft();
+    assert.equal(draft[category].length, 1);
+    assert.equal(draft[category][0].path, '');
+    context.addLibraryRootDraftEntry(category);
+    assert.equal(draft[category].length, 2);
+    assert.notEqual(draft[category][0].id, draft[category][1].id);
+    context.removeLibraryRootDraftEntry(category, 1);
+    context.removeLibraryRootDraftEntry(category, 0);
+    assert.equal(draft[category].length, 1);
+    assert.equal(draft[category][0].path, '');
+    const html = context.buildLibrarySettingsRootSection(category, 'Library', 'Paths');
+    assert.equal((html.match(/data-library-root-field="path"/g) || []).length, 1);
+    assert.doesNotMatch(html, /Folder layout|data-library-layout-trigger|No roots added yet/);
+  }
+  assert.equal(JSON.stringify(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft())), JSON.stringify(settings));
+});
+
+test('blank rows do not save or become policy targets and layout metadata survives', async () => {
+  const { context, calls } = loadHelpers();
+  const draft = context.getLibrarySettingsDraft();
+  draft.main_library_roots = [{ id: 'shared', path: '/music', layout_mode: 'genre/artist' }, { id: 'blank', path: '   ', layout_mode: 'artist' }];
+  draft.hoarding_library_roots = [{ id: 'shared', path: '' }];
+  draft.move_policy = { preferred_main_write_root: 'shared', move_new_arrivals_to: 'shared' };
+  const payload = context.serializeLibrarySettingsDraft(draft);
+  assert.equal(payload.main_library_roots.length, 1);
+  assert.equal(payload.main_library_roots[0].layout_mode, 'genre/artist');
+  assert.equal(payload.hoarding_library_roots.length, 0);
+  assert.equal(payload.move_policy.preferred_main_write_root, 'shared');
+  assert.equal(payload.move_policy.move_new_arrivals_to, '');
+  assert.equal(context.buildLibrarySettingsRootOptions(draft.hoarding_library_roots, 'Default').length, 1);
+  context.removeLibraryRootDraftEntry('hoarding_library_roots', 0);
+  assert.equal(draft.move_policy.preferred_main_write_root, 'shared');
+  assert.equal(draft.move_policy.move_new_arrivals_to, '');
+  draft.move_policy.preferred_main_write_root = 'blank';
+  assert.equal(context.serializeLibrarySettingsDraft(draft).move_policy.preferred_main_write_root, '');
+  draft.move_policy.preferred_main_write_root = 'unknown';
+  assert.equal(context.serializeLibrarySettingsDraft(draft).move_policy.preferred_main_write_root, 'unknown');
+  await context.saveUtilityLibrarySettings();
+  const posted = JSON.parse(calls.fetches[0][1].body).settings;
+  assert.equal(posted.main_library_roots.length, 1);
+  assert.equal(posted.main_library_roots[0].layout_mode, 'genre/artist');
+  assert.equal(posted.hoarding_library_roots.length, 0);
+  assert.equal(posted.new_arrivals_roots.length, 0);
+});
+
+test('folder browse fills the materialized empty row', async () => {
+  const { context } = loadHelpers();
+  context.fetch = async () => ({ ok: true, json: async () => ({ ok: true, entries: [] }) });
+  context.showAppFormDialog = async () => '/chosen';
+  assert.equal(await context.browseLibraryRootDraft('hoarding_library_roots', 0), true);
+  assert.equal(context.getLibrarySettingsDraft().hoarding_library_roots.length, 1);
+  assert.equal(context.getLibrarySettingsDraft().hoarding_library_roots[0].path, '/chosen');
+});
+
+test('move policy choices retain IDs, reset defaults, and honor manage permission', () => {
+  const { context } = loadHelpers();
+  context.state.utility.librarySettings.loaded = true;
+  const draft = context.getLibrarySettingsDraft();
+  draft.main_library_roots = [{ id: 'first', path: '/same' }, { id: 'second', path: '/same' }, { id: 'blank', path: '' }];
+  draft.move_policy.preferred_main_write_root = 'second';
+  let menu;
+  context.openUtilityChoiceDropdown = (trigger, options) => { menu = options; };
+  const trigger = { getAttribute: () => 'preferred_main_write_root' };
+  const event = { preventDefault() {}, target: { closest: selector => selector === '[data-library-policy-trigger]' ? trigger : null } };
+  assert.equal(context.handleLibrarySettingsClick(event), true);
+  assert.equal(menu.label, 'Library destination'); assert.equal(menu.selected, 'second');
+  assert.equal(JSON.stringify(menu.formats), JSON.stringify([{ value: 'first', label: '/same' }, { value: 'second', label: '/same' }]));
+  menu.onSelect('first'); assert.equal(draft.move_policy.preferred_main_write_root, 'first');
+  menu.onSelect(''); assert.equal(draft.move_policy.preferred_main_write_root, '');
+  context.state.utility.librarySettings.moveAutomationDraft = { preferred_main_write_root: true, move_new_arrivals_to: true };
+  const html = context.buildUtilityLibrarySettingsDetail();
+  assert.doesNotMatch(html, /<select/);
+  assert.match(html, /aria-label="Library destination"/); assert.match(html, /Move New Arrivals to Hoard/);
+  assert.doesNotMatch(html, /<label class="lastfm-inline-field library-settings-inline-field">/);
+  assert.equal((html.match(/class="library-settings-move-policy-row"/g) || []).length, 2);
+  context.state.utility.librarySettings.allowedActions['library.settings.manage'] = false;
+  assert.equal(menu.onSelect('second'), false);
+  assert.equal(draft.move_policy.preferred_main_write_root, '');
+  menu = null; context.handleLibrarySettingsClick(event); assert.equal(menu, null);
+  assert.doesNotMatch(context.buildLibrarySettingsPolicyButton('preferred_main_write_root', [], '', 'Library destination', ''), /<button/);
+});
+
+test('choice dropdown opens above the persistent player when the lower space is covered', () => {
+  const { context } = loadHelpers();
+  const above = context.resolveUtilityChoiceDropdownVerticalPlacement(
+    { top: 620, bottom: 660 }, 96, 680,
+  );
+  assert.equal(above.top, 520);
+  assert.equal(above.maxHeight, 608);
+  const below = context.resolveUtilityChoiceDropdownVerticalPlacement(
+    { top: 120, bottom: 160 }, 96, 680,
+  );
+  assert.equal(below.top, 164);
+  assert.equal(below.maxHeight, 508);
+});
+
+test('shared choice dropdown toggles, switches triggers, preserves IDs and Foobar strings', () => {
+  const { context } = loadHelpers();
+  const menus = [], selected = [];
+  const makeNode = () => ({
+    style: {}, listeners: {}, attributes: {}, isConnected: true,
+    setAttribute(key, value) { this.attributes[key] = value; },
+    addEventListener(type, callback) { this.listeners[type] = callback; },
+    remove() { this.removed = true; }, contains: () => false,
+    focus() { this.focused = true; },
+    getBoundingClientRect: () => ({ left: 10, bottom: 50 }),
+  });
+  const firstButton = makeNode();
+  context.document = { body: { append: menu => menus.push(menu) }, addEventListener() {}, removeEventListener() {},
+    createElement: () => ({ ...makeNode(), querySelector: () => firstButton, querySelectorAll: () => [firstButton] }) };
+  context.addEventListener = () => {}; context.removeEventListener = () => {};
+  context.innerWidth = 1000; context.innerHeight = 800;
+  context.syncTriggerAnchor = () => {}; context.clearTriggerAnchor = () => {};
+  const first = makeNode(), second = makeNode();
+  const firstLabel = {}, secondLabel = {};
+  first.querySelector = () => firstLabel; second.querySelector = () => secondLabel;
+  const options = { formats: [{ value: '', label: 'Default' }, { value: 'id-one', label: '/same' }, { value: 'id-two', label: '/same' }], selected: 'id-two', label: 'Library writes', onSelect: value => selected.push(value) };
+  context.openUtilityChoiceDropdown(first, options);
+  assert.match(menus[0].innerHTML, /aria-checked="true" data-foobar-format="id-two"/);
+  assert.match(menus[0].className, /gallery-anchored-menu/);
+  assert.match(menus[0].innerHTML, /gallery-menu-action/);
+  context.openUtilityChoiceDropdown(second, options);
+  assert.equal(menus[0].removed, true); assert.equal(menus.length, 2); assert.equal(second.attributes['aria-expanded'], 'true');
+  menus[1].listeners.click({ target: { closest: () => ({ getAttribute: () => 'id-one' }) } });
+  assert.equal(selected.at(-1), 'id-one'); assert.equal(secondLabel.textContent, '/same'); assert.equal(second.focused, true);
+  context.openUtilityChoiceDropdown(first, options);
+  menus[2].listeners.click({ target: { closest: () => ({ getAttribute: () => '' }) } });
+  assert.equal(selected.at(-1), ''); assert.equal(firstLabel.textContent, 'Default');
+  context.openUtilityFoobarFormats(first);
+  menus[3].listeners.click({ target: { closest: () => ({ getAttribute: () => 'Text Tools — standard' }) } });
+  assert.equal(context.state.utility.foobarFormat, 'Text Tools — standard'); assert.equal(firstLabel.textContent, 'Text Tools — standard');
+  context.openUtilityChoiceDropdown(first, options);
+  context.openUtilityChoiceDropdown(first, options);
+  assert.equal(menus.length, 5); assert.equal(menus[4].removed, true); assert.equal(first.attributes['aria-expanded'], 'false');
+});
+
+test('library failures use shared escaped alerts and retain the retry action', async () => {
+  const { context } = loadHelpers();
+  const settings = context.ensureLibrarySettingsState();
+  settings.error = '<img src=x onerror=bad>';
+  let html = context.buildUtilityLibrarySettingsDetail();
+  assert.match(html, /data-on-page-alert="error"/);
+  assert.match(html, /&lt;img src=x onerror=bad&gt;/);
+  assert.match(html, /data-reload-library-settings="1"/);
+  assert.match(html, /ui-button__content/);
+  await context.loadUtilityLibrarySettings(true);
+  context.ensureLibrarySettingsState().error = '<failed>';
+  html = context.buildUtilityLibrarySettingsDetail();
+  assert.match(html, /data-on-page-alert="error"/);
+  assert.match(html, /&lt;failed&gt;/);
+});
 
 test('loadUtilityLibrarySettings stores normalized settings and drafts', async () => {
   const { context, calls } = loadHelpers();
@@ -175,7 +340,7 @@ test('saveUtilityLibrarySettings posts draft, clears stale problematic state, an
   assert.equal(calls.fetches[0][1].method, 'POST');
   assert.equal(
     JSON.stringify(JSON.parse(calls.fetches[0][1].body)),
-    JSON.stringify({ settings: context.state.utility.librarySettings.draft }),
+    JSON.stringify({ settings: context.serializeLibrarySettingsDraft(context.state.utility.librarySettings.draft) }),
   );
   assert.equal(context.state.utility.loaded, false);
   assert.equal(JSON.stringify(context.state.utility.problematicFiles), '[]');
@@ -412,7 +577,7 @@ test('buildUtilityLibrarySettingsDetail exposes the explicit album-rating import
   const markup = context.buildUtilityLibrarySettingsDetail();
 
   assert.match(markup, /data-import-album-ratings="1"/);
-  assert.match(markup, />Import ratings from file tags<\/button>/);
+  assert.match(markup, /<button\b[^>]*data-import-album-ratings="1"[^>]*>Import ratings<\/button>/);
   assert.doesNotMatch(markup, /data-album-rating-import-result="1"/);
 });
 
@@ -562,4 +727,34 @@ test('importAlbumRatingsFromFileTags clears its busy error state so a failed act
     JSON.parse(JSON.stringify(context.state.utility.librarySettings.albumRatingImportResult)),
     { created: 1, authority_skipped: 2, failed: 0 },
   );
+});
+
+
+test('main library destination is automatic for one path and lists only actual paths for multiple', () => {
+  const { context } = loadHelpers();
+  const single = [{ id: 'main', path: '/music' }, { id: 'draft', path: '' }];
+  const render = roots => context.buildLibrarySettingsPolicyButton('preferred_main_write_root', roots, '', 'Library destination', '');
+  assert.match(render(single), /\/music/);
+  assert.doesNotMatch(render(single), /<button|aria-haspopup/);
+  const multiple = [...single, { id: 'other', path: '/other' }];
+  assert.match(render(multiple), /aria-haspopup="menu"/);
+  assert.match(render(multiple), /\/music/);
+  assert.equal(JSON.stringify(context.buildLibrarySettingsRootOptions(multiple)), JSON.stringify([{value: 'main', label: '/music'}, {value: 'other', label: '/other'}]));
+  context.state.utility.librarySettings.allowedActions['library.settings.manage'] = false;
+  assert.match(render(multiple), /disabled/);
+});
+
+test('automatic move switches are UI-only and reveal destinations only while enabled', () => {
+  const { context } = loadHelpers();
+  const owner = context.state.utility.librarySettings;
+  const roots = [{ id: 'one', path: '/one' }, { id: 'two', path: '/two' }];
+  const render = () => context.buildLibraryMovePolicyRow('preferred_main_write_root', roots, '', 'Auto Move rated albums to Main library', 'Library destination', 'main');
+  assert.match(render(), /role="switch" aria-checked="false"/);
+  assert.doesNotMatch(render(), /data-library-policy-trigger/);
+  owner.moveAutomationDraft = { preferred_main_write_root: true };
+  assert.match(render(), /role="switch" aria-checked="true"/);
+  assert.match(render(), /data-library-policy-trigger/);
+  assert.equal(context.serializeLibrarySettingsDraft(context.getLibrarySettingsDraft()).move_policy.auto_move_rated_to_main, undefined);
+  owner.allowedActions['library.settings.manage'] = false;
+  assert.match(render(), /disabled/);
 });

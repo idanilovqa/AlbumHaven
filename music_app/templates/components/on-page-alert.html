@@ -1,0 +1,7 @@
+{% macro on_page_alert(message='', severity='info', title='', role='alert', hidden=false, attributes={}, class_name='') -%}
+{% set severity = severity if severity in ('error', 'warning', 'info') else 'info' -%}
+<section class="on-page-alert on-page-alert--{{ severity }}{% if class_name %} {{ class_name }}{% endif %}" role="{{ role if role in ('alert', 'status') else 'alert' }}" data-on-page-alert="{{ severity }}"{% if hidden %} hidden{% endif %}{% for name, value in attributes.items() %}{% if name in ('id', 'title', 'aria-label', 'aria-live', 'data-settings-navigation-error', 'data-admin-roster-error', 'data-admin-roster-status', 'data-admin-form-error', 'data-admin-form-status') %} {{ name }}="{{ value }}"{% endif %}{% endfor %}>
+  <span class="on-page-alert__icon"><svg viewBox="0 0 24 24" aria-hidden="true">{% if severity == 'info' %}<circle cx="12" cy="12" r="9"></circle><path d="M12 10.5v6"></path><path d="M12 7.5h.01"></path>{% else %}<path d="M10.3 3.8 2.4 17.5A2 2 0 0 0 4.1 20h15.8a2 2 0 0 0 1.7-2.5L13.7 3.8a2 2 0 0 0-3.4 0Z"></path><path d="M12 9v4"></path><path d="M12 16.5h.01"></path>{% endif %}</svg></span>
+  <div class="on-page-alert__content">{% if title %}<strong class="on-page-alert__title">{{ title }}</strong>{% endif %}<p class="on-page-alert__message">{{ message | trim }}</p>{% if caller is defined %}<div class="on-page-alert__actions">{{ caller() }}</div>{% endif %}</div>
+</section>
+{%- endmacro %}

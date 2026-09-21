@@ -1,6 +1,19 @@
 /* NavigationTree keeps flat link/button semantics and consumer-owned spacing. */
 .navigation-tree { min-width: 0; }
 .navigation-tree-item { min-width: 0; position: relative; }
+/* Pointer hover uses a neutral filled surface; outlines indicate keyboard focus. */
+:root .navigation-tree-item:hover:not(:disabled):not([aria-disabled="true"]) {
+  border-color: transparent !important;
+  background: color-mix(in srgb, var(--text, #eee) 7%, var(--panel, #171717)) !important;
+}
+:root[data-appearance-item-hover] .navigation-tree-item:not(.is-selected):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--appearance-item-hover) !important;
+}
+:root .navigation-tree-item:hover:not(:focus-visible) { outline: none !important; }
+:root .navigation-tree-item.is-selected:hover {
+  background: var(--selection-body-background) !important;
+}
+#utility-modal .navigation-tree-item[hidden] { display: none !important; }
 button.navigation-tree-item[data-navigation-tree-item="panel"] {
   width: 100%; text-align: left; font: inherit; cursor: pointer;
 }

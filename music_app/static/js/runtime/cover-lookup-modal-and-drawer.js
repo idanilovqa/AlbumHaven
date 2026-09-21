@@ -1439,8 +1439,12 @@ function renderCoverLookupModal() {
   const showCaaEmptyNotice = Boolean(task?.caa_empty_notice) && !archiveMatches.length;
   const taskRunning = Boolean(task && ['pending', 'running'].includes(String(task.status || '')));
   if (els.status) {
-    els.status.textContent = taskRunning ? '' : (modalState.statusText || '');
-    els.status.classList.toggle('is-error', !taskRunning && String(modalState.statusTone || '') === 'error');
+    const statusText = taskRunning ? '' : (modalState.statusText || '');
+    if (statusText && String(modalState.statusTone || '') === 'error') {
+      els.status.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Cover lookup failed', message: statusText });
+    } else {
+      els.status.textContent = statusText;
+    }
   }
   const searchControlsDisabled = Boolean(taskRunning || modalState.manualBusy);
   const searchControlsDisabledAttr = searchControlsDisabled ? 'disabled' : '';

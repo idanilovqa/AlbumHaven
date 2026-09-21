@@ -154,13 +154,13 @@ export function createManagedAppLifecycle(options = {}) {
     }
 
     removeFileIfPresent(ackPath);
-    writeJsonAtomically(requestPath, { nonce, ...(operation !== 'restart' ? { operation } : {}) });
+    writeJsonAtomically(requestPath, { nonce, ...(operation === 'stop' ? { action: 'stop' } : operation !== 'restart' ? { operation } : {}) });
     const deadline = now() + timeoutMs;
 
     while (now() <= deadline) {
       const acknowledgment = readAcknowledgment(ackPath);
       if (String(acknowledgment?.nonce || '') === nonce) {
-        if (acknowledgment?.status === 'ready') {
+        if (acknowledgment?.status === (operation === 'stop' ? 'stopped' : 'ready')) {
           if (operation === 'report-failure') throw new Error('Managed fixture failure was not acknowledged as terminal.');
           return acknowledgment;
         }
@@ -183,6 +183,9 @@ export function createManagedAppLifecycle(options = {}) {
   }
 
   function scheduleRestart(operation) {
+    if (activeRestart && activeOperation === 'stop' && operation !== 'stop') {
+      return Promise.reject(new Error('Managed app stop is in progress.'));
+    }
     if (activeRestart && activeOperation === operation) return activeRestart;
     const previous = activeRestart;
     const pending = (async () => {
@@ -215,6 +218,7 @@ export function createManagedAppLifecycle(options = {}) {
       }
       return activeFailureReport;
     },
+    stop() { return scheduleRestart('stop'); },
     restart() {
       return scheduleRestart('restart');
     },

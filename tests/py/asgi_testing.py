@@ -15,7 +15,7 @@ from tests.py.runtime_testing import configure_test_app_paths
 
 class _BootstrapOwnerResolver:
     def resolve(self, _raw_token):
-        from music_app.services.current_actor import ActorState, CurrentActor
+        from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
 
         return CurrentActor(
             state=ActorState.ACTIVE,
@@ -23,6 +23,8 @@ class _BootstrapOwnerResolver:
             session_id=1,
             username_display="Rendref",
             is_bootstrap_owner=True,
+            current_library_id=1,
+            library_relationships=(LibraryRelationship(1, "owner", True),),
         )
 
 
@@ -31,6 +33,11 @@ def configure_test_bootstrap_actor(asgi_app) -> None:
 
     if not hasattr(asgi_app.state, "current_actor_resolver"):
         asgi_app.state.current_actor_resolver = _BootstrapOwnerResolver()
+        # The fixture's default owner also owns its media host. Configure this
+        # only when installing the default resolver, not on every request: tests
+        # may deliberately clear the host or supply another actor afterward.
+        if getattr(asgi_app.state, "media_host_library_id", None) is None:
+            asgi_app.state.media_host_library_id = 1
     if not hasattr(asgi_app.state, "auth_policy_config"):
         asgi_app.state.auth_policy_config = {
             "hmac": {
@@ -48,6 +55,7 @@ def create_test_asgi_app(tmp_path: Path, monkeypatch):
     asgi_app = create_asgi_app()
     asgi_app.state.config["TESTING"] = True
     configure_test_bootstrap_actor(asgi_app)
+    asgi_app.state.media_host_library_id = 1
     return asgi_app
 
 

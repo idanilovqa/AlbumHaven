@@ -1,0 +1,729 @@
+{
+  "preEditAlbums": [
+    {
+      "key": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+      "album_ref": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+      "name": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+      "album_artist": "\u0414\u0414\u0422",
+      "artists": [
+        "\u0414\u0414\u0422"
+      ],
+      "cover_path": null,
+      "cover_revision": null,
+      "cover_selection_origin": null,
+      "local_cover_width": null,
+      "local_cover_height": null,
+      "remote_cover_url": null,
+      "remote_cover_thumbnail_url": null,
+      "remote_cover_source": null,
+      "remote_cover_source_label": null,
+      "remote_cover_album_url": null,
+      "remote_cover_width": null,
+      "remote_cover_height": null,
+      "year": 1988,
+      "release_date": null,
+      "edition": null,
+      "root_provenance": {
+        "badges": [],
+        "is_mixed": false,
+        "root_ids": [
+          "functional-core-root"
+        ],
+        "categories": [
+          "main_library"
+        ],
+        "category_labels": [
+          "Main Library"
+        ],
+        "primary_category": "main_library",
+        "primary_category_label": "Main Library"
+      },
+      "library_root_id": 1,
+      "library_root_category": "main_library",
+      "track_count_preview": 13,
+      "total_duration_seconds": 52,
+      "total_duration_display": "0m 52s",
+      "tracks": [
+        {
+          "key": "owned-track-01.mp3",
+          "track_ref": "owned-track-01.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 1",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 1,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-01.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-02.mp3",
+          "track_ref": "owned-track-02.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 2",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 2,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-02.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-03.mp3",
+          "track_ref": "owned-track-03.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 3",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 3,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-03.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-04.mp3",
+          "track_ref": "owned-track-04.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 4",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 4,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-04.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-05.mp3",
+          "track_ref": "owned-track-05.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 5",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 5,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-05.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-06.mp3",
+          "track_ref": "owned-track-06.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 6",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 6,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-06.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-07.mp3",
+          "track_ref": "owned-track-07.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 7",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 7,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-07.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-08.mp3",
+          "track_ref": "owned-track-08.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 8",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 8,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-08.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-09.mp3",
+          "track_ref": "owned-track-09.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 9",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 9,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-09.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-10.mp3",
+          "track_ref": "owned-track-10.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 10",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 10,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-10.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-11.mp3",
+          "track_ref": "owned-track-11.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 11",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 11,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-11.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-12.mp3",
+          "track_ref": "owned-track-12.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 12",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 12,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-12.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        },
+        {
+          "key": "owned-track-13.mp3",
+          "track_ref": "owned-track-13.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 13",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 13,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-13.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": false
+        }
+      ],
+      "open_directory_paths": [
+        "owned-directory"
+      ],
+      "preview_only": false,
+      "display_artist": "\u0414\u0414\u0422",
+      "artist_credits_seen": [
+        "\u0414\u0414\u0422"
+      ],
+      "artist_family_tag_refs": [
+        "artist-family:\u0434\u0434\u0442"
+      ],
+      "artist_family_variation_names_by_tag_ref": {
+        "artist-family:\u0434\u0434\u0442": [
+          "\u0414\u0414\u0422"
+        ]
+      },
+      "tag_album_rating": null,
+      "tag_album_rating_source": null,
+      "album_preference": {
+        "rating": null,
+        "favorite_override": null,
+        "is_favorite": false,
+        "favorite_source": null,
+        "can_edit": false,
+        "to_listen": false,
+        "is_relisten": false,
+        "can_toggle_to_listen": false
+      }
+    },
+    {
+      "key": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "album_ref": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "name": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "album_artist": "\u0414\u0414\u0422",
+      "artists": [
+        "\u0414\u0414\u0422"
+      ],
+      "cover_path": null,
+      "cover_revision": null,
+      "cover_selection_origin": null,
+      "local_cover_width": null,
+      "local_cover_height": null,
+      "remote_cover_url": null,
+      "remote_cover_thumbnail_url": null,
+      "remote_cover_source": null,
+      "remote_cover_source_label": null,
+      "remote_cover_album_url": null,
+      "remote_cover_width": null,
+      "remote_cover_height": null,
+      "year": 1988,
+      "release_date": null,
+      "edition": null,
+      "root_provenance": {
+        "badges": [],
+        "is_mixed": false,
+        "root_ids": [
+          "functional-core-root"
+        ],
+        "categories": [
+          "main_library"
+        ],
+        "category_labels": [
+          "Main Library"
+        ],
+        "primary_category": "main_library",
+        "primary_category_label": "Main Library"
+      },
+      "library_root_id": 1,
+      "library_root_category": "main_library",
+      "track_count_preview": 3,
+      "total_duration_seconds": 12,
+      "total_duration_display": "0m 12s",
+      "tracks": [
+        {
+          "key": "owned-track-14.mp3",
+          "track_ref": "owned-track-14.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": null,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-14.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true
+        },
+        {
+          "key": "owned-track-15.mp3",
+          "track_ref": "owned-track-15.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 16,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-15.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true
+        },
+        {
+          "key": "owned-track-16.mp3",
+          "track_ref": "owned-track-16.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 18,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-16.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true
+        }
+      ],
+      "open_directory_paths": [
+        "owned-directory"
+      ],
+      "preview_only": false,
+      "display_artist": "\u0414\u0414\u0422",
+      "artist_credits_seen": [
+        "\u0414\u0414\u0422"
+      ],
+      "artist_family_tag_refs": [
+        "artist-family:\u0434\u0434\u0442"
+      ],
+      "artist_family_variation_names_by_tag_ref": {
+        "artist-family:\u0434\u0434\u0442": [
+          "\u0414\u0414\u0422"
+        ]
+      },
+      "tag_album_rating": null,
+      "tag_album_rating_source": null,
+      "album_preference": {
+        "rating": null,
+        "favorite_override": null,
+        "is_favorite": false,
+        "favorite_source": null,
+        "can_edit": false,
+        "to_listen": false,
+        "is_relisten": false,
+        "can_toggle_to_listen": false
+      }
+    }
+  ],
+  "post": {
+    "confirmed": true,
+    "album": {
+      "key": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "album_ref": "\u0434\u0434\u0442::\u0441\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "name": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+      "album_artist": "\u0414\u0414\u0422",
+      "artists": [
+        "\u0414\u0414\u0422"
+      ],
+      "cover_path": null,
+      "cover_revision": null,
+      "cover_selection_origin": null,
+      "local_cover_width": null,
+      "local_cover_height": null,
+      "remote_cover_url": null,
+      "remote_cover_thumbnail_url": null,
+      "remote_cover_source": null,
+      "remote_cover_source_label": null,
+      "remote_cover_album_url": null,
+      "remote_cover_width": null,
+      "remote_cover_height": null,
+      "year": 1988,
+      "release_date": null,
+      "edition": null,
+      "root_provenance": {
+        "badges": [],
+        "is_mixed": false,
+        "root_ids": [
+          "functional-core-root"
+        ],
+        "categories": [
+          "main_library"
+        ],
+        "category_labels": [
+          "Main Library"
+        ],
+        "primary_category": "main_library",
+        "primary_category_label": "Main Library"
+      },
+      "library_root_id": 1,
+      "library_root_category": "main_library",
+      "track_count_preview": 3,
+      "total_duration_seconds": 12,
+      "total_duration_display": "0m 12s",
+      "tracks": [
+        {
+          "key": "owned-track-14.mp3",
+          "track_ref": "owned-track-14.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 15",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": null,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-14.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true,
+          "edition": null
+        },
+        {
+          "key": "owned-track-15.mp3",
+          "track_ref": "owned-track-15.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 16",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 16,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-15.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true,
+          "edition": null
+        },
+        {
+          "key": "owned-track-16.mp3",
+          "track_ref": "owned-track-16.mp3",
+          "title": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u0430\u044f \u0437\u0430\u043f\u0438\u0441\u044c 14",
+          "artist": "\u0414\u0414\u0422",
+          "album_artist": "\u0414\u0414\u0422",
+          "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 merge candidate",
+          "secondary_credit": "",
+          "genre": "",
+          "year": 1988,
+          "cover_path": null,
+          "cover_revision": null,
+          "disc_number": 1,
+          "disc_number_raw": "1",
+          "track_number": 18,
+          "duration_seconds": 4,
+          "duration_display": "0m 04s",
+          "path": "owned-track-16.mp3",
+          "track_scrobble_count": 0,
+          "track_preference_overlay": {
+            "rating": null,
+            "love_tier": null
+          },
+          "is_problematic": true,
+          "edition": null
+        }
+      ],
+      "open_directory_paths": [
+        "owned-directory"
+      ],
+      "preview_only": false,
+      "display_artist": "\u0414\u0414\u0422",
+      "artist_credits_seen": [
+        "\u0414\u0414\u0422"
+      ],
+      "artist_family_tag_refs": [
+        "artist-family:\u0434\u0434\u0442"
+      ],
+      "artist_family_variation_names_by_tag_ref": {
+        "artist-family:\u0434\u0434\u0442": [
+          "\u0414\u0414\u0422"
+        ]
+      },
+      "tag_album_rating": null,
+      "tag_album_rating_source": null,
+      "album_preference": {
+        "rating": null,
+        "favorite_override": null,
+        "is_favorite": false,
+        "favorite_source": null,
+        "can_edit": false,
+        "to_listen": false,
+        "is_relisten": false,
+        "can_toggle_to_listen": false
+      },
+      "tabLabel": "Original - 1988"
+    },
+    "updates": {
+      "owned-track-15.mp3": {
+        "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438"
+      },
+      "owned-track-16.mp3": {
+        "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438"
+      },
+      "owned-track-14.mp3": {
+        "album": "\u0421\u0442\u0443\u0434\u0438\u0439\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438"
+      }
+    }
+  },
+  "timing": {
+    "postStart": 27018.447,
+    "postDuration": 863.012,
+    "firstCanonicalStart": 27878.806,
+    "firstCanonicalDuration": 1154.675,
+    "snapshotStart": 28199.184,
+    "snapshotEnd": 28265.361,
+    "firstCanonicalSourceTrackCount": 16,
+    "snapshotSourceTrackCount": 13
+  }
+}

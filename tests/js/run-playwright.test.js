@@ -2388,7 +2388,10 @@ test('tests-complete cleanup stops the managed shell launch root after Python re
   assert.equal((await runPromise).exitCode, 0);
 });
 
-test('tests-complete without run-final fails on the short finalization deadline', async () => {
+for (const snapshotFailure of [false, true]) test(`tests-complete without run-final fails on the short finalization deadline (snapshotFailure=${snapshotFailure})`, async () => {
+  const lifecycleEvents = [];
+  let elapsedClock = 1000;
+  const snapshotOptions = [];
   const child = createFakeChildProcess(4242, { autoCloseOnExit: false });
   const timerHarness = createTimerHarness();
   const serviceOwner = { pid: 2468, creationIdentity: 'service-start' };
@@ -2401,16 +2404,24 @@ test('tests-complete without run-final fails on the short finalization deadline'
     600000,
     {
       spawnFn: () => child,
-      readProcessTreeIdentitiesFn: () => [
-        { pid: child.pid, creationIdentity: 'cli-start', parentPid: 0, depth: 0 },
-        { ...shellRoot, parentPid: child.pid, depth: 1 },
-        { ...serviceOwner, parentPid: shellRoot.pid, depth: 2 },
-      ],
+      nowFn: () => elapsedClock,
+      processObject: { pid: process.pid, exitCode: null },
+      readProcessTreeIdentitiesFn: (_pid, options) => {
+        snapshotOptions.push(options);
+        if (options && snapshotFailure) throw new Error('/private/snapshot --token=fixture-secret');
+        return [
+          { pid: child.pid, creationIdentity: 'cli-start', processName: 'node', parentPid: 0, depth: 0 },
+          { ...shellRoot, processName: '/private/custom-shell', commandLine: '--token=fixture-secret', parentPid: child.pid, depth: 1 },
+          { ...serviceOwner, processName: 'python', parentPid: shellRoot.pid, depth: 2 },
+        ].map(owner => options && owner.pid === serviceOwner.pid
+          ? { ...owner, creationIdentity: 'replacement-process' } : owner);
+      },
       readPortOwningProcessIdentitiesFn: () => [serviceOwner],
       readProcessCreationIdentityFn(pid) {
         return pid === shellRoot.pid ? shellRoot.creationIdentity : null;
       },
       stopProcessTreeFn(pid) {
+        lifecycleEvents.push({ type: 'stop', pid });
         stopped.push(pid);
       },
       reclaimPortFn: () => [],
@@ -2418,7 +2429,7 @@ test('tests-complete without run-final fails on the short finalization deadline'
       setTimeoutFn: timerHarness.setTimeoutFn,
       clearTimeoutFn: timerHarness.clearTimeoutFn,
       stdout: { write() {} },
-      stderr: { write(text) { stderrWrites.push(text); } },
+      stderr: { write(text) { lifecycleEvents.push({ type: 'stderr', text }); stderrWrites.push(text); } },
     },
   );
   const testsComplete = `[album-haven-playwright-result] {"version":1,"phase":"tests-complete","nonce":"${TEST_RESULT_NONCE}","status":"passed","total":1,"completed":1,"failed":0,"skipped":0,"errors":0}\n`;
@@ -2434,8 +2445,25 @@ test('tests-complete without run-final fails on the short finalization deadline'
   ));
   assert.ok(finalResultTimer, 'expected a short deadline instead of the 600-second run timeout');
 
+  elapsedClock = 31000;
   await finalResultTimer.fn();
   const result = await runPromise;
+  const diagnosticIndex = lifecycleEvents.findIndex(event => event.text?.startsWith('[playwright-wrapper-finalization-diagnostic] '));
+  const killIndex = lifecycleEvents.findIndex(event => event.type === 'stop' && event.pid === child.pid);
+  assert.ok(diagnosticIndex >= 0 && diagnosticIndex < killIndex, 'capture owned processes before terminating the Playwright child');
+  const diagnostic = JSON.parse(lifecycleEvents[diagnosticIndex].text.split('] ')[1]);
+  assert.equal(diagnostic.reason, 'missing-run-final');
+  assert.equal(diagnostic.phase, 'tests-complete');
+  assert.equal(diagnostic.elapsedMs, 30000);
+  assert.deepEqual(snapshotOptions.at(-1), { timeoutMs: 5000 });
+  assert.deepEqual(diagnostic.processes.find(owner => owner.pid === child.pid), {
+    pid: child.pid, parentPid: process.pid, executable: 'node', role: 'playwright-cli', liveness: snapshotFailure ? 'unknown' : 'alive',
+  });
+  assert.equal(diagnostic.processes.find(owner => owner.pid === serviceOwner.pid).liveness, snapshotFailure ? 'unknown' : 'identity-changed');
+  assert.equal(diagnostic.processes.find(owner => owner.pid === shellRoot.pid).executable, 'other');
+  assert.deepEqual(diagnostic.snapshotError, snapshotFailure ? { name: 'Error' } : null);
+  assert.doesNotMatch(lifecycleEvents[diagnosticIndex].text, /private|fixture-secret|commandLine|creationIdentity/);
+  assert.ok(result.combinedOutput.includes(lifecycleEvents[diagnosticIndex].text));
   assert.equal(result.exitCode, 1);
   assert.deepEqual(stopped, [shellRoot.pid, child.pid]);
   assert.match(stderrWrites.join(''), /\[playwright-wrapper-diagnostic\]/);
@@ -3483,6 +3511,40 @@ test('stopManagedIsolatedApp uses bind-only port checks after verified process-t
     { port: 4322, ownerProbeResult: [] },
     { port: 4324, ownerProbeResult: [] },
   ]);
+});
+
+test('managed isolated stop request waits for shutdown without starting a replacement', async () => {
+  const ownedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'album-haven-stop-request-'));
+  let finishStop;
+  const stopped = new Promise((resolve) => { finishStop = resolve; });
+  let starts = 0;
+  try {
+    const controller = _private.createManagedIsolatedAppRestartController({
+      childEnv: {}, ownedIsolatedTempRoot: ownedRoot,
+      initialChild: createFakeChildProcess(5660), ports: [4320, 4322],
+      stopManagedIsolatedAppFn: () => stopped,
+      startManagedIsolatedAppFn: async () => { starts += 1; return createFakeChildProcess(5661); },
+      autoStart: false,
+    });
+    const requestPath = path.join(controller.controlDirectory, 'restart-request.json');
+    const ackPath = path.join(controller.controlDirectory, 'restart-ack.json');
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'stop-1', action: 'stop' }));
+    const pending = controller.processPendingRequest();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fs.existsSync(ackPath), false);
+    finishStop();
+    await pending;
+    assert.equal(starts, 0);
+    assert.equal(controller.getCurrentChild(), null);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'stop-1', status: 'stopped' });
+    fs.writeFileSync(requestPath, JSON.stringify({ nonce: 'resume-1' }));
+    await controller.processPendingRequest();
+    assert.equal(starts, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(ackPath)), { nonce: 'resume-1', status: 'ready' });
+    await controller.close();
+  } finally {
+    fs.rmSync(ownedRoot, { recursive: true, force: true });
+  }
 });
 
 test('managed isolated restart controller keeps control files under the runner-owned temp root', async () => {

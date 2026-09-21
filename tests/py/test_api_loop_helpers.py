@@ -50,6 +50,7 @@ def test_resolve_loop_creation_source_prefers_saved_parent_loop_metadata(tmp_pat
     source_path.write_bytes(b"parent-audio")
     parent_loop = {
         "id": "parent-loop",
+        "start_seconds": 60, "end_seconds": 80,
         "artist": "Parent Artist",
         "title": "Parent Title",
         "album": "Parent Album",
@@ -57,7 +58,7 @@ def test_resolve_loop_creation_source_prefers_saved_parent_loop_metadata(tmp_pat
     }
 
     source_details, error = resolve_loop_creation_source(
-        {"source_loop_id": "parent-loop", "source_path": "ignored"},
+        {"source_loop_id": "parent-loop", "source_path": "ignored", "start_seconds": 2, "end_seconds": 5},
         config={},
         get_loop=lambda config, loop_id: parent_loop if loop_id == "parent-loop" else None,
         resolve_loop_media_path=lambda config, loop_id: source_path if loop_id == "parent-loop" else None,
@@ -73,6 +74,7 @@ def test_resolve_loop_creation_source_prefers_saved_parent_loop_metadata(tmp_pat
         "album": "Parent Album",
         "cover_path": "C:/covers/parent.jpg",
         "parent_loop_id": "parent-loop",
+        "original_start_seconds": 62, "original_end_seconds": 65,
     }
 
 
@@ -82,7 +84,7 @@ def test_resolve_loop_creation_source_uses_file_cache_metadata_for_track_source(
     source_path.write_bytes(b"source-audio")
 
     source_details, error = resolve_loop_creation_source(
-        {"source_path": str(source_path), "artist": "Payload Artist"},
+        {"source_path": str(source_path), "artist": "Payload Artist", "start_seconds": 2, "end_seconds": 5},
         config={},
         get_loop=lambda config, loop_id: None,
         resolve_loop_media_path=lambda config, loop_id: None,
@@ -105,20 +107,21 @@ def test_resolve_loop_creation_source_uses_file_cache_metadata_for_track_source(
         "album": "Cached Album",
         "cover_path": "C:/covers/cached.jpg",
         "parent_loop_id": "",
+        "original_start_seconds": 2, "original_end_seconds": 5,
     }
 
 
 def test_resolve_loop_creation_source_reports_missing_sources():
     parent_result = resolve_loop_creation_source(
-        {"source_loop_id": "missing-parent"},
+        {"source_loop_id": "missing-parent", "start_seconds": 1, "end_seconds": 2},
         config={},
-        get_loop=lambda config, loop_id: {"id": loop_id},
+        get_loop=lambda config, loop_id: {"id": loop_id, "start_seconds": 60, "end_seconds": 80},
         resolve_loop_media_path=lambda config, loop_id: None,
         normalize_music_file_path=lambda raw_path: None,
         file_cache={},
     )
     track_result = resolve_loop_creation_source(
-        {"source_path": "missing.mp3"},
+        {"source_path": "missing.mp3", "start_seconds": 1, "end_seconds": 2},
         config={},
         get_loop=lambda config, loop_id: None,
         resolve_loop_media_path=lambda config, loop_id: None,

@@ -30,7 +30,7 @@ async function mount(page, method, options = {}) {
     'runtime/shell-persistent-player.css', 'navigation-tree.css', 'appearance-backgrounds.css', 'button-component.css',
   ] : ['button-component.css', 'appearance-backgrounds.css'];
   for (const file of cssFiles) await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
-  for (const file of ['button-component.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
+  for (const file of ['button-component.js', 'runtime/alert-components.js', 'editor-page.js', 'appearance-palettes.js', 'appearance-backgrounds.js']) await page.addScriptTag({ path: path.join(staticRoot, 'js', file) });
   await page.evaluate(async method => {
     const instance = window.AlbumHavenAppearance.instance;
     if (!await instance.load()) throw new Error('Component appearance setup must load successfully.');
@@ -85,14 +85,23 @@ test('native player survives a handle-only save and reload without repainting ot
 
 test('custom controls keep opaque action pods while the player surface remains native', async ({ page }) => {
   await mount(page, 'mountSeekbar', { utilityShell: true, saved: { palette_id: null, player_style_override: null, player_override: null } });
+  await page.addScriptTag({ path: path.join(staticRoot, 'js/runtime/playback-control-cluster.js') });
   const paint = await page.evaluate(() => {
     const api = window.AlbumHavenAppearance;
     const player = document.querySelector('.global-player');
-    player.insertAdjacentHTML('beforeend', '<div class="loop-edit-actions"><div class="loop-edit-action-pod"></div><button class="loop-edit-action-enter">Edit</button></div><button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
+    for (const loopControlStyle of ['capsule', 'companion']) {
+      player.insertAdjacentHTML('beforeend', window.renderPlaybackControlCluster({ variant: 'expanded-player', loopControlStyle }));
+    }
+    player.querySelectorAll('[data-playback-control-cluster]').forEach(node => {
+      node.setAttribute('data-loop-action-engaged', 'true');
+      node.setAttribute('data-loop-action-state', 'editing');
+    });
+    player.insertAdjacentHTML('beforeend', '<button class="player-loop-button is-active">Loop</button><div class="player-timeline-wrap is-idle"></div>');
     const surface = getComputedStyle(player).backgroundImage;
     api.instance.controller.setPlayerStyleColor('controls.fill', '#123456');
     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
-    const pod = document.querySelector('.loop-edit-action-pod');
+    const pod = document.querySelector('[data-loop-control-style="capsule"]');
+    const companion = document.querySelector('[data-loop-control-style="companion"]');
     const idle = document.querySelector('.player-timeline-wrap');
     const idleBackground = getComputedStyle(idle, '::before').backgroundColor;
     const style = structuredClone(api.instance.controller.getState().draft.player_style_override);
@@ -101,7 +110,7 @@ test('custom controls keep opaque action pods while the player surface remains n
     api.applyTheme(api.instance.controller.getState().draft, document.documentElement);
     const loop = getComputedStyle(document.querySelector('.player-loop-button'));
     return { surface, after: getComputedStyle(player).backgroundImage, outline: [loop.outlineStyle, loop.outlineWidth, loop.outlineColor],
-      pod: getComputedStyle(pod).backgroundColor, tail: getComputedStyle(pod, '::after').backgroundColor,
+      pod: getComputedStyle(pod, '::before').backgroundColor, tail: getComputedStyle(companion, '::before').backgroundColor,
       idle: idleBackground };
   });
   expect(paint.after).toBe(paint.surface);
@@ -322,17 +331,18 @@ test('unmount restores the shared footer theme before another editor takes owner
 for (const palette of [null, 'steelblue']) {
   test(`saved independent interactions reach live consumers with palette ${palette}`, async ({ page }) => {
     await mount(page, 'mountSelectionAccent', { saved: { palette_id: palette } });
-    for (const file of ['runtime/base-layout.css', 'runtime/utilities.css', 'runtime/account-menu.css', 'runtime/cover-lookup-drawer-and-related.css', 'button-component.css', 'appearance-backgrounds.css']) {
+    for (const file of ['runtime/base-layout.css', 'runtime/utilities.css', 'runtime/account-menu.css', 'runtime/trigger-anchor.css', 'runtime/cover-lookup-drawer-and-related.css', 'button-component.css', 'appearance-backgrounds.css']) {
       await page.addStyleTag({ path: path.join(staticRoot, 'css', file) });
     }
     await page.evaluate(() => {
       const host = document.createElement('section'); host.id = 'live-consumers';
+      document.documentElement.style.setProperty('--dropdown-item-hover-background', 'rgb(36, 36, 36)');
       host.innerHTML = '<button class="utility-list-item" id="utility-hover">List row</button><button class="utility-list-item is-active" id="utility-selected">Selected row</button><a class="account-menu-item" href="#" id="menu-link">Menu link</a><button class="account-menu-item" id="menu-button">Menu button</button><a class="related-chip" href="#" id="related-hover">Related artist</a><a class="related-chip active" href="#" id="related-selected">Selected related artist</a><button class="related-toggle" id="related-toggle">Related artists</button><button class="button" id="legacy-action">Legacy action</button><button class="button ui-button" id="shared-action">Shared action</button><button class="button ui-button ui-button--quiet" id="quiet-action">Cancel</button><input type="checkbox" id="native-check"><input type="radio" id="native-radio">';
       document.body.prepend(host);
     });
     const hoverColors = [
-      ['utility-hover', 'rgb(255, 17, 34)'], ['menu-link', 'rgb(255, 17, 34)'],
-      ['menu-button', 'rgb(255, 17, 34)'], ['related-hover', 'rgb(255, 17, 34)'],
+      ['utility-hover', 'rgb(255, 17, 34)'], ['menu-link', 'rgb(36, 36, 36)'],
+      ['menu-button', 'rgb(36, 36, 36)'], ['related-hover', 'rgb(255, 17, 34)'],
       ['related-toggle', 'rgb(51, 68, 255)'], ['legacy-action', 'rgb(51, 68, 255)'],
       ['shared-action', 'rgb(51, 68, 255)'],
     ];
@@ -362,7 +372,11 @@ for (const palette of [null, 'steelblue']) {
     await expect(page.locator('#utility-hover')).toHaveCSS('background-color', 'rgba(96, 165, 250, 0.1)');
     await expect(page.locator('#utility-selected')).toHaveCSS('background-color', 'rgba(96, 165, 250, 0.1)');
     await page.locator('#menu-link').hover();
-    await expect(page.locator('#menu-link')).toHaveCSS('background-color', 'rgb(23, 45, 67)');
+    await expect(page.locator('#menu-link')).toHaveCSS('background-color', 'rgb(36, 36, 36)');
+    await expect(page.locator('#menu-link')).toHaveCSS('outline-style', 'none');
+    await expect(page.locator('#menu-link')).toHaveCSS('box-shadow', 'none');
+    await page.locator('html').evaluate(element => element.style.setProperty('--dropdown-item-hover-background', 'rgb(70, 70, 70)'));
+    await expect(page.locator('#menu-link')).toHaveCSS('background-color', 'rgb(70, 70, 70)');
     await page.locator('#legacy-action').hover();
     await expect(page.locator('#legacy-action')).not.toHaveCSS('background-color', 'rgb(51, 68, 255)');
   });

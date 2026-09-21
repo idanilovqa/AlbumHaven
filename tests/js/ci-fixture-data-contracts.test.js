@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
+const { discoverComponentCases } = require('../../scripts/ci/validate-foundation-gates.cjs');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const ciContractRoot = path.join(repoRoot, 'tests', 'ci');
@@ -350,13 +351,24 @@ test('fixture manifest schema pins v1 and all five fixture profiles', () => {
 
 test('approved test-data matrix records every discovered case', () => {
   const matrix = readJson(testDataMatrixPath);
+  const componentCases = new Set(discoverComponentCases(repoRoot).map((line) => {
+    const match = line.trim().match(/^([^:]+):\d+:\d+\s+›\s+(.+)$/u);
+    assert.ok(match, `Unexpected component discovery line: ${line}`);
+    return caseIdentity({
+      config: 'playwright.component.config.js',
+      project: '',
+      test: `tests/components/${match[1]}`,
+      case: match[2],
+    });
+  }));
   const errors = validateTestDataMatrix(matrix, {
     expectedConfigs: configuredPlaywrightSurfaces,
+    expectedCases: componentCases,
   });
 
   assert.deepEqual(errors, []);
-  assert.equal(matrix.length, 187);
-  assert.equal(new Set(matrix.map(caseIdentity)).size, 187);
+  assert.equal(matrix.length, 223);
+  assert.equal(new Set(matrix.map(caseIdentity)).size, 223);
   assert.equal(matrix.every((entry) => entry.ownerApproval === 'approved'), true);
 });
 
@@ -476,7 +488,7 @@ test('matrix validation rejects mutation assigned to shared or duplicate data', 
   assert.equal(errors.includes('duplicate mutation ownership: album:mutable-example::media/mutable-example'), true);
 });
 
-test('functional shard contract owns all 103 browser-functional cases exactly once', () => {
+test('functional shard contract owns all 115 browser-functional cases exactly once', () => {
   const matrix = readJson(testDataMatrixPath);
   const expectedCases = new Set(
     matrix
@@ -492,7 +504,7 @@ test('functional shard contract owns all 103 browser-functional cases exactly on
   const contract = readJson(functionalShardsPath);
   const errors = validateFunctionalShards(contract, expectedCases);
 
-  assert.equal(expectedCases.size, 103);
+  assert.equal(expectedCases.size, 115);
   assert.deepEqual(errors, []);
   assert.equal(contract.shards.length, 4);
   assert.equal(contract.shards.every((shard) => shard.invocations.length > 0), true);
@@ -695,14 +707,14 @@ test('read-only inventory command reports complete discovery and ownership total
 
   assert.equal(inventory.configuredSurfaces, 10);
   assert.deepEqual(inventory.categories, {
-    browserFunctional: 103,
-    component: 58,
+    browserFunctional: 115,
+    component: 82,
     performance: 26,
-    total: 187,
+    total: 223,
   });
   assert.deepEqual(inventory.ownership, {
-    testDataMatrix: 187,
-    functionalShards: 103,
+    testDataMatrix: 223,
+    functionalShards: 115,
     performanceTargets: 26,
   });
 });

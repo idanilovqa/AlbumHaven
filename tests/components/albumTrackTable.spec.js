@@ -154,6 +154,10 @@ async function mountAlbumDetailsComponents(page) {
     content: `function escapeHtml(value) { return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;'); }`,
   });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'button-component.js') });
+  await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-details-components.js') });
+  await page.locator('.album-details-header__actions').evaluate(host => {
+    host.innerHTML = buildAlbumDetailsHeaderActionsHtml();
+  });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'compact-data-table.js') });
   await page.addScriptTag({ path: path.join(repositoryRoot, 'music_app', 'static', 'js', 'runtime', 'album-track-table.js') });
   await page.locator('#table-host').evaluate((host) => {

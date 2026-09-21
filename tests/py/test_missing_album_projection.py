@@ -70,6 +70,39 @@ def test_missing_album_gallery_tombstone_is_json_serializable():
     assert json.loads(json.dumps(album))["inventory_status"] == "missing"
 
 
+def test_problematic_detail_reaches_missing_projection_after_empty_active_album(monkeypatch):
+    from music_app.services.library_browse_postgres import PostgresLibraryBrowseRepository
+
+    row = _missing_row()
+    row.update({
+        "album_key": "artist::release",
+        "album_title": "Release",
+        "artist_name": "Artist",
+        "album_cover_path": "owned-cover.jpg",
+        "album_metadata": {"album_artist": "Artist", "artists": ["Artist"]},
+    })
+    album_key = row["album_key"]
+    repository = PostgresLibraryBrowseRepository({})
+    monkeypatch.setattr(repository, "_load_problematic_file_rows", lambda **kwargs: [row])
+    monkeypatch.setattr(repository, "_load_relation_alias_maps", lambda: {"alias_to_canonical": {}})
+    requested_missing_keys = []
+
+    def missing_rows(*, album_key):
+        requested_missing_keys.append(album_key)
+        return [row]
+
+    monkeypatch.setattr(repository, "_load_missing_album_rows", missing_rows)
+    detail = repository.build_problematic_file_detail_payload(album_key)
+
+    assert detail is not None
+    assert requested_missing_keys == [album_key]
+    assert detail["key"] == album_key
+    assert detail["detail_loaded"] is True
+    assert detail["problem_reasons"] == ["Album not found"]
+    assert detail["tracks"] == []
+    assert not detail.get("open_directory_paths")
+
+
 def test_missing_album_tombstone_replaces_same_key_active_gallery_payload():
     from music_app.services.library_browse_postgres import (
         _merge_missing_albums_into_artist_groups,

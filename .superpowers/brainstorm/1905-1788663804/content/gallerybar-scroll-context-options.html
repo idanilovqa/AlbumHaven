@@ -1,0 +1,32 @@
+<h2>What should the sticky GalleryBar say?</h2>
+<p class="subtitle">Each option moves every artist name—including the selected primary artist—into the scrolling Gallery body.</p>
+
+<div class="cards">
+  <div class="card" data-choice="stable-gallery-summary" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#090c0c;padding:12px">
+      <div style="height:44px;border-bottom:1px solid #3a4845;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111515">
+        <div><strong style="display:block">Gallery</strong><small style="color:#8fa09c">Transatlantic family · 5 artists · 32 albums</small></div><span>◉ ◫ ⚙</span>
+      </div>
+      <div style="padding:14px 10px"><div style="display:flex;align-items:center;gap:8px"><strong>Neal Morse</strong><span style="height:1px;background:#34423f;flex:1"></span><small>18 albums</small></div><div class="placeholder" style="height:92px;margin-top:10px"></div></div>
+    </div>
+    <div class="card-body"><h3>A. Stable Gallery summary — recommended</h3><p>The bar identifies the page and active browse scope. Artist names and counts live consistently inside the scrolling body, so the sticky text never misidentifies visible albums.</p></div>
+  </div>
+
+  <div class="card" data-choice="scroll-aware-artist" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#090c0c;padding:12px">
+      <div style="height:44px;border-bottom:1px solid #3a4845;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111515"><div><small style="color:#8fa09c">Now viewing</small><strong style="display:block">Neal Morse</strong></div><span>◉ ◫ ⚙</span></div>
+      <div style="padding:14px 10px"><div style="display:flex;align-items:center;gap:8px"><strong>Neal Morse</strong><span style="height:1px;background:#34423f;flex:1"></span><small>18 albums</small></div><div class="placeholder" style="height:92px;margin-top:10px"></div></div>
+    </div>
+    <div class="card-body"><h3>B. Scroll-aware artist</h3><p>The bar changes to the artist section crossing the viewport. It is locally precise, but adds motion and can obscure the selected family scope while scrolling quickly.</p></div>
+  </div>
+
+  <div class="card" data-choice="fixed-family-scope" onclick="toggleSelect(this)">
+    <div class="card-image" style="background:#090c0c;padding:12px">
+      <div style="height:44px;border-bottom:1px solid #3a4845;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#111515"><div><small style="color:#8fa09c">Artist family</small><strong style="display:block">Transatlantic</strong></div><span>◉ ◫ ⚙</span></div>
+      <div style="padding:14px 10px"><div style="display:flex;align-items:center;gap:8px"><strong>Neal Morse</strong><span style="height:1px;background:#34423f;flex:1"></span><small>18 albums</small></div><div class="placeholder" style="height:92px;margin-top:10px"></div></div>
+    </div>
+    <div class="card-body"><h3>C. Explicit fixed family scope</h3><p>The name remains sticky but is labeled as the browse scope rather than the visible section. Clearer than today, though it still repeats Transatlantic in the body.</p></div>
+  </div>
+</div>
+
+<p class="subtitle">Click an option, then confirm your choice in Codex.</p>

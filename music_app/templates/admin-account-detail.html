@@ -1,3 +1,4 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -13,9 +14,10 @@
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
 </head>
 <body>
-  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
   <main class="settings-host settings-shell" data-settings-host>
     {% from "partials/app-bar.html" import app_bar with context %}
     {{ app_bar() }}
@@ -36,8 +38,8 @@
         {% endif %}
       </header>
 
-      <p class="admin-form-error" data-admin-form-error role="alert" hidden></p>
-      <p class="admin-form-status" data-admin-form-status role="status" hidden></p>
+      {{ on_page_alert(severity='error', hidden=true, class_name='admin-form-error', attributes={'data-admin-form-error': ''}) }}
+      {{ on_page_alert(role='status', hidden=true, class_name='admin-form-status', attributes={'data-admin-form-status': ''}) }}
       <form class="admin-detail-form" data-admin-account-form data-mode="{{ 'edit' if member else 'create' }}"{% if member %} data-initial-active="{{ 'true' if member.is_active else 'false' }}" data-initial-library-access="{{ 'true' if member.membership_role else 'false' }}"{% endif %}>
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         {% if member %}<input type="hidden" name="account_id" value="{{ member.account_id }}">{% endif %}
@@ -98,7 +100,7 @@
             <h2 id="reauth-title">Confirm it’s you</h2>
             <p>Enter your own current password to continue this sensitive administrator action.</p>
           </div>
-          <label><span>Your current password</span><span class="password-control"><input id="admin-current-password" type="password" autocomplete="current-password" data-reauth-password><button type="button" data-password-toggle="admin-current-password" aria-pressed="false">Show</button></span></label>
+          <label><span>Your current password</span><span class="password-control ui-input-action"><input id="admin-current-password" type="password" autocomplete="current-password" data-reauth-password><button type="button" data-password-toggle="admin-current-password" aria-pressed="false">Show</button></span></label>
           <div class="reauth-actions"><button class="admin-button" type="button" data-reauth-cancel>Cancel</button><button class="admin-button is-primary" type="button" data-reauth-submit>Continue</button></div>
         </section>
         {% endif %}

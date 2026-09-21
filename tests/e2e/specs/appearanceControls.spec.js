@@ -18,6 +18,74 @@ const test = base.extend({
 });
 
 const CASE_ID = 'FTC-APPEARANCE-001';
+test.describe(() => {
+test.use({ hasTouch: true });
+
+test('FTC-SETTINGS-A01 shared search preserves the staged loop style and Save hydrates it before Settings opens', { tag: '@area:settings' }, async ({
+  appearancePreferenceIsolation, galleryActions, globalPlayerActions, page, playbackEvidence, settingsModalAppBarActions, trackModalActions, utilityAppearanceActions, utilityTabBarActions,
+}) => {
+  const appearance = utilityAppearanceActions.utilityAppearanceTab;
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await appearancePreferenceIsolation.capture();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.openSection('seekbar');
+  const savedStyle = await appearance.liveLoopCluster.getAttribute('data-loop-control-style');
+  const otherStyle = savedStyle === 'companion' ? 'capsule' : 'companion';
+  await appearance.loopStyleButton(otherStyle).click();
+  await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', savedStyle);
+  const editor = await appearance.editor.elementHandle();
+  await appearance.sidebar.search.fill('Album page');
+  await expect(appearance.sectionButton('album-page')).toBeVisible();
+  await expect(appearance.sectionButton('seekbar')).toBeHidden();
+  await expect(appearance.loopStyleButton(otherStyle)).toHaveAttribute('aria-pressed', 'true');
+  expect(await appearance.isRetainedEditor(editor)).toBe(true);
+  await editor.dispose();
+  await appearance.sidebar.search.fill('');
+  await utilityAppearanceActions.cancel();
+  await expect(appearance.loopStyleButton(savedStyle)).toHaveAttribute('aria-pressed', 'true');
+  await appearance.loopStyleButton('companion').click();
+  if (savedStyle !== 'companion') await utilityAppearanceActions.save();
+  await utilityAppearanceActions.openSection('backgrounds');
+  await utilityAppearanceActions.choosePalette('harbor-mint');
+  await utilityAppearanceActions.save();
+  await page.reload();
+  await galleryActions.waitForGalleryReady();
+  await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('appearance');
+  await utilityAppearanceActions.waitForReady();
+  await utilityAppearanceActions.openSection('seekbar');
+  await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
+  await appearance.editorFooter.reset.root.click();
+  await expect(appearance.loopStyleButton('capsule')).toHaveAttribute('aria-pressed', 'true');
+  await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', 'companion');
+  await utilityAppearanceActions.cancel();
+  await expect(appearance.loopStyleButton('companion')).toHaveAttribute('aria-pressed', 'true');
+  await settingsModalAppBarActions.closeSettings();
+  await galleryActions.selectAlbumDetailsByIdentity({ artist: 'Album Haven Last.fm Fixture', album: 'Signed Scrobble Journey', year: '2026' });
+  const playbackMark = await playbackEvidence.playbackMark();
+  const touchTrack = await trackModalActions.playTrackAt(0);
+  const renderedAudio = await playbackEvidence.waitForTrackPlaybackEvidence({ after: playbackMark, path: touchTrack.path });
+  expect(renderedAudio.nonZeroSamples).toBeGreaterThan(0);
+  expect(renderedAudio.renderedFrameDelta).toBeGreaterThan(0);
+  await trackModalActions.close();
+  await globalPlayerActions.waitForFullTrackTiming();
+  for (const style of ['companion', 'capsule']) {
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('appearance');
+    await utilityAppearanceActions.waitForReady();
+    await utilityAppearanceActions.openSection('seekbar');
+    await appearance.loopStyleButton(style).click();
+    if (await appearance.liveLoopCluster.getAttribute('data-loop-control-style') !== style) await utilityAppearanceActions.save();
+    await settingsModalAppBarActions.closeSettings();
+    await expect(appearance.liveLoopCluster).toHaveAttribute('data-loop-control-style', style);
+    await globalPlayerActions.verifyTouchLoopCreationAndCancel();
+  }
+});
+});
 const PLAYER_COLORS = Object.freeze({
   surfaceStart: '#123456',
   surfaceEnd: '#234567',
@@ -41,6 +109,7 @@ const INTERACTION_COLORS = Object.freeze({
 });
 
 test(`${CASE_ID} applies every Appearance control family to real UI and preserves it across reload`, { tag: '@area:responsive-visual' }, async ({
+  appearancePreferenceIsolation,
   artistFamilyActions,
   galleryActions,
   navigationPanelActions,
@@ -59,6 +128,7 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
   await stepLogger.step('Open the five-page Appearance workspace and keep drafts preview-only', async () => {
     await galleryActions.goto();
     await galleryActions.waitForGalleryReady();
+    await appearancePreferenceIsolation.capture();
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
@@ -273,12 +343,30 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     const familySelected = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
     expect(familySelected.box.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(familySelected.box.borderColor).toBe('rgb(184, 189, 197)');
-    expect(familySelected.primary.backgroundColor).toBe(INTERACTION_COLORS.navigationSelected);
-    await artistFamilyActions.artistFamily.firstInactiveChip.hover();
-    await expect(artistFamilyActions.artistFamily.firstInactiveChip)
-      .toHaveCSS('background-color', INTERACTION_COLORS.navigationHover);
-    const familyHover = await artistFamilyActions.artistFamily.readAppearanceCheckpoint();
-    expect(familyHover.firstInactive.backgroundColor).toBe(INTERACTION_COLORS.navigationHover);
+    expect(familySelected.primary.backgroundColor).toBe('rgb(17, 21, 23)');
+    expect(familySelected.primary.borderColor).toBe('rgb(62, 247, 128)');
+    expect(familySelected.primary.markerVisible).toBe('visible');
+    expect(familySelected.firstInactive.markerVisible).toBe('hidden');
+    expect(familySelected.firstInactive.borderColor).toBe('rgb(69, 75, 79)');
+    for (const row of [familySelected.primary, familySelected.firstInactive]) {
+      expect(row.height).toBe(60);
+      expect(row.borderWidth).toBe('1px');
+      expect(row.boxShadow).toBe('none');
+      expect(row.thumbnailWidth).toBe(48);
+      expect(row.thumbnailHeight).toBe(48);
+      expect(row.badgeWidth).toBe(44);
+      expect(row.badgeHeight).toBe(32);
+      expect(row.badgeBackground).toBe('rgb(41, 43, 47)');
+    }
+    const inactiveName = await artistFamilyActions.artistFamily.firstInactiveChip
+      .getAttribute('data-gallery-family-artist');
+    expect(inactiveName).toBeTruthy();
+    const familyHover = await artistFamilyActions.readChipHoverState(inactiveName);
+    const combineHover = await artistFamilyActions.readCombineHoverState();
+    expect(familyHover.before.backgroundColor).toBe(familySelected.firstInactive.backgroundColor);
+    expect(familyHover.after.backgroundColor).not.toBe(familyHover.before.backgroundColor);
+    expect(familyHover.after.backgroundColor).toBe(combineHover.after.backgroundColor);
+    expect(familyHover.after.labelDecoration).toBe('none');
 
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
@@ -305,7 +393,10 @@ test(`${CASE_ID} applies every Appearance control family to real UI and preserve
     await expect(appearance.waveformHex('edge')).toHaveValue(PLAYER_COLORS.waveformEdge);
     await expect(appearance.playerStyleHex('handles.color')).toHaveValue(PLAYER_COLORS.handle);
     await expect(appearance.compactStyleButton('floating')).toHaveAttribute('aria-pressed', 'true');
+    // Restoring the saved aggregate leaves no pending work to cancel or save.
     await expect(appearance.editorFooter.secondary.root).toBeDisabled();
+    await expect(appearance.editorFooter.primary.root).toBeDisabled();
+    await expect(appearance.editorFooter.status).toHaveText('Saved to your account');
   });
 
   await stepLogger.step('Keep other pending pages while Reset affects only Player and Seekbar', async () => {

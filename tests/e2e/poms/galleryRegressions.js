@@ -5,6 +5,7 @@ export class GalleryRegressions {
     this.familyPanel=page.locator('#artist-family-panel');
     this.nealSidebar=page.locator('[data-sidebar-artist="Neal Morse"]');
     this.rootSidebar=page.locator('[data-sidebar-all-artists="1"]');
+    this.rootArtistCount=this.rootSidebar.locator('.navigation-tree-count');
     this.search=page.getByRole('combobox',{name:'Search music'});
     this.options=page.locator('.recent-search-option');
     this.summary=page.locator('[data-gallery-context-summary]');
@@ -25,14 +26,49 @@ export class GalleryRegressions {
     this.art=this.modal.locator('.track-modal-cover .album-artbox');
     this.tracks=this.modal.locator('.track-modal-list');
     this.rows=this.modal.locator('.album-track-table__row');
-    this.warning=page.getByRole('button',{name:'Library warning',exact:true});
-    this.warningPanel=page.locator('#library-warning-panel');
+    this.warning=page.locator('#toast-layer .system-warning-notification').filter({hasText:'Library watcher needs attention'});
+    this.warningDismiss=this.warning.getByRole('button',{name:'Dismiss',exact:true});
+    this.warningGoLibrary=this.warning.getByRole('button',{name:'Go to Library page',exact:true});
+    this.removedWarningButton=page.getByRole('button',{name:'Library warning',exact:true});
+    this.removedWarningPanel=page.locator('#library-warning-panel');
     this.scanWarning=page.locator('#library-scan-warning');
     this.libraryCheck=page.locator('#scan-indicator .status-check');
     this.library=page.getByRole('button',{name:'Library status',exact:true});
     this.openScan=page.locator('[data-status-action="go-to-scan-page"]:visible');
   }
   cover(card) { return card.locator('img').first(); }
+  async observeSelectionLoader() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe rendered selection loader transitions without modifying product state
+    return this.page.evaluateHandle(() => {
+      const loader = document.getElementById('library-loader');
+      const evidence = { selections: 0, warningExposures: 0, missingSpinners: 0 };
+      const inspect = () => {
+        if (loader.hidden || document.getElementById('library-loader-title')?.textContent !== 'Loading selection') return;
+        evidence.selections += 1;
+        if ([...loader.querySelectorAll('[role="alert"]')].some(alert => alert.getClientRects().length > 0)) {
+          evidence.warningExposures += 1;
+        }
+        if (!loader.querySelector('.library-loader-spinner')?.getClientRects().length) {
+          evidence.missingSpinners += 1;
+        }
+      };
+      const observer = new MutationObserver(inspect);
+      observer.observe(loader, { subtree: true, childList: true, attributes: true, characterData: true });
+      inspect();
+      return { finish() { inspect(); observer.disconnect(); return evidence; } };
+    });
+  }
+  async finishSelectionLoaderObservation(observation) {
+    try {
+      // parity-check: allow-read-only-measurement-evaluate -- read and disconnect the owned loader observer
+      return await observation.evaluate(value => value.finish());
+    } finally { await observation.dispose(); }
+  }
+  async readCompletedStartupPartialView() {
+    // parity-check: allow-read-only-measurement-evaluate -- observe the production full-hydration paint marker
+    return this.page.evaluate(() => window.__ALBUM_HAVEN_STARTUP_METRICS__
+      ?.marks?.initial_refresh_complete?.detail?.partialView ?? null);
+  }
   yearWithin(card) { return card.locator('.gallery-card__hover-year'); }
   numberPlay(row) { return row.locator('.album-track-table__number-play'); }
   async readTrackPath(row) {

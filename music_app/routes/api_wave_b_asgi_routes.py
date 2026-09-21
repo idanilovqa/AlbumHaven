@@ -1,7 +1,15 @@
 from __future__ import annotations
 
-import mimetypes
+from music_app.services.log_history import history_scope_for_request
+
+from music_app.services.loop_request_scope import saved_loop_scope
+from music_app.services.loops import project_loop_for_client, project_loop_order_for_client
+from music_app.services.loops import probe_loop_source_duration
+from music_app.services.saved_loops_postgres import LoopOrderError
+import math
 import logging
+
+import mimetypes
 import uuid
 from datetime import datetime, timezone
 from email import policy
@@ -12,6 +20,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
+from music_app.services.lastfm import get_saved_lastfm_session, get_lastfm_total_scrobbles
 
 from music_app.routes.api_loop_helpers import (
     parse_pitch_semitones,
@@ -39,7 +48,11 @@ from music_app.services.lastfm import (
     scrobble_track,
     update_now_playing,
 )
-from music_app.services.lastfm_retry import pending_scrobble_count, retry_pending_lastfm_scrobbles
+from music_app.services.lastfm_retry import (
+    LastfmRetryBatchError,
+    pending_scrobble_count,
+    retry_pending_lastfm_scrobbles,
+)
 from music_app.services.lastfm_sync_bridge import (
     build_lastfm_integration_status,
     record_playback_session_complete,
@@ -73,6 +86,7 @@ from music_app.services.loops import (
 )
 from music_app.services.playback_session_payloads import normalize_playback_track_payload
 from music_app.services.track_preferences import save_track_preference
+from music_app.services.policy_asgi import allowed_actions_for_request
 
 
 router = APIRouter()
@@ -141,7 +155,17 @@ def _invalid_payload_response(error: str = "Invalid payload", status_code: int =
     return {"ok": False, "error": error}, status_code
 
 
-def _enrich_lastfm_status(config: dict[str, Any], status: JsonDict) -> JsonDict:
+def _enrich_lastfm_status(config: dict[str, Any], status: JsonDict, *, account_id=None, library_id=None) -> JsonDict:
+    if account_id is not None:
+        from music_app.services.listen_history import build_measured_playback_statistics
+        from psycopg.errors import UndefinedColumn
+        try:
+            statistics = build_measured_playback_statistics(config, account_id=account_id, library_id=library_id)
+        except UndefinedColumn:
+            logging.getLogger(__name__).warning("Playback statistics unavailable: database migration required.")
+            statistics = None
+        return {**status, **build_listen_history_status_counts(config, account_id=account_id, library_id=library_id),
+                "playback_statistics": statistics}
     return build_lastfm_integration_status(
         config,
         base_status=status,
@@ -150,7 +174,10 @@ def _enrich_lastfm_status(config: dict[str, Any], status: JsonDict) -> JsonDict:
     )
 
 
-def _build_integrations_payload(config: dict[str, Any]) -> JsonDict:
+def _build_integrations_payload(config: dict[str, Any], *, account_id=None, library_id=None) -> JsonDict:
+    if account_id is not None:
+        lastfm = _enrich_lastfm_status(config, build_lastfm_status(config, account_id=account_id), account_id=account_id, library_id=library_id)
+        return {"ok": True, "integrations": [lastfm, build_foobar_integration_payload(build_help_url=lambda: "/utilities/integrations/foobar/help", build_asset_url=build_foobar_asset_url), _build_local_playlist_import_integration()]}
     history_counts = build_listen_history_status_counts(config)
     lastfm = build_lastfm_integration_status(
         config,
@@ -187,6 +214,7 @@ def _log_lastfm_scrobble_event(
     payload: JsonDict,
     error: str = "",
     retry_count: int = 0,
+    history_scope=None,
 ) -> None:
     log_app_event(
         config,
@@ -194,6 +222,7 @@ def _log_lastfm_scrobble_event(
         action,
         level=level,
         history=True,
+        history_scope=history_scope,
         artist=str(payload.get("artist") or "").strip(),
         album=str(payload.get("album") or "").strip(),
         title=str(payload.get("title") or payload.get("track") or "").strip(),
@@ -212,6 +241,48 @@ def _safe_lastfm_connection_error(error: LastfmError) -> str:
     if error.error_kind == "malformed_response":
         return "Last.fm returned an invalid response."
     return "Last.fm rejected the connection."
+
+
+def _lastfm_scrobble_summary(
+    config: dict[str, Any], *, account_id: int, library_id: int, session: object | None,
+) -> JsonDict:
+    counts = build_listen_history_status_counts(
+        config, account_id=account_id, library_id=library_id,
+    )
+    lastfm_total = None
+    if session is not None:
+        try:
+            lastfm_total = get_lastfm_total_scrobbles(config, session=session)
+        except LastfmError:
+            lastfm_total = None
+    return {
+        "scrobbled": int(counts["listen_history_count"]),
+        "pending": int(counts["pending_scrobble_count"]),
+        "lastfm_total": lastfm_total,
+    }
+
+
+def _log_lastfm_pending_submit_failure(
+    config: dict[str, Any], logger: Any, history_scope: Any, error: str,
+    *, summary: dict[str, int], failure_stage: str,
+) -> None:
+    log_app_event(
+        config,
+        logger,
+        "Last.fm pending scrobble submission failed",
+        level="error",
+        history=True,
+        history_scope=history_scope,
+        integration="Last.fm",
+        status="failed",
+        failure_stage=failure_stage,
+        error=error,
+        attempted=int(summary.get("attempted") or 0),
+        succeeded=int(summary.get("succeeded") or 0),
+        failed=int(summary.get("failed") or 0),
+        pending_before=int(summary.get("pending_before") or 0),
+        pending_after=int(summary.get("pending_after") or 0),
+    )
 
 
 def _lastfm_submission_response(result: object, *, success_key: str) -> dict[str, object]:
@@ -321,7 +392,151 @@ def _playlist_upload_redirect_payload() -> JsonDict:
 @router.get("/utilities/integrations")
 async def utilities_integrations(request: Request) -> JSONResponse:
     config = _app_config(request)
-    return JSONResponse(await run_in_threadpool(_build_integrations_payload, config))
+    scope = await history_scope_for_request(request)
+    result = await run_in_threadpool(_build_integrations_payload, config, account_id=scope.account_id, library_id=scope.library_id)
+    # The scoped Last.fm projection already loads statistics and handles an
+    # unavailable measurement schema. Reuse it instead of querying again.
+    result["playback_statistics"] = next(
+        (item.get("playback_statistics") for item in result.get("integrations", [])
+         if item.get("key") == "lastfm"), None)
+    return JSONResponse(result)
+
+
+@router.get("/utilities/integrations/lastfm/scrobbles")
+async def utilities_lastfm_scrobbles(request: Request) -> JSONResponse:
+    config = _app_config(request)
+    scope = await history_scope_for_request(request)
+    session = await run_in_threadpool(
+        get_saved_lastfm_session, config, account_id=scope.account_id,
+    )
+    summary = await run_in_threadpool(
+        _lastfm_scrobble_summary,
+        config,
+        account_id=scope.account_id,
+        library_id=scope.library_id,
+        session=session,
+    )
+    can_submit = allowed_actions_for_request(
+        request, ("integration.lastfm.scrobbles.submit",),
+    ).allows("integration.lastfm.scrobbles.submit")
+    return JSONResponse({"ok": True, **summary, "can_submit": can_submit})
+
+
+@router.post("/utilities/integrations/lastfm/scrobbles/submit")
+async def utilities_lastfm_scrobbles_submit(request: Request) -> JSONResponse:
+    config = _app_config(request)
+    logger = _app_logger(request)
+    scope = await history_scope_for_request(request)
+    retry_summary = {
+        "pending_before": 0,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 0,
+    }
+    try:
+        counts = await run_in_threadpool(
+            build_listen_history_status_counts,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+        )
+        pending_before = int(counts["pending_scrobble_count"])
+        retry_summary["pending_before"] = pending_before
+        retry_summary["pending_after"] = pending_before
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="pending_count_read",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    if not lastfm_api_enabled(config):
+        error = "Last.fm API credentials are not configured on the server."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="api_configuration",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 503))
+    try:
+        session = await run_in_threadpool(
+            get_saved_lastfm_session, config, account_id=scope.account_id,
+        )
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="account_session_read",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    if session is None:
+        error = "Last.fm account is not connected."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="account_connection",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 409))
+    try:
+        retry_summary = await run_in_threadpool(
+            retry_pending_lastfm_scrobbles,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+            bypass_backoff=True,
+            limit=1_000_000,
+        )
+    except LastfmRetryBatchError as exc:
+        retry_summary = exc.summary
+        try:
+            counts = await run_in_threadpool(
+                build_listen_history_status_counts,
+                config,
+                account_id=scope.account_id,
+                library_id=scope.library_id,
+            )
+            retry_summary["pending_after"] = int(counts["pending_scrobble_count"])
+        except Exception:
+            pass
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    try:
+        status_summary = await run_in_threadpool(
+            _lastfm_scrobble_summary,
+            config,
+            account_id=scope.account_id,
+            library_id=scope.library_id,
+            session=session,
+        )
+    except Exception:
+        error = "Album Haven could not submit pending scrobbles to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config, logger, scope, error, summary=retry_summary, failure_stage="status_refresh",
+        )
+        return _json_response(({"ok": False, "error": error, **retry_summary}, 500))
+    retry_summary = {**retry_summary, "pending_after": int(status_summary["pending"])}
+    result = {
+        **status_summary,
+        **{key: int(retry_summary[key]) for key in (
+            "pending_before", "attempted", "succeeded", "failed", "pending_after",
+        )},
+    }
+    if result["failed"] or result["pending"]:
+        error = "Some pending scrobbles could not be submitted to Last.fm."
+        _log_lastfm_pending_submit_failure(
+            config,
+            logger,
+            scope,
+            error,
+            summary={**retry_summary, "pending_after": result["pending"]},
+            failure_stage="submission",
+        )
+        return _json_response(({"ok": False, "error": error, **result}, 502))
+    return JSONResponse({"ok": True, **result})
 
 
 @router.get("/utilities/integrations/foobar/help")
@@ -404,6 +619,8 @@ async def utilities_local_playlist_import_execute() -> JSONResponse:
 
 @router.post("/utilities/integrations/lastfm")
 async def utilities_lastfm_settings(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request)
+    owner = {"account_id": history_scope.account_id, "library_id": history_scope.library_id}
     config = _app_config(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
@@ -411,9 +628,9 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         return _json_response(_invalid_payload_response())
 
     if payload.get("disconnect"):
-        clear_lastfm_settings(config)
+        await run_in_threadpool(clear_lastfm_settings, config, account_id=history_scope.account_id)
         return JSONResponse(
-            {"ok": True, "integration": _enrich_lastfm_status(config, build_lastfm_status(config))}
+            {"ok": True, "integration": await run_in_threadpool(_enrich_lastfm_status, config, await run_in_threadpool(build_lastfm_status, config, account_id=history_scope.account_id), **owner)}
         )
 
     username = str(payload.get("username") or "").strip()
@@ -421,10 +638,10 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
     timezone_name = str(payload.get("timezone") or "").strip()
     if payload.get("save_timezone_only"):
         try:
-            integration = save_lastfm_user_timezone(config, timezone_name)
+            integration = await run_in_threadpool(save_lastfm_user_timezone, config, timezone_name, account_id=history_scope.account_id)
         except LastfmError as exc:
             return _json_response(({"ok": False, "error": str(exc)}, 400))
-        return JSONResponse({"ok": True, "integration": _enrich_lastfm_status(config, integration)})
+        return JSONResponse({"ok": True, "integration": await run_in_threadpool(_enrich_lastfm_status, config, integration, **owner)})
 
     if not lastfm_api_enabled(config):
         return _json_response(
@@ -435,12 +652,14 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
         return _json_response(({"ok": False, "error": "Last.fm username and password are required."}, 400))
 
     try:
-        integration = authenticate_lastfm(
+        integration = await run_in_threadpool(
+            authenticate_lastfm,
             config,
             username,
             password,
             connected_at=datetime.now(timezone.utc).isoformat(),
             user_timezone=timezone_name,
+            account_id=history_scope.account_id,
         )
     except LastfmError as exc:
         try:
@@ -457,7 +676,7 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
                 error_kind=exc.error_kind,
                 error_code=exc.code,
                 retryable=exc.retryable,
-            )
+             history_scope=history_scope)
         except Exception:
             try:
                 logger.exception(
@@ -479,7 +698,7 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
                 failure_stage="provider_or_session_persistence",
                 error="Album Haven could not complete the Last.fm connection.",
                 error_kind=type(exc).__name__,
-            )
+             history_scope=history_scope)
         except Exception:
             try:
                 logger.exception(
@@ -489,8 +708,8 @@ async def utilities_lastfm_settings(request: Request) -> JSONResponse:
                 pass
         raise
 
-    retry_pending_lastfm_scrobbles(config, reauthenticated=True)
-    return JSONResponse({"ok": True, "integration": _enrich_lastfm_status(config, integration)})
+    await run_in_threadpool(retry_pending_lastfm_scrobbles, config, reauthenticated=True, account_id=history_scope.account_id)
+    return JSONResponse({"ok": True, "integration": await run_in_threadpool(_enrich_lastfm_status, config, integration, **owner)})
 
 
 @router.post("/playback/session/now-playing")
@@ -499,8 +718,13 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    trusted = await history_scope_for_request(request)
+    session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+    if payload.get("measurement_version") is not None and session is None:
+        return JSONResponse({"ok": False, "error": "account_scoped_scrobble_unavailable", "retryable": False}, status_code=409)
+    captured = {"session": session}
     try:
-        result = update_now_playing(config, normalize_playback_track_payload(payload))
+        result = await run_in_threadpool(update_now_playing, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     return JSONResponse(_lastfm_submission_response(result, success_key="now_playing"))
@@ -508,13 +732,32 @@ async def playback_session_now_playing(request: Request) -> JSONResponse:
 
 @router.post("/playback/session/scrobble")
 async def playback_session_scrobble(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
+    trusted = await history_scope_for_request(request)
+    session = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+    if payload.get("measurement_version") is not None and session is None:
+        return JSONResponse({"ok": False, "error": "account_scoped_scrobble_unavailable", "retryable": False}, status_code=409)
+    captured = {"session": session}
+    if payload.get("measurement_version") is not None:
+        try:
+            result, status = await run_in_threadpool(record_playback_session_complete, config,
+                {**payload, "finalized": False}, account_id=trusted.account_id, library_id=trusted.library_id,
+                lastfm_session=session, user_timezone="UTC",
+                normalize_playback_track_payload=normalize_playback_track_payload,
+                is_meaningful_listen_session=is_meaningful_listen_session,
+                append_listen_history_entry=append_listen_history_entry,
+                update_listen_history_entry=update_listen_history_entry,
+                scrobble_track=scrobble_track, log_lastfm_scrobble_event=lambda *args, **kwargs: None)
+            return JSONResponse(result, status_code=status)
+        except ValueError as error:
+            return JSONResponse({"ok": False, "error": "Invalid or conflicting listen snapshot"}, status_code=getattr(error, "status_code", 400))
     try:
-        result = scrobble_track(config, normalize_playback_track_payload(payload))
+        result = await run_in_threadpool(scrobble_track, config, normalize_playback_track_payload(payload), **captured)
     except LastfmError as exc:
         _log_lastfm_scrobble_event(
             config,
@@ -523,7 +766,7 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
             level="warning",
             payload=payload,
             error=str(exc),
-        )
+         history_scope=history_scope)
         return _json_response(({"ok": False, "error": str(exc)}, 400))
     response_payload = _lastfm_submission_response(result, success_key="scrobbled")
     _log_lastfm_scrobble_event(
@@ -533,39 +776,54 @@ async def playback_session_scrobble(request: Request) -> JSONResponse:
         level="info" if response_payload.get("scrobbled", True) else "warning",
         payload=payload,
         error="" if response_payload.get("scrobbled", True) else str(response_payload.get("message", "")),
-    )
+     history_scope=history_scope)
     return JSONResponse(response_payload)
 
 
 @router.post("/playback/session/complete")
 async def playback_session_complete(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
-    response_payload, status_code = record_playback_session_complete(
-        config,
-        payload,
-        user_timezone=get_lastfm_user_timezone(config),
-        normalize_playback_track_payload=normalize_playback_track_payload,
-        is_meaningful_listen_session=is_meaningful_listen_session,
-        append_listen_history_entry=append_listen_history_entry,
-        update_listen_history_entry=update_listen_history_entry,
-        scrobble_track=scrobble_track,
-        log_lastfm_scrobble_event=lambda action, **kwargs: _log_lastfm_scrobble_event(
+    if payload.get("measurement_version") != "rendered-pcm-v1":
+        return JSONResponse({"ok": False, "error": "unsupported_measurement"}, status_code=400)
+    scope = {}
+    if payload.get("measurement_version") is not None:
+        trusted = await history_scope_for_request(request)
+        scope = {"account_id": trusted.account_id, "library_id": trusted.library_id}
+        scope["lastfm_session"] = await run_in_threadpool(get_saved_lastfm_session, config, account_id=trusted.account_id)
+    try:
+        response_payload, status_code = await run_in_threadpool(
+            record_playback_session_complete,
             config,
-            logger,
-            action,
-            **kwargs,
-        ),
-    )
+            payload,
+            user_timezone="UTC" if scope else get_lastfm_user_timezone(config),
+            **scope,
+            normalize_playback_track_payload=normalize_playback_track_payload,
+            is_meaningful_listen_session=is_meaningful_listen_session,
+            append_listen_history_entry=append_listen_history_entry,
+            update_listen_history_entry=update_listen_history_entry,
+            scrobble_track=scrobble_track,
+            log_lastfm_scrobble_event=lambda action, **kwargs: _log_lastfm_scrobble_event(
+                config,
+                logger,
+                action,
+                **kwargs,
+             history_scope=history_scope),
+        )
+    except ValueError as error:
+        return JSONResponse({"ok": False, "error": "Invalid or conflicting listen completion"}, status_code=getattr(error, "status_code", 400))
     return JSONResponse(response_payload, status_code=status_code)
 
 
 @router.post("/loops/create")
 async def create_saved_loop(request: Request) -> JSONResponse:
+    history_scope = await history_scope_for_request(request, required=False)
     config = _app_config(request)
+    scope = await saved_loop_scope(request)
     library_state = _library_state(request)
     logger = _app_logger(request)
     payload = await _json_payload(request)
@@ -579,10 +837,11 @@ async def create_saved_loop(request: Request) -> JSONResponse:
     source_details, source_error = resolve_loop_creation_source(
         payload,
         config=config,
-        get_loop=get_loop,
-        resolve_loop_media_path=resolve_loop_media_path,
+        get_loop=lambda config, key: get_loop(config,key,**scope),
+        resolve_loop_media_path=lambda config,key: resolve_loop_media_path(config,key,**scope),
         normalize_music_file_path=lambda raw_path: resolve_configured_media_path(config, raw_path),
         file_cache=library_state.get("file_cache", {}) or {},
+        scope=scope,
     )
     if source_error is not None:
         return _json_response(source_error)
@@ -590,6 +849,18 @@ async def create_saved_loop(request: Request) -> JSONResponse:
     source_path = source_details["source_path"]
     if not source_path.exists() or not source_path.is_file():
         return _json_response(({"ok": False, "error": "Source file does not exist"}, 400))
+
+    if not source_details['parent_loop_id']:
+        try:
+            precise_duration = float(probe_loop_source_duration(source_path))
+            if not math.isfinite(precise_duration) or precise_duration <= 0 or validated['end_seconds'] > precise_duration + .001:
+                raise ValueError('Invalid source duration')
+            validated['end_seconds'] = min(validated['end_seconds'],precise_duration)
+            if validated['end_seconds'] <= validated['start_seconds']:
+                raise ValueError('Invalid source range')
+            source_details['original_end_seconds'] = validated['end_seconds']
+        except (TypeError,ValueError,RuntimeError,OverflowError):
+            return _json_response(({'ok':False,'error':'Loop range exceeds the precise source duration or duration is unavailable'},400))
 
     loop_id = uuid.uuid4().hex
     try:
@@ -599,9 +870,11 @@ async def create_saved_loop(request: Request) -> JSONResponse:
             float(validated["start_seconds"]),
             float(validated["end_seconds"]),
             loop_id,
+            **scope,
         )
-    except Exception as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, 500))
+    except Exception:
+        logging.getLogger(__name__).exception('Saved-loop media generation failed')
+        return _json_response(({"ok": False, "error": "Unable to generate saved-loop audio. Please try again."}, 500))
 
     item = build_loop_item(
         loop_id=loop_id,
@@ -615,8 +888,17 @@ async def create_saved_loop(request: Request) -> JSONResponse:
         album=str(source_details["album"]),
         cover_path=str(source_details["cover_path"]),
         parent_loop_id=str(source_details["parent_loop_id"]),
+        original_start_seconds=source_details["original_start_seconds"],
+        original_end_seconds=source_details["original_end_seconds"],
     )
-    add_loop(config, item)
+    try:
+        item = add_loop(config, item, **scope) or item
+    except LoopOrderError as error:
+        output_path.unlink(missing_ok=True)
+        return _json_response((project_loop_order_for_client(error.payload),error.status_code))
+    except Exception:
+        output_path.unlink(missing_ok=True)
+        raise
     log_app_event(
         config,
         logger,
@@ -628,13 +910,14 @@ async def create_saved_loop(request: Request) -> JSONResponse:
         artist=str(source_details["artist"]),
         album=str(source_details["album"]),
         source_path=str(source_path),
-    )
-    return JSONResponse({"ok": True, "loop": item, "loops": load_loops(config)})
+     history_scope=history_scope)
+    return JSONResponse({"ok": True, "loop": project_loop_for_client(item), "loops": [project_loop_for_client(row) for row in load_loops(config, **scope)]})
 
 
 @router.post("/loops/pitch-preview")
 async def create_loop_pitch_preview(request: Request) -> JSONResponse:
     config = _app_config(request)
+    scope = await saved_loop_scope(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
@@ -644,15 +927,19 @@ async def create_loop_pitch_preview(request: Request) -> JSONResponse:
     semitones, pitch_error = parse_pitch_semitones(payload)
     if pitch_error is not None:
         return _json_response(pitch_error)
-    source_path = resolve_loop_media_path(config, loop_id)
+    source_path = resolve_loop_media_path(config, loop_id, **scope)
     if source_path is None:
         return _json_response(({"ok": False, "error": "Saved loop source file was not found"}, 404))
     if semitones == 0:
         return JSONResponse({"ok": True, "preview_id": "", "media_url": f"/loops/media/{loop_id}", "semitones": 0})
     try:
-        preview_id, _path = create_pitch_preview_file(config, loop_id, source_path, semitones)
-    except Exception as exc:
-        return _json_response(({"ok": False, "error": str(exc)}, 500))
+        preview_id, _path = create_pitch_preview_file(config, loop_id, source_path, semitones, **scope)
+    except Exception:
+        logging.getLogger(__name__).exception('Saved-loop media generation failed')
+        return _json_response(({"ok": False, "error": "Unable to generate saved-loop audio. Please try again."}, 500))
+    if get_loop(config,loop_id,**scope) is None:
+        _path.unlink(missing_ok=True)
+        return _json_response(({'ok':False,'error':'Saved loop was removed'},404))
     return JSONResponse(
         {
             "ok": True,
@@ -666,28 +953,34 @@ async def create_loop_pitch_preview(request: Request) -> JSONResponse:
 @router.post("/loops/delete")
 async def delete_saved_loop(request: Request) -> JSONResponse:
     config = _app_config(request)
+    scope = await saved_loop_scope(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
     loop_id, error_response = parse_required_loop_id(payload)
     if error_response is not None:
         return _json_response(error_response)
-    deleted, loops = delete_loop(config, loop_id)
+    deleted, loops = delete_loop(config, loop_id, **scope)
     if not deleted:
         return _json_response(({"ok": False, "error": "Loop was not found"}, 404))
-    return JSONResponse({"ok": True, "loops": loops})
+    return JSONResponse({"ok": True, "loops": [project_loop_for_client(row) for row in loops]})
 
 
 @router.post("/loops/reorder")
 async def reorder_saved_loops(request: Request) -> JSONResponse:
     config = _app_config(request)
+    scope = await saved_loop_scope(request)
     payload = await _json_payload(request)
     if payload is None:
         return _json_response(_invalid_payload_response())
     ordered_ids = payload.get("ordered_ids")
     if not isinstance(ordered_ids, list):
         return _json_response(({"ok": False, "error": "ordered_ids must be a list"}, 400))
-    return JSONResponse({"ok": True, "loops": reorder_loops(config, ordered_ids)})
+    try:
+        snapshot = reorder_loops(config, ordered_ids, song_key=payload.get('song_key'), expected_revision=payload.get('expected_revision'), **scope)
+    except LoopOrderError as error:
+        return _json_response((project_loop_order_for_client(error.payload),error.status_code))
+    return JSONResponse({'ok':True, **project_loop_order_for_client(snapshot)})
 
 
 async def _reserved_playlist_response(request: Request, *, create_route: bool = False) -> JSONResponse:

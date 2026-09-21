@@ -490,6 +490,28 @@ function createRuntimeContext() {
   return { context, scrollEl, containerEl, topSpacerEl, bottomSpacerEl };
 }
 
+for (const scrollTop of [0, 840]) {
+  test(`a hidden Scan Page gallery retains absolute scroll ${scrollTop} when layout returns`, () => {
+    const { context, scrollEl } = createRuntimeContext();
+    const virtualGrid = vm.runInContext('virtualGrid', context);
+    const visibleRect = scrollEl.getBoundingClientRect;
+    scrollEl.scrollTop = scrollTop;
+    scrollEl.getBoundingClientRect = () => ({ top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0 });
+    context.__albumTitleButtons = [context.createAlbumTitleButton(
+      'retained-album', { top: 0, bottom: 0 }, 'artist:all:Retained:0', 'Retained',
+    )];
+
+    const anchor = virtualGrid.captureScrollAnchor();
+    scrollEl.getBoundingClientRect = visibleRect;
+    context.__albumTitleButtons = [context.createAlbumTitleButton(
+      'retained-album', { top: 43, bottom: 280 }, 'artist:all:Retained:0', 'Retained',
+    )];
+    virtualGrid.restoreScrollAnchor(anchor);
+
+    assert.equal(scrollEl.scrollTop, scrollTop, 'Zero-size hidden geometry cannot become a visible card anchor');
+  });
+}
+
 test('visible cover priming promotes scheduler work discovered after transient layout', () => {
   const { context, scrollEl } = createRuntimeContext();
   Object.setPrototypeOf(scrollEl, context.HTMLElement.prototype);
@@ -1387,6 +1409,52 @@ test('a newer user scroll invalidates a pending absolute setGroups restoration',
     { scrollLeft: scrollEl.scrollLeft, scrollTop: scrollEl.scrollTop },
     { scrollLeft: 33, scrollTop: 1400 },
     'a stale absolute restoration callback must not snap back after newer user navigation',
+  );
+});
+
+test('an album-card click does not surrender pending absolute scroll restoration', () => {
+  const { context, scrollEl } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const scheduledFrames = new Map();
+  let nextFrameId = 890;
+  context.scheduleBrowserAnimationFrame = (callback) => {
+    nextFrameId += 1;
+    scheduledFrames.set(nextFrameId, callback);
+    return nextFrameId;
+  };
+  context.cancelBrowserAnimationFrame = (frameId) => {
+    context.canceledBrowserAnimationFrames.push(frameId);
+    scheduledFrames.delete(frameId);
+  };
+  virtualGrid.render = () => {};
+  virtualGrid.primeVisibleCoverImages = () => {};
+  scrollEl.scrollTop = 2036;
+
+  virtualGrid.setGroups([], [], [], {
+    preserveScroll: true,
+    preserveAbsoluteScroll: true,
+    absoluteScrollPosition: { scrollLeft: 0, scrollTop: 2036 },
+  });
+  const restoreFrameId = virtualGrid._scrollRestoreRaf;
+  const restoreFrame = scheduledFrames.get(restoreFrameId);
+  assert.equal(typeof restoreFrame, 'function');
+
+  scrollEl.dispatchEvent({
+    type: 'pointerdown',
+    target: { closest: () => ({ dataset: { albumKey: 'studio-records' } }) },
+  });
+  scrollEl.scrollTop = 1272;
+  scrollEl.dispatchEvent({ type: 'scroll' });
+  restoreFrame();
+
+  assert.ok(
+    !context.canceledBrowserAnimationFrames.includes(restoreFrameId),
+    'clicking a gallery card must not cancel edit-owned scroll restoration',
+  );
+  assert.equal(
+    scrollEl.scrollTop,
+    2036,
+    'browser reveal scrolling for a clicked card must not replace the edit-owned coordinate',
   );
 });
 
@@ -3204,7 +3272,7 @@ test('switching Cards to No info invalidates mounted card markup without replaci
   virtualGrid.onPointerDown({
     target: {
       closest(selector) {
-        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card');
+        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]');
         return { dataset: { albumKey: 'neal morse::neal morse' } };
       },
     },
@@ -3293,7 +3361,7 @@ test('deferred pointer render retains the scroll frame owner across a render gen
     pointerId: 41,
     target: {
       closest(selector) {
-        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card');
+        assert.equal(selector, '[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]');
         return { dataset: { albumKey: 'neal morse::joseph' } };
       },
     },
@@ -4067,4 +4135,46 @@ test('family-only selection renders albums from the same scoped cache as the fam
   assert.match(containerEl.innerHTML, /Casualties of Cool/);
   assert.equal(context.getFilteredGalleryMainModel().totals.albumCount, 1);
   assert.equal(context.getFilteredGalleryMainModel().groups[0].artist, family.artist);
+});
+
+test('family information button survives forced render through pointerup and click', () => {
+  const { context } = createRuntimeContext();
+  const virtualGrid = vm.runInContext('virtualGrid', context);
+  const frames = [];
+  context.scheduleBrowserAnimationFrame = callback => {
+    frames.push(callback);
+    return frames.length;
+  };
+  const infoButton = { dataset: { artistInfoTrigger: '1', artist: 'Neal Morse' } };
+  let mountedButton = infoButton;
+  let patchCount = 0;
+  virtualGrid.patchRenderedSections = () => {
+    mountedButton = { ...infoButton };
+    patchCount += 1;
+  };
+  virtualGrid.scheduleMeasureRows = () => {};
+  virtualGrid.sections = [];
+  virtualGrid.totalHeight = 0;
+  virtualGrid.onPointerDown({
+    pointerId: 73,
+    target: {
+      closest(selector) {
+        return selector.includes('.family-artist-header [data-artist-info-trigger]')
+          ? infoButton : null;
+      },
+    },
+  });
+  virtualGrid.render(true);
+  assert.strictEqual(mountedButton, infoButton, 'forced render must retain the pressed family info button');
+  context.document.dispatchEvent({ type: 'pointerup', pointerId: 73 });
+  assert.strictEqual(mountedButton, infoButton, 'pointerup must retain the original click target');
+  let clickedButton = null;
+  context.document.addEventListener('click', event => { clickedButton = event.target; });
+  context.document.dispatchEvent({ type: 'click', target: mountedButton });
+  assert.strictEqual(clickedButton, infoButton, 'click must reach the original family info button');
+  assert.equal(patchCount, 0);
+  frames.shift()();
+  assert.equal(patchCount, 1, 'deferred render must resume after the click');
+  assert.notStrictEqual(mountedButton, infoButton);
+  virtualGrid.destroy();
 });

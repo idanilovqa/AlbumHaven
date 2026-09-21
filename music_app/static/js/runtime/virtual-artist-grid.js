@@ -432,7 +432,7 @@ class VirtualArtistGrid {
   onPointerDown(event) {
     const target = event?.target;
     const closest = typeof target?.closest === 'function'
-      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card')
+      ? target.closest('[data-open-tracklist="1"][data-album-key], .album-card, .family-artist-header [data-artist-info-trigger]')
       : null;
     if (!closest) return;
     if (this._albumCardPointerReleaseRaf) {
@@ -515,7 +515,9 @@ class VirtualArtistGrid {
     const scrollRect = typeof this.scrollEl.getBoundingClientRect === 'function'
       ? this.scrollEl.getBoundingClientRect()
       : null;
-    if (!scrollRect) {
+    // Scan Page keeps this gallery mounted while hidden. Its zero-size cards
+    // have no usable viewport offsets; retain the absolute position instead.
+    if (!scrollRect || scrollRect.width === 0 || scrollRect.height === 0) {
       return { scrollLeft, scrollTop };
     }
     const cardTriggers = Array.from(this.containerEl.querySelectorAll('[data-open-tracklist="1"][data-album-key]'));
@@ -1094,7 +1096,8 @@ class VirtualArtistGrid {
     this.updateScrollDiagnostic(renderRafOwner);
   }
 
-  onUserScrollIntent() {
+  onUserScrollIntent(event) {
+    if (event?.type === 'pointerdown' && event.target !== this.scrollEl) return;
     this.invalidateScrollStabilization();
   }
 

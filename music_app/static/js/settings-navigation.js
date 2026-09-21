@@ -37,7 +37,11 @@
     };
     const reportError = () => {
       if (error) {
-        error.textContent = 'This page could not be loaded. Please try again.';
+        error.querySelector('.on-page-alert__message').textContent = 'This page could not be loaded. Please try again.';
+        const content = host.hidden && library
+          ? library.querySelector('#shell-main-surface') : outlet;
+        content?.prepend(error);
+        if (content) content.scrollTop = 0;
         error.hidden = false;
       }
     };

@@ -1,16 +1,21 @@
 /* One field surface encloses both the editable input and overridable action. */
+:root {
+  --search-field-focus: var(--muted, var(--appearance-muted, #9ca3af));
+}
 .search-field {
   position: relative;
   min-width: 0;
   width: 100%;
+  font-size: 12px;
 }
 .search-field-control {
+  --ui-input-action-button-focus: var(--search-field-focus);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
   width: 100%;
   box-sizing: border-box;
-  min-height: var(--search-field-height, 40px);
+  min-height: var(--search-field-height, 34px);
   border: 1px solid var(--search-field-border, var(--border));
   border-radius: var(--search-field-radius, 8px);
   background: var(--search-field-background, var(--panel));
@@ -21,16 +26,29 @@
   min-width: 0;
   height: 100%;
   box-sizing: border-box;
-  padding: 0 12px;
+  padding: 0 0 0 12px;
   border: 0;
   border-radius: inherit;
   background: transparent;
   color: inherit;
   font-size: inherit;
 }
-.search-field-control:focus-within {
-  outline: 2px solid var(--search-field-focus, var(--accent));
-  outline-offset: 2px;
+.search-field input[type='search']::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  cursor: pointer;
+  margin: 0 0 0 4px;
+  border-radius: 4px;
+  background-image: linear-gradient(45deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%),
+    linear-gradient(-45deg, transparent 42%, currentColor 42%, currentColor 58%, transparent 58%);
+  background-size: 9px 9px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.search-field input[type='search']::-webkit-search-cancel-button:hover {
+  background-color: var(--search-field-hover, var(--panel-2));
 }
 :root .search-field .search-field-control > input[type='search']:focus-visible,
 :root .search-field .search-field-action > .search-field-button:focus-visible {
@@ -54,22 +72,32 @@
   transition: color .15s ease, background-color .15s ease;
 }
 .search-field-action > .search-field-button:is(:hover, :focus-visible):not(:disabled) {
-  background: var(--search-field-hover, var(--panel-2));
+  background: var(--search-field-hover, var(--dropdown-item-hover-background, color-mix(in srgb, var(--text, #eee) 8%, var(--panel, #171717))));
   color: var(--search-field-color, var(--text));
 }
 .search-field-action > .search-field-button:disabled { opacity: .5; cursor: default; }
 
+/* The connected dropdown owns focus styling while its trigger is open.
+   Its bridge must paint over the enclosing field border without clipping. */
+:root .search-field-control:has(.search-field-button.trigger-anchor-open) {
+  outline: none;
+}
+.search-field-action > .search-field-button.trigger-anchor-open {
+  overflow: visible;
+  z-index: 1;
+}
+
 .recent-search-popover { position: fixed; z-index: 105; }
 
-.search-field-control:has(input[aria-expanded="true"]) {
+:root .search-field-control:has(input[aria-expanded="true"]) {
   outline: none;
-  border: 1px solid var(--search-field-focus, var(--accent));
+  border: 1px solid var(--search-field-focus);
   border-bottom-color: transparent;
   border-radius: var(--search-field-radius, 8px) var(--search-field-radius, 8px) 0 0;
 }
 .recent-search-popover {
   box-sizing: border-box;
-  border: 1px solid var(--search-joined-focus, var(--accent));
+  border: 1px solid var(--search-joined-focus, var(--search-field-focus));
   border-top: 0;
   border-radius: 0 0 8px 8px;
   background: var(--search-joined-background, var(--panel));

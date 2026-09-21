@@ -145,6 +145,9 @@ def _configure_asgi_app(app, runtime) -> None:
     from music_app.services.waveform_peak_cache_postgres import (
         PostgresWaveformPeakCacheRepository,
     )
+    from music_app.services.saved_loop_waveform_peak_cache_postgres import (
+        PostgresSavedLoopWaveformPeakCacheRepository,
+    )
     from music_app.services.waveform_peaks import WaveformPeaksRegistry
     from music_app.services.private_route_boundary import install_private_route_boundary
     from music_app.services.library_watch_health import (
@@ -161,6 +164,7 @@ def _configure_asgi_app(app, runtime) -> None:
     template_dir = package_root / "templates"
 
     app.state.config = runtime.config
+    app.state.media_host_library_id = None
     app.state.library_state = runtime.library_state
     app.state.logger = runtime.logger
     app.state.cold_scan_handoff_lock = runtime.cold_scan_handoff_lock
@@ -176,6 +180,11 @@ def _configure_asgi_app(app, runtime) -> None:
     )
     app.state.waveform_peaks_registry = WaveformPeaksRegistry(
         cache_repository=waveform_cache_repository
+    )
+    app.state.saved_loop_waveform_peak_cache_repository = (
+        PostgresSavedLoopWaveformPeakCacheRepository(runtime.config)
+        if str(runtime.config.get("ALBUM_HAVEN_APP_DATABASE_URL") or "").strip()
+        else None
     )
     app.state.templates = Jinja2Templates(directory=str(template_dir))
     app.state.runtime_asset_version = _runtime_asset_version()
@@ -259,6 +268,9 @@ def create_asgi_app():
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         hydrated = hydrate_runtime_library_state_on_startup(runtime)
+        from music_app.services.log_history import resolve_media_host_history_scope
+        host_scope = resolve_media_host_history_scope(runtime.config)
+        _app.state.media_host_library_id = host_scope.library_id if host_scope is not None else None
         ensure_runtime_relation_projection_ready(runtime)
         library_state = runtime.library_state
         if (

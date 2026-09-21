@@ -1160,6 +1160,7 @@ def test_asgi_view_data_omit_sidebar_skips_cached_library_hydration_for_follow_u
 
 
 def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.services.library_roots import normalize_library_root_settings
 
     persisted_root_settings = normalize_library_root_settings(
@@ -1183,6 +1184,13 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
 
         def load_loops(self):
             return list(persisted_loops)
+
+        def load_scoped_loops(self, **scope):
+            assert scope == {"account_id": 7, "library_id": 9}
+            return list(persisted_loops)
+
+        def is_unique_scoped_artifact(self, **scope):
+            return True
 
         def save_loops(self, loops):
             persisted_loops[:] = [dict(item) for item in loops]
@@ -1221,7 +1229,7 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
         ],
     )
 
-    preview_path = (loop_previews_dir(app.config) / "loop-1_pplus1.mp3").resolve()
+    preview_path = (loop_previews_dir(app.config, account_id=7, library_id=9) / "loop-1_pplus1.mp3").resolve()
     preview_path.write_bytes(b"preview-bytes")
 
     asgi_app = _make_asgi_app(app)
@@ -1345,10 +1353,11 @@ def test_asgi_track_cover_and_loop_media_preserve_private_file_policy(app, monke
     _assert_flask_like_private_media_not_found(missing_preview_headers, missing_preview_body)
 
 
-def test_asgi_saved_loop_media_uses_canonical_file_for_legacy_persisted_path(
+def test_asgi_saved_loop_media_uses_owned_stored_legacy_artifact(
     app,
     monkeypatch,
 ):
+    _authorize_loop_fixture(monkeypatch)
     persisted_loops = []
 
     class FakeSavedLoopsPostgresAdapter:
@@ -1357,6 +1366,13 @@ def test_asgi_saved_loop_media_uses_canonical_file_for_legacy_persisted_path(
 
         def load_loops(self):
             return list(persisted_loops)
+
+        def load_scoped_loops(self, **scope):
+            assert scope == {"account_id": 7, "library_id": 9}
+            return list(persisted_loops)
+
+        def is_unique_scoped_artifact(self, **scope):
+            return True
 
         def save_loops(self, loops):
             persisted_loops[:] = [dict(item) for item in loops]
@@ -1380,7 +1396,7 @@ def test_asgi_saved_loop_media_uses_canonical_file_for_legacy_persisted_path(
     ).resolve()
     legacy_loop.parent.mkdir(parents=True, exist_ok=True)
     legacy_loop.write_bytes(b"legacy-loop-bytes")
-    save_loops(app.config, [{"id": "legacy-loop", "path": str(legacy_loop)}])
+    save_loops(app.config, [{"id": "legacy-loop", "path": str(canonical_loop)}])
 
     asgi_app = _make_asgi_app(app)
     asgi_app.state.flask_app = _FatalFlaskBridge()
@@ -1567,3 +1583,11 @@ def test_asgi_open_album_location_preserves_json_statuses(app, monkeypatch):
     assert _decode_json(success_body) == {"ok": True, "opened": [str(album_dir)]}
     assert opened_calls == [[album_dir]]
     assert opened == [album_dir]
+
+def _authorize_loop_fixture(monkeypatch):
+    from music_app.services import current_actor_asgi
+    from types import SimpleNamespace
+    actor = SimpleNamespace(account_id=7, current_library_id=9, is_authenticated=True,
+        library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
+    async def resolve_actor(_request): return actor
+    monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)

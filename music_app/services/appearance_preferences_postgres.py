@@ -30,7 +30,7 @@ _PLAYER_COLUMNS = (
 )
 _STORAGE_FIELDS = (*_FIELDS, "palette_id", "panel_index", *_PLAYER_COLUMNS, "waveform_recent_colors", "compact_player_style")
 _AGGREGATE_COLUMNS = ("revision", "interaction_overrides", "selection_accent", "player_style_override", "player_recent_sets")
-_ROW_COLUMNS = (*_STORAGE_FIELDS, *_ALBUM_PAGE_FIELDS, *_ALERT_FIELDS, *_AGGREGATE_COLUMNS)
+_ROW_COLUMNS = (*_STORAGE_FIELDS, *_ALBUM_PAGE_FIELDS, *_ALERT_FIELDS, *_AGGREGATE_COLUMNS, "loop_control_style")
 _READ_COLUMNS = ", ".join(_ROW_COLUMNS)
 _SAVED_READ_COLUMNS = ", ".join(f"saved.{name}" for name in _ROW_COLUMNS)
 _INTERACTION_COLOR_FIELDS = (
@@ -39,12 +39,17 @@ _INTERACTION_COLOR_FIELDS = (
 _ITEM_OUTLINE_SOURCES = frozenset({"automatic", "theme", "player", "custom"})
 _AGGREGATE_WRITE_FIELDS = (*_COMPACT_FIELDS, *_ALBUM_PAGE_FIELDS, *_ALERT_FIELDS, "waveform_recent_colors", "interaction_overrides", "selection_accent", "player_style_override", "applied_player_set")
 APPEARANCE_PALETTE_IDS = frozenset({
-    "steelblue", "navy", "powderblue", "graphite", "slate", "midnight",
+    "steelblue", "navy", "harbor-mint", "powderblue", "graphite", "slate", "midnight",
     "black", "blackgray", "paper", "silver", "coollight",
 })
 ALBUM_DETAILS_LAYOUTS = frozenset({"classic_bar", "stacked_bar", "editorial_canvas"})
 ALBUM_PLAYING_ROW_ANIMATIONS = frozenset({"enabled", "disabled"})
 ALERT_FAMILIES = frozenset({"ember", "signal", "quiet"})
+LOOP_CONTROL_STYLES = frozenset({"capsule", "companion"})
+
+
+class AppearanceLoopStyleForbidden(PermissionError):
+    """An actual loop-style change requires effective loop-create authority."""
 
 
 def _closed_choice(value: object, choices: frozenset[str], message: str) -> str:
@@ -145,6 +150,18 @@ def _jsonb(value: object):
 
 
 def normalize_appearance_preferences(payload: object) -> dict[str, object]:
+    """Preserve omission so older writers cannot reset an existing loop style."""
+    if isinstance(payload, Mapping) and "loop_control_style" in payload:
+        writable = dict(payload)
+        style = _closed_choice(
+            writable.pop("loop_control_style"), LOOP_CONTROL_STYLES,
+            "Unknown loop control style.",
+        )
+        return {**_normalize_appearance_preferences(writable), "loop_control_style": style}
+    return _normalize_appearance_preferences(payload)
+
+
+def _normalize_appearance_preferences(payload: object) -> dict[str, object]:
     """Validate either a legacy pair or the complete palette/player preference."""
     aggregate_shapes = (
         set(_AGGREGATE_WRITE_FIELDS),
@@ -251,7 +268,7 @@ def expand_appearance_preferences(payload: object) -> dict[str, object]:
         normalized.pop("waveform_color_updates", None)
         return {"palette_id": None, "panel_index": 0, "player_override": None, "compact_player_style": "docked",
                 "album_details_layout": "classic_bar", "album_playing_row_animation": "enabled",
-                "alert_family": "ember",
+                "alert_family": "ember", "loop_control_style": "capsule",
                 **normalized, "waveform_recent_colors": history, "revision": revision, **aggregate,
                 "player_recent_sets": recent_sets}
     history = _recent_colors(writable.pop("waveform_recent_colors", []))
@@ -259,7 +276,7 @@ def expand_appearance_preferences(payload: object) -> dict[str, object]:
     normalized.pop("waveform_color_updates", None)
     return {"palette_id": None, "panel_index": 0, "player_override": None, "compact_player_style": "docked",
             "album_details_layout": "classic_bar", "album_playing_row_animation": "enabled",
-            "alert_family": "ember",
+            "alert_family": "ember", "loop_control_style": "capsule",
             **normalized, "waveform_recent_colors": history}
 
 
@@ -324,6 +341,7 @@ def _preferences(row: object) -> dict[str, object]:
             "album_details_layout": values.get("album_details_layout", "classic_bar"),
             "album_playing_row_animation": values.get("album_playing_row_animation", "enabled"),
             "alert_family": values.get("alert_family", "ember"),
+            "loop_control_style": values.get("loop_control_style", "capsule"),
             **{name: values.get(name) for name in _AGGREGATE_COLUMNS},
         })
     return expand_appearance_preferences({
@@ -362,10 +380,13 @@ class PostgresAppearancePreferencesRepository:
     def save_preferences(
         self, *, account_id: int, preferences: object, client_profile: str = "desktop",
         expected_revision: int | None = None,
+        allow_loop_control_style: bool = False,
     ) -> dict[str, object]:
         owner = _account_id(account_id)
         profile = appearance_client_profile(client_profile)
         colors = normalize_appearance_preferences(preferences)
+        if "loop_control_style" in colors and "interaction_overrides" not in colors:
+            raise ValueError("Loop style writes require the revision-controlled aggregate.")
         if "interaction_overrides" in colors:
             if type(expected_revision) is not int or expected_revision < 0:
                 raise ValueError("A non-negative expected revision is required.")
@@ -379,7 +400,8 @@ class PostgresAppearancePreferencesRepository:
                             %s::bigint expected_revision, %s::text compact_player_style,
                             %s::text album_details_layout, %s::text album_playing_row_animation,
                             %s::text alert_family,
-                            %s::text player_background, %s::text player_fill, %s::text player_edge
+                            %s::text player_background, %s::text player_fill, %s::text player_edge,
+                            %s::text loop_control_style, %s::boolean allow_loop_control_style
                    ), updated as (
                      update app.user_appearance_preferences as saved
                         set main_surface_color = incoming.main_surface_color,
@@ -400,12 +422,16 @@ class PostgresAppearancePreferencesRepository:
                             album_details_layout = incoming.album_details_layout,
                             album_playing_row_animation = incoming.album_playing_row_animation,
                             alert_family = incoming.alert_family,
+                            loop_control_style = coalesce(incoming.loop_control_style, saved.loop_control_style),
                             revision = saved.revision + 1,
                             updated_at = now()
                        from incoming
                       where saved.account_id = incoming.account_id
                         and saved.client_profile = incoming.client_profile
                         and saved.revision = incoming.expected_revision
+                        and (incoming.loop_control_style is null
+                             or incoming.loop_control_style = saved.loop_control_style
+                             or incoming.allow_loop_control_style)
                    returning {_SAVED_READ_COLUMNS}
                    ), inserted as (
                    insert into app.user_appearance_preferences
@@ -413,7 +439,7 @@ class PostgresAppearancePreferencesRepository:
                       palette_id, panel_index, interaction_overrides, selection_accent,
                       player_style_override, player_recent_sets, waveform_recent_colors,
                       revision, compact_player_style, album_details_layout, album_playing_row_animation,
-                      alert_family, player_background_color, player_waveform_fill_color, player_waveform_edge_color)
+                      alert_family, player_background_color, player_waveform_fill_color, player_waveform_edge_color, loop_control_style)
                    select account_id, client_profile, main_surface_color, panel_background_color,
                           palette_id, panel_index, interaction_overrides, selection_accent,
                           player_style_override,
@@ -421,8 +447,10 @@ class PostgresAppearancePreferencesRepository:
                           app.merge_waveform_recent_colors(waveform_color_updates),
                           expected_revision + 1, compact_player_style,
                           album_details_layout, album_playing_row_animation, alert_family,
-                          player_background, player_fill, player_edge
+                          player_background, player_fill, player_edge, coalesce(loop_control_style, 'capsule')
                      from incoming where expected_revision = 0
+                       and (loop_control_style is null or loop_control_style = 'capsule'
+                            or allow_loop_control_style)
                    on conflict (account_id, client_profile) do nothing
                    returning {_READ_COLUMNS}
                    )
@@ -437,6 +465,7 @@ class PostgresAppearancePreferencesRepository:
                 colors["album_details_layout"], colors["album_playing_row_animation"],
                 colors["alert_family"],
                 *((colors["player_override"] or {}).get(field) for field in _PLAYER_FIELDS),
+                colors.get("loop_control_style"), allow_loop_control_style is True,
             )
             with self._connection() as connection:
                 row = connection.execute(sql, params).fetchone()
@@ -445,7 +474,13 @@ class PostgresAppearancePreferencesRepository:
                         f"select {_READ_COLUMNS} from app.user_appearance_preferences where account_id = %s and client_profile = %s",
                         (owner, profile),
                     ).fetchone()
-                    raise AppearanceRevisionConflict(current=_preferences(current))
+                    current_preferences = _preferences(current)
+                    if (current_preferences["revision"] == expected_revision
+                            and "loop_control_style" in colors
+                            and colors["loop_control_style"] != current_preferences["loop_control_style"]
+                            and allow_loop_control_style is not True):
+                        raise AppearanceLoopStyleForbidden("Loop creation permission is required to change this style.")
+                    raise AppearanceRevisionConflict(current=current_preferences)
             return _preferences(row)
         updates = colors.get("waveform_color_updates", [])
         if "palette_id" not in colors:

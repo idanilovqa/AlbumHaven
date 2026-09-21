@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from dataclasses import dataclass
 import hashlib
 import json
 from typing import Any
@@ -19,6 +20,8 @@ except ImportError:  # pragma: no cover - allows import-time diagnostics without
 _APP_DATABASE_URL_KEY = "ALBUM_HAVEN_APP_DATABASE_URL"
 _SOURCE = "runtime_listen_history_adapter"
 _BACKFILL_SOURCE = "phase_6_json_file_backfill"
+_MEASURED_SOURCE = "rendered_local_listen_session"
+LASTFM_SCROBBLE_SOURCE_FAMILIES = (_SOURCE, _BACKFILL_SOURCE, _MEASURED_SOURCE)
 
 
 def is_listen_history_postgres_available(config: dict[str, object] | None) -> bool:
@@ -26,6 +29,14 @@ def is_listen_history_postgres_available(config: dict[str, object] | None) -> bo
         return False
     database_url = str(config.get(_APP_DATABASE_URL_KEY) or "").strip()
     return bool(database_url) and psycopg is not None and callable(getattr(psycopg, "connect", None))
+
+
+@dataclass(frozen=True)
+class PendingListenEntry:
+    entry: dict[str, object]
+    account_id: int
+    library_id: int
+    row_id: int
 
 
 class PostgresListenHistoryAdapter:
@@ -97,6 +108,61 @@ class PostgresListenHistoryAdapter:
                             ),
                         ),
                     )
+
+    def load_pending_entries(
+        self,
+        *,
+        limit=25,
+        eligible: Callable[[PendingListenEntry], bool] | None = None,
+    ):
+        # This preserves the existing configured legacy retry family while
+        # carrying its actual row provenance into delayed callbacks.
+        from music_app.services.listen_history import is_pending_scrobble_entry
+        with self._connect_to_database() as connection:
+            rows = connection.execute(_load_listen_history_sql(include_provenance=True)).fetchall()
+            measured_rows = connection.execute("""
+                select * from integration.listen_history
+                where measurement_version = 'rendered-pcm-v1'
+                  and source_family = %s
+                  and scrobble_status is distinct from 'scrobbled'
+                order by played_at, id
+            """, (_MEASURED_SOURCE,)).fetchall()
+            rows.extend(measured_rows)
+        result = []
+        for row in rows:
+            item = _listen_history_item_from_row(row)
+            if (row['account_id'] and row['library_id'] and is_pending_scrobble_entry(item)
+                    and item.get('scrobble_submission_state') not in ('attempting', 'sent', 'uncertain', 'accepted')):
+                pending = PendingListenEntry(item, row['account_id'], row['library_id'], row['id'])
+                if eligible is not None and not eligible(pending):
+                    continue
+                result.append(pending)
+                if len(result) >= max(1, int(limit)):
+                    break
+        return result
+
+    def update_scoped_entry(self, *, account_id, library_id, row_id, entry_id, updates):
+        with self._connect_to_database() as connection:
+            if any(type(value) is not int or value <= 0 for value in (account_id, library_id)):
+                raise ValueError("Exact listen update scope is required")
+            if row_id is None:
+                row = connection.execute("""select * from integration.listen_history
+                    where account_id=%s and library_id=%s
+                      and measurement_version='rendered-pcm-v1'
+                      and metadata->'source_payload'->>'id'=%s for update""",
+                    (account_id, library_id, entry_id)).fetchone()
+            else:
+                row = connection.execute('select * from integration.listen_history where id=%s and account_id=%s and library_id=%s for update', (row_id, account_id, library_id)).fetchone()
+            if row is None:
+                return None
+            item = _listen_history_item_from_row(row)
+            if str(item.get('id') or '') != str(entry_id):
+                return None
+            item.update(dict(updates))
+            metadata = dict(row['metadata'] or {})
+            metadata['source_payload'] = item
+            connection.execute('update integration.listen_history set metadata=%s,scrobble_status=%s where id=%s and account_id=%s and library_id=%s', (_jsonb(metadata), _scrobble_status(item), row['id'], account_id, library_id))
+            return item
 
     def _connect_to_database(self) -> Any:
         if not self._database_url:
@@ -248,11 +314,16 @@ def _bootstrap_context_ready_sql() -> str:
     return _bootstrap_context_sql() + " select 1 as bootstrap_context_ready from bootstrap_context;"
 
 
-def _load_listen_history_sql() -> str:
+def _load_listen_history_sql(*, include_provenance: bool = False) -> str:
+    provenance = (
+        "integration.listen_history.id, integration.listen_history.account_id, "
+        "integration.listen_history.library_id,"
+        if include_provenance else ""
+    )
     return (
         _bootstrap_context_sql()
         + f"""
-        select
+        select {provenance}
           integration.listen_history.track_key,
           integration.listen_history.played_at,
           integration.listen_history.source_entry_id,
@@ -273,18 +344,32 @@ def _load_scrobbled_play_count_lookup_sql() -> str:
     return (
         _bootstrap_context_sql()
         + f"""
-        select
-          integration.listen_history.track_key,
-          count(*)::int as scrobble_count
-        from integration.listen_history
-        join bootstrap_context
-          on bootstrap_context.library_id = integration.listen_history.library_id
-         and bootstrap_context.account_id = integration.listen_history.account_id
-        where integration.listen_history.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}')
-          and integration.listen_history.scrobble_status = 'scrobbled'
-          and integration.listen_history.track_key = any(%(track_refs)s)
-        group by integration.listen_history.track_key
-        order by integration.listen_history.track_key;
+        , track_aliases as (
+          select t.id as track_id, t.track_key as track_ref
+          from library.local_tracks t join bootstrap_context b on b.library_id=t.library_id
+          union
+          select t.id, f.private_path
+          from library.local_tracks t join bootstrap_context b on b.library_id=t.library_id
+          join library.local_track_files f on f.track_id=t.id
+        ), accepted as (
+          select h.id,h.track_id,h.track_key,h.measurement_version
+          from integration.listen_history h join bootstrap_context b
+            on b.library_id=h.library_id and b.account_id=h.account_id
+          where h.source_family in ('{_SOURCE}', '{_BACKFILL_SOURCE}', '{_MEASURED_SOURCE}')
+            and h.scrobble_status='scrobbled'
+        )
+        select requested.track_ref as track_key,count(distinct h.id)::int as scrobble_count
+        from unnest(%(track_refs)s::text[]) as requested(track_ref)
+        join accepted h on (h.measurement_version is null and h.track_key=requested.track_ref) or exists (
+          select 1 from track_aliases requested_alias
+          where requested_alias.track_ref=requested.track_ref
+            and (requested_alias.track_id=h.track_id or (h.measurement_version is null and exists (
+              select 1 from track_aliases historical_alias
+              where historical_alias.track_id=requested_alias.track_id
+                and historical_alias.track_ref=h.track_key
+            )))
+        )
+        group by requested.track_ref order by requested.track_ref;
     """
     )
 

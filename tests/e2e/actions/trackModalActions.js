@@ -171,6 +171,12 @@ export class TrackModalActions {
     await this.waitForClosed(options);
   }
 
+  async closeForegroundWithEscape(options = {}) {
+    await this.trackModal.closeButton.click({ trial: true });
+    await this.trackModal.pressEscape();
+    await this.waitForClosed(options);
+  }
+
   async closeIfOpen(options = {}) {
     if (!(await this.trackModal.dialog.isVisible())) return;
     try {
@@ -187,9 +193,8 @@ export class TrackModalActions {
     await this.trackModal.closeButton.focus();
     await expect(this.trackModal.closeButton).toBeFocused();
     await this.trackModal.closeButton.press('Space');
-    await this.waitForLoadedSummary(options);
+    await this.waitForClosed(options);
     await options.afterSpace?.();
-    await expect(this.trackModal.closeButton).toBeFocused();
   }
 
   async readSummary() {
@@ -202,8 +207,10 @@ export class TrackModalActions {
       && image.getBoundingClientRect().width > 0
       && image.getBoundingClientRect().height > 0
     )));
-    const coverPlaceholderVisible = await this.trackModal.coverPlaceholder.isVisible()
-      && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty';
+    const coverPlaceholderVisible = (
+      await this.trackModal.coverPlaceholder.isVisible()
+      && await this.trackModal.coverPlaceholder.getAttribute('data-album-artbox-state') === 'empty'
+    ) || await this.trackModal.missingArtbox.isVisible();
     return {
       title: String(await this.trackModal.title.textContent() || '').trim(),
       subtitle: String(await this.trackModal.subtitle.textContent() || '').trim(),
@@ -222,6 +229,7 @@ export class TrackModalActions {
     await this.trackModal.waitForPageCondition((selectors) => {
       const coverImage = document.querySelector(selectors.coverImageSelector);
       const coverPlaceholder = document.querySelector(selectors.coverPlaceholderSelector);
+      const missingArtbox = document.querySelector(selectors.missingArtboxSelector);
       const coverLoaded = coverImage instanceof HTMLImageElement
         && coverImage.complete
         && coverImage.naturalWidth > 0
@@ -238,6 +246,7 @@ export class TrackModalActions {
     }, {
       coverImageSelector: this.trackModal.detailedCoverImageSelector,
       coverPlaceholderSelector: this.trackModal.coverPlaceholderSelector,
+      missingArtboxSelector: this.trackModal.missingArtboxSelector,
     });
     const summary = await this.readSummary();
     expect(summary.trackRows).toBeGreaterThan(0);
@@ -257,9 +266,9 @@ export class TrackModalActions {
   }
 
   async waitForTitle(expectedTitle, options = {}) {
-    await expect(this.trackModal.title).toHaveText(String(expectedTitle), {
+    await expect.poll(async () => (await this.trackModal.readCanonicalAlbumIdentity()).replaceAll(' • ', ' - '), {
       timeout: options.timeout || 30000,
-    });
+    }).toBe(String(expectedTitle).replaceAll(' • ', ' - '));
     return this.readSummary();
   }
 
@@ -387,9 +396,7 @@ export class TrackModalActions {
     const expectedTrackTitles = Array.isArray(expected.trackTitles)
       ? expected.trackTitles.map((title) => String(title || '').trim())
       : [];
-    await expect(this.trackModal.title).toHaveText(expectedTitle, {
-      timeout: options.timeout || 30000,
-    });
+    await this.waitForTitle(expectedTitle, options);
     await expect(this.trackModal.trackRows).toHaveCount(expectedTrackTitles.length, {
       timeout: options.timeout || 30000,
     });
@@ -498,6 +505,39 @@ export class TrackModalActions {
     const scrobble = await scrobbleResponse.json();
     if (!scrobbleResponse.ok() || scrobble.ok !== true || scrobble.scrobbled !== true) {
       throw new Error(`Expected accepted Last.fm scrobble, received HTTP ${scrobbleResponse.status()}: ${JSON.stringify(scrobble)}`);
+    }
+    const completeResponse = await completeResponsePromise;
+    const completion = await completeResponse.json();
+    if (!completeResponse.ok() || completion.ok !== true) {
+      throw new Error(`Expected persisted playback completion, received HTTP ${completeResponse.status()}: ${JSON.stringify(completion)}`);
+    }
+    return { track, scrobble, completion };
+  }
+
+  async playTrackAtAndWaitForPendingLastfmJourney(index, options = {}) {
+    const expectedTitle = String(options.title || '');
+    const track = await this.readTrackAt(index);
+    if (expectedTitle && track.title !== expectedTitle) {
+      throw new Error(`Expected to play ${JSON.stringify(expectedTitle)}, received ${JSON.stringify(track.title)}.`);
+    }
+    const scrobbleResponsePromise = this.trackModal.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/playback/session/scrobble'
+    ), { timeout: options.timeout || 30000 });
+    const completeResponsePromise = this.trackModal.page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/playback/session/complete'
+    ), { timeout: options.timeout || 30000 });
+    await this.trackModal.playButtonAt(index).click();
+    const scrobbleResponse = await scrobbleResponsePromise;
+    const scrobble = await scrobbleResponse.json();
+    if (
+      !scrobbleResponse.ok()
+      || scrobble.ok !== true
+      || scrobble.scrobbled !== false
+      || scrobble.entry?.scrobble_retryable !== true
+    ) {
+      throw new Error(`Expected queued Last.fm scrobble, received HTTP ${scrobbleResponse.status()}: ${JSON.stringify(scrobble)}`);
     }
     const completeResponse = await completeResponsePromise;
     const completion = await completeResponse.json();
@@ -663,9 +703,8 @@ export class TrackModalActions {
     await this.trackModal.lightboxCloseButton.focus();
     await expect(this.trackModal.lightboxCloseButton).toBeFocused();
     await this.trackModal.lightboxCloseButton.press('Space');
+    await expect(this.trackModal.lightbox).toBeHidden({ timeout: options.timeout || 15000 });
     await options.afterSpace?.();
-    await expect(this.trackModal.lightbox).toBeVisible({ timeout: options.timeout || 15000 });
-    await expect(this.trackModal.lightboxCloseButton).toBeFocused();
   }
 
   async expectCoverLightboxNavigationUnavailable(options = {}) {

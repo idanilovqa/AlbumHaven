@@ -479,6 +479,7 @@ def test_mixed_media_and_exception_failure_compensates_media_before_returning(
     assert status_code == 500
     assert payload["ok"] is False
     assert "exception persistence failed" in payload["error"]
+    assert payload["edit_outcome"] == "failed_rolled_back"
     assert media_title[track_path] == "Old Title"
     assert media_writes == [
         {"title": "New Title"},
@@ -1135,6 +1136,46 @@ def test_album_rename_acquires_reservation_before_state_read_and_media_write(
     assert queued_payloads[0]["structural_tag_edit_reservation"] is lease
     assert lease.released is False
     lease.release()
+
+
+def test_proposal_validation_rejects_stale_source_under_reservation_before_intent_or_io(config):
+    import inspect
+
+    assert 'validate_proposals' in inspect.signature(edit_workflows_module._handle_edit_tags_request_after_reservation).parameters
+    events = []
+    track_path = str(config['MUSIC_DIR'] / 'Artist' / 'Old Album' / 'track.flac')
+    state = {'file_cache': {track_path: {'path': track_path, 'album': 'Old Album'}}}
+
+    class Lease:
+        def release(self):
+            events.append('release')
+
+    def acquire(keys):
+        events.append('reserve')
+        return Lease()
+
+    def read_state():
+        events.append('state')
+        return state
+
+    def validate(current_state, updates):
+        assert current_state is state
+        assert updates == {track_path: {'album': 'Client value'}}
+        events.append('validate')
+        raise ValueError('Proposal source changed')
+
+    options = _reservation_album_rename_kwargs(
+        config=config, track_path=track_path, destination_album='Client value', get_state=read_state,
+        apply_repairs_worker=lambda *_args: pytest.fail('stale proposal cannot write media'),
+        queue_finalize_save_task=lambda **_kwargs: pytest.fail('stale proposal cannot finalize'),
+        acquire_reservation=acquire, resource_keys={f'path:{track_path}'},
+    )
+    options['prepare_tag_edit_intent'] = lambda **_kwargs: pytest.fail('stale proposal cannot prepare an intent')
+    response, status = handle_edit_tags_request(**options, validate_proposals=validate)
+    assert status == 409
+    assert response['ok'] is False
+    assert response['proposal_status'] == 'stale'
+    assert events == ['reserve', 'state', 'validate', 'release']
 
 
 def test_waiting_album_rename_rereads_latest_state_before_writing_later_intent(

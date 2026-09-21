@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>GalleryBar context live comparison</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#080b0a;color:#edf4f2}
+    *{box-sizing:border-box}html,body{height:100%;margin:0;overflow:hidden;background:#080b0a;color:#edf4f2}
+    .tester{height:58px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;border-bottom:1px solid #344440;background:linear-gradient(180deg,#18201e,#101514);box-shadow:0 3px 20px rgba(0,0,0,.42);position:relative;z-index:2}
+    .tester strong{font-size:14px}.tester p{margin:0;color:#91a09c;font-size:12px}.modes{margin-left:auto;display:flex;gap:7px}.modes button{height:34px;min-width:126px;border:1px solid #40514d;border-radius:8px;background:#1d2624;color:#b8c5c1;cursor:pointer}.modes button:hover,.modes button:focus-visible{border-color:#42d4a5;outline:2px solid rgba(66,212,165,.22)}.modes button.active{background:#20352f;border-color:#42d4a5;color:#fff}.stage{height:calc(100% - 58px)}iframe{width:100%;height:100%;border:0;background:#070909}
+    @media(max-width:760px){.tester{height:104px;padding:10px;display:grid;grid-template-columns:1fr}.tester p{display:none}.modes{margin:0;display:grid;grid-template-columns:repeat(3,1fr)}.modes button{min-width:0;font-size:11px}.stage{height:calc(100% - 104px)}}
+  </style>
+</head>
+<body>
+  <header class="tester"><div><strong>Live GalleryBar context comparison</strong><p>Switch versions, then scroll through Transatlantic into Neal Morse.</p></div><div class="modes"><button class="active" data-mode="a">A · Gallery summary</button><button data-mode="b">B · Scroll-aware</button><button data-mode="c">C · Family scope</button></div></header>
+  <div class="stage"><iframe id="mock" title="Interactive Gallery context mockup" src="/files/gallery-main-v001-refined-2.html"></iframe></div>
+  <script>
+    const frame=document.getElementById('mock');let current='a';
+    function infoButton(doc,name){const b=doc.createElement('button');b.className='info-button';b.type='button';b.textContent='ⓘ';b.setAttribute('aria-label','Information about '+name);b.onclick=e=>{e.stopPropagation();const win=frame.contentWindow;doc.getElementById('overlay-title').textContent=name;win.toggle('artist-comparison',b,doc.getElementById('artist-overlay'))};return b}
+    function makeBodyHeading(doc){let row=doc.getElementById('comparison-primary-heading');if(row)return row;row=doc.createElement('div');row.id='comparison-primary-heading';row.className='family-heading';const name=doc.createElement('span');name.textContent='Transatlantic';row.append(name,infoButton(doc,'Transatlantic'));const line=doc.createElement('span');line.className='divider-line';const count=doc.createElement('span');count.className='family-count';count.textContent='7 albums';row.append(line,count);doc.getElementById('cards').before(row);return row}
+    function setContext(doc,mode,visible){const context=doc.querySelector('.artist-context');context.replaceChildren();if(mode==='a'){const box=doc.createElement('div');box.innerHTML='<div class="artist-name">Gallery</div><div style="font-size:11px;color:#82918d;margin-top:2px">Transatlantic family · 5 artists · 32 albums</div>';context.append(box)}if(mode==='b'){const box=doc.createElement('div');box.innerHTML='<div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#82918d">Now viewing</div><div class="artist-name" id="comparison-current">'+visible+'</div>';context.append(box,infoButton(doc,visible))}if(mode==='c'){const box=doc.createElement('div');box.innerHTML='<div style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#82918d">Family scope</div><div class="artist-name">Transatlantic family</div>';context.append(box,infoButton(doc,'Transatlantic'))}}
+    function apply(mode){current=mode;const doc=frame.contentDocument;if(!doc||!doc.getElementById('gallery-scroll'))return;makeBodyHeading(doc);setContext(doc,mode,'Transatlantic');const scroll=doc.getElementById('gallery-scroll');scroll.onscroll=()=>{if(current!=='b')return;const family=doc.querySelector('.family-heading:not(#comparison-primary-heading)');const threshold=doc.getElementById('gallerybar').getBoundingClientRect().bottom+18;const visible=family.getBoundingClientRect().top<=threshold?'Neal Morse':'Transatlantic';const shown=doc.getElementById('comparison-current');if(shown&&shown.textContent!==visible)setContext(doc,'b',visible)};scroll.scrollTop=0}
+    frame.addEventListener('load',()=>apply(current));document.querySelectorAll('[data-mode]').forEach(button=>button.onclick=()=>{document.querySelectorAll('[data-mode]').forEach(x=>x.classList.remove('active'));button.classList.add('active');apply(button.dataset.mode)});
+  </script>
+</body>
+</html>

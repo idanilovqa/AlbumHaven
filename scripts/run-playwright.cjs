@@ -1587,8 +1587,8 @@ function createManagedIsolatedAppRestartController(options = {}) {
     if (!nonce || nonce.length > 256) {
       throw new Error('Managed isolated restart request requires a valid nonce.');
     }
-    const operation = request.operation ?? 'restart';
-    if (!['restart', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
+    const operation = request.operation ?? request.action ?? 'restart';
+    if (!['restart', 'stop', 'report-failure', 'watcher-cleanup'].includes(operation)) throw new Error('Unknown managed app lifecycle operation.');
     if (operation === 'watcher-cleanup' && Object.keys(request).some((key) => !['nonce', 'operation'].includes(key))) {
       throw new Error('Watcher cleanup accepts only its fixed runner-owned operation.');
     }
@@ -1636,6 +1636,10 @@ function createManagedIsolatedAppRestartController(options = {}) {
               fakeDatabaseCleanup: { status: 'failed', error: safeErrorSummary(error) } };
             throw error;
           }
+        }
+        if (request.operation === 'stop') {
+          writeJsonAtomically(ackPath, { nonce: request.nonce, status: 'stopped' });
+          return true;
         }
 
         phase = 'start-replacement';
@@ -1764,6 +1768,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       || (options.spawnFn ? (() => []) : readProcessTreeIdentities);
     const setTimeoutFn = options.setTimeoutFn || setTimeout;
     const clearTimeoutFn = options.clearTimeoutFn || clearTimeout;
+    const nowFn = options.nowFn || Date.now;
     const cleanupIsolatedLibraryDatabaseFn = options.cleanupIsolatedLibraryDatabaseFn
       || (options.spawnFn ? null : cleanupIsolatedLibraryDatabase);
     const stdout = options.stdout || process.stdout;
@@ -1824,6 +1829,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
     let processFailureLatchWritten = false;
     let terminalCollectionFailureObserved = false;
     let testsCompleteObserved = false;
+    let completionPhaseStartedAt = null;
     let authoritativeFinalObserved = false;
     let hardTimeoutExpired = false;
     let mismatchDiagnosticWritten = false;
@@ -1960,6 +1966,60 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       stderr.write(diagnostic);
     };
 
+    const emitFinalizationTimeoutDiagnostic = () => {
+      let currentOwners = [];
+      let snapshotError = null;
+      try {
+        currentOwners = readProcessTreeIdentitiesFn(child.pid, { timeoutMs: 5000 });
+      } catch (error) {
+        snapshotError = safeErrorSummary(error);
+      }
+      const priorOwners = new Map(managedRunProcessOwners.map(owner => [owner.pid, owner]));
+      const currentByPid = new Map(currentOwners.map(owner => [owner.pid, owner]));
+      const root = priorOwners.get(child.pid);
+      const currentRoot = currentByPid.get(child.pid);
+      const rootMatches = root && currentRoot?.creationIdentity === root.creationIdentity;
+      const owned = new Map(priorOwners);
+      if (rootMatches) {
+        for (const owner of currentOwners) {
+          if (!owned.has(owner.pid)) owned.set(owner.pid, owner);
+        }
+      }
+      if (!owned.has(child.pid)) {
+        owned.set(child.pid, { pid: child.pid, parentPid: processObject.pid });
+      }
+      const processes = [...owned.values()].slice(0, WINDOWS_PROCESS_TREE_MAX_PROCESSES).map(owner => {
+        const current = currentByPid.get(owner.pid);
+        const executable = String(owner.processName || '').toLowerCase().replace(/\.exe$/, '');
+        const safeExecutable = ['node', 'python', 'pythonw', 'chrome', 'chromium', 'msedge', 'firefox', 'pwsh', 'powershell', 'cmd'].includes(executable)
+          ? executable : 'other';
+        return {
+          pid: owner.pid,
+          parentPid: owner.pid === child.pid ? processObject.pid : owner.parentPid,
+          executable: owner.pid === child.pid ? 'node' : safeExecutable,
+          role: owner.pid === child.pid ? 'playwright-cli'
+            : ['chrome', 'chromium', 'msedge', 'firefox'].includes(safeExecutable) ? 'browser'
+              : safeExecutable === 'node' ? 'node-descendant'
+                : ['python', 'pythonw'].includes(safeExecutable) ? 'python-descendant'
+                  : ['pwsh', 'powershell', 'cmd'].includes(safeExecutable) ? 'shell' : 'other',
+          liveness: snapshotError ? 'unknown'
+            : !current ? 'not-observed'
+              : current.creationIdentity === owner.creationIdentity && owner.creationIdentity ? 'alive' : 'identity-changed',
+        };
+      });
+      const diagnostic = `[playwright-wrapper-finalization-diagnostic] ${JSON.stringify({
+        reason: authoritativeFinalObserved ? 'child-not-closed' : testsCompleteObserved ? 'missing-run-final' : 'collection-finalization-incomplete',
+        phase: authoritativeFinalObserved ? 'run-final' : testsCompleteObserved ? 'tests-complete' : 'collection-failure',
+        elapsedMs: completionPhaseStartedAt === null ? null : Math.max(0, nowFn() - completionPhaseStartedAt),
+        childClosed,
+        childExitCode: childExitRawCode,
+        snapshotError,
+        processes,
+      })}\n`;
+      combinedOutput += diagnostic;
+      stderr.write(diagnostic);
+    };
+
     const completeReporterRun = async (exitCode) => {
       if (reporterFinalizing || settlementState === 'settled') {
         return;
@@ -2062,6 +2122,7 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
                   ? 'Playwright did not produce an authoritative final result after tests completed.'
                   : 'Playwright did not close naturally after a terminal collection failure.',
             );
+          emitFinalizationTimeoutDiagnostic();
           stopChildProcess('finalization-timeout');
           if (!portCleanupCompleted) {
             settlementState = 'reporter-grace';
@@ -2292,6 +2353,14 @@ function runPlaywrightProcess(passthroughArgv, childEnv, runTimeoutMs, options =
       })) {
         return;
       }
+      // Output chunks replay the last authenticated signal. Enumerate process
+      // owners and arm deadlines only for a new phase, not for every late
+      // provider log (Windows process snapshots synchronously block this loop).
+      const completionAlreadyObserved = completionSignal.phase === 'run-final'
+        ? authoritativeFinalObserved
+        : testsCompleteObserved || authoritativeFinalObserved;
+      if (completionAlreadyObserved) return;
+      completionPhaseStartedAt = nowFn();
       snapshotManagedRunProcessOwners();
       if (completionSignal.phase === 'tests-complete' && !testsCompleteObserved) {
         testsCompleteObserved = true;
@@ -2581,6 +2650,7 @@ function parseProcessTreeIdentityRecords(stdout) {
       creationIdentity: String(record?.creationIdentity || '').trim(),
       depth: Number(record?.depth),
       parentPid: Number(record?.parentPid),
+      ...(record?.processName ? { processName: String(record.processName) } : {}),
     }))
     .filter((record) => (
       Number.isInteger(record.pid)
@@ -2752,6 +2822,7 @@ function readProcessTreeIdentities(rootPid, options = {}) {
     '$records += [PSCustomObject]@{',
     'pid = [int]$current.pid;',
     'parentPid = [int]$current.parentPid;',
+    'processName = [string]$currentProcess.ProcessName;',
     'creationIdentity = $startTime.ToUniversalTime().Ticks.ToString();',
     'depth = [int]$current.depth',
     '};',
@@ -2775,7 +2846,7 @@ function readProcessTreeIdentities(rootPid, options = {}) {
   const result = runCommandFn(
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     ['-Command', powershellCommand],
-    { stdio: 'pipe', windowsHide: true },
+    { stdio: 'pipe', windowsHide: true, ...(options.timeoutMs ? { timeout: options.timeoutMs } : {}) },
   );
   if (result.error) {
     throw result.error;

@@ -1,5 +1,5 @@
 ﻿:root {
-  --player-height: 68px;
+  --player-height: 76px;
   color-scheme: light dark;
   --bg: #111827;
   --panel: #1f2937;
@@ -247,18 +247,44 @@ input[type='search'] {
 .toast {
   min-width: 280px;
   max-width: min(460px, calc(100vw - 32px));
-  background: color-mix(in srgb, var(--success) 18%, var(--panel) 82%);
-  border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border) 55%);
-  color: var(--text);
-  border-radius: 12px;
-  padding: 12px 14px;
-  box-shadow: 0 10px 22px rgba(0,0,0,0.22);
   opacity: 0;
   transform: translateY(-8px);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
+.system-warning-notification {
+  container: floating-notification / inline-size;
+  position: fixed;
+  right: 16px;
+  bottom: 12px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: auto;
+}
+#toast-layer > .floating-notification-positioned,
+#repair-alert.floating-notification-positioned {
+  position: fixed;
+  left: var(--notification-left, 16px);
+  top: var(--notification-top, 14px);
+  right: auto;
+  bottom: auto;
+  transform: none;
+}
+#toast-layer > .toast.floating-notification-positioned,
+#repair-alert.floating-notification-positioned { width: max-content; }
+#toast-layer > .toast.floating-notification-positioned {
+  min-width: min(280px, var(--notification-available-width));
+  max-width: min(460px, var(--notification-available-width));
+  overflow-wrap: anywhere;
+}
+#toast-layer > .system-warning-notification.floating-notification-positioned { max-width: var(--notification-available-width); }
+#repair-alert.floating-notification-positioned { max-width: min(520px, var(--notification-available-width)); }
+#repair-alert.floating-notification-positioned.has-log-history-link { max-width: min(480px, var(--notification-available-width)); }
+@container floating-notification (max-width: 320px) {
+  .system-warning-notification .on-page-alert { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px; }
+  .system-warning-notification .on-page-alert__actions .ui-button { max-width: 100%; min-width: 0; padding-inline: 8px; }
+  :root .system-warning-notification .on-page-alert__actions .ui-button__content { white-space: normal; overflow-wrap: anywhere; }
+}
+[data-notification-deferred] { visibility: hidden; }
 .toast.is-visible { opacity: 1; transform: translateY(0); }
-.toast.is-error { background: color-mix(in srgb, #ef4444 18%, var(--panel) 82%); border-color: color-mix(in srgb, #ef4444 45%, var(--border) 55%); }
 .toast.is-top-center {
   position: fixed;
   top: 14px;
@@ -270,44 +296,29 @@ input[type='search'] {
   transform: translate(-50%, 0);
 }
 .repair-alert {
-  pointer-events: none;
   position: fixed;
+  pointer-events: none;
   right: 16px;
   bottom: calc(var(--player-height) + 12px);
   z-index: 140;
-  transform: translateY(8px);
   opacity: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(520px, calc(100vw - 32px));
-  padding: 9px 11px 9px 13px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--success) 48%, var(--border) 52%);
-  background: color-mix(in srgb, var(--success) 12%, rgba(15, 23, 42, 0.68) 88%);
-  backdrop-filter: blur(10px);
-  color: var(--text);
-  box-shadow: 0 10px 26px rgba(0,0,0,0.18);
-  font-size: 0.86rem;
-  font-weight: 700;
+  transform: translateY(8px);
   transition: opacity 220ms ease, transform 220ms ease;
+  max-width: min(520px, calc(100vw - 32px));
 }
-.repair-alert[hidden] {
-  display: none;
-}
-.repair-alert.is-visible {
-  opacity: 1;
-  transform: translateY(0);
-}
-.repair-alert.is-error {
-  border-color: color-mix(in srgb, #ef4444 52%, var(--border) 48%);
-  background: color-mix(in srgb, #ef4444 12%, rgba(15, 23, 42, 0.7) 88%);
-}
-.repair-alert-message {
+#repair-alert-message {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.repair-alert[hidden] {
+  display: none;
+}
+.repair-alert .ui-button { pointer-events: auto; }
+.repair-alert.is-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 .repair-alert.has-log-history-link {
   top: 14px;
@@ -316,47 +327,14 @@ input[type='search'] {
   bottom: auto;
   transform: translate(-50%, -8px);
   transition: opacity 220ms ease;
-  align-items: center;
-  border-radius: 12px;
   max-width: min(480px, calc(100vw - 32px));
-}
-.repair-alert.has-log-history-link .repair-alert-message {
-  white-space: nowrap;
 }
 .repair-alert.has-log-history-link.is-visible {
   transform: translate(-50%, 0);
 }
-.repair-alert-inline-link {
-  pointer-events: auto;
-  flex: 0 0 auto;
-  margin-left: 8px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--text) 84%, white 16%);
-  font: inherit;
-  font-weight: 800;
-  text-decoration: underline;
-  cursor: pointer;
-  white-space: nowrap;
+:root input:is(:not([type]), [type='text'], [type='password'], [type='search'], [type='email'], [type='url'], [type='tel'], [type='number']):not(:disabled):not([readonly]),
+:root textarea:not(:disabled):not([readonly]),
+:root [contenteditable='true'] {
+  cursor: text;
 }
-.repair-alert-inline-link:hover {
-  color: white;
-}
-.repair-alert-close {
-  pointer-events: auto;
-  width: 22px;
-  height: 22px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.06);
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.78rem;
-  line-height: 1;
-}
-.repair-alert-close:hover {
-  border-color: rgba(255,255,255,0.24);
-  background: rgba(255,255,255,0.12);
-}
+#library-loader [hidden] { display: none !important; }

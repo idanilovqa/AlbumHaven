@@ -1601,6 +1601,9 @@ class PostgresLibraryBrowseRepository:
             if projected_items:
                 first_album = projected_items[0][1]
                 first_key = str(first_album.get("key") or "")
+                first_album["_suggestion_aliases"] = self._load_relation_alias_maps(
+                    connection=connection
+                ).get("alias_to_canonical", {})
                 initial_detail = _problematic_album_detail_payload(first_album)
                 if initial_detail is None:
                     raise RuntimeError(
@@ -1633,6 +1636,9 @@ class PostgresLibraryBrowseRepository:
                 if isinstance(track, Mapping)
             }
             if album_track_paths & normalized_paths:
+                album["_suggestion_aliases"] = self._load_relation_alias_maps().get(
+                    "alias_to_canonical", {}
+                )
                 return _problematic_album_detail_payload(album)
         return None
 
@@ -1644,13 +1650,26 @@ class PostgresLibraryBrowseRepository:
         for album in albums:
             if str(album.get("key") or "") not in requested_keys:
                 continue
-            return _problematic_album_detail_payload(album)
+            album["_suggestion_aliases"] = self._load_relation_alias_maps().get("alias_to_canonical", {})
+            detail = _problematic_album_detail_payload(album)
+            if detail is not None:
+                return detail
         missing_albums = _missing_album_projection_payloads(
             self._load_missing_album_rows(album_key=str(album_key or ""))
         )
         if missing_albums:
             return _problematic_album_detail_payload(missing_albums[0])
         return None
+
+    def build_problem_suggestion_entries_by_paths(self, track_paths: set[str]) -> dict[str, dict[str, object]]:
+        """Read original inventory tags, without presentation fallbacks, in this library."""
+        paths = _normalized_track_paths(track_paths)
+        return {
+            str(row.get("file_private_path")): _problematic_file_entry_from_row(row)
+            for item in self._load_album_rows_by_track_paths(paths)
+            for row in [_row_mapping(item)]
+            if str(row.get("file_private_path")) in paths
+        } if paths else {}
 
     def build_album_payloads_by_track_paths(self, track_paths: set[str]) -> list[dict[str, object]]:
         normalized_paths = _normalized_track_paths(track_paths)
@@ -3003,6 +3022,8 @@ def _problematic_file_entry_from_row(row_payload: Mapping[str, object]) -> dict[
         raw_year = row_payload.get("album_release_year")
     return {
         "path": track_path,
+        "mtime": file_entry.get("mtime"),
+        "size": file_entry.get("size"),
         "album": required_text_value("album", "file_album", row_payload.get("album_title")),
         "album_artist": required_text_value(
             "album_artist",
@@ -3835,6 +3856,8 @@ def _problematic_album_summary_payload(
 
 
 def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, object] | None:
+    from music_app.services.problem_suggestions import build_problem_suggestions
+
     album_scope_reasons = _problematic_album_scope_reasons(album)
     track_problem_rows = _problematic_track_problem_rows(album)
     summary = _problematic_album_summary_payload(
@@ -3878,6 +3901,14 @@ def _problematic_album_detail_payload(album: Mapping[str, object]) -> dict[str, 
         "root_provenance": dict(_row_json_mapping(album.get("root_provenance"))),
         "tracks": list(album.get("tracks") or []),
         "repair_preview_rows": repair_preview.get("preview_rows", []),
+        "suggested_edits": [
+            proposal
+            for entry in album.get("_file_entries", [])
+            if isinstance(entry, dict)
+            for proposal in build_problem_suggestions(str(entry.get("path") or ""), entry, alias_to_canonical=album.get("_suggestion_aliases"))
+            if not _problem_reason_is_ignored(set(album.get("_ignored_repair_keys") or ()), proposal['path'], proposal['reason'], scope="file", legacy_field=proposal['field'])
+            and not _problem_reason_is_ignored(set(album.get("_ignored_repair_keys") or ()), album_problem_identity, proposal['reason'], scope="album")
+        ],
         "track_problem_rows": track_problem_rows,
         "track_order_issues": _track_order_issues(album),
         "problematic_track_paths": [
@@ -4611,10 +4642,14 @@ def _selected_artist_family_groups_from_preview_rows(
         normalized_family_artists,
         alias_to_canonical=alias_to_canonical,
     )
-    return _decorate_selected_artist_group_payloads(
-        family_artist_groups,
-        alias_to_canonical=alias_to_canonical,
-        canonical_to_aliases=canonical_to_aliases,
+    return _expose_selected_artist_family_group_filter_variations(
+        _decorate_selected_artist_group_payloads(
+            family_artist_groups,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+        ),
+        alias_to_canonical,
+        normalized_family_artists,
     )
 
 
@@ -4661,19 +4696,56 @@ def _selected_artist_family_group_filter_key(
     alias_to_canonical: Mapping[str, str],
     family_artists: Iterable[object],
 ) -> str:
+    from music_app.services.selected_artist_membership import collaboration_alias_of
+
     group_artist = str(group.get("artist") or "").strip()
     group_key = _artist_display_dedupe_key(group_artist)
-    family_artist_keys = {
-        _artist_display_dedupe_key(artist)
+    family_artist_entries = [
+        (artist, key)
         for artist in family_artists
-        if _artist_display_dedupe_key(artist)
+        if (key := _artist_display_dedupe_key(artist))
+    ]
+    family_artist_keys = {key for _, key in family_artist_entries}
+    collaboration_family_keys = {
+        key
+        for artist, key in family_artist_entries
+        if collaboration_alias_of(group_artist, artist)
     }
+    if len(collaboration_family_keys) == 1:
+        return next(iter(collaboration_family_keys))
     if group_key in family_artist_keys:
         return group_key
     canonical_artist = str(
         alias_to_canonical.get(group_artist, group_artist) or ""
     ).strip()
     return _artist_display_dedupe_key(canonical_artist)
+
+
+def _expose_selected_artist_family_group_filter_variations(
+    family_artist_groups: list[dict[str, object]],
+    alias_to_canonical: Mapping[str, str],
+    family_artists: list[str],
+) -> list[dict[str, object]]:
+    artists_by_key = {
+        _artist_display_dedupe_key(artist): artist
+        for artist in family_artists
+        if _artist_display_dedupe_key(artist)
+    }
+    for group in family_artist_groups:
+        filter_key = _selected_artist_family_group_filter_key(
+            group,
+            alias_to_canonical,
+            family_artists,
+        )
+        filter_artist = artists_by_key.get(filter_key)
+        if not filter_artist:
+            continue
+        variation_names = group.get("variation_names")
+        group["variation_names"] = list(dict.fromkeys([
+            *(variation_names if isinstance(variation_names, list) else []),
+            filter_artist,
+        ]))
+    return family_artist_groups
 
 
 def _artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:
@@ -5657,7 +5729,7 @@ def _album_detail_sql() -> str:
           where app.bootstrap_owners.owner_key = 'local-bootstrap-owner'
           limit 1
         ),
-        scrobble_counts as (
+        legacy_scrobble_counts as (
           select
             integration.listen_history.track_key,
             count(*)::int as scrobble_count
@@ -5671,6 +5743,19 @@ def _album_detail_sql() -> str:
           )
             and integration.listen_history.scrobble_status = 'scrobbled'
           group by integration.listen_history.track_key
+        ),
+        measured_scrobble_counts as (
+          select t.track_key,count(*)::int as scrobble_count
+          from integration.listen_history h
+          join bootstrap_context b on b.library_id=h.library_id and b.account_id=h.account_id
+          join library.local_tracks t on t.id=h.track_id and t.library_id=h.library_id
+          where h.source_family='rendered_local_listen_session' and h.scrobble_status='scrobbled'
+          group by t.track_key
+        ),
+        scrobble_counts as (
+          select track_key,sum(scrobble_count)::int as scrobble_count
+          from (select * from legacy_scrobble_counts union all select * from measured_scrobble_counts) counts
+          group by track_key
         ),
         track_preferences as (
           select

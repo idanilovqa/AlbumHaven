@@ -24,6 +24,7 @@ MANAGED_CAPABILITY_KEYS = frozenset(
         "library.inventory.manage",
         "library.rules.read",
         "library.logs.read",
+        "library.logs.export",
         "library.loops.read",
         "library.loops.media.read",
         "library.discovery.read",
@@ -34,6 +35,7 @@ MANAGED_CAPABILITY_KEYS = frozenset(
         "library.playlists.manage",
         "library.playlists.items.manage",
         "library.track_preferences.manage",
+        "integration.lastfm.scrobbles.submit",
     }
 )
 

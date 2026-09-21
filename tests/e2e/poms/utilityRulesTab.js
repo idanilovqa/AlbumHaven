@@ -24,6 +24,9 @@ export class UtilityRulesTab extends BasePage {
     this.fileExclusionsTable = this.ruleDetail.getByRole('table', { name: 'File exclusions', exact: true });
     this.exclusionRows = this.ruleDetail.locator(this.keyedTableRowSelector);
     this.revertButtons = page.getByRole('button', { name: 'Revert rule', exact: true });
+    this.revertConfirmation = page.getByRole('dialog', { name: 'Revert rule?', exact: true });
+    this.revertYes = this.revertConfirmation.getByRole('button', { name: 'Yes', exact: true });
+    this.revertNo = this.revertConfirmation.getByRole('button', { name: 'No', exact: true });
   }
 
   get listItemSelector() {
@@ -72,6 +75,7 @@ export class UtilityRulesTab extends BasePage {
   revertButtonForRow(row) {
     return row.getByRole('button', { name: 'Revert rule', exact: true });
   }
+
 
   firstKeyedRow(table) {
     return table.locator(this.keyedTableRowSelector).first();

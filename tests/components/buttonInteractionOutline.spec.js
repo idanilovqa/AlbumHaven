@@ -115,7 +115,7 @@ test('shared footer buttons render themed hover and keyboard-focus outlines whil
   await reset.hover();
   await expect(reset).toHaveCSS('outline-style', 'solid');
   await expect(reset).toHaveCSS('outline-width', '1px');
-  await expect(reset).toHaveCSS('outline-offset', '1px');
+  await expect(reset).toHaveCSS('outline-offset', '-1px');
   await expect(reset).toHaveCSS('outline-color', outlineColor);
   await expect(reset).toHaveCSS('border-color', outlineColor);
 
@@ -187,7 +187,9 @@ test('round destructive ActionButton centers its SVG and keeps error-family inte
 
   await action.hover();
   await expect(action).toHaveCSS('border-color', 'rgb(239, 83, 80)');
-  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
+  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-offset', '-1px');
   await action.focus();
-  await expect(action).toHaveCSS('outline-color', 'rgb(255, 123, 121)');
+  await expect(action).toHaveCSS('outline-color', 'rgb(239, 83, 80)');
+  await expect(action).toHaveCSS('outline-offset', '-1px');
 });

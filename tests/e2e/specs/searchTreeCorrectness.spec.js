@@ -196,15 +196,38 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
     },
   );
 
+  let completeNealView;
   await stepLogger.step('Search for Transatlantic from Neal Morse', async () => {
     await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}`);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST);
+    completeNealView = {
+      albums: await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST),
+      headings: await galleryActions.readArtistHeadings(),
+    };
+    expect(completeNealView.albums.length).toBeGreaterThan(1);
     await searchToolbarActions.search(TRANSATLANTIC_QUERY, { submitWithEnter: true });
     await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, {
+      queryValue: TRANSATLANTIC_QUERY,
+    });
   });
 
-  await stepLogger.step('Select Neal Morse and show only its album-title match', async () => {
+  await stepLogger.step('Selecting a different primary artist preserves the query until explicit Clear restores its complete gallery', async () => {
     await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
+    expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
+    await searchToolbarActions.clearSearch();
+    await searchToolbarActions.waitForQuery('');
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: '' });
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual(completeNealView.albums);
+    expect(await galleryActions.readArtistHeadings()).toEqual(completeNealView.headings);
+  });
+
+  await stepLogger.step('Explicit Neal Morse album-title search remains narrow through same-primary selection', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}&q=${encodeURIComponent(TRANSATLANTIC_QUERY)}`);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: TRANSATLANTIC_QUERY,
     });
@@ -218,13 +241,22 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
       headings: [FAMILY_ARTIST],
       nealAlbums: [TRANSATLANTIC_NEAL_ALBUM],
     });
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
+    expect(await galleryActions.readArtistHeadings()).toEqual([FAMILY_ARTIST]);
+    expect(await galleryActions.readAlbumNamesByHeading(FAMILY_ARTIST)).toEqual([TRANSATLANTIC_NEAL_ALBUM]);
   });
 
-  await stepLogger.step('Select Transatlantic and keep its full artist-name match', async () => {
-    await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
+  await stepLogger.step('Explicit Transatlantic search keeps its full artist-name match', async () => {
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(TRANSATLANTIC_ARTIST)}&q=${encodeURIComponent(TRANSATLANTIC_QUERY)}`);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
     await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, {
       queryValue: TRANSATLANTIC_QUERY,
     });
+    await navigationPanelActions.selectSidebarArtistByName(TRANSATLANTIC_ARTIST);
+    await searchToolbarActions.waitForQuery(TRANSATLANTIC_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(TRANSATLANTIC_ARTIST, { queryValue: TRANSATLANTIC_QUERY });
     expect(await galleryActions.readAlbumNamesByHeading(TRANSATLANTIC_ARTIST))
       .toEqual(completeTransatlanticView.albums);
     expect(await galleryActions.readArtistHeadings())
@@ -232,12 +264,14 @@ test('FTC-SEARCH-NAV-028 limits a content-matched family artist while keeping an
   });
 
   await stepLogger.step('Search by a Neal Morse track title and keep the same record-only scope', async () => {
-    await searchToolbarActions.search(NEAL_SCOPE_TRACK_QUERY, { submitWithEnter: true });
+    await galleryActions.goto(`/?surface=albums&artist=${encodeURIComponent(FAMILY_ARTIST)}&q=${encodeURIComponent(NEAL_SCOPE_TRACK_QUERY)}`);
     await searchToolbarActions.waitForQuery(NEAL_SCOPE_TRACK_QUERY);
-    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
     await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, {
       queryValue: NEAL_SCOPE_TRACK_QUERY,
     });
+    await navigationPanelActions.selectSidebarArtistByName(FAMILY_ARTIST);
+    await searchToolbarActions.waitForQuery(NEAL_SCOPE_TRACK_QUERY);
+    await galleryActions.waitForSelectedArtistGallery(FAMILY_ARTIST, { queryValue: NEAL_SCOPE_TRACK_QUERY });
     await expect.poll(
       async () => ({
         headings: await galleryActions.readArtistHeadings(),

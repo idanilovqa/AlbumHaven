@@ -8,6 +8,7 @@ const state = {
   repairAlertHideTimer: null,
   awaitingInitialDataRefresh: false,
   status: {},
+  loopCreateAllowed: window.__ALBUM_HAVEN_PLAYBACK_ALLOWED_ACTIONS__?.['library.loops.create'] === true,
   coverRefreshTokens: {},
   coverFailures: {
     localDisplayPaths: {},
@@ -183,6 +184,11 @@ const state = {
     rulesLoading: false,
     rulesLoadPromise: null,
       loops: [],
+      loopsSearchQuery: '',
+      loopOrderPending: {},
+      loopViewGeneration: 0,
+      loopDataGeneration: 0,
+      loopMutationGeneration: 0,
       selectedLoopGroupKey: '',
       selectedLoopDetailMode: 'group',
       collapsedLoopGroups: {},
@@ -224,6 +230,13 @@ const state = {
     integrationsLoaded: false,
     integrationsLoading: false,
     integrationsLoadPromise: null,
+    lastfmScrobbles: {
+      summary: null,
+      loading: false,
+      submitting: false,
+      loadPromise: null,
+      requestGeneration: 0,
+    },
     localPlaylistImport: {
       selectedFile: null,
       selectedFileName: '',
@@ -549,6 +562,7 @@ function renderLibraryLoader(data = {}, options = {}) {
   const relBusy = Boolean(data.relations_in_progress);
   const coverBusy = Boolean(data.covers_in_progress);
   const scanPageVisible = Boolean(options.scanPageVisible || state.ui.scanPageReturnContext);
+  if (typeof syncScanLibraryWatcherHealth === 'function') syncScanLibraryWatcherHealth(data, scanPageVisible);
   const forcedScanPageVisible = Boolean(state.ui.forceScanPageVisible) && (scanBusy || relBusy || state.awaitingInitialDataRefresh);
   const hasSearch = Boolean((state.view?.query || '').trim() || (state.view?.selected_artist || '').trim());
   const pendingViewTransition = Boolean(state.ui.pendingViewTransition);
@@ -562,11 +576,17 @@ function renderLibraryLoader(data = {}, options = {}) {
   const finalizingActiveScan = scanPageVisible
     && Boolean(data.scan_in_progress)
     && String(data.scan_phase || '').trim().toLowerCase() === 'finalizing';
-  const canBrowseScanned = shouldShow
+  // The dedicated page hides, but deliberately retains, the previous gallery and
+  // query. Its Browse action must not wait for that retained view to become empty.
+  const retainedBrowseAvailable = scanPageVisible
+    && (scanBusy || relBusy || state.awaitingInitialDataRefresh)
+    && Number(state.view?.album_count || 0) > 0;
+  const canBrowseScanned = shouldShow && (scanPageVisible || !hasSearch)
     && !pendingViewTransition
     && (
       finalizingActiveScan
-      || shouldOfferBrowseScannedLibraryAction(state.view, data, state.awaitingInitialDataRefresh)
+      || retainedBrowseAvailable
+      || shouldOfferBrowseScannedLibraryAction(scanPageVisible ? {} : state.view, data, state.awaitingInitialDataRefresh)
     );
   const canCancelScan = shouldShow && scanPageVisible && Boolean(data.scan_in_progress);
   setDomPropertyIfChanged(loader, 'hidden', !shouldShow);
@@ -607,13 +627,14 @@ function renderLibraryLoader(data = {}, options = {}) {
   );
   if (!shouldShow) return;
 
-  if (hasSearch && !isLoadingState && !forcedScanPageVisible && !scanPageVisible) {
+  if (hasSearch && !pendingViewTransition && !scanPageVisible) {
     spinner.hidden = true;
     title.textContent = 'Nothing found';
     status.textContent = 'No artists, albums, or tracks matched your search.';
     progress.innerHTML = '';
     browseButton.hidden = true;
-    if (actions) actions.hidden = Boolean(!cancelButton || cancelButton.hidden);
+    if (cancelButton) cancelButton.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 

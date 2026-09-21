@@ -1,0 +1,22 @@
+[
+    {
+        "Profile":  "playback-media",
+        "ExitCode":  1,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-playback.log"
+    },
+    {
+        "Profile":  "synthetic-large-library",
+        "ExitCode":  1,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-library.log"
+    },
+    {
+        "Profile":  "utility-problematic-files",
+        "ExitCode":  1,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-problems.log"
+    },
+    {
+        "Profile":  "scan-library",
+        "ExitCode":  1,
+        "Log":  "C:\\Users\\Rendref\\.codex\\worktrees\\b14c\\album-haven-app\\.codex-restart\\task9-performance-scan.log"
+    }
+]

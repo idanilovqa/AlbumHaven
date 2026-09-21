@@ -153,7 +153,7 @@ def test_two_concurrent_default_pytest_processes_use_isolated_roots_and_cleanup_
     assert all(result["generated"] is True for result in results)
     assert all(result["session_temp_exists"] is True for result in results)
     assert all(result["appdata_exists"] is True for result in results)
-    assert all(result["appdata_is_session_owned"] is True for result in results)
+    assert all(result["appdata_is_session_owned"] is True for result in results), results
     assert all(result["config_data_dir_matches"] is True for result in results)
     assert all(
         set(result["temp_environment"].values()) == {result["session_temp"]}
@@ -315,3 +315,151 @@ def test_pytest_unconfigure_retries_generated_root_cleanup_after_sessionfinish(
         (owned_root, (os.getpid(), "acde1234")),
         (owned_root, (os.getpid(), "acde1234")),
     ]
+
+
+def test_partial_cleanup_preserves_ownership_for_unconfigure_retry(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / 'workspace-temp'
+    owned_root = workspace_temp / 'pytest-444444-deadbeef'
+    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
+    (owned_root / 'locked.log').write_text('held until logging teardown', encoding='utf-8')
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def partially_locked_rmtree(path):
+        attempts.append(Path(path))
+        # Windows may delete early entries before encountering an open log file.
+        (path / '.album-haven-pytest-owner.json').unlink()
+        raise PermissionError('log handler still owns locked.log')
+
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', partially_locked_rmtree)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert len(attempts) == pytest_harness._PYTEST_ROOT_REMOVAL_ATTEMPTS
+    assert pytest_harness._owned_generated_pytest_root(owned_root) is not None
+    assert (owned_root / 'locked.log').read_text(encoding='utf-8') == 'held until logging teardown'
+
+    # Once the plugin closes the file, the final hook must still recognize its root.
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', real_rmtree)
+    assert pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert not owned_root.exists()
+
+
+def test_partial_cleanup_does_not_claim_a_replacement_directory(tmp_path, monkeypatch):
+    workspace_temp = tmp_path / 'workspace-temp'
+    owned_root = workspace_temp / 'pytest-444444-deadbeef'
+    displaced_root = workspace_temp / 'preserved-original'
+    _write_owner_marker(owned_root, pid=444444, token='deadbeef')
+    attempts = []
+
+    def replaced_rmtree(path):
+        attempts.append(Path(path))
+        path.rename(displaced_root)
+        path.mkdir()
+        (path / 'unowned.txt').write_text('must survive', encoding='utf-8')
+        raise PermissionError('directory was replaced')
+
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', replaced_rmtree)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, 'deadbeef'),
+    )
+    assert attempts == [owned_root]
+    assert not (owned_root / '.album-haven-pytest-owner.json').exists()
+    assert (owned_root / 'unowned.txt').read_text(encoding='utf-8') == 'must survive'
+    assert displaced_root.is_dir()
+
+
+@pytest.mark.parametrize("replacement", ["directory", "marker"])
+def test_cleanup_revalidates_ownership_after_retry_backoff(tmp_path, monkeypatch, replacement):
+    workspace_temp = tmp_path / "workspace-temp"
+    owned_root = workspace_temp / "pytest-444444-deadbeef"
+    displaced_root = workspace_temp / "preserved-original"
+    _write_owner_marker(owned_root, pid=444444, token="deadbeef")
+    real_rmtree = shutil.rmtree
+    attempts = []
+
+    def locked_once(path):
+        attempts.append(Path(path))
+        if len(attempts) == 1:
+            raise PermissionError("temporary lock")
+        real_rmtree(path)
+
+    def replace_during_backoff(_seconds):
+        if replacement == "directory":
+            owned_root.rename(displaced_root)
+            owned_root.mkdir()
+        else:
+            (owned_root / ".album-haven-pytest-owner.json").unlink()
+        (owned_root / "unowned.txt").write_text("must survive", encoding="utf-8")
+
+    monkeypatch.setattr(pytest_harness, "_workspace_pytest_temp_root", lambda: workspace_temp.resolve())
+    monkeypatch.setattr(pytest_harness.shutil, "rmtree", locked_once)
+    monkeypatch.setattr(pytest_harness.time, "sleep", replace_during_backoff)
+    assert not pytest_harness._remove_owned_generated_pytest_root(
+        owned_root, expected_owner=(444444, "deadbeef"),
+    )
+    assert attempts == [owned_root]
+    assert (owned_root / "unowned.txt").read_text(encoding="utf-8") == "must survive"
+
+
+@pytest.mark.parametrize("factory_removed", [False, True])
+def test_generated_root_cleanup_runs_after_late_configuration_resources_close(tmp_path, monkeypatch, factory_removed):
+    """Config cleanups run after unconfigure and may still own Windows handles."""
+    callbacks = []
+    workspace = tmp_path / 'workspace-temp'
+    config = SimpleNamespace(
+        option=SimpleNamespace(basetemp=None),
+        addinivalue_line=lambda *_args: None,
+        add_cleanup=callbacks.append,
+    )
+    monkeypatch.setattr(pytest_harness, '_workspace_pytest_temp_root', lambda: workspace.resolve())
+    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda root: root / 'appdata')
+    pytest_harness.pytest_configure(config)
+    root = Path(config.option.basetemp)
+    token = config._album_haven_generated_basetemp_token
+    _write_owner_marker(root, pid=os.getpid(), token=token)
+    config._tmp_path_factory = SimpleNamespace(_basetemp=root)
+    held = [True]
+    callbacks.append(lambda: held.__setitem__(0, False))
+    if factory_removed:
+        # Mirror pytest.tmpdir's registered MonkeyPatch.undo cleanup.
+        callbacks.append(lambda: delattr(config, "_tmp_path_factory"))
+    real_rmtree = shutil.rmtree
+
+    def remove_after_handle_close(path):
+        if held[0]:
+            raise PermissionError('configuration cleanup still owns a Windows handle')
+        real_rmtree(path)
+
+    monkeypatch.setattr(pytest_harness.shutil, 'rmtree', remove_after_handle_close)
+    monkeypatch.setattr(pytest_harness.time, 'sleep', lambda _seconds: None)
+    pytest_harness.pytest_sessionfinish(SimpleNamespace(config=config), 0)
+    pytest_harness.pytest_unconfigure(config)
+    assert root.exists(), 'the resource stays open through unconfigure'
+    for callback in reversed(callbacks):
+        callback()
+    assert held == [False]
+    assert not root.exists(), 'the final config cleanup must remove its own root after resources close'
+
+
+def test_explicit_root_does_not_register_a_final_generated_cleanup(tmp_path, monkeypatch):
+    callbacks = []
+    root = tmp_path / 'explicit-root'
+    root.mkdir()
+    config = SimpleNamespace(
+        option=SimpleNamespace(basetemp=str(root)),
+        addinivalue_line=lambda *_args: None,
+        add_cleanup=callbacks.append,
+    )
+    monkeypatch.setattr(pytest_harness, '_activate_pytest_app_paths', lambda base: base / 'appdata')
+    pytest_harness.pytest_configure(config)
+    for callback in reversed(callbacks):
+        callback()
+    assert callbacks == []
+    assert root.is_dir()

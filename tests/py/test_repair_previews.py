@@ -196,4 +196,5 @@ def test_build_encoding_repair_preview_can_skip_preview_rows_for_summary_only_ca
         "raw_name": "Album CD1",
         "raw_album_artist": "Alias Artist",
         "preview_rows": [],
+        "suggested_edits": [],
     }

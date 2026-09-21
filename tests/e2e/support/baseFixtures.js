@@ -54,7 +54,9 @@ import { installContextRequestInterceptionGuard } from './requestInterceptionGua
 import { createManagedAppLifecycle } from '../helpers/managedAppLifecycle.js';
 import { observeNonLoopbackHttpRequests } from '../helpers/thirdPartyRequestEvidence.js';
 import { observePlaybackPcmTraffic } from '../helpers/gaplessPlaybackHelpers.js';
+import { controlLastfmProvider, readLastfmProviderState } from '../helpers/lastfmProviderHelpers.js';
 import { createWorkerAuthentication } from '../../../scripts/playwright-worker-authentication.mjs';
+import { createAppearancePreferenceIsolation } from '../helpers/appearancePreferenceIsolation.js';
 
 const ANSI = {
   cyan: '\u001b[36m',
@@ -319,6 +321,10 @@ const functionalBrowserWarmupFixtures = (
 );
 
 export const test = base.extend({
+  appearancePreferenceIsolation: async ({ page }, use) => {
+    const isolation = createAppearancePreferenceIsolation(page);
+    try { await use(isolation); } finally { await isolation.restore(); }
+  },
   // Login/alternate-user suites opt out at file scope with test.use().
   reuseAuthentication: [true, { scope: 'worker', option: true }],
   authenticateFreshBrowserSession: [true, { option: true }],
@@ -474,6 +480,31 @@ export const test = base.extend({
       await use(observer);
     } finally {
       observer.stop();
+    }
+  },
+
+  lastfmProviderFixture: async ({}, use, testInfo) => {
+    await controlLastfmProvider(testInfo, 'reset');
+    try {
+      await use({
+        readState: () => readLastfmProviderState(testInfo),
+        reset: () => controlLastfmProvider(testInfo, 'reset'),
+        setScrobbleMode: (mode) => controlLastfmProvider(
+          testInfo,
+          'set-scrobble-mode',
+          { mode: String(mode) },
+        ),
+      });
+    } finally {
+      try {
+        await controlLastfmProvider(testInfo, 'reset');
+      } catch (error) {
+        if (!didTestFail(testInfo)) throw error;
+        await testInfo.attach('lastfm-provider-cleanup-error.txt', {
+          body: Buffer.from(error?.stack || error?.message || String(error)),
+          contentType: 'text/plain',
+        });
+      }
     }
   },
 

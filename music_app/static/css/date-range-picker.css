@@ -1,0 +1,70 @@
+.date-range-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.date-range-picker label { display: grid; gap: 6px; min-width: 0; }
+.date-range-picker input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  font: inherit;
+  background: var(--appearance-control, var(--panel-2));
+  color: var(--appearance-ink, var(--text));
+  border: 1px solid var(--appearance-line, var(--border));
+  border-radius: 8px;
+  caret-color: currentColor;
+}
+#app-form-modal:has(.date-range-picker) {
+  --appearance-interaction-outline: var(--muted);
+}
+#app-form-modal .date-range-picker__control > input {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent;
+}
+#app-form-modal .date-range-picker__control > .action-button:not(.trigger-anchor-open) {
+  border: 0 !important;
+  box-shadow: none !important;
+  background: transparent;
+}
+#app-form-modal .date-range-picker__control:has(.trigger-anchor-open) {
+  outline: none !important;
+  box-shadow: none;
+}
+#app-form-modal.app-form-anchored:has(.date-range-picker) .confirm-modal-dialog {
+  animation: none;
+  clip-path: none;
+  border-inline: 1px solid var(--border);
+}
+#app-form-modal:has(.date-range-picker) .utility-detail-meta { margin: 10px 0 0; }
+#app-form-modal:has(.date-range-picker) .confirm-modal-actions { margin-top: 12px; }
+#app-form-modal:has(.date-range-picker) #app-form-cancel {
+  color: var(--appearance-error, #df8f96);
+  border-color: color-mix(in srgb, var(--appearance-error, #df8f96) 50%, var(--border));
+  background: color-mix(in srgb, var(--appearance-error, #df8f96) 12%, var(--panel));
+}
+#app-form-modal:has(.date-range-picker) #app-form-submit {
+  color: #fff;
+  border-color: #356da8;
+  background: #356da8;
+}
+@media (max-width: 480px) { .date-range-picker { grid-template-columns: minmax(0, 1fr); } }
+.date-range-picker__field { display: grid; gap: 6px; min-width: 0; }
+.date-range-picker__control { --ui-input-action-focus-outline: 1px solid var(--muted); --ui-input-action-focus-offset: -1px; --ui-input-action-focus-border: var(--muted); --ui-input-action-button-focus: var(--muted); display: flex; align-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--appearance-control, var(--panel-2)); padding-right: 4px; }
+.date-range-picker__control input { border: 0; background: transparent; font-size: 13px; }
+.calendar-picker { position: fixed; z-index: 140; box-sizing: border-box; padding: 10px; max-height: calc(100vh - 32px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 24px #0006; }
+.calendar-picker__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+/* Keep the shared anchor edge outside the scrolling content's clipping box. */
+.calendar-picker { overflow: visible; max-height: none; }
+.calendar-picker__content { max-height: calc(100vh - 54px); overflow: auto; }
+.calendar-picker__weekdays, .calendar-picker__days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; text-align: center; }
+.calendar-picker__weekdays { color: var(--muted); font-size: 11px; padding-block: 4px 8px; }
+#app-form-modal .calendar-picker .ui-button { min-width: 0; min-height: 30px; height: 30px; padding: 0; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--text); font-size: 12px; box-shadow: none; }
+#app-form-modal .calendar-picker .ui-button:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 12%, var(--panel)); outline: none; }
+#app-form-modal .calendar-picker .ui-button[aria-current="date"] { border-color: var(--muted); }
+#app-form-modal .calendar-picker .ui-button[aria-pressed="true"] { background: var(--text); color: var(--panel); border-color: var(--text); }
+#app-form-modal .calendar-picker .ui-button:focus-visible { outline: 1px solid var(--muted) !important; outline-offset: -2px; }
+#app-form-modal .calendar-picker .ui-button:disabled { opacity: .3; cursor: default; }

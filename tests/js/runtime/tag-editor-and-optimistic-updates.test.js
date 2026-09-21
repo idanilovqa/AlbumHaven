@@ -3971,6 +3971,8 @@ test('Various Artists modal playback preserves album artist in markup and queue 
   assert.match(duplicateWarning.innerHTML, /data-album-key="alpha"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="0"/);
   assert.match(duplicateWarning.innerHTML, /data-duplicate-source-index="1"/);
+  assert.match(duplicateWarning.innerHTML, /data-on-page-alert="warning"/);
+  assert.match(duplicateWarning.innerHTML, /ui-button__content/);
   assert.doesNotMatch(duplicateWarning.innerHTML, /data-duplicate-folder-album=/);
   assert.match(baseElements.list.innerHTML, /Total Length: 40:00/);
   context.state.modalDuplicateSourceIndices.alpha = 1;
@@ -4242,3 +4244,26 @@ test('Various Artists modal playback preserves album artist in markup and queue 
     ['Original - 2000', 'Special Edition - 2000'],
   );
 }
+
+
+test('Album Details passes exact explicit bonus and main durations to final summary', () => {
+  let config;
+  const context = loadHelper([], {
+    state: { player: { current: null }, view: { query: '' } },
+    document: { documentElement: { getAttribute: () => null } },
+    formatAlbumDuration: (seconds) => `${seconds}s`,
+    formatTrackDuration: () => '',
+    getPlayerPlaybackSnapshot: () => ({ paused: true, ended: false }),
+    buildAlbumTrackTableHtml(value) { config = value; return 'table'; },
+  });
+  context.buildTrackListHtml([
+    { path: 'main.flac', title: 'Main', disc_number: 1, duration_seconds: 180 },
+    { path: 'bonus.flac', title: 'Bonus', disc_number: 2, disc_number_raw: 'Bonus Disc', duration_seconds: 1350 },
+  ], { total_duration_seconds: 1530 });
+  assert.equal(config.mainLength, '180s');
+  assert.equal(config.bonusLength, '1350s');
+  context.buildTrackListHtml([
+    { path: 'bonus-title.flac', title: 'Bonus', duration_seconds: 180 },
+  ], { total_duration_seconds: 180 });
+  assert.equal(config.bonusLength, '');
+});

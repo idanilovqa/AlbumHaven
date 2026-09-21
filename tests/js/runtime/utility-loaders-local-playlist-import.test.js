@@ -23,6 +23,9 @@ function createContext(overrides = {}) {
     renders: 0,
   };
   const context = {
+    Date, Intl, URLSearchParams,
+    getUtilityModalElements: () => ({ overlay: { hidden: true } }),
+    renderUtilityLogHistory() {},
     FormData: class FormData {
       constructor() {
         this.fields = [];
@@ -71,6 +74,7 @@ function createContext(overrides = {}) {
     ...overrides,
   };
   vm.createContext(context);
+  for (const name of ['utility-log-history-query', 'utility-log-history-ui']) vm.runInContext(fs.readFileSync(path.join(path.dirname(helperPath), `${name}.js`), 'utf8'), context);
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
 }
@@ -229,7 +233,7 @@ test('failed Last.fm connection marks previously loaded log history stale', asyn
   assert.equal(context.state.utility.logHistoryLoaded, false);
 });
 
-test('log history loader merges the atomic server snapshot and returns its revision', async () => {
+test('log history loader captures the server snapshot without merging legacy browser entries', async () => {
   const serverEntry = {
     id: 'server-entry-1',
     action: 'Scan file error',
@@ -256,7 +260,7 @@ test('log history loader merges the atomic server snapshot and returns its revis
       return {
         ok: true,
         async json() {
-          return { ok: true, items: [serverEntry], revision: 'process-a:7' };
+          return { ok: true, items: [serverEntry], revision: 'process-a:7', snapshot: 'fixed' };
         },
       };
     },
@@ -274,8 +278,8 @@ test('log history loader merges the atomic server snapshot and returns its revis
 
   assert.equal(revision.revision, 'process-a:7');
   assert.equal(context.state.utility.logHistoryRevision, 'process-a:7');
-  assert.deepEqual(persistedSnapshots, [[serverEntry]]);
-  assert.deepEqual(context.state.utility.logHistory, mergedItems);
+  assert.deepEqual(persistedSnapshots, []);
+  assert.deepEqual(context.state.utility.logHistory, [serverEntry]);
   assert.equal(context.state.utility.logHistoryLoaded, true);
   assert.equal(calls.fetches.length, 1);
   assert.equal(calls.fetches[0].options.cache, 'no-store');
@@ -309,7 +313,7 @@ test('background log history synchronization does not replace active loop playba
 });
 
 
-test('log history revision sync follows a newer target queued during an in-flight load', async () => {
+test('log history revision sync marks newer targets stale without replacing the captured query', async () => {
   const { context, calls } = createContext();
   const pendingLoads = [];
   context.state.utility = {
@@ -334,29 +338,33 @@ test('log history revision sync follows a newer target queued during an in-fligh
       });
     });
   };
+  const stale = [];
+  context.state.utility.logHistoryController = { markStale: revision => stale.push(revision) };
 
   const firstSync = context.syncUtilityLogHistoryRevision('process-a:1');
   await Promise.resolve();
   const secondSync = context.syncUtilityLogHistoryRevision('process-a:2');
-  assert.equal(pendingLoads.length, 1);
-  assert.equal(pendingLoads[0].requestedRevision, 'process-a:1');
-
-  pendingLoads[0].resolve();
-  for (let attempt = 0; attempt < 5 && pendingLoads.length < 2; attempt += 1) {
-    await Promise.resolve();
-  }
-  assert.equal(pendingLoads.length, 2);
-  assert.equal(pendingLoads[1].requestedRevision, 'process-a:2');
-
-  pendingLoads[1].resolve();
   await Promise.all([firstSync, secondSync]);
-
-  assert.equal(context.state.utility.logHistoryRevision, 'process-a:2');
+  assert.equal(pendingLoads.length, 0);
+  assert.deepEqual(stale, ['process-a:1', 'process-a:2']);
+  assert.equal(context.state.utility.logHistoryRevision, '');
+  assert.equal(context.state.utility.logHistoryTargetRevision, 'process-a:2');
   assert.equal(context.state.utility.logHistorySyncPromise, null);
-  assert.deepEqual(calls.fetches, [{ force: true }, { force: true }]);
+  assert.deepEqual(calls.fetches, []);
 });
 
-test('snapshot failure retains browser-owned history and its persistence status', async () => {
+test('the independent Integrations loader remains callable beside scoped Log History', async () => {
+  const { context } = createContext();
+  context.state.utility.integrationDrafts = { lastfm: { username: '' } };
+  context.fetch = async () => ({ json: async () => ({ integrations: [{ key: 'library' }] }) });
+  context.reconcileLastfmTimeZoneDraft = async () => {};
+  assert.equal(typeof context.loadUtilityIntegrations, 'function');
+  await context.loadUtilityIntegrations();
+  assert.equal(context.state.utility.integrations[0].key, 'library');
+  assert.equal(context.state.utility.integrationsLoaded, true);
+});
+
+test('snapshot failure stays retryable without reading browser-owned history', async () => {
   let persistenceRequests = 0;
   const storedEntry = {
     id: 'browser-entry-1',
@@ -391,11 +399,12 @@ test('snapshot failure retains browser-owned history and its persistence status'
     selectedLogHistoryId: '',
   };
   await context.loadUtilityLogHistory(true);
-  assert.equal(persistenceRequests, 1);
+  assert.equal(persistenceRequests, 0);
   assert.equal(calls.fetches.length, 1);
-  assert.equal(calls.fetches[0].url, '/utilities/log-history');
+  assert.equal(calls.fetches[0].url, '/utilities/log-history?page_size=500');
   assert.equal(calls.fetches[0].options.cache, 'no-store');
-  assert.deepEqual(context.state.utility.logHistory, [storedEntry]);
-  assert.equal(context.state.utility.logHistoryLoaded, true);
-  assert.deepEqual(context.state.utility.logHistoryStorageStatus, storageStatus);
+  assert.deepEqual(context.state.utility.logHistory, []);
+  assert.equal(context.state.utility.logHistoryLoaded, false);
+  assert.equal(context.state.utility.logHistoryStorageStatus, undefined);
+  assert.match(context.getUtilityLogHistoryController().getState().error, /unavailable/);
 });

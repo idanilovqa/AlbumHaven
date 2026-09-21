@@ -7,6 +7,10 @@
   const actionButtonShapes = new Set(['default', 'round']);
   const actionButtonSemantics = new Set(['default', 'destructive']);
   const iconPaths = Object.freeze({
+    calendar: 'M4 5h16v15H4V5ZM8 3v4M16 3v4M4 10h16',
+    copy: 'M8 8h12v12H8V8ZM4 16H3V3h13v1M8 4H4v4',
+    cover: 'M5 5h14v14H5V5Zm0 10 4-4 4 4 2-2 4 4M14.5 8.5h.01',
+    search: 'M16 16l4 4M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z',
     play: 'M9 6.4v11.2l9-5.6-9-5.6Z',
     pause: 'M7.5 6.5h3.25v11H7.5v-11Zm5.75 0h3.25v11h-3.25v-11Z',
     edit: 'm6.5 16.6.55-3.15L15.9 4.6a1.65 1.65 0 0 1 2.35 0l1.15 1.15a1.65 1.65 0 0 1 0 2.35l-8.85 8.85-3.15.55-.9-.9Zm8.3-9.9 2.5 2.5',
@@ -91,7 +95,12 @@
     );
   }
 
-  const api = { renderButton, renderActionButton, renderIconSvg };
+  function setDisabled(element, disabled) {
+    element.disabled = Boolean(disabled);
+    element.setAttribute('aria-disabled', String(element.disabled));
+  }
+
+  const api = { renderButton, renderActionButton, renderIconSvg, setDisabled };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (scope) scope.ButtonComponent = api;
 })(typeof window !== 'undefined' ? window : null);

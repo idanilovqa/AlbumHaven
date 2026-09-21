@@ -13,18 +13,30 @@ test(GALLERY_CASE,{tag:'@area:gallery-search'},async({page,context,galleryAction
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
   let firstPaintSummary;
+  let firstPaintArtistCount;
   await stepLogger.step('Server first paint shows known totals before any JavaScript hydration',async()=>{
     const response=await page.goto(new URL('/?surface=albums',test.info().project.use.baseURL).href);
     const html=await response.text();
     const scripts=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
     const payload=parseProductionBootstrapPayloadScriptSources(scripts);
     const view=payload.initial_view;
+    firstPaintArtistCount=String(view.artist_count);
     firstPaintSummary = `${view.artist_count} artists · ${view.album_count} albums`;
     expect(html).toContain(`data-gallery-context-summary>${firstPaintSummary}`);
     expect(view.album_count).toBeGreaterThan(7);
   });
   await galleryActions.waitForGalleryReady();
   await expect(ui.summary).toHaveText(firstPaintSummary);
+  await stepLogger.step('Root totals remain authoritative after scrolling beyond the initial viewport',async()=>{
+    await expect(ui.rootArtistCount).toHaveText(firstPaintArtistCount);
+    await galleryActions.scrollGalleryToMiddle();
+    await expect.poll(()=>ui.readCompletedStartupPartialView(),{timeout:60000}).toBe(false);
+    const scroll=await galleryActions.readGalleryScrollState();
+    await galleryActions.scrollGalleryBy(-scroll.scrollTop);
+    await expect.poll(async()=> (await galleryActions.readGalleryScrollState()).scrollTop).toBeLessThan(2);
+    await expect(ui.summary).toHaveText(firstPaintSummary);
+    await expect(ui.rootArtistCount).toHaveText(firstPaintArtistCount);
+  });
   await stepLogger.step('Artist Family is hidden at root and closes when returning from a selected artist',async()=>{
     const familyToggle=ui.familyToggle;
     const familyPanel=ui.familyPanel;
@@ -196,42 +208,62 @@ test(TABLE_CASE,{tag:'@area:album-details'},async({page,context,galleryActions,s
   } finally {await fixture.restore();}
 });
 
-test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,stepLogger})=>{
+test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,searchToolbarActions,stepLogger})=>{
   const fixture=await createGalleryRegressionFixture(PERFORMANCE_AUTH_USERNAME);
   test.setTimeout(180000);
   const ui=new GalleryRegressions(page);
   try {
     await fixture.warn('2026-09-12T11:00:00Z');
     await galleryActions.goto('/?surface=albums');await galleryActions.waitForGalleryReady();
-    await stepLogger.step('A warning icon opens the alert while Library stays green',async()=>{
+    await stepLogger.step('One floating warning appears without a toolbar duplicate or premature Library notice',async()=>{
       await expect(ui.warning).toBeVisible({timeout:60000});
+      await expect(ui.removedWarningButton).toHaveCount(0);
+      await expect(ui.removedWarningPanel).toHaveCount(0);
       await expect(ui.libraryCheck).toHaveCSS('color','rgb(52, 211, 153)');
-      await ui.warning.click();
-      await expect(ui.warningPanel).toContainText('Some library changes may have been missed');
-      await expect(ui.warningPanel.getByRole('button',{name:'Dismiss',exact:true})).toBeVisible();
-      await ui.warningPanel.getByRole('button',{name:'Open Library/Scan',exact:true}).click();
-      await expect(ui.scanWarning).toBeVisible();
+      await ui.library.click({button:'right'});await ui.openScan.click();
+      await expect(ui.scanWarning).toBeHidden();
+      await expect(ui.warning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
     });
-    await stepLogger.step('Dismiss survives reload but keeps the warning on Library/Scan',async()=>{
-      await ui.warning.click();
-      await ui.warningPanel.getByRole('button',{name:'Dismiss',exact:true}).click();
-      await expect(ui.warning).toBeHidden(); await expect(ui.warningPanel).toBeHidden();
+    await stepLogger.step('Searching with active watcher health shows only the selection loader',async()=>{
+      const observation=await ui.observeSelectionLoader();
+      let evidence;
+      try {
+        await searchToolbarActions.search('Neal Morse',{submitWithEnter:true});
+        await searchToolbarActions.waitForQuery('Neal Morse');
+        await galleryActions.waitForGalleryReady();
+      } finally { evidence=await ui.finishSelectionLoaderObservation(observation); }
+      expect(evidence.selections).toBeGreaterThan(0);
+      expect(evidence.warningExposures).toBe(0);
+      expect(evidence.missingSpinners).toBe(0);
+      await expect(ui.scanWarning).toBeHidden();
+      await expect(ui.warning).toBeVisible();
+      await searchToolbarActions.clearSearch({ submitWithEnter: true });
+      await searchToolbarActions.waitForQuery('');
+      await galleryActions.waitForGalleryReady();
+      await expect(ui.rootSidebar).toBeVisible();
+      await ui.rootSidebar.click();
+      await galleryActions.waitForGalleryReady();
+    });
+    await stepLogger.step('Dismiss survives reload and moves the unresolved notice to Library only',async()=>{
+      await ui.warningDismiss.click();
+      await expect(ui.warning).toBeHidden();
       await page.reload();await galleryActions.waitForGalleryReady();
       await expect(ui.library).toHaveClass(/is-warning/,{timeout:60000});
       await expect(ui.warning).toBeHidden();
-      await ui.library.click({button:'right'}); await ui.openScan.click();
+      await ui.library.click({button:'right'});await ui.openScan.click();
       await expect(ui.scanWarning).toBeVisible();
+      await expect(ui.scanWarning.getByRole('button',{name:'Full Rescan',exact:true})).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
+      await expect(ui.scanWarning).toBeHidden();
     });
-    await stepLogger.step('A distinct same-clock event resurfaces without an intervening healthy response',async()=>{
-      await expect(ui.warning).toBeHidden();
-      // Replace only this fixture root atomically; keep this page and its dismissed token alive.
+    await stepLogger.step('A same-clock new warning resurfaces and Go to Library acknowledges that event',async()=>{
       await fixture.warn('2026-09-12T11:00:00Z',{eventId:'a3c91f73-2031-4e3b-9b44-f1e05c85ac36'});
       await expect(ui.warning).toBeVisible({timeout:60000});
-      await ui.warning.click();
-      await ui.warningPanel.getByRole('button',{name:'Dismiss',exact:true}).click();
-      await expect(ui.warning).toBeHidden();await expect(ui.warningPanel).toBeHidden();
+      await ui.warningGoLibrary.click();
+      await expect(ui.warning).toBeHidden();
+      await expect(ui.scanWarning).toBeVisible();
+      await page.getByRole('button',{name:'Back to previous library view'}).click();
       await page.reload();await galleryActions.waitForGalleryReady();
       await expect(ui.library).toHaveClass(/is-warning/,{timeout:60000});
       await expect(ui.warning).toBeHidden();
@@ -239,7 +271,7 @@ test(WARNING_CASE,{tag:'@area:gallery-search'},async({page,galleryActions,stepLo
       await expect(ui.scanWarning).toBeVisible();
       await page.getByRole('button',{name:'Back to previous library view'}).click();
     });
-    await stepLogger.step('A new detection resurfaces the icon; resolving health removes the Scan notice',async()=>{
+    await stepLogger.step('A later warning resurfaces and health recovery clears both surfaces',async()=>{
       await fixture.warn('2026-09-12T11:01:00Z');
       await page.reload();await galleryActions.waitForGalleryReady();
       await expect(ui.warning).toBeVisible({timeout:60000});

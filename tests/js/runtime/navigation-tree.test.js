@@ -26,6 +26,12 @@ test('shared row escapes labels and preserves selected links and counts', () => 
   assert.doesNotMatch(markup, /role="treeitem"/);
 });
 
+test('panel rows retain descriptive metadata without an artwork column',()=>{
+  const html=harness().renderItem({variant:'panel',action:true,label:'Loop created',subtitle:'Album Haven',year:'Sep 9, 10:42'});
+  assert.match(html,/utility-list-item-meta[^>]*>Album Haven · Sep 9, 10:42/);
+  assert.doesNotMatch(html,/navigation-tree-artwork/);
+});
+
 test('flat settings row keeps feature-owned actions and unselected semantics', () => {
   const tree = harness();
   const markup = tree.renderItem({label: 'My account', href: '/account', key: 'account', variant: 'settings', attributes: {'data-settings-section': 'account'}});
@@ -81,7 +87,7 @@ test('Appearance navigation uses the compact shared rows in approved order and d
   const NavigationTree = {renderItem(options){rendered.push(options);return `<button>${options.label}</button>`;}};
   const elements = {
     overlay:{}, search:{}, problemFilterButton:{}, problemFilterMenu:{}, problemFilterChips:{},
-    list:{innerHTML:''}, detail:{innerHTML:''}, count:{textContent:''},
+    list:{innerHTML:'',scrollTop:0,querySelectorAll:()=>[],querySelector:()=>null}, detail:{innerHTML:''}, count:{textContent:''},
   };
   const context = vm.createContext({
     console,

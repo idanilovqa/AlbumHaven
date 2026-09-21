@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from music_app.services.log_history import resolve_media_host_history_scope
+
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -108,9 +110,10 @@ def _bounded_file_error_history_recorder(
     summary_action: str = "Additional library file errors omitted",
     summary_id_prefix: str = "library-file-errors-omitted",
     counter_state: dict[str, int] | None = None,
+    history_scope=None,
 ) -> Callable[..., None]:
     counters = counter_state if counter_state is not None else {}
-    counter_key = f"{summary_id_prefix}:{scan_generation}"
+    counter_key = f"{summary_id_prefix}:{getattr(history_scope, 'library_id', 'unattributed')}:{scan_generation}"
 
     def record_file_error(action: str, **fields: object) -> None:
         recorded_file_errors = int(counters.get(counter_key) or 0) + 1
@@ -122,6 +125,7 @@ def _bounded_file_error_history_recorder(
                 action,
                 level="error",
                 history=True,
+                history_scope=history_scope,
                 scan_generation=scan_generation,
                 **fields,
             )
@@ -132,6 +136,7 @@ def _bounded_file_error_history_recorder(
                 summary_action,
                 level="error",
                 history=True,
+                history_scope=history_scope,
                 id=counter_key,
                 scan_generation=scan_generation,
                 detail_limit=_SCAN_FILE_ERROR_HISTORY_LIMIT,
@@ -152,6 +157,7 @@ def _call_hydrate_library_state_from_disk(
     strict_scan_cache_load: bool = False,
     logger=None,
 ):
+    history_scope = resolve_media_host_history_scope(config)
     hydrate_kwargs = {
         "ensure_relations": ensure_relations,
         "validate_cache": validate_cache,
@@ -176,7 +182,7 @@ def _call_hydrate_library_state_from_disk(
             summary_action="Additional library hydration file errors omitted",
             summary_id_prefix="library-hydration-file-errors-omitted",
             counter_state=counter_state,
-        )
+         history_scope=history_scope)
     return hydrate_library_state_from_disk(
         library_state,
         config,
@@ -571,6 +577,7 @@ def scan_music_incremental(
     publication_state: dict[str, object] | None = None,
     publish_partial_snapshot: Callable[[], None] | None = None,
 ) -> tuple[dict[str, dict[str, object]], float]:
+    history_scope = resolve_media_host_history_scope(config)
     cfg = config
     configured_roots = iter_library_root_paths(cfg)
     scan_roots = [root for root in configured_roots if root.exists()]
@@ -604,7 +611,7 @@ def scan_music_incremental(
         logger,
         scan_generation=int(expected_scan_generation or 0),
         counter_state=counter_state,
-    )
+     history_scope=history_scope)
     traversal_failed_root_ids: set[str] = set()
 
     def record_file_error(action: str, **fields: object) -> None:

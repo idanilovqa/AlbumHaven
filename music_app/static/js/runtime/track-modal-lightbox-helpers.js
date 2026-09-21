@@ -531,6 +531,9 @@ function queueVisibleTrackModalAlbumDetailsPrewarm(containerEl, scrollEl, limit 
 function openTrackModal(album, options = {}) {
   const els = getTrackModalElements();
   if (!els.overlay || !album) return;
+  if (options.foreground && document.getElementById('utility-modal')?.hidden === false) {
+    els.overlay.classList.add('is-above-settings');
+  }
   state.ui.trackModalCoverLightboxGallery = options.coverLightboxGallery !== false;
   if (typeof clearPendingSelectedArtistReconcile === 'function') {
     clearPendingSelectedArtistReconcile();
@@ -552,7 +555,7 @@ function openTrackModal(album, options = {}) {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       if (!resolvedAlbum || albumRequiresHydration(resolvedAlbum) || els.overlay.hidden) return;
       invalidatePendingTrackModalLoad();
-      openTrackModal(resolvedAlbum, options);
+      openTrackModal(resolvedAlbum, { ...options, foreground: false });
     }).catch((error) => {
       if (loadToken !== state.ui.pendingTrackModalLoadToken) return;
       console.error('[AlbumHaven][AlbumDetails] Failed to load full album details.', error);
@@ -677,9 +680,12 @@ function getTrackModalLightboxSourceAlbumKey(button) {
   return String(getAlbumIdentity(album) || album?.key || `${album?.name || ''}::${album?.album_artist || ''}`);
 }
 
+let imageLightboxReturnFocus = null;
+
 function openImageLightbox(src, alt, options = {}) {
   const els = getLightboxElements();
   if (!els.overlay || !els.image || !src) return;
+  if (els.overlay.hidden) imageLightboxReturnFocus = document.activeElement;
   bindOverlayPointerOrigin(els.overlay);
   state.lightbox.sourceAlbumKey = String(options.sourceAlbumKey || '');
   state.lightbox.items = Array.isArray(options.items) ? options.items.filter(Boolean) : [];
@@ -709,7 +715,11 @@ function openImageLightbox(src, alt, options = {}) {
     updateLightboxNavState();
   }
   els.overlay.hidden = false;
+  els.overlay.setAttribute?.('role', 'dialog');
+  els.overlay.setAttribute?.('aria-modal', 'true');
+  els.overlay.setAttribute?.('aria-label', 'Full-size album cover');
   document.body.classList.add('modal-open');
+  els.close?.focus?.();
 }
 
 function closeImageLightbox() {
@@ -747,12 +757,16 @@ function closeImageLightbox() {
   if (!trackModalOpen && !utilityModalOpen) {
     document.body.classList.remove('modal-open');
   }
+  const returnFocus = imageLightboxReturnFocus;
+  imageLightboxReturnFocus = null;
+  if (returnFocus?.isConnected) returnFocus.focus?.();
 }
 
 function closeTrackModal() {
   const els = getTrackModalElements();
   if (!els.overlay) return;
   els.overlay.hidden = true;
+  els.overlay.classList.remove('is-above-settings');
   invalidatePendingTrackModalLoad();
   resumeAllGalleryCoverLoadsAfterTrackModalActions();
   state.modalReleases = [];
@@ -822,6 +836,10 @@ function attachModalEvents() {
       closeCoverLookupDeleteConfirm();
       return;
     }
+    if (!els.overlay.hidden && els.overlay.classList.contains('is-above-settings')) {
+      if (!event.defaultPrevented) closeTrackModal();
+      return;
+    }
     const utilityEls = getUtilityModalElements();
     if (utilityEls.overlay && !utilityEls.overlay.hidden) {
       if (event.defaultPrevented) return;
@@ -845,6 +863,20 @@ function attachModalEvents() {
   document.addEventListener('keydown', (event) => {
     const lightboxEls = getLightboxElements();
     if (!lightboxEls.overlay || lightboxEls.overlay.hidden) return;
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      const controls = Array.from(lightboxEls.overlay.querySelectorAll?.('button, [href], input, select, textarea, [tabindex]') || [])
+        .filter(control => !control.hidden && !control.disabled && control.tabIndex >= 0
+          && !control.closest?.('[hidden], [inert]') && control.getClientRects().length > 0);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (!first) return;
+      const outside = !lightboxEls.overlay.contains(document.activeElement);
+      if (outside || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+      return;
+    }
     if (event.key === 'ArrowLeft') {
       event.preventDefault();
       stepLightbox(-1);

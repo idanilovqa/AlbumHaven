@@ -135,7 +135,7 @@ test('problematic-file render scrolls the focused track row into view determinis
     detail,
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     tabs: [],
   };
   const context = {
@@ -228,7 +228,9 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
     buildProblematicAlbumListItem() { return '<button>Album Alpha</button>'; },
     loadProblematicAlbumDetail(albumKey) { loadCalls.push(albumKey); },
   };
+  context.escapeHtml = value => String(value || '');
   vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), 'alert-components.js'), 'utf8'), context);
   vm.runInContext(rendererSource, context, { filename: rendererPath });
 
   context.renderProblematicFiles();
@@ -236,6 +238,7 @@ test('rerender leaves a failed problematic album detail in its terminal state', 
 
   assert.deepEqual(loadCalls, []);
   assert.match(elements.detail.innerHTML, /unable to load/i);
+  assert.match(elements.detail.innerHTML, /data-on-page-alert="error"/);
 });
 
 test('focused-track navigation keeps the matching album selected during a summary refresh', () => {
@@ -425,7 +428,7 @@ test('removed mutation owner keeps its scrim until the nearest previous survivor
     footer: { innerHTML: '<button>Edit Tags</button>' },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     tabs: [],
   };
   const context = {
@@ -947,14 +950,14 @@ test(`problematic-file render preserves owned mutation scroll geometry across a 
 });
 }
 
-test('empty log history visibly explains session-only storage and keeps export explicit', () => {
+test('empty scoped log history renders its captured console and keeps export explicit', () => {
   const elements = {
     overlay: {},
-    list: { innerHTML: '' },
+    list: { innerHTML: '', dataset: {}, replaceChildren() {}, querySelectorAll: () => [] },
     detail: { innerHTML: '' },
     count: { textContent: '' },
     search: { disabled: false, placeholder: '', value: '' },
-    problemFilterButton: { disabled: false, hidden: false },
+    problemFilterButton: { disabled: false, hidden: false, setAttribute() {} },
     problemFilterMenu: { hidden: false },
     problemFilterChips: { innerHTML: 'old chips' },
     sidebarLabel: { textContent: '' },
@@ -966,11 +969,7 @@ test('empty log history visibly explains session-only storage and keeps export e
         activeTab: 'log-history',
         logHistory: [],
         logHistoryLoading: false,
-        logHistoryStorageStatus: {
-          persistent: false,
-          storage: 'session',
-          message: 'History is available for this session and will be lost on reload.',
-        },
+        allowedActions: { 'library.logs.read': true, 'library.logs.export': true },
         selectedLogHistoryId: '',
       },
     },
@@ -985,17 +984,25 @@ test('empty log history visibly explains session-only storage and keeps export e
     },
   };
   vm.createContext(context);
+  context.window = {};
+  context.URLSearchParams = URLSearchParams;
+  context.escapeHtml = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
+  vm.runInContext(fs.readFileSync(path.resolve(path.dirname(rendererPath), '../button-component.js'), 'utf8'), context);
+  for (const file of ['utility-log-history-query.js', 'utility-log-history-ui.js']) {
+    vm.runInContext(fs.readFileSync(path.join(path.dirname(rendererPath), file), 'utf8'), context);
+  }
   vm.runInContext(rendererSource, context, { filename: rendererPath });
   context.renderUtilityLogHistory();
-  assert.match(elements.detail.innerHTML, /lost on reload/i);
-  assert.match(elements.detail.innerHTML, /scan/i);
-  assert.match(elements.detail.innerHTML, /file/i);
-  assert.match(elements.detail.innerHTML, /edit/i);
-  assert.match(elements.detail.innerHTML, /error/i);
+  assert.match(elements.detail.innerHTML, /No events in this snapshot/);
+  assert.match(elements.detail.innerHTML, /Recent activity/);
+  assert.equal(elements.count.textContent, '0');
   assert.doesNotMatch(
     elements.detail.innerHTML,
-    /Completed tag edits and repairs will appear here/i,
+    /session-only|lost on reload/i,
   );
-  assert.match(elements.detail.innerHTML, /data-export-log-history="1"/);
-  assert.match(elements.detail.innerHTML, />Export Logs</);
+  assert.match(elements.detail.innerHTML, /data-log-history-action="export-draft"/);
+  assert.match(elements.detail.innerHTML, />Export all logs</);
+  const exportCurrent = elements.detail.innerHTML.match(/<button[^>]*data-log-history-action="export-current"[^>]*>/)?.[0];
+  assert.ok(exportCurrent);
+  assert.match(exportCurrent, /\bdisabled(?:="[^"]*")?(?:\s|>)/);
 });

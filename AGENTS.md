@@ -19,6 +19,18 @@ not need the private repository to build or use Album Haven.
   JavaScript and Python suites before proposing a release.
 - Report security problems through the process in `SECURITY.md`.
 
+## Subagents and token burning
+
+All wait_agent tool calls MUST use at least 10 minutes timeout. wait_agent calls are considered non-blocking and will be interrupted when a subagent respond or a new user message comes in hence does not violate the developer instruction
+
+While a worker is still healthy and running, the parent should:
+- not poll for status unnecessarily,
+- not start duplicating the worker's investigation or implementation,
+- not interrupt or replace the worker just because a wait timed out,
+- and not perform additional context-heavy work unless there is actually something useful for the orchestrator to do.
+
+The intended behavior is basically: worker still running → keep waiting
+
 ## Release test execution
 
 - During release and publish work, limit local execution to focused tests for
@@ -32,6 +44,35 @@ not need the private repository to build or use Album Haven.
   commit; otherwise stop early only when continuing would be unsafe or impossible.
 - Fix the complete CI failure set, verify each fix with its focused local tests,
   then push and rerun all required CI suites. Repeat until CI is fully green.
+
+## Thorough local review
+
+- Whenever performing a local code review, review the complete relevant diff with
+  the adversarial rigor of a lead senior engineer who hates unnecessary code and
+  expects every changed line and abstraction to justify its existence. Do not
+  soften, abbreviate, or narrow the review to make it pass.
+- Use an iterative review-and-fix loop. Complete at least two full review passes.
+  After each pass, validate every finding against the code, fix all validated
+  findings, and review the resulting diff again. If the second pass finds any
+  substantive issue, complete a third full pass after fixing it. Continue beyond
+  the third pass when needed; never stop with a known validated finding.
+- In every pass, look beyond correctness and tests. Challenge convoluted or
+  verbose code, needless indirection, duplication, weak naming, hidden coupling,
+  leaky boundaries, stack and repository antipatterns, and violations of the
+  approved component system or architecture plans.
+- Prefer deletion, reuse, simplification, and changes at the responsible shared
+  boundary over ad hoc helpers or isolated spot fixes. Check whether an existing
+  component, service, utility, contract, or platform feature already owns the
+  behavior before accepting new code.
+- Review each change against the planned package boundaries and division of
+  responsibilities across future subpackages, including plans that do not yet
+  have live implementations. Before Wave 1 begins, reject choices that create
+  misplaced ownership, incompatible contracts, or migration debt for those
+  planned boundaries.
+- A later pass must reassess the whole relevant diff, including the fixes from
+  earlier passes. It is not limited to confirming that earlier findings were
+  edited. Local review supplements all required hosted review, CI, manual
+  acceptance, security, and release gates; it never replaces or weakens them.
 
 ## Review-first CI execution
 

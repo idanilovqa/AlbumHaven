@@ -95,3 +95,13 @@ test('Gallery reserves no layout space for scan errors and starts close to the a
   assert.doesNotMatch(appTemplate, /id="last-error"/);
   assert.match(appChromeCss, /\.shell-main-surface:has\(> \.gallery-bar\)\s*\{\s*padding-top: 6px;/);
 });
+
+test('compound fields share input and embedded-action focus ownership', () => {
+  const sharedCss = fs.readFileSync(path.join(__dirname, '../../music_app/static/css/button-component.css'), 'utf8');
+  assert.match(sharedCss, /\.ui-input-action:has\(> input:focus\):not\(:has\(button:active, \.trigger-anchor-open, > input\[aria-expanded="true"\]\)\)/);
+  assert.match(sharedCss, /\.ui-input-action button:focus-visible:not\(\.trigger-anchor-open\)/);
+  assert.match(sharedCss, /outline-offset:\s*-3px !important/);
+  assert.doesNotMatch(searchInputCss, /\.search-field-control:focus-within/);
+  assert.match(searchInputCss, /--search-field-focus: var\(--muted, var\(--appearance-muted, #9ca3af\)\)/);
+  assert.ok(appearanceCss.includes(':not(.ui-input-action *)'));
+});

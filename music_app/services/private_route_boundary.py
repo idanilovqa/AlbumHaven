@@ -59,8 +59,10 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("GET", "/utilities/problematic-files/{album_key:path}"): "library.problems.read",
     ("GET", "/utilities/rules"): "library.rules.read",
     ("GET", "/utilities/log-history"): "library.logs.read",
+    ("POST", "/utilities/log-history/export"): "library.logs.export",
     ("GET", "/utilities/loops"): "library.loops.read",
     ("GET", "/utilities/integrations"): "integration.settings.read",
+    ("GET", "/utilities/integrations/lastfm/scrobbles"): "integration.settings.read",
     ("GET", "/utilities/integrations/foobar/help"): "integration.foobar.read",
     ("GET", "/utilities/integrations/foobar/assets/{asset_key}"): "integration.foobar.read",
     ("GET", "/album-opinions/{album_ref}/crowd"): "library.opinions.read",
@@ -92,6 +94,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/cancel-refresh-api"): "library.refresh.cancel",
     ("GET", "/refresh"): "library.refresh.read",
     ("GET", "/library-settings"): "library.settings.read",
+    ("GET", "/library-settings/browse"): "library.filesystem.browse",
     ("POST", "/library-settings"): "library.settings.manage",
     ("POST", "/library-settings/import-album-ratings"): "library.ratings.import",
     ("POST", "/utilities/rules/version-exceptions/revert"): "library.rules.manage",
@@ -124,6 +127,7 @@ _PRIVATE_ROUTE_ACTIONS = {
     ("POST", "/utilities/imports/local-playlists/analyze"): "integration.local_playlists.analyze",
     ("POST", "/utilities/imports/local-playlists/import"): "integration.local_playlists.import",
     ("POST", "/utilities/integrations/lastfm"): "integration.lastfm.manage",
+    ("POST", "/utilities/integrations/lastfm/scrobbles/submit"): "integration.lastfm.scrobbles.submit",
     ("POST", "/playback/session/now-playing"): "integration.lastfm.now_playing",
     ("POST", "/playback/session/scrobble"): "integration.lastfm.scrobble",
     ("POST", "/playback/session/complete"): "integration.lastfm.complete",
@@ -182,6 +186,8 @@ def install_private_route_boundary(app: FastAPI) -> None:
         resource = _private_resource(request, route_path)
         try:
             await require_action(action, resource=resource)(request)
+            if route_path == '/utilities/log-history/export':
+                await require_action('library.logs.read', resource=resource)(request)
         except HTTPException as exc:
             if (
                 exc.status_code == 401

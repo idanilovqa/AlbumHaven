@@ -23,6 +23,7 @@ EXTENDED_DEFAULTS = {
     "album_details_layout": "classic_bar",
     "album_playing_row_animation": "enabled",
     "alert_family": "ember",
+    "loop_control_style": "capsule",
 }
 AGGREGATE_DEFAULTS = {
     "revision": 0,
@@ -357,7 +358,7 @@ def test_repository_load_returns_the_complete_authoritative_snapshot_for_one_own
 
     result = _repository(connection).load_preferences(account_id=41, client_profile="desktop")
 
-    assert result == AGGREGATE_APPEARANCE
+    assert result == {**AGGREGATE_APPEARANCE, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     for column in (
@@ -384,7 +385,7 @@ def test_repository_conditionally_saves_every_section_and_increments_revision_in
         expected_revision=7,
     )
 
-    assert result == saved
+    assert result == {**saved, "loop_control_style": "capsule"}
     assert len(connection.operations) == 1
     sql, params = connection.operations[0]
     assert "app.user_appearance_preferences" in sql

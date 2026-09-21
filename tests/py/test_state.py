@@ -1085,7 +1085,8 @@ def test_hydration_file_errors_use_bounded_structured_history(
         "action": "Additional library hydration file errors omitted",
         "level": "error",
         "history": True,
-        "id": "library-hydration-file-errors-omitted:9",
+        "id": "library-hydration-file-errors-omitted:unattributed:9",
+        "history_scope": None,
         "scan_generation": 9,
         "detail_limit": 50,
     }
@@ -1152,7 +1153,8 @@ def test_scan_music_incremental_bounds_structured_file_error_history(
         "action": "Additional library file errors omitted",
         "level": "error",
         "history": True,
-        "id": "library-file-errors-omitted:14",
+        "id": "library-file-errors-omitted:unattributed:14",
+        "history_scope": None,
         "scan_generation": 14,
         "detail_limit": 50,
     }

@@ -19,10 +19,11 @@
     return '<svg class="compact-player-skip-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l6 6-6 6"></path><path d="M13 6l6 6-6 6"></path></svg>';
   }
 
-  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '' } = {}) {
+  function renderPlaybackControlCluster({ variant, ownerId = '', loopId = '', loopControlStyle = scope.AlbumHavenAppearance?.instance?.getSavedLoopControlStyle?.() || 'capsule' } = {}) {
     if (!PLAYBACK_CONTROL_VARIANTS.has(variant)) {
       throw new TypeError('Unknown PlaybackControlCluster variant.');
     }
+    const style = loopControlStyle === 'companion' ? 'companion' : 'capsule';
     if (variant === 'compact-player') {
       return `
         <div class="playback-control-cluster playback-control-cluster--compact compact-player-transport" data-playback-control-cluster data-playback-control-variant="compact-player">
@@ -35,7 +36,7 @@
     if (variant === 'expanded-player') {
       const owner = escapePlaybackControlAttribute(ownerId || 'global-player');
       return `
-        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player">
+        <span class="playback-control-cluster playback-control-cluster--expanded loop-play-control-cluster player-play-cluster" data-playback-control-cluster data-playback-control-variant="expanded-player" data-loop-control-style="${style}">
           <button class="loop-play-control-button player-play" type="button" id="player-play" data-playback-control-action="play-pause" aria-label="Play or pause">Play</button>
           <span class="loop-play-control-actions player-loop-actions" data-playback-control-loop-actions data-loop-action-mount="${owner}" data-loop-action-owner="${owner}"></span>
         </span>
@@ -50,7 +51,7 @@
       throw new TypeError('PlaybackControlCluster requires the loop action renderer.');
     }
     return `
-      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop">
+      <div class="playback-control-cluster playback-control-cluster--saved-loop loop-play-control-cluster utility-loop-play-cluster" data-playback-control-cluster data-playback-control-variant="saved-loop" data-loop-control-style="${style}">
         <button class="loop-play-control-button utility-loop-play" type="button" data-playback-control-action="play-pause" data-loop-play="${id}" aria-label="Play or pause">&#9654;</button>
         <span class="loop-play-control-actions utility-loop-actions" data-playback-control-loop-actions>
           ${renderLoopActions({ ownerId: owner, enterLabel: 'Create another loop', createLabel: 'Create loop', cancelLabel: 'Cancel loop creation' })}

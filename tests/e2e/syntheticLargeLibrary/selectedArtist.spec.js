@@ -178,17 +178,12 @@ test.describe(`${CASE_ID} synthetic-large selected-artist browse`, () => {
 
     await stepLogger.step('Hydrate the complete known family with every member selected by default', async () => {
       const runtimeView = await readRuntimeView(page);
-      const expectedFamily = [
-        'Devin Townsend',
-        ...(Array.isArray(runtimeView?.related_artists) ? runtimeView.related_artists : []),
-      ].filter((name, index, names) => name && names.indexOf(name) === index);
-      expect(expectedFamily.length).toBeGreaterThan(1);
+      expect(runtimeView.related_artists).toEqual(['IR8']);
       await artistFamilyActions.expand();
       const familyTags = await artistFamilyActions.readChipTexts();
-      expect(familyTags).toEqual(expect.arrayContaining(expectedFamily));
-      expect(familyTags).toContain('IR8 / Sexoturica');
-      expect(familyTags).not.toContain('IR8');
-      await artistFamilyActions.waitForAllChipsActive(expectedFamily);
+      expect(familyTags).toEqual(['Devin Townsend', 'IR8 / Sexoturica']);
+      expect(await artistFamilyActions.readChipCountByName('IR8 / Sexoturica')).toBeGreaterThan(0);
+      await artistFamilyActions.waitForAllChipsActive(familyTags);
     });
 
     await stepLogger.step('Keep the split release visible under its combined artist heading', async () => {

@@ -14,6 +14,57 @@ async function loadManagedAppLifecycle() {
   return import(helperUrl);
 }
 
+test('stop waits for the matching stopped acknowledgment before fixture restoration', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  let polls = 0;
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory),
+      createNonce: () => 'fixture-stop',
+      pollIntervalMs: 1,
+      timeoutMs: 100,
+      async sleep() {
+        polls += 1;
+        assert.deepEqual(JSON.parse(fs.readFileSync(path.join(controlDirectory, 'restart-request.json'))), {
+          nonce: 'fixture-stop', action: 'stop',
+        });
+        fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({
+          nonce: 'fixture-stop', status: polls === 1 ? 'ready' : 'stopped',
+        }));
+      },
+    });
+    assert.deepEqual(await lifecycle.stop(), { nonce: 'fixture-stop', status: 'stopped' });
+    assert.equal(polls, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a pending stop cannot be mistaken for a completed restart', async () => {
+  const { createManagedAppLifecycle } = await loadManagedAppLifecycle();
+  const { root, controlDirectory } = createOwnedDirectories();
+  let finishStop;
+  try {
+    const lifecycle = createManagedAppLifecycle({
+      environment: createValidEnvironment(root, controlDirectory),
+      createNonce: () => 'pending-stop',
+      async sleep() {
+        await new Promise((resolve) => { finishStop = resolve; });
+        fs.writeFileSync(path.join(controlDirectory, 'restart-ack.json'), JSON.stringify({
+          nonce: 'pending-stop', status: 'stopped',
+        }));
+      },
+    });
+    const pending = lifecycle.stop();
+    await assert.rejects(lifecycle.restart(), /stop.*in progress/i);
+    finishStop();
+    await pending;
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function createValidEnvironment(root, controlDirectory) {
   return {
     PLAYWRIGHT_MANAGED_APP: '1',

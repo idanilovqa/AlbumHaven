@@ -5,6 +5,22 @@ const path = require('node:path');
 
 const appearance = require('../../../music_app/static/js/appearance-backgrounds.js');
 
+test('seekbar mode stays in draft until successful Save and Cancel discards it', async () => {
+  const applied = [];
+  const controller = appearance.createController({ request: async () => initialAppearance(), initial: initialAppearance() });
+  controller.configureSeekbar('default', mode => applied.push(mode));
+  controller.setSeekbarMode('waveform');
+  assert.equal(controller.getState().canSave, true);
+  assert.deepEqual(applied, []);
+  controller.cancel();
+  assert.equal(controller.getState().seekbarMode, 'default');
+  assert.equal(controller.getState().dirty, false);
+  controller.setSeekbarMode('waveform');
+  assert.equal(await controller.save(), true);
+  assert.deepEqual(applied, ['waveform']);
+  assert.equal(controller.getState().dirty, false);
+});
+
 const classicGreen = () => ({
   surface: { mode: 'gradient', angle: 0, start: '#0A2F24', end: '#0A1422' },
   controls: { fill: '#24B86B', border: '#86EFAC' },
@@ -32,6 +48,7 @@ const initialAppearance = () => ({
   album_details_layout: 'classic_bar',
   album_playing_row_animation: 'enabled',
   alert_family: 'ember',
+  loop_control_style: 'capsule',
   interaction_overrides: interactionOverrides(),
   selection_accent: { enabled: true, color: '#6E9BD0' },
   player_style_override: classicGreen(),
@@ -236,6 +253,12 @@ test('Alerts and Album page expose the approved live-preview contracts', () => {
   assert.match(alerts, /data-alert-live-preview/);
   assert.match(alerts, /data-alert-preview-small-compact/);
   assert.match(alerts, /data-alert-preview-small-expanded/);
+  assert.match(alerts, /class="appearance-alert-preview__page" aria-hidden="true"/, 'sample alerts must not announce real failures');
+  assert.match(alerts, /data-alert-preview-small-compact aria-hidden="true"/);
+  assert.match(alerts, /data-alert-preview-small-expanded aria-hidden="true"/);
+  assert.match(alerts, /data-on-page-alert="error"/, 'page preview uses the shared alert renderer');
+  assert.equal((alerts.match(/data-small-alert="error"/g) || []).length, 2, 'both artbox previews use the shared alert renderer');
+  assert.match(album, /data-on-page-alert="error"/, 'missing album preview uses the shared alert renderer');
 
   for (const layout of ['classic_bar', 'stacked_bar', 'editorial_canvas']) assert.match(album, new RegExp(`data-album-details-layout="${layout}"`));
   assert.match(album, /data-album-preview-state="present"/);
@@ -599,8 +622,9 @@ test('interaction overrides use seven coordinated families and the former focus 
   const roles = ['item_hover', 'item_selected', 'button_hover_background', 'item_outline', 'button_pressed'];
   assert.deepEqual(appearance.interactionColorFamilies.map(family => [family.id, family.label, roles.map(role => family.colors[role])]), expected);
   const markup = appearance.interactionControlsMarkup();
-  for (const label of ['Panel &amp; dropdown outline', 'Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
+  for (const label of ['Navigation hover', 'Navigation selected', 'Item hover background', 'Item hover &amp; keyboard focus outline', 'Item pressed']) assert.match(markup, new RegExp(`>${label}<`));
   assert.equal((markup.match(/class="appearance-interaction-row/g) || []).length, 6);
+  assert.match(markup, /data-panel-outline-custom/);
   assert.doesNotMatch(markup, /data-interaction-clear=/);
   assert.match(markup, /data-interaction-color="item_hover" data-color="#31465D"/);
   assert.match(markup, /data-item-outline-color[^>]*data-color-family="blue"[^>]*style="--swatch:#86B7EF"/);
@@ -704,7 +728,7 @@ test('Item interaction tokens cover shared actionable controls without recolorin
   assert.match(css, /:not\(:disabled\)/);
   assert.match(css, /:not\(\[aria-disabled=['"]true['"]\]\)/);
   assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
-  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
+  assert.match(css, /:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.navigation-tree-item\):not\(\.search-field-button\):not\(\.cover-lookup-task-open\):not\(\.global-player \*\):hover[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*-1px/s);
   assert.match(css, /:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,[^;}]+;[^}]*outline-offset:\s*1px/s);
   assert.match(css, /:root\s+:is\(button, \.button, \[role='button'\], \[data-actionable\]\)[^{]*:hover[^{}]*\{[^}]*border-color:\s*var\(--appearance-interaction-outline,/s);
   assert.match(css, /:root\s+:is\(button, input, select, \[role='button'\], \[data-actionable\]\)[^{]*:not\(\.global-player \*\)[^{]*:focus-visible[^{}]*\{[^}]*outline:\s*1px solid var\(--appearance-interaction-outline,/s);

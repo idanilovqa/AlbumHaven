@@ -1,0 +1,17 @@
+{
+  "runner_pid": 14088,
+  "pytest_pid": 35348,
+  "owned_tree_exited": true,
+  "clear_ports": [
+    5413,
+    5415,
+    4173,
+    4175
+  ],
+  "pid_reuse_excluded": {
+    "pid": 36548,
+    "name": "svchost.exe",
+    "parent": 1556
+  },
+  "timeout": false
+}

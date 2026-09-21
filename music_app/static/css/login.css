@@ -58,16 +58,7 @@ body {
   object-fit: contain;
 }
 
-.login-alert {
-  margin: 0 0 20px;
-  padding: 11px 14px;
-  border: 1px solid rgba(240, 124, 133, 0.42);
-  border-radius: 9px;
-  color: var(--login-danger);
-  background: rgba(93, 33, 44, 0.22);
-  font-size: 14px;
-  line-height: 1.45;
-}
+.login-alert { margin: 0 0 16px; }
 
 .login-field {
   margin-bottom: 22px;

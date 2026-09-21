@@ -1191,6 +1191,9 @@ class PostgresScanCacheAdapter:
             _execute_semantic_local_album_reconciliation(
                 connection,
                 target_album_ids=(destination_album_id,),
+                allow_same_year_separate_release_merge=(
+                    normalized_changed_fields == frozenset({"album"})
+                ),
             )
             committed_relation_state = (
                 _commit_structural_relation_projection(connection, self._config)
@@ -2805,6 +2808,7 @@ def _increment_inventory_mutation_revision_sql() -> str:
 def _reconcile_semantic_local_albums_sql(
     *,
     target_album_ids: tuple[int, ...] | None = None,
+    allow_same_year_separate_release_merge: bool = False,
 ) -> tuple[str, ...]:
     scoped_target_ids = tuple(
         sorted(
@@ -2815,6 +2819,8 @@ def _reconcile_semantic_local_albums_sql(
             }
         )
     )
+    if allow_same_year_separate_release_merge and not scoped_target_ids:
+        raise ValueError("Explicit release consolidation requires a targeted album identity.")
     target_identity_cte_sql = (
         """
         semantic_album_target_identities as materialized (
@@ -2965,7 +2971,11 @@ def _reconcile_semantic_local_albums_sql(
                  library.local_albums.library_id
             where nullif(btrim(library.local_albums.title), '') is not null
               and library.local_albums.artist_id is not null
-              and not exists (
+              and (
+        """
+        + ("true" if allow_same_year_separate_release_merge else "false")
+        + """
+                or not exists (
                 select 1
                 from library.separate_releases
                 where library.separate_releases.library_id =
@@ -3000,6 +3010,7 @@ def _reconcile_semantic_local_albums_sql(
                         ''
                       )
                       )
+                )
               )
           ) as ranked
           where ranked.album_id <> ranked.canonical_album_id
@@ -3452,6 +3463,7 @@ def _execute_semantic_local_album_reconciliation(
     connection: Any,
     *,
     target_album_ids: tuple[int, ...] | None = None,
+    allow_same_year_separate_release_merge: bool = False,
 ) -> None:
     scoped_target_ids = tuple(
         sorted(
@@ -3462,12 +3474,15 @@ def _execute_semantic_local_album_reconciliation(
             }
         )
     )
+    if allow_same_year_separate_release_merge and not scoped_target_ids:
+        raise ValueError("Explicit release consolidation requires a targeted album identity.")
     if not scoped_target_ids:
         for statement in _reconcile_semantic_local_albums_sql():
             connection.execute(statement)
         return
     for statement in _reconcile_semantic_local_albums_sql(
         target_album_ids=scoped_target_ids,
+        allow_same_year_separate_release_merge=allow_same_year_separate_release_merge,
     ):
         if "%(target_album_ids)s" in statement:
             connection.execute(

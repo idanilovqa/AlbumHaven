@@ -59,14 +59,14 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
     await utilityAppearanceActions.saveCompactPlayerStyle('docked');
-    await utilityAppearanceActions.selectSeekbarMode('default');
+    await utilityAppearanceActions.saveSeekbarMode('default');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('regular');
 
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('waveform');
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('waveform');
 
@@ -79,7 +79,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('default');
+    await utilityAppearanceActions.saveSeekbarMode('default');
     await settingsModalAppBarActions.closeSettings();
     await globalPlayerActions.expectExpandedGeometry('regular');
 
@@ -154,6 +154,7 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
   });
 
   await stepLogger.step('Distinguish Floating artwork activation from a bounded drag', async () => {
+    await settingsModalAppBarActions.openSettings();
     await globalPlayerActions.globalPlayer.compactPlayer.coverButton.click();
     await expect(trackModalActions.trackModal.dialog).toBeHidden();
     await globalPlayerActions.globalPlayer.compactPlayer.coverButton.dblclick();
@@ -161,6 +162,8 @@ test(`${CASE_ID} switches expanded, docked, and floating player views without sh
     expect(opened.title).toContain(ALBUM.album);
     await trackModalActions.close();
 
+    await settingsModalAppBarActions.waitForOpen();
+    await settingsModalAppBarActions.closeSettings();
     const drag = await globalPlayerActions.dragFloatingPlayerTo('top-right');
     expect(drag.after.player.x).toBeGreaterThan(drag.before.player.x);
     expect(drag.after.player.x + drag.after.player.width).toBeLessThanOrEqual(drag.viewport.width - 3);

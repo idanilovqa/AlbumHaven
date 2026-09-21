@@ -1,3 +1,5 @@
+import { existsSync, globSync, renameSync } from 'node:fs';
+import path from 'node:path';
 import { InteractionSurfaces, expectCombinedLoopWaveform, expectLoopPauseFirstClick, expectStableButtonHover } from '../poms/interactionSurfaces.js';
 import { expect, test } from '../support/baseFixtures.js';
 
@@ -12,18 +14,32 @@ const LOOP_PLAYER_TITLE = 'Album Haven Last.fm Fixture - Fake Loop Source /';
 const MEDIA_DURATION_TOLERANCE_SECONDS = 0.15;
 const HANDLE_POSITION_TOLERANCE_SECONDS = 0.25;
 
+function resolveOwnedLoopFixtureMedia(loopId) {
+  const tempRoot = String(process.env.ALBUM_HAVEN_E2E_TEMP_ROOT || '').trim();
+  if (!tempRoot) throw new Error('The isolated loop E2E requires ALBUM_HAVEN_E2E_TEMP_ROOT.');
+  const loopRoot = path.resolve(tempRoot, 'app-data', 'loops');
+  const pattern = path.join(loopRoot, 'account-*', 'library-*', `${loopId}.mp3`).replaceAll('\\', '/');
+  const matches = globSync(pattern).map(candidate => path.resolve(candidate));
+  if (matches.length !== 1 || path.relative(loopRoot, matches[0]).startsWith('..')) {
+    throw new Error(`Expected one fixture-owned saved-loop artifact for ${loopId}, found ${matches.length}.`);
+  }
+  return matches[0];
+}
+
 test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold reload', { tag: '@area:loops' }, async ({
   page, galleryActions, globalPlayerActions, playbackEvidence, settingsModalAppBarActions,
   trackModalActions, utilityAppearanceActions, utilityLoopsActions, utilityTabBarActions,
 }) => {
   const names = Array.from({ length: 5 }, (_, index) => `Waveform ${Date.now()} ${test.info().workerIndex} ${index + 1}`);
   const created = [];
+  let repairMediaPath = '';
+  let repairBackupPath = '';
   await galleryActions.goto();
   await galleryActions.waitForGalleryReady();
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
-  await utilityAppearanceActions.selectSeekbarMode('waveform');
+  await utilityAppearanceActions.saveSeekbarMode('waveform');
   await settingsModalAppBarActions.closeSettings();
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
   const playbackMark = await playbackEvidence.playbackMark();
@@ -41,18 +57,107 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
       expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
       created.push(name);
     }
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('loops');
+    await utilityLoopsActions.waitForReady();
+    await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    for (const name of [...names].reverse()) {
+      const { entry, loopId } = await utilityLoopsActions.resolveLoopEntryByName(name);
+      await utilityLoopsActions.expectPausedLoopWaveformPainted(entry, loopId);
+    }
+    await page.reload();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('loops');
+    await utilityLoopsActions.waitForReady();
+    const waveformLoadFrames = utilityLoopsActions.observeGroupWaveformLoad(LOOP_TRACK_TITLE, names);
+    const entries = await Promise.all(names.map(name => utilityLoopsActions.resolveLoopEntryByName(name)));
+    expect(new Set(entries.map(item => item.loopId)).size).toBe(5);
+    for (const { entry, loopId } of entries) {
+      await utilityLoopsActions.expectPausedLoopWaveformPainted(entry, loopId);
+    }
+    const observedFrames = await waveformLoadFrames;
+    expect(observedFrames.length).toBeGreaterThan(0);
+    expect(observedFrames.flat().every(frame => (
+      frame.waveformMode && frame.waveformVisible && !frame.regularVisible
+    )), 'saved-loop rows must never expose the regular seekbar while waveform peaks load').toBe(true);
+
+    const first = entries[0];
+    const firstEntry = first.entry;
+    const firstTimeline = utilityLoopsActions.utilityLoopsTab.loopEntryCard.ordinaryTimelineForEntry(firstEntry);
+    const firstWrap = utilityLoopsActions.utilityLoopsTab.loopEntryCard.timelineWrapForEntry(firstEntry);
+    await utilityLoopsActions.utilityLoopsTab.loopEntryCard.playButtonForEntry(firstEntry).click();
+    await utilityLoopsActions.waitForLoopPlayback(first.loopId);
+    const firstStarted = await utilityLoopsActions.readLoopPlaybackSnapshot(first.loopId);
+    await utilityLoopsActions.waitForLoopProgress(first.loopId, {
+      afterCurrentTime: firstStarted.currentTime,
+      allowWrap: false,
+    });
+    await expect(firstWrap).toHaveCSS('outline-style', 'none');
+    const timelineBounds = await firstTimeline.boundingBox();
+    if (!timelineBounds) throw new Error('Expected saved-loop timeline bounds.');
+    await firstTimeline.click({ position: { x: timelineBounds.width * 0.6, y: timelineBounds.height / 2 } });
+    await expect(firstWrap).toHaveCSS('outline-style', 'none');
+    const brightness = await utilityLoopsActions.utilityLoopsTab.loopEntryCard
+      .readWaveformBrightnessBalance(firstEntry);
+    expect(brightness.progressRatio).toBeGreaterThan(0.5);
+    expect(brightness.played.paintedPixels).toBeGreaterThan(0);
+    expect(brightness.unplayed.paintedPixels).toBeGreaterThan(0);
+    expect(
+      brightness.played.strongAlpha - brightness.unplayed.strongAlpha,
+      'played saved-loop waveform pixels must remain visibly brighter than unplayed pixels',
+    ).toBeGreaterThan(50);
+
+    const second = entries[1];
+    await utilityLoopsActions.startLoopAndExpectExclusive(first.loopId, second);
+
+    await utilityLoopsActions.utilityLoopsTab.loopEntryCard.playButtonForEntry(second.entry).click();
+    await utilityLoopsActions.waitForLoopPlaybackState(second.loopId, { paused: true });
+    const repairTarget = entries[2];
+    repairMediaPath = resolveOwnedLoopFixtureMedia(repairTarget.loopId);
+    repairBackupPath = `${repairMediaPath}.e2e-repair`;
+    renameSync(repairMediaPath, repairBackupPath);
+
     await page.reload();
     await galleryActions.waitForGalleryReady();
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('loops');
     await utilityLoopsActions.waitForReady();
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
-    const entries = await Promise.all(names.map(name => utilityLoopsActions.resolveLoopEntryByName(name)));
-    expect(new Set(entries.map(item => item.loopId)).size).toBe(5);
-    for (const { entry, loopId } of entries) {
-      await utilityLoopsActions.expectPausedLoopWaveformPainted(entry, loopId);
-    }
+    const missing = await utilityLoopsActions.resolveLoopEntryByName(names[2]);
+    const missingCard = utilityLoopsActions.utilityLoopsTab.loopEntryCard;
+    await expect(missingCard.ordinaryWaveformForEntry(missing.entry)).toBeHidden();
+    await expect(missingCard.ordinaryTimelineForEntry(missing.entry)).toBeVisible();
+    await missingCard.playButtonForEntry(missing.entry).click();
+    await expect(missingCard.errorToastByText(
+      'Unable to start loop playback. Please try again.',
+    )).toBeVisible();
+    await utilityLoopsActions.hoverLoopActionByName(names[2], 'enter');
+    await missingCard.loopScissorsButtonForEntry(missing.entry).click();
+    await expect(missingCard.errorToastByText(
+      'Failed to load saved loop waveform.',
+    )).toBeVisible();
+
+    renameSync(repairBackupPath, repairMediaPath);
+    repairBackupPath = '';
+    await page.reload();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('loops');
+    await utilityLoopsActions.waitForReady();
+    await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    const repaired = await utilityLoopsActions.resolveLoopEntryByName(names[2]);
+    await utilityLoopsActions.expectPausedLoopWaveformPainted(repaired.entry, repaired.loopId);
+    await utilityLoopsActions.revealCreateAnotherLoopEditorByName(names[2]);
+    await utilityLoopsActions.cancelCreateAnotherLoopByName(names[2]);
+    await missingCard.playButtonForEntry(repaired.entry).click();
+    await utilityLoopsActions.waitForLoopPlayback(repaired.loopId);
+    const decoded = await utilityLoopsActions.readDecodedLoopSampleEvidence(repaired.loopId);
+    expect(decoded.nonZeroSamples).toBeGreaterThan(0);
   } finally {
+    if (repairBackupPath && existsSync(repairBackupPath) && repairMediaPath) {
+      renameSync(repairBackupPath, repairMediaPath);
+    }
     if (!await settingsModalAppBarActions.settingsModalAppBar.modal.isVisible()) {
       await settingsModalAppBarActions.openSettings();
     }
@@ -63,6 +168,207 @@ test('FTC-UTIL-LOOPS-028 five paused saved loops render waveforms after a cold r
       await utilityLoopsActions.openDeleteConfirmationByName(name);
       expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
     }
+  }
+});
+
+test('FTC-SETTINGS-H03 real log download matches the displayed captured snapshot', { tag: '@area:log-history' }, async ({
+  galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
+  trackModalActions, utilityLogHistoryActions, utilityLoopsActions, utilityTabBarActions,
+}, testInfo) => {
+  const name = `Export snapshot ${testInfo.workerIndex}-${Date.now()}`;
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const track = await trackModalActions.playTrackAt(0);
+  await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
+  await trackModalActions.close();
+  await globalPlayerActions.waitForFullTrackTiming();
+  await globalPlayerActions.openLoopEditor();
+  expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
+  await settingsModalAppBarActions.openSettings();
+  const [response] = await Promise.all([
+    page.waitForResponse(value => value.request().method() === 'GET' && new URL(value.url()).pathname === '/utilities/log-history'),
+    utilityTabBarActions.openTab('log-history'),
+  ]);
+  expect(response.status()).toBe(200);
+  const captured = await response.json();
+  expect(captured.items.length).toBeGreaterThan(0);
+  expect(captured.next_cursor).toBeFalsy();
+  await expect(utilityLogHistoryActions.utilityLogHistoryTab.consoleLines).toHaveCount(captured.items.length);
+  const downloaded = await utilityLogHistoryActions.exportLogs();
+  expect(downloaded.suggestedFilename).toMatch(/^album-haven-logs-.*\.json$/);
+  expect(downloaded.document.snapshot).toBe(captured.snapshot);
+  expect(downloaded.document.items).toEqual(captured.items);
+  expect(downloaded.document.count).toBe(captured.items.length);
+  const history = utilityLogHistoryActions.utilityLogHistoryTab;
+  await history.exportAllButton.click();
+  await history.exportCustomButton.click();
+  for (const [field, input] of [['from', history.exportFrom], ['to', history.exportTo]]) {
+    await expect(input).toHaveAttribute('readonly', '');
+    await expect(input).toHaveAttribute('placeholder', 'mm/dd/yyyy');
+    await input.click();
+    await expect(input).toBeFocused();
+    expect(await history.readDateFocusOutline(input)).toEqual({ painted: true, unclipped: true, horizontalOverflow: false });
+    await history.exportDateButton(field).hover();
+    await page.mouse.down();
+    try {
+      await expect.poll(async () => (await history.readDateFocusOutline(input)).painted).toBe(false);
+    } finally {
+      await page.mouse.up();
+    }
+    const calendar = history.exportCalendar(field);
+    await expect(calendar).toBeVisible();
+    await utilityLogHistoryActions.selectCurrentExportDate(field);
+  }
+  await expect(history.exportTo).toHaveValue(await history.exportFrom.inputValue());
+  await history.exportCancel.click();
+  await expect(history.exportDialog).toBeHidden();
+  await history.periodButton.click();
+  // The shared calendar opens with today's start/end; presets belong to Export all logs.
+  await expect(history.periodFrom).toHaveValue(/^\d{4}-\d{2}-\d{2}$/u);
+  await expect(history.periodTo).toHaveValue(await history.periodFrom.inputValue());
+  const [periodResponse] = await Promise.all([
+    page.waitForResponse(value => value.request().method() === 'GET' && new URL(value.url()).pathname === '/utilities/log-history'),
+    history.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click(),
+  ]);
+  const periodCapture = await periodResponse.json();
+  await expect(history.periodRow).toHaveCount(1);
+  await utilityLogHistoryActions.selectEntryByAction('Loop created');
+  await expect(history.periodRow).toHaveCount(1);
+  await history.periodRow.click();
+  const periodExport = await utilityLogHistoryActions.exportLogs();
+  expect(periodExport.document.snapshot).toBe(periodCapture.snapshot);
+  expect(periodExport.document.items).toEqual(periodCapture.items);
+  await history.clearPeriodButton.click();
+  await expect(history.periodRow).toHaveCount(0);
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  await utilityLoopsActions.openDeleteConfirmationByName(name);
+  expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
+});
+
+test.describe(() => {
+  test.use({ timezoneId: 'America/Santiago' });
+
+  test('FTC-SETTINGS-H04 Period includes complete local dates across skipped midnight', { tag: '@area:log-history' }, async ({
+    galleryActions, page, settingsModalAppBarActions, utilityLogHistoryActions, utilityTabBarActions,
+  }) => {
+    await galleryActions.goto();
+    await galleryActions.waitForGalleryReady();
+    await settingsModalAppBarActions.openSettings();
+    await utilityTabBarActions.openTab('log-history');
+    await utilityLogHistoryActions.waitForReady();
+    const history = utilityLogHistoryActions.utilityLogHistoryTab;
+    for (const [date, start, end] of [
+      ['2026-09-05', '2026-09-05T04:00:00.000Z', '2026-09-06T04:00:00.000Z'],
+      ['2026-09-06', '2026-09-06T04:00:00.000Z', '2026-09-07T03:00:00.000Z'],
+    ]) {
+      await history.periodButton.click();
+      await utilityLogHistoryActions.selectPeriodDay(date);
+      const [response] = await Promise.all([
+        page.waitForResponse(value => value.request().method() === 'GET'
+          && new URL(value.url()).pathname === '/utilities/log-history'
+          && new URL(value.url()).searchParams.get('from_utc') === start),
+        history.periodDialog.getByRole('button', { name: 'Apply', exact: true }).click(),
+      ]);
+      expect(response.status()).toBe(200);
+      const params = new URL(response.url()).searchParams;
+      expect(params.get('from_utc')).toBe(start);
+      expect(params.get('to_utc')).toBe(end);
+      const captured = await response.json();
+      expect(captured.snapshot).toBeTruthy();
+      await expect(history.periodDialog).toBeHidden();
+      await expect(history.periodRow).toHaveCount(1);
+      await expect(history.periodRow).toContainText('America/Santiago');
+      await expect(history.console).toBeVisible();
+      await expect(history.consoleLines).toHaveCount(captured.items.length);
+      await history.clearPeriodButton.click();
+      await expect(history.periodRow).toHaveCount(0);
+    }
+  });
+});
+
+test('FTC-SETTINGS-L02 native panel drag persists order while another loop retains playback and its pending range', { tag: '@area:loops' }, async ({
+  galleryActions, globalPlayerActions, page, settingsModalAppBarActions,
+  trackModalActions, utilityLoopsActions, utilityTabBarActions,
+}, testInfo) => {
+  const names = ['Playing', 'Move', 'Target'].map(label => `${label} native reorder ${testInfo.workerIndex}-${Date.now()}`);
+  await galleryActions.goto();
+  await galleryActions.waitForGalleryReady();
+  await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);
+  const track = await trackModalActions.playTrackAt(0);
+  await globalPlayerActions.waitForCurrentTrack({ path: track.path, trackTitle: LOOP_TRACK_TITLE, visibleTitle: LOOP_PLAYER_TITLE });
+  await trackModalActions.close();
+  await globalPlayerActions.waitForFullTrackTiming();
+  for (const name of names) {
+    await globalPlayerActions.openLoopEditor();
+    expect((await globalPlayerActions.saveLoopWithName(name)).requestCount).toBe(1);
+  }
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  const card = utilityLoopsActions.utilityLoopsTab.loopEntryCard;
+  const before = await card.readPanelOrder();
+  const playingId = await utilityLoopsActions.playLoopByName(names[0]);
+  await utilityLoopsActions.enableRepeatByName(names[0]);
+  await utilityLoopsActions.revealCreateAnotherLoopEditorByName(names[0]);
+  await utilityLoopsActions.adjustLoopBoundaryWithKeyboard(names[0], 'start', 'ArrowRight');
+  await utilityLoopsActions.adjustLoopBoundaryWithKeyboard(names[0], 'end', 'ArrowLeft');
+  const rangeBefore = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect(rangeBefore.startSeconds).toBeGreaterThan(0);
+  const audio = await utilityLoopsActions.captureLoopAudioHandle(playingId);
+  const moveEntry = await utilityLoopsActions.resolveLoopEntryByName(names[1]);
+  const targetEntry = await utilityLoopsActions.resolveLoopEntryByName(names[2]);
+  const moveIsEarlier = before.indexOf(moveEntry.loopId) < before.indexOf(targetEntry.loopId);
+  await utilityLoopsActions.verifyLoopInsertionCues();
+  const result = await utilityLoopsActions.dragLoopAfterByName(
+    moveIsEarlier ? names[1] : names[2],
+    moveIsEarlier ? names[2] : names[1],
+  );
+  expect(result.ordered_ids).not.toEqual(before);
+  await utilityLoopsActions.expandGroupByTitle(LOOP_TRACK_TITLE);
+  expect(await utilityLoopsActions.utilityLoopsTab.loopTree.readSongChildOrder(result.song_key)).toEqual(result.ordered_ids);
+  const continuity = await utilityLoopsActions.readLoopContinuity(audio, playingId);
+  expect(continuity.sameNode).toBe(true);
+  expect(continuity.snapshot.paused).toBe(false);
+  await utilityLoopsActions.waitForLoopProgress(playingId, { afterCurrentTime: continuity.snapshot.currentTime, minimumDelta: 0.2, allowWrap: true });
+  const rangeAfter = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect([rangeAfter.startSeconds, rangeAfter.endSeconds]).toEqual([rangeBefore.startSeconds, rangeBefore.endSeconds]);
+  await utilityLoopsActions.expectCreateAnotherLoopEditorActiveByName(names[0]);
+  const tree = utilityLoopsActions.utilityLoopsTab.loopTree;
+  const search = utilityLoopsActions.utilityLoopsTab.sidebar.search;
+  await search.fill(names[0]);
+  const toggle = tree.collapseToggleForGroup(tree.groupButtonByTitle(LOOP_TRACK_TITLE));
+  for (const expanded of ['false', 'true', 'false', 'true']) {
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', expanded);
+    await expect(search).toHaveValue(names[0]);
+    await expect(tree.childButtons.filter({ hasText: names[1] })).toHaveCount(0);
+    await expect(tree.childButtons.filter({ hasText: names[2] })).toHaveCount(0);
+    if (expanded === 'true') {
+      await expect(tree.childButtons).toHaveCount(1);
+      await expect(tree.childButtons).toContainText(names[0]);
+    }
+  }
+  const filteredContinuity = await utilityLoopsActions.readLoopContinuity(audio, playingId);
+  expect(filteredContinuity.sameNode).toBe(true);
+  expect(filteredContinuity.snapshot.paused).toBe(false);
+  const filteredRange = await utilityLoopsActions.readLoopEditorStateByName(names[0]);
+  expect([filteredRange.startSeconds, filteredRange.endSeconds]).toEqual([rangeBefore.startSeconds, rangeBefore.endSeconds]);
+  await utilityLoopsActions.expectCreateAnotherLoopEditorActiveByName(names[0]);
+  await search.fill('');
+  await page.reload();
+  await galleryActions.waitForGalleryReady();
+  await settingsModalAppBarActions.openSettings();
+  await utilityTabBarActions.openTab('loops');
+  await utilityLoopsActions.waitForReady();
+  await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+  expect(await card.readPanelOrder()).toEqual(result.ordered_ids);
+  for (const name of names) {
+    await utilityLoopsActions.openDeleteConfirmationByName(name);
+    expect((await utilityLoopsActions.confirmDeleteByName(name)).requestCount).toBe(1);
   }
 });
 
@@ -86,6 +392,13 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   let warmupIdleAction = null;
   let playingPlayerLayout = null;
   let selectedTrack;
+  // Approved B02: 48px Play centered in a 56px Capsule, then the shared 8px column gap.
+  const approvedCapsulePlayGap = 8 + ((56 - 48) / 2);
+  const expectApprovedCapsuleSpacing = visual => {
+    expect(Math.abs(visual.playBounds.width - 48)).toBeLessThanOrEqual(1);
+    expect(Math.abs(visual.clusterBounds.width - 56)).toBeLessThanOrEqual(1);
+    expect(Math.abs(visual.timelineLeftGapFromPlay - approvedCapsulePlayGap)).toBeLessThanOrEqual(1);
+  };
 
   await stepLogger.step('Open the fake-data gallery and wait for the initial view to settle', async () => {
     await galleryActions.goto();
@@ -104,7 +417,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(unavailable.visual.timelineCenterY - unavailable.visual.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(unavailable.visual.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(unavailable.visual);
     const hovered = await globalPlayerActions.hoverLoopAction();
     expect(hovered.styles.state).toBe('disabled');
     expect(hovered.podBounds).toEqual(unavailable.visual.podBounds);
@@ -145,7 +458,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await settingsModalAppBarActions.openSettings();
     await utilityTabBarActions.openTab('appearance');
     await utilityAppearanceActions.waitForReady();
-    await utilityAppearanceActions.selectSeekbarMode('waveform');
+    await utilityAppearanceActions.saveSeekbarMode('waveform');
     await settingsModalAppBarActions.closeSettings();
     playingPlayerLayout = await globalPlayerActions.readLoopActionVisualState();
     expect(playingPlayerLayout.coverCenterY).not.toBeNull();
@@ -153,8 +466,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(playingPlayerLayout.timelineCenterY - playingPlayerLayout.playCenterY))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(playingPlayerLayout.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
-    expect(Math.abs(playingPlayerLayout.playerBounds.height - 92)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(playingPlayerLayout);
+    expect(playingPlayerLayout.playerBounds.height).toBe(100);
     expect(playingPlayerLayout.titleTopGap).toBeGreaterThanOrEqual(6);
   });
 
@@ -238,7 +551,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       .toBeLessThanOrEqual(1);
     expect(Math.abs(idle.mainAreaBounds.x - playingPlayerLayout.mainAreaBounds.x))
       .toBeLessThanOrEqual(1);
-    expect(Math.abs(idle.mainLeftGapFromPlay - 8)).toBeLessThanOrEqual(1);
+    expectApprovedCapsuleSpacing(idle);
     const idleHovered = await globalPlayerActions.hoverLoopAction();
     expect(idleHovered.styles.state).toBe('idle');
     expect(idleHovered.mainAreaBounds).toEqual(idle.mainAreaBounds);
@@ -252,7 +565,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(opened.cursors.endHandle).toBe('grab');
     expect(opened.timeWaveformOverlap).toBe(false);
     expect(opened.metadataWaveformGap).toBeGreaterThanOrEqual(3);
-    expect(Math.abs(opened.playerHeight - 92)).toBeLessThanOrEqual(1);
+    expect(Math.abs(opened.playerHeight - 100)).toBeLessThanOrEqual(1);
     expect(opened.waveformHeight).toBe(56);
     expect(opened.selectionStartErrorPixels).toBeLessThanOrEqual(1);
     expect(opened.selectionEndErrorPixels).toBeLessThanOrEqual(1);
@@ -269,10 +582,9 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(cancelHovered.styles.cancel.color).not.toBe(createHovered.styles.cancel.color);
     const collapsed = await globalPlayerActions.moveAwayFromLoopAction();
     expect(collapsed.styles.engaged).toBe('false');
-    expect(collapsed.podBounds).toEqual(idle.podBounds);
-    expect(collapsed.podBounds.width).toBeLessThan(createHovered.podBounds.width);
-    expect(collapsed.styles.pod.borderColor).not.toBe(createHovered.styles.pod.borderColor);
-    expect(collapsed.styles.pod.boxShadow).not.toBe(createHovered.styles.pod.boxShadow);
+    expect(collapsed.podBounds).toEqual(createHovered.podBounds);
+    expect(collapsed.styles.create.color).not.toBe(createHovered.styles.create.color);
+    expect(collapsed.styles.create.glyphFilter).not.toBe(createHovered.styles.create.glyphFilter);
     expect(collapsed.mainAreaBounds).toEqual(idle.mainAreaBounds);
     expect(collapsed.waveformBounds).toEqual(idle.waveformBounds);
     await globalPlayerActions.pauseIfPlaying();
@@ -381,6 +693,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       childLoopCount: 0,
     });
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
+    await utilityLoopsActions.verifySongArtworkAndYear(LOOP_TRACK_TITLE, LOOP_ALBUM_TARGET.year);
     await expectCombinedLoopWaveform(page);
     await expectStableButtonHover(page, surfaces.loopPlay);
     const detail = await utilityLoopsActions.readDetailSummary();
@@ -396,7 +709,14 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       endHandle: false,
     });
     const compactLayout = await utilityLoopsActions.readCompactLoopLayoutByName('Warmup Loop');
-    expect(compactLayout.entryBounds.height).toBeLessThan(140);
+    // L03 adds Original timestamps; L04/B03 reserves the approved bottom glow padding.
+    // Keep the card exactly fitted to its two rows instead of the superseded 140px cap.
+    expect(compactLayout.cardInsets).toEqual({ top: 16, right: 18, bottom: 24, left: 18, rowGap: 7, border: 1 });
+    const { entryBounds, headingBounds, shellBounds } = compactLayout;
+    expect(Math.abs(headingBounds.y - entryBounds.y - 17)).toBeLessThanOrEqual(1);
+    expect(Math.abs(shellBounds.y - headingBounds.y - headingBounds.height - 7)).toBeLessThanOrEqual(1);
+    expect(Math.abs(entryBounds.y + entryBounds.height - shellBounds.y - shellBounds.height - 25)).toBeLessThanOrEqual(1);
+    expect(Math.abs(entryBounds.height - headingBounds.height - shellBounds.height - 49)).toBeLessThanOrEqual(1);
     expect(compactLayout.pitchBounds.y).toBeGreaterThanOrEqual(compactLayout.topRowBounds.y);
     expect(compactLayout.pitchBounds.y + compactLayout.pitchBounds.height)
       .toBeLessThanOrEqual(compactLayout.topRowBounds.y + compactLayout.topRowBounds.height + 1);
@@ -423,8 +743,8 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
       const controlCenterY = bounds.y + (bounds.height / 2);
       expect(Math.abs(controlCenterY - savedLoopTimelineCenterY)).toBeLessThanOrEqual(1);
     });
-    expect(compactLayout.firstEntryGap).toBeGreaterThanOrEqual(0);
-    expect(compactLayout.firstEntryGap).toBeLessThanOrEqual(16);
+    // The detail's 10px flex gap plus the list's 10px block-start padding is intentional.
+    expect(compactLayout.firstEntryGap).toBe(20);
     expect(compactLayout.scissorsBounds.x).toBeGreaterThan(compactLayout.playBounds.x);
     expect(compactLayout.scissorsBounds.y).toBeGreaterThan(compactLayout.playBounds.y);
     warmupIdleAction = await utilityLoopsActions.readLoopActionVisualStateByName('Warmup Loop');
@@ -566,8 +886,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(savedCreateHovered.mainBounds).toEqual(warmupIdleAction.mainBounds);
     expect(savedCreateHovered.timelineBounds).toEqual(warmupIdleAction.timelineBounds);
     const savedCollapsed = await utilityLoopsActions.moveAwayFromLoopActionByName('Warmup Loop');
-    expect(savedCollapsed.podBounds).toEqual(warmupIdleAction.podBounds);
-    expect(savedCollapsed.podBounds.width).toBeLessThan(savedCreateHovered.podBounds.width);
+    expect(savedCollapsed.podBounds).toEqual(savedCreateHovered.podBounds);
     expect(savedCollapsed.mainBounds).toEqual(warmupIdleAction.mainBounds);
     expect(savedCollapsed.timelineBounds).toEqual(warmupIdleAction.timelineBounds);
     await utilityLoopsActions.hoverLoopActionByName('Warmup Loop', 'create');
@@ -685,7 +1004,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     const nestedSave = await globalPlayerActions.submitLoopName('Transition Loop');
     expect(nestedSave.requestCount).toBe(1);
     const immediateGroup = await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE);
-    expect(immediateGroup.countText).toBe('2 loops');
+    expect(immediateGroup.count).toBe(2);
     const immediateDetail = await utilityLoopsActions.readDetailSummary();
     expect(immediateDetail.title).toBe(LOOP_TRACK_TITLE);
     expect(immediateDetail.entryCount).toBe(2);
@@ -700,7 +1019,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     await utilityLoopsActions.waitForReady();
     await utilityLoopsActions.selectGroupByTitle(LOOP_TRACK_TITLE);
     const groupSummary = await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE);
-    expect(groupSummary.countText).toBe('2 loops');
+    expect(groupSummary.count).toBe(2);
     const detail = await utilityLoopsActions.readDetailSummary();
     expect(detail.title).toBe(LOOP_TRACK_TITLE);
     expect(detail.entryCount).toBe(2);
@@ -774,7 +1093,7 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
   await stepLogger.step('Delete a saved loop through the app-owned No and Yes confirmation', async () => {
     const firstOpen = await utilityLoopsActions.openDeleteConfirmationByName('Transition Loop');
     expect(firstOpen.nativeDialogs).toEqual([]);
-    expect(firstOpen.text).toBe('Remove "Transition Loop"? This will delete the saved loop file.');
+    expect(firstOpen.text).toBe('Delete “Transition Loop”? The saved loop will be removed.');
     expect(firstOpen.stacking.deleteZIndex).toBeGreaterThan(firstOpen.stacking.utilityZIndex);
     expect(firstOpen.stacking.deleteOwnsTopElement).toBe(true);
     expect((await utilityLoopsActions.cancelDeleteConfirmationByName('Transition Loop')).requestCount)
@@ -784,11 +1103,11 @@ test(`${CASE_ID} fake-data bottom-player loop save and Utility Loops playback st
     expect(secondOpen.nativeDialogs).toEqual([]);
     expect((await utilityLoopsActions.confirmDeleteByName('Transition Loop')).requestCount).toBe(1);
     expect((await utilityLoopsActions.readDetailSummary()).entryCount).toBe(1);
-    expect((await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE)).countText).toBe('1 loop');
+    expect((await utilityLoopsActions.readGroupSummaryByTitle(LOOP_TRACK_TITLE)).count).toBe(1);
 
     const consecutiveOpen = await utilityLoopsActions.openDeleteConfirmationByName('Warmup Loop');
     expect(consecutiveOpen.nativeDialogs).toEqual([]);
-    expect(consecutiveOpen.text).toBe('Remove "Warmup Loop"? This will delete the saved loop file.');
+    expect(consecutiveOpen.text).toBe('Delete “Warmup Loop”? The saved loop will be removed.');
     expect((await utilityLoopsActions.cancelDeleteConfirmationByName('Warmup Loop')).requestCount)
       .toBe(0);
   });
@@ -827,7 +1146,7 @@ test('FTC-UTIL-LOOPS-026 delete confirmation foregrounds the open Utility modal'
   expect(opened.stacking.deleteZIndex).toBeGreaterThan(opened.stacking.utilityZIndex);
   expect(opened.stacking.deleteOwnsTopElement).toBe(true);
   expect(await utilityLoopsActions.selectDeleteConfirmationTextOutsideDialog())
-    .toBe(`Remove "${loopName}"? This will delete the saved loop file.`);
+    .toBe(`Delete “${loopName}”? The saved loop will be removed.`);
   expect((await utilityLoopsActions.confirmDeleteByName(loopName)).requestCount).toBe(1);
 });
 
@@ -953,7 +1272,7 @@ test('FTC-PLAYER-017 paused reload restores the current waveform', { tag: '@area
   await settingsModalAppBarActions.openSettings();
   await utilityTabBarActions.openTab('appearance');
   await utilityAppearanceActions.waitForReady();
-  await utilityAppearanceActions.selectSeekbarMode('waveform');
+  await utilityAppearanceActions.saveSeekbarMode('waveform');
   await settingsModalAppBarActions.closeSettings();
 
   await galleryActions.selectAlbumDetailsByIdentity(LOOP_ALBUM_TARGET);

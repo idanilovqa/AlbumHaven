@@ -26,16 +26,26 @@ function unmountAppearanceEditors() {
 function mountBackgroundAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor) editor.mount(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Backgrounds could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Backgrounds could not be loaded. Reload this page to try again.' });
 }
 
 // Live canvases consume only the account's applied state, never the editor draft.
 function getSavedAppearancePlayerColors() {
   return typeof window !== 'undefined' ? window.AlbumHavenAppearance?.getSavedPlayerColors?.() || null : null;
 }
+function getSavedAppearanceLoopControlStyle() {
+  return getBackgroundAppearanceEditor()?.getSavedLoopControlStyle?.() === 'companion' ? 'companion' : 'capsule';
+}
+function syncSavedAppearanceLoopControlStyle() {
+  const style = getSavedAppearanceLoopControlStyle();
+  document.querySelectorAll?.('[data-playback-control-cluster][data-loop-control-style]').forEach(node => {
+    node.setAttribute('data-loop-control-style', style);
+  });
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   window.addEventListener('album-haven-appearance-change', () => {
     if (typeof updateWaveformAppearance === 'function') updateWaveformAppearance();
+    syncSavedAppearanceLoopControlStyle();
   });
 }
 
@@ -60,18 +70,23 @@ function mountSeekbarAppearanceEditor(detail) {
   if (editor?.mountSeekbar) editor.mountSeekbar(host, {
     getLegacyColors: getPreviousBrowserWaveformColors,
     getSeekbarMode: () => state.player.appearance?.seekbarMode || 'default',
+    applySeekbarMode: seekbarMode => {
+      state.player.appearance = normalizePlayerAppearance({ ...state.player.appearance, seekbarMode });
+      persistPlayerAppearance();
+      updateWaveformAppearance(true);
+    },
   });
-  else host.innerHTML = '<div class="utility-empty-state">Waveform colors could not be loaded. Reload this page to try again.</div>';
+  else host.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Waveform colors could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlbumPageAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlbumPage) editor.mountAlbumPage(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Album page appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Album page appearance could not be loaded. Reload this page to try again.' });
 }
 
 function mountAlertsAppearanceEditor(detail) {
   const editor = getBackgroundAppearanceEditor();
   if (editor?.mountAlerts) editor.mountAlerts(detail);
-  else detail.innerHTML = '<div class="utility-empty-state">Alert appearance could not be loaded. Reload this page to try again.</div>';
+  else detail.innerHTML = buildOnPageAlertHtml({ severity: 'error', title: 'Appearance unavailable', message: 'Alert appearance could not be loaded. Reload this page to try again.' });
 }

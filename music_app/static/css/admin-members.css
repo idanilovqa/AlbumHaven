@@ -46,7 +46,7 @@
 .settings-host .admin-button.is-danger { border-color: #d93d45; color: var(--red); }
 .settings-host .admin-button:hover,
 .settings-host .admin-button:focus-visible { filter: brightness(1.1); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 14%); }
-.settings-host .admin-notice { margin: 0 0 18px; padding: 12px 14px; border: 1px solid #2c684c; border-radius: 8px; color: #afe2c4; background: #103426; font-size: 12px; }
+.settings-host .admin-notice { margin: 0 0 18px; }
 .settings-host .members-table { border: 1px solid var(--line); }
 .settings-host .members-row { min-height: 78px; padding: 0 15px; display: grid; grid-template-columns: minmax(210px, 1.6fr) minmax(170px, 1.25fr) .65fr .8fr .75fr 58px; align-items: center; gap: 17px; border-bottom: 1px solid #1d3044; color: #9caec2; font-size: 12px; }
 .settings-host .members-row:last-child { border-bottom: 0; }
@@ -98,13 +98,10 @@
 .settings-host .detail-field > span:first-child { padding-top: 12px; font-size: 13px; font-weight: 700; }
 .settings-host .detail-field > input,
 .settings-host .detail-field > select,
-.settings-host .password-control { width: 100%; min-height: 42px; border: 1px solid #32485f; border-radius: 8px; color: var(--ink); background: #0b1929; }
+.settings-host .password-control { --ui-input-action-button-focus: var(--blue); width: 100%; min-height: 42px; border: 1px solid #32485f; border-radius: 8px; color: var(--ink); background: #0b1929; }
 .settings-host .detail-field > input,
 .settings-host .detail-field > select { padding: 0 13px; }
 .settings-host .detail-field small { grid-column: 2; margin-top: -11px; color: #8294aa; font-size: 11px; }
-.settings-host .detail-field input:focus,
-.settings-host .detail-field select:focus,
-.settings-host .password-control:focus-within { border-color: var(--blue); outline: none; box-shadow: 0 0 0 3px rgb(86 173 255 / 12%); }
 .settings-host .password-control { display: flex; overflow: hidden; }
 .settings-host .password-control input { min-width: 0; flex: 1; padding: 0 13px; border: 0; outline: 0; color: var(--ink); background: transparent; }
 .settings-host .password-control button { width: 70px; border: 0; border-left: 1px solid #32485f; color: var(--ink); background: transparent; cursor: pointer; }
@@ -129,8 +126,8 @@
 .settings-host .detail-setting > span:first-child small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .settings-host .detail-setting.is-danger strong { color: var(--red); }
 .settings-host .detail-actions { padding-top: 16px; display: flex; justify-content: flex-end; gap: 11px; }
-.settings-host .admin-form-error { padding: 12px; border: 1px solid #7c4047; border-radius: 8px; color: #ffc0c4; background: #371c22; font-size: 12px; }
-.settings-host .admin-form-status { padding: 12px; border: 1px solid #2c684c; border-radius: 8px; color: #afe2c4; background: #103426; font-size: 12px; }
+.settings-host .admin-form-error { margin: 18px 0; }
+.settings-host .admin-form-status { margin: 18px 0; }
 .settings-host .reauth-panel { margin-top: 18px; padding: 17px; border: 1px solid #31587b; border-radius: 10px; background: #10263b; }
 .settings-host .reauth-panel h2 { margin: 0; font-size: 15px; }
 .settings-host .reauth-panel p { margin: 5px 0 15px; color: #a7b8ca; font-size: 11px; }

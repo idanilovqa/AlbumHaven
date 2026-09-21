@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from music_app.services.loop_request_scope import saved_loop_scope
+
 import asyncio
 from contextlib import suppress
 from dataclasses import dataclass
 import json
+import logging
 import math
 from typing import Any
 
@@ -19,7 +22,10 @@ from music_app.services.playback_pcm import (
     PcmStreamMetadata,
     pack_pcm_frame,
 )
-from music_app.services.waveform_peaks import WaveformPeaksBusyError
+from music_app.services.waveform_peaks import (
+    WAVEFORM_ANALYZER_VERSION,
+    WaveformPeaksBusyError,
+)
 from music_app.services.policy_asgi import require_action
 
 
@@ -50,6 +56,7 @@ _MAX_PROTOCOL_INTEGER = 2_147_483_647
 _NORMAL_SHUTDOWN_CODE = 1001
 
 router = APIRouter()
+_LOGGER = logging.getLogger(__name__)
 
 
 async def _wait_for_http_disconnect(request: Request) -> None:
@@ -81,15 +88,58 @@ async def playback_waveform(
             {"error": "Provide either path or loop_id, not both"},
             status_code=400,
         )
+    loop_scope = await saved_loop_scope(request) if requested_loop_id else None
     resolved_path = (
-        resolve_loop_media_path(request.app.state.config, requested_loop_id)
-        if requested_loop_id
+        resolve_loop_media_path(
+            request.app.state.config,
+            requested_loop_id,
+            **loop_scope,
+        )
+        if loop_scope is not None
         else resolve_configured_media_path(request.app.state.config, requested_path)
     )
     if resolved_path is None:
         return JSONResponse({"error": "Media file not found"}, status_code=404)
 
+    loop_cache = (
+        getattr(request.app.state, "saved_loop_waveform_peak_cache_repository", None)
+        if loop_scope is not None
+        else None
+    )
+    loop_cache_identity = None
+    if loop_cache is not None:
+        try:
+            stat = resolved_path.stat()
+        except OSError:
+            return JSONResponse({"error": "Media file not found"}, status_code=404)
+        loop_cache_identity = {
+            **loop_scope,
+            "loop_id": requested_loop_id,
+            "file_size_bytes": int(stat.st_size),
+            "modified_at_ns": int(stat.st_mtime_ns),
+            "sample_count": bins,
+            "analyzer_version": WAVEFORM_ANALYZER_VERSION,
+        }
+        try:
+            peaks = await asyncio.to_thread(
+                loop_cache.get_for_loop,
+                **loop_cache_identity,
+            )
+        except Exception as error:
+            _LOGGER.warning("Saved-loop waveform cache read failed: %s", error)
+        else:
+            if peaks is not None:
+                return JSONResponse(
+                    {
+                        "left": list(peaks.left),
+                        "right": list(peaks.right),
+                        "sampleCount": peaks.sample_count,
+                    }
+                )
+
     if cachedOnly == "1":
+        if loop_scope is not None:
+            return Response(status_code=204)
         try:
             peaks = await request.app.state.waveform_peaks_registry.get_cached(
                 resolved_path,
@@ -133,6 +183,25 @@ async def playback_waveform(
         disconnect_task.cancel()
         disconnect_task.add_done_callback(_observe_cancelled_task)
         await asyncio.gather(peaks_task, return_exceptions=True)
+
+    if loop_cache is not None and loop_cache_identity is not None:
+        try:
+            current_stat = resolved_path.stat()
+        except OSError:
+            current_stat = None
+        if (
+            current_stat is not None
+            and int(current_stat.st_size) == loop_cache_identity["file_size_bytes"]
+            and int(current_stat.st_mtime_ns) == loop_cache_identity["modified_at_ns"]
+        ):
+            try:
+                await asyncio.to_thread(
+                    loop_cache.put_for_loop,
+                    **loop_cache_identity,
+                    peaks=peaks,
+                )
+            except Exception as error:
+                _LOGGER.warning("Saved-loop waveform cache write failed: %s", error)
 
     return JSONResponse(
         {

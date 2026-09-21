@@ -100,9 +100,23 @@ function createContext(stateOverrides = {}) {
   const calls = {
     pendingSyncs: 0,
     renders: 0,
+    filterRenders: 0,
     missingAlbumRemovalConfirms: [],
   };
+  const filterMenu = {
+    hidden: false,
+    set innerHTML(value) { this.markup = value; calls.filterRenders += 1; },
+  };
+  const utilityElements = {
+    problemFilterMenu: filterMenu,
+    problemFilterChips: { innerHTML: '' },
+    problemFilterButton: {
+      classList: { toggle() {} },
+      setAttribute() {},
+    },
+  };
   const context = {
+    getUtilityModalElements() { return utilityElements; },
     document: {
       querySelectorAll() {
         return [];
@@ -208,11 +222,50 @@ function createContext(stateOverrides = {}) {
   };
 
   vm.createContext(context);
+  context.window = context;
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../../../music_app/static/js/button-component.js'), 'utf8'), context);
   vm.runInContext(utilityListBuildersSource, context, {
     filename: utilityListBuildersPath,
   });
   vm.runInContext(helperSource, context, { filename: helperPath });
   return { context, calls };
+}
+
+test('clicking the filter search input dismisses only the dropdown without consuming input focus', async () => {
+  const selected = ['Missing cover art'];
+  const { context, calls } = createContext({ selectedProblemFilters: selected });
+  const { event, wasPrevented } = createEvent({
+    // The input shares this wrapper; the old boundary must reproduce the bug.
+    '.utility-problem-filter, .utility-problem-filter-chips': createElement(),
+  });
+  context.document.activeElement = event.target;
+  event.target.focus = () => assert.fail('Dismissal must not redirect focus');
+  await context.handleUtilityBootstrapClick(event);
+  assert.equal(context.state.utility.problemDropdownOpen, false);
+  assert.equal(context.getUtilityModalElements().problemFilterMenu.hidden, true);
+  assert.equal(calls.filterRenders, 1);
+  assert.equal(calls.renders, 0);
+  assert.equal(wasPrevented(), false);
+  assert.equal(context.document.activeElement, event.target);
+  assert.equal(context.state.utility.selectedProblemFilters, selected);
+});
+
+for (const ancestor of ['.utility-problem-filter-menu', '.utility-problem-filter-chips', '.utility-problem-filter-button']) {
+  test(`clicking within ${ancestor} preserves its normal dropdown behavior`, async () => {
+    const { context, calls } = createContext();
+    const element = createElement();
+    const { event } = createEvent();
+    event.target.closest = selector => {
+      if (selector.split(', ').includes(ancestor)) return element;
+      if (ancestor === '.utility-problem-filter-button' && selector === '[data-toggle-problem-filter="1"]') return element;
+      return null;
+    };
+    await context.handleUtilityBootstrapClick(event);
+    const trigger = ancestor === '.utility-problem-filter-button';
+    assert.equal(context.state.utility.problemDropdownOpen, !trigger);
+    assert.equal(calls.filterRenders, 0);
+    assert.equal(calls.renders, trigger ? 1 : 0);
+  });
 }
 
 test('editing a tag field refreshes the canonical pending-change presentation', () => {
@@ -243,7 +296,7 @@ test('switching away from Loops clears session-only Space ownership', () => {
   );
 });
 
-test('failure alert Log History link selects its exact entry before opening the tab', async () => {
+test('failure alert Log History link passes its exact entry to the authoritative open owner', async () => {
   const link = createElement({
     'data-log-history-entry-id': 'tag-edit-failure-42',
   });
@@ -256,14 +309,14 @@ test('failure alert Log History link selects its exact entry before opening the 
   let hidden = false;
   let opened = false;
   context.hideRepairAlert = () => { hidden = true; };
-  context.openUtilityLogHistoryTab = () => { opened = true; };
+  context.openUtilityLogHistoryTab = entryId => { opened = entryId; };
 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
   assert.equal(hidden, true);
-  assert.equal(opened, true);
-  assert.equal(context.state.utility.selectedLogHistoryId, 'tag-edit-failure-42');
+  assert.equal(opened, 'tag-edit-failure-42');
+  assert.equal(context.state.utility.selectedLogHistoryId, 'older-entry', 'the controller accepts selection after its scoped request');
 });
 
 test('applying a problem filter preserves the selected album in the live bootstrap handler when it still matches', () => {
@@ -276,7 +329,7 @@ test('applying a problem filter preserves the selected album in the live bootstr
   });
   const filterContainer = createElement();
   const { event, wasPrevented } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -303,7 +356,7 @@ test('applying a problem filter clears the selected album in the live bootstrap 
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Poor art quality',
     }),
@@ -328,7 +381,7 @@ test('removing a problem filter preserves the selected album in the live bootstr
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-remove-problem-filter]': createElement({
       'data-remove-problem-filter': 'Poor art quality',
     }),
@@ -342,7 +395,7 @@ test('removing a problem filter preserves the selected album in the live bootstr
   assert.equal(context.state.utility.problemDropdownOpen, false);
 });
 
-test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', () => {
+test('clicking a problematic album row clears deferred auto-selection in the live bootstrap handler', async () => {
   const { context } = createContext({
     deferProblematicAutoSelection: true,
     focusedTrackPath: 'C:\\Music\\Artist Alpha\\Album Alpha\\18 Late Problem.flac',
@@ -353,7 +406,7 @@ test('clicking a problematic album row clears deferred auto-selection in the liv
     }),
   });
 
-  context.handleUtilityBootstrapClick(event);
+  await context.handleUtilityBootstrapClick(event);
 
   assert.equal(context.state.utility.selectedProblematicKey, 'album-7');
   assert.equal(context.state.utility.deferProblematicAutoSelection, false);
@@ -386,19 +439,19 @@ test('Problematic Files uses the shared missing-album removal confirmation', () 
   }]);
 });
 
-test('Problematic Files handler leaves Album Details missing-album actions to the gallery handler', () => {
+test('Problematic Files handler leaves Album Details missing-album actions to the gallery handler', async () => {
   const { context, calls } = createContext();
   const { event, wasPrevented } = createEvent({
     '[data-remove-missing-album="1"]': createElement({ 'data-remove-missing-album': '1' }),
   });
 
-  context.handleUtilityBootstrapClick(event);
+  await context.handleUtilityBootstrapClick(event);
 
   assert.equal(wasPrevented(), false);
   assert.deepEqual(calls.missingAlbumRemovalConfirms, []);
 });
 
-test('Rules revert passes the complete current exclusion item to the optimistic queue', async () => {
+test('Rules revert preserves the complete current exclusion item for confirmation', async () => {
   const rowKey = 'album::neal-morse-question-2005::undecoded-characters';
   const ruleItem = {
     row_key: rowKey,
@@ -428,7 +481,8 @@ test('Rules revert passes the complete current exclusion item to the optimistic 
   await context.handleUtilityBootstrapClick(click.event);
 
   assert.equal(click.wasPrevented(), true);
-  assert.deepEqual(queued, [ruleItem]);
+  assert.deepEqual(queued, []);
+  assert.equal(context.state.utility.pendingRuleRevert.item, ruleItem);
 });
 
 test('pointer activation opens exclusion confirmation from the semantic click only', async () => {
@@ -493,10 +547,11 @@ test('separate releases has an independent enabled action without a problem excl
       key: 'artist::album',
       years: [1988, 1992],
     },
+    allowed_actions: { 'library.rules.manage': true },
   });
 
   assert.match(html, /data-open-separate-release-confirm="1"/);
-  assert.match(html, />Apply separate releases<\/button>/);
+  assert.match(html, />Apply separate releases<\/span>/);
   assert.doesNotMatch(
     html.match(/<button[^>]*data-open-separate-release-confirm="1"[^>]*>/)?.[0] || '',
     /\bdisabled\b/,
@@ -526,7 +581,7 @@ test('separate releases action opens its own confirmation even with a problem ex
   assert.equal(context.state.utility.pendingRepairAction, 'separate-release');
 });
 
-test('exclusion confirmation contains only the approved sentence and Cancel or Exclude actions', () => {
+test('exclusion confirmation names the affected problem and its reversible effect', () => {
   const dialogAttributes = new Map([
     ['aria-labelledby', 'repair-confirm-title'],
     ['aria-describedby', 'repair-confirm-text'],
@@ -565,13 +620,14 @@ test('exclusion confirmation contains only the approved sentence and Cancel or E
   };
   vm.createContext(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
+  context.getSelectedProblematicAlbum = () => ({ name: 'Album', album_problem_rows: [{ row_key: 'opaque-row-key', reason: 'Missing year' }] });
 
   context.openRepairConfirmModal();
 
   assert.equal(elements.overlay.hidden, false);
-  assert.equal(elements.text.textContent, 'Are you sure? This will create an exclusion rule');
+  assert.match(elements.text.textContent, /Album.*Missing year.*hidden.*revert/);
   assert.equal(elements.cancel.textContent, 'Cancel');
-  assert.equal(elements.accept.textContent, 'Exclude');
+  assert.equal(elements.accept.textContent, 'Create Exception');
   assert.equal(elements.title.hidden, true);
   assert.equal(elements.title.textContent, '');
   assert.equal(elements.dialog.getAttribute('aria-labelledby'), 'repair-confirm-text');
@@ -663,7 +719,7 @@ test('normal repair confirmation keeps Repair local files as its accessible name
   assert.equal(elements.dialog.getAttribute('aria-describedby'), 'repair-confirm-text');
 });
 
-test('canceling exclusion confirmation restores focus to Exclude the problem', () => {
+test('canceling exclusion confirmation restores focus to Create Exception', () => {
   let focusCalls = 0;
   const excludeButton = {
     focus() { focusCalls += 1; },
@@ -688,6 +744,7 @@ test('canceling exclusion confirmation restores focus to Exclude the problem', (
     getRepairConfirmElements() { return elements; },
     getSelectedRepairRowKeys() { return []; },
     getSelectedSeparateReleaseKeys() { return []; },
+    getSelectedProblematicAlbum() { return { name: 'Album', album_problem_rows: [{ row_key: 'opaque-row-key', reason: 'Missing year' }] }; },
   };
   vm.createContext(context);
   vm.runInContext(utilityLoadersSource, context, { filename: utilityLoadersPath });
@@ -713,7 +770,8 @@ test('clicking a non-library integration still selects it when the library helpe
 
   assert.equal(wasPrevented(), true);
   assert.equal(context.state.utility.selectedIntegrationKey, 'foobar');
-  assert.equal(calls.renders, 2);
+  assert.equal(calls.renders, 1, 'integration selection renders the content once');
+  assert.equal(calls.filterRenders, 1, 'outside dismissal refreshes only the filter controls');
 });
 
 test('clicking analyze on the local playlist import surface runs the analyze action', async () => {
@@ -748,7 +806,7 @@ test('applying the base incomplete-order filter preserves a selection after deta
   });
   const filterContainer = createElement();
   const { event } = createEvent({
-    '.utility-problem-filter, .utility-problem-filter-chips': filterContainer,
+    '.utility-problem-filter-button, .utility-problem-filter-menu, .utility-problem-filter-chips': filterContainer,
     '[data-problem-filter-value]': createElement({
       'data-problem-filter-value': 'Incomplete track order',
     }),
@@ -1092,15 +1150,16 @@ test('changing the local playlist import file input stores the selected file thr
   assert.equal(receivedFile, playlistFile);
 });
 
-test('clicking Export Logs invokes the explicit browser download action', async () => {
+test('clicking Export displayed logs invokes the scoped snapshot download action', async () => {
   const { context } = createContext({ activeTab: 'log-history' });
   let exportCalls = 0;
-  context.exportBrowserLogHistory = async () => {
+  context.handleUtilityLogHistoryAction = async action => {
+    assert.equal(action, 'export-current');
     exportCalls += 1;
   };
-  const exportButton = createElement({ 'data-export-log-history': '1' });
+  const exportButton = createElement({ 'data-log-history-action': 'export-current' });
   const { event, wasPrevented } = createEvent({
-    '[data-export-log-history="1"]': exportButton,
+    '[data-log-history-action]': exportButton,
   });
   await context.handleUtilityBootstrapClick(event);
   assert.equal(wasPrevented(), true);

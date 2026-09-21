@@ -1,3 +1,4 @@
+{% from "components/on-page-alert.html" import on_page_alert %}
 <!doctype html>
 <html lang="en">
 <head>
@@ -13,9 +14,10 @@
   <script src="/static/js/account.js" defer></script>
   <script src="/static/js/settings-navigation.js" defer></script>
   {% include "partials/appearance-bootstrap.html" %}
+  <link rel="stylesheet" href="/static/css/runtime/alert-components.css">
 </head>
 <body>
-  <p class="settings-navigation-error" data-settings-navigation-error role="alert" hidden></p>
+  {{ on_page_alert('This page could not be loaded. Please try again.', severity='error', hidden=true, class_name='settings-navigation-error', attributes={'data-settings-navigation-error': ''}) }}
   <main class="settings-host settings-shell" data-settings-host>
     {% from "partials/app-bar.html" import app_bar with context %}
     {{ app_bar() }}
@@ -31,9 +33,9 @@
         {% if allowed_actions.allows('accounts.create') %}<a class="admin-button is-primary" href="/admin/accounts/new"><span aria-hidden="true">♙+</span> Add user</a>{% endif %}
       </header>
 
-      {% if created %}<p class="admin-notice" role="status">The account was created and is waiting for its invitation to be accepted.</p>{% endif %}
-      <p data-admin-roster-status role="status" aria-live="polite" hidden></p>
-      <p data-admin-roster-error role="alert" hidden></p>
+      {% if created %}{{ on_page_alert('The account was created and is waiting for its invitation to be accepted.', role='status', class_name='admin-notice') }}{% endif %}
+      {{ on_page_alert(role='status', hidden=true, attributes={'data-admin-roster-status': '', 'aria-live': 'polite'}) }}
+      {{ on_page_alert(severity='error', hidden=true, attributes={'data-admin-roster-error': ''}) }}
 
       <div class="members-table" role="table" aria-label="Managed users">
         <div class="members-row members-table-head" role="row">

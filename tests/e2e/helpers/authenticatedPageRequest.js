@@ -26,7 +26,7 @@ function serializeCookies(cookies, target) {
     });
 }
 
-export async function authenticatedPageGet(page, url, options = {}) {
+async function authenticatedPageOptions(page, url, options = {}) {
   const current = new URL(page.url());
   const target = new URL(url, current);
   if (target.origin !== current.origin) {
@@ -42,5 +42,15 @@ export async function authenticatedPageGet(page, url, options = {}) {
     throw new Error('Authenticated functional requests manage the Cookie header.');
   }
   headers.Cookie = serialized.join('; ');
-  return page.request.get(target.toString(), { ...options, headers });
+  return { target: target.toString(), options: { ...options, headers } };
+}
+
+export async function authenticatedPageGet(page, url, options = {}) {
+  const request = await authenticatedPageOptions(page, url, options);
+  return page.request.get(request.target, request.options);
+}
+
+export async function authenticatedPagePut(page, url, options = {}) {
+  const request = await authenticatedPageOptions(page, url, options);
+  return page.request.put(request.target, request.options);
 }

@@ -1,3 +1,4 @@
+{% from 'components/on-page-alert.html' import on_page_alert %}
   <div class="confirm-modal" id="repair-confirm-modal" hidden>
     <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="repair-confirm-title" aria-describedby="repair-confirm-text">
       <h3 class="confirm-modal-title" id="repair-confirm-title">Repair local files</h3>
@@ -13,9 +14,8 @@
     <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="tag-edit-confirm-title" aria-describedby="tag-edit-confirm-text tag-edit-non-album-warning">
       <h3 class="confirm-modal-title" id="tag-edit-confirm-title">Apply tag edits</h3>
       <div class="confirm-modal-text" id="tag-edit-confirm-text">Are you sure?</div>
-      <div class="tag-edit-non-album-warning" id="tag-edit-non-album-warning" role="alert" hidden>
-        <span class="tag-edit-non-album-warning-icon" data-non-album-rarity-warning-icon="1" aria-hidden="true">!</span>
-        <span data-non-album-rarity-warning-text="1">Applying non-album rarity exception to this track will remove it from the album. You sure?</span>
+      <div id="tag-edit-non-album-warning" hidden>
+        {{ on_page_alert('Applying non-album rarity exception to this track will remove it from the album. You sure?', severity='warning', title='Track will leave this album') }}
       </div>
       <div class="confirm-modal-actions">
         <button class="button" type="button" data-close-tag-edit-confirm="1">Cancel</button>
@@ -67,6 +67,17 @@
       <div class="confirm-modal-actions">
         <button class="button" type="button" id="app-confirm-cancel">Cancel</button>
         <button class="button" type="button" id="app-confirm-accept">Continue</button>
+      </div>
+    </div>
+  </div>
+  <div class="confirm-modal" id="app-form-modal" hidden>
+    <div class="confirm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="app-form-title" aria-describedby="app-form-error">
+      <h3 class="confirm-modal-title" id="app-form-title"></h3>
+      <div id="app-form-content"></div>
+      <p id="app-form-error" role="alert"></p>
+      <div class="confirm-modal-actions">
+        <button class="button" type="button" id="app-form-cancel">Cancel</button>
+        <button class="button" type="button" id="app-form-submit">Apply</button>
       </div>
     </div>
   </div>

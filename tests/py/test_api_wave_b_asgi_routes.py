@@ -5,14 +5,60 @@ from copy import deepcopy
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import sys
 
 import pytest
 
+
+def test_missing_statistics_migration_does_not_hide_integrations(monkeypatch):
+    from psycopg.errors import UndefinedColumn
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import listen_history
+
+    def unavailable(*args, **kwargs):
+        raise UndefinedColumn('measured_listened_seconds')
+
+    monkeypatch.setattr(listen_history, 'build_measured_playback_statistics', unavailable)
+    monkeypatch.setattr(routes, 'build_listen_history_status_counts', lambda *args, **kwargs: {
+        'listen_history_count': 7, 'pending_scrobble_count': 2,
+    })
+    result = routes._enrich_lastfm_status({}, {'key': 'lastfm', 'connected': True}, account_id='owner', library_id='library')
+    assert result['connected'] is True
+    assert result['listen_history_count'] == 7
+    assert result['playback_statistics'] is None
+
 from tests.py.asgi_testing import create_test_asgi_app
+from tests.py.asgi_testing import configure_test_bootstrap_actor
 from tests.py.asgi_testing import decode_json as _decode_json
 from tests.py.asgi_testing import collect_route_paths as _collect_route_paths
 from tests.py.asgi_testing import run_asgi_request as _run_asgi_request
 from tests.py.asgi_testing import runtime_app_from_asgi_app
+from tests.py.test_settings_measured_listen_ledger import ledger, measured, rows as measured_rows
+
+
+@pytest.mark.parametrize('statistics', [None, {'local_playcount': 7}])
+def test_integrations_endpoint_reuses_scoped_statistics(monkeypatch, statistics):
+    import asyncio
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import listen_history
+
+    async def scope(request):
+        return SimpleNamespace(account_id='owner', library_id='library')
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Endpoint must not query statistics a second time')
+
+    monkeypatch.setattr(routes, '_app_config', lambda request: {})
+    monkeypatch.setattr(routes, 'history_scope_for_request', scope)
+    monkeypatch.setattr(listen_history, 'build_measured_playback_statistics', unexpected)
+    monkeypatch.setattr(routes, '_build_integrations_payload', lambda *args, **kwargs: {
+        'ok': True, 'integrations': [{'key': 'lastfm', 'playback_statistics': statistics},
+                                    {'key': 'foobar'}, {'key': 'local-playlist-import'}]})
+    response = asyncio.run(routes.utilities_integrations(None))
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert len(payload['integrations']) == 3
+    assert payload['playback_statistics'] == statistics
 
 
 @pytest.fixture
@@ -27,7 +73,9 @@ def _track_ref(app, filename: str = "01 Track.flac") -> str:
 def _make_asgi_app():
     from music_app import create_asgi_app
 
-    return create_asgi_app()
+    asgi_app = create_asgi_app()
+    configure_test_bootstrap_actor(asgi_app)
+    return asgi_app
 
 
 class _NoFlaskBridge:
@@ -36,10 +84,75 @@ class _NoFlaskBridge:
 
 
 @pytest.fixture
-def local_log_history_items(app):
+def empty_scoped_lastfm_history(monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services import listen_history
+
+    def counts(config, *, account_id, library_id):
+        assert (account_id, library_id) == (1, 1)
+        return {"listen_history_count": 0, "pending_scrobble_count": 0}
+
+    def statistics(config, *, account_id, library_id):
+        assert (account_id, library_id) == (1, 1)
+        return {"local_playcount": 0, "total_listening_seconds": 0.0}
+
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", counts)
+    monkeypatch.setattr(listen_history, "build_measured_playback_statistics", statistics)
+
+
+@pytest.fixture
+def scoped_history_runtime(app, monkeypatch, ledger):
+    """Use independently owned real PostgreSQL rows for route/history contracts."""
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+    from music_app.services.log_history import HistoryScope
+
+    owner = ledger["own"]
+    app.config.update(ledger["config"])
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=owner["account_id"],
+        session_id=1,
+        username_display="fixture-listener",
+        is_bootstrap_owner=True,
+        current_library_id=owner["library_id"],
+        library_relationships=(LibraryRelationship(owner["library_id"], "owner", True),),
+    )
+
+    class Resolver:
+        def resolve(self, _raw_token):
+            return actor
+
+    make_app = _make_asgi_app
+
+    def make_scoped_app():
+        asgi_app = make_app()
+        asgi_app.state.config = app.config
+        asgi_app.state.current_actor_resolver = Resolver()
+        asgi_app.state.media_host_library_id = owner["library_id"]
+        return asgi_app
+
+    monkeypatch.setattr(sys.modules[__name__], "_make_asgi_app", make_scoped_app)
+    return HistoryScope(
+        library_id=owner["library_id"], account_id=owner["account_id"], origin_kind="request",
+    )
+
+
+@pytest.fixture
+def connected_lastfm_session(app, scoped_history_runtime):
+    from music_app.services.lastfm import get_saved_lastfm_session, save_lastfm_settings
+
+    save_lastfm_settings(app.config, {
+        "username": "owned-fixture-listener", "session_key": "owned-fixture-session",
+        "connected_at": "2026-09-18T12:00:00+00:00",
+    }, account_id=scoped_history_runtime.account_id)
+    return get_saved_lastfm_session(app.config, account_id=scoped_history_runtime.account_id)
+
+
+@pytest.fixture
+def local_log_history_items(app, scoped_history_runtime):
     from music_app.services.log_history import load_log_history
 
-    return lambda: load_log_history(app.config)
+    return lambda: load_log_history(app.config, scope=scoped_history_runtime)
 
 
 @pytest.fixture()
@@ -152,6 +265,8 @@ def test_asgi_wave_b_routes_register_natively(asgi_app):
         "/utilities/imports/local-playlists/analyze",
         "/utilities/imports/local-playlists/import",
         "/utilities/integrations/lastfm",
+        "/utilities/integrations/lastfm/scrobbles",
+        "/utilities/integrations/lastfm/scrobbles/submit",
         "/playback/session/now-playing",
         "/playback/session/scrobble",
         "/playback/session/complete",
@@ -176,14 +291,13 @@ def test_asgi_wave_b_routes_register_natively(asgi_app):
         assert route_path in route_paths
 
 
-def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_headers(app):
+def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_headers(app, monkeypatch, empty_scoped_lastfm_history):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         asgi_routes,
         "build_lastfm_status",
-        lambda _config: {
+        lambda _config, **_scope: {
             "key": "lastfm",
             "title": "Last.fm",
             "api_configured": False,
@@ -196,20 +310,12 @@ def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_hea
     monkeypatch.setattr(
         asgi_routes,
         "build_listen_history_status_counts",
-        lambda _config: {"listen_history_count": 0, "pending_scrobble_count": 0},
+        lambda _config, **_scope: {"listen_history_count": 0, "pending_scrobble_count": 0},
     )
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_integration_status",
-        lambda config, *, base_status, listen_history_count, pending_scrobble_count: {
-            **dict(base_status),
-            "listen_history_count": listen_history_count,
-            "pending_scrobble_count": pending_scrobble_count,
-            "sync_state_mode": "local_postgres_orchestration",
-            "sync_problem_count": 0,
-            "last_retry_summary": {},
-        },
-    )
+    def reject_unscoped_projection(*_args, **_kwargs):
+        raise AssertionError("An authenticated projection must not read global sync state")
+
+    monkeypatch.setattr(asgi_routes, "build_lastfm_integration_status", reject_unscoped_projection)
     asgi_app = _make_asgi_app()
 
     integrations_status, _integrations_headers, integrations_body = _run_asgi_request(
@@ -254,10 +360,12 @@ def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_hea
     assert lastfm["listen_history_count"] >= 0
     assert isinstance(lastfm["pending_scrobble_count"], int)
     assert lastfm["pending_scrobble_count"] >= 0
-    assert lastfm["sync_state_mode"] == "local_postgres_orchestration"
-    assert isinstance(lastfm["sync_problem_count"], int)
-    assert lastfm["sync_problem_count"] >= 0
-    assert isinstance(lastfm["last_retry_summary"], dict)
+    assert lastfm["playback_statistics"] == {
+        "local_playcount": 0, "total_listening_seconds": 0.0,
+    }
+    assert integrations_payload["playback_statistics"] == lastfm["playback_statistics"]
+    assert "last_retry_summary" not in lastfm
+    assert "sync_problem_count" not in lastfm
     assert foobar["help_route"] == "/utilities/integrations/foobar/help"
     assert local_import["analyze_route"] == "/utilities/imports/local-playlists/analyze"
     assert help_status == 200
@@ -274,111 +382,535 @@ def test_asgi_integrations_and_foobar_asset_routes_preserve_payload_and_file_hea
     assert conditional_body == b""
     assert missing_status == 404
     assert _decode_json(missing_body) == {"ok": False, "error": "Unknown Foobar reference asset."}
-    monkeypatch.undo()
 
 
-def test_asgi_integrations_lastfm_enrichment_uses_route_sources(app, monkeypatch):
-    from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+def test_lastfm_scrobble_summary_is_scoped_and_provider_total_is_best_effort(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.lastfm import LastfmError
 
-    threadpool_calls: list[tuple[object, tuple[object, ...]]] = []
-    history_count_calls: list[object] = []
-
-    async def fake_run_in_threadpool(function, *args):
-        threadpool_calls.append((function, args))
-        return function(*args)
-
-    def fail_if_retried(_config):
-        raise AssertionError("GET /utilities/integrations must not retry pending scrobbles")
-
-    def fake_build_listen_history_status_counts(config):
-        history_count_calls.append(config)
-        return {"listen_history_count": 42, "pending_scrobble_count": 7}
-
-    monkeypatch.setattr(asgi_routes, "run_in_threadpool", fake_run_in_threadpool)
-    monkeypatch.setattr(asgi_routes, "retry_pending_lastfm_scrobbles", fail_if_retried)
+    counts = []
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: (
+        counts.append((account_id, library_id)) or
+        {"listen_history_count": 42, "pending_scrobble_count": 3}
+    ))
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="listener"))
     monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_status",
-        lambda config: {
-            "key": "lastfm",
-            "title": "Last.fm",
-            "api_configured": True,
-            "connected": True,
-            "username": "demo-user",
-        },
+        routes, "get_lastfm_total_scrobbles",
+        lambda config, *, session: (_ for _ in ()).throw(LastfmError("provider unavailable", retryable=True)),
     )
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_listen_history_status_counts",
-        fake_build_listen_history_status_counts,
-    )
-
-    def fake_build_lastfm_integration_status(
-        config,
-        *,
-        base_status,
-        listen_history_count,
-        pending_scrobble_count,
-    ):
-        assert config is app.config
-        assert base_status["username"] == "demo-user"
-        assert listen_history_count == 42
-        assert pending_scrobble_count == 7
-        payload = dict(base_status)
-        payload.update(
-            {
-                "listen_history_count": listen_history_count,
-                "pending_scrobble_count": pending_scrobble_count,
-                "sync_state_mode": "seeded_test_bridge",
-                "sync_problem_count": 3,
-                "last_retry_summary": {
-                    "pending_before": 9,
-                    "attempted": 4,
-                    "succeeded": 2,
-                    "failed": 2,
-                    "pending_after": 7,
-                },
-            }
-        )
-        return payload
-
-    monkeypatch.setattr(asgi_routes, "build_lastfm_integration_status", fake_build_lastfm_integration_status)
-
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state
 
     status, _headers, body = _run_asgi_request(
-        asgi_app,
-        "GET",
-        "/utilities/integrations",
+        asgi_app, "GET", "/utilities/integrations/lastfm/scrobbles",
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True, "scrobbled": 42, "pending": 3,
+        "lastfm_total": None, "can_submit": True,
+    }
+    assert counts == [(1, 1)]
+
+
+def test_lastfm_scrobble_submit_bypasses_backoff_with_exact_scope(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    retry_calls = []
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda config: True)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="listener"))
+    monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", lambda config, *, session: 9001)
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: {
+        "listen_history_count": 44, "pending_scrobble_count": 0,
+    })
+    monkeypatch.setattr(
+        routes, "retry_pending_lastfm_scrobbles",
+        lambda config, **kwargs: retry_calls.append(kwargs) or {
+            "pending_before": 2, "attempted": 2, "succeeded": 2,
+            "failed": 0, "pending_after": 0,
+        },
+    )
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 200
+    assert _decode_json(body) == {
+        "ok": True, "scrobbled": 44, "pending": 0, "lastfm_total": 9001,
+        "pending_before": 2, "attempted": 2, "succeeded": 2, "failed": 0,
+        "pending_after": 0,
+    }
+    assert retry_calls == [{
+        "account_id": 1, "library_id": 1, "bypass_backoff": True, "limit": 1_000_000,
+    }]
+
+
+def test_lastfm_scrobble_submit_failure_returns_alert_contract_and_logs_safe_counts(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    events = []
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda config: True)
+    monkeypatch.setattr(routes, "get_saved_lastfm_session", lambda config, *, account_id: SimpleNamespace(username="listener"))
+    monkeypatch.setattr(routes, "get_lastfm_total_scrobbles", lambda config, *, session: 9002)
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", lambda config, *, account_id, library_id: {
+        "listen_history_count": 43, "pending_scrobble_count": 1,
+    })
+    monkeypatch.setattr(routes, "retry_pending_lastfm_scrobbles", lambda *args, **kwargs: {
+        "pending_before": 2, "attempted": 2, "succeeded": 1,
+        "failed": 1, "pending_after": 1,
+    })
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append((args, kwargs)))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 502
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Some pending scrobbles could not be submitted to Last.fm.",
+        "scrobbled": 43, "pending": 1, "lastfm_total": 9002,
+        "pending_before": 2, "attempted": 2, "succeeded": 1, "failed": 1,
+        "pending_after": 1,
+    }
+    args, fields = events[-1]
+    assert args[2] == "Last.fm pending scrobble submission failed"
+    assert fields["history"] is True
+    assert fields["history_scope"].account_id == 1
+    assert {key: fields[key] for key in (
+        "attempted", "succeeded", "failed", "pending_before", "pending_after",
+    )} == {
+        "attempted": 2, "succeeded": 1, "failed": 1,
+        "pending_before": 2, "pending_after": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    ("api_enabled", "connected", "expected_status", "expected_error"),
+    [
+        (False, False, 503, "Last.fm API credentials are not configured on the server."),
+        (True, False, 409, "Last.fm account is not connected."),
+    ],
+)
+def test_lastfm_scrobble_submit_precondition_failure_uses_truthful_scoped_counts(
+    app, monkeypatch, api_enabled, connected, expected_status, expected_error,
+):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    events = []
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda _config: api_enabled)
+    monkeypatch.setattr(
+        routes, "get_saved_lastfm_session",
+        lambda _config, *, account_id: SimpleNamespace(username="listener") if connected else None,
+    )
+    monkeypatch.setattr(
+        routes,
+        "build_listen_history_status_counts",
+        lambda _config, *, account_id, library_id: {
+            "listen_history_count": 17,
+            "pending_scrobble_count": 3,
+        },
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == expected_status
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": expected_error,
+        "pending_before": 3,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 3,
+    }
+    assert events[-1]["pending_before"] == 3
+    assert events[-1]["pending_after"] == 3
+
+
+def test_lastfm_scrobble_submit_handles_scoped_count_read_failure_without_private_detail(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    events = []
+    monkeypatch.setattr(
+        routes,
+        "build_listen_history_status_counts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private database detail")),
+    )
+    monkeypatch.setattr(
+        routes,
+        "get_saved_lastfm_session",
+        lambda *_args, **_kwargs: pytest.fail("session read must not follow a failed count read"),
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
     )
 
     payload = _decode_json(body)
-    lastfm = next(item for item in payload["integrations"] if item["key"] == "lastfm")
-    assert status == 200
-    assert threadpool_calls == [(asgi_routes._build_integrations_payload, (app.config,))]
-    assert history_count_calls == [app.config]
-    assert lastfm == {
-        "key": "lastfm",
-        "title": "Last.fm",
-        "api_configured": True,
-        "connected": True,
-        "username": "demo-user",
-        "listen_history_count": 42,
-        "pending_scrobble_count": 7,
-        "sync_state_mode": "seeded_test_bridge",
-        "sync_problem_count": 3,
-        "last_retry_summary": {
-            "pending_before": 9,
-            "attempted": 4,
-            "succeeded": 2,
-            "failed": 2,
-            "pending_after": 7,
-        },
+    assert status == 500
+    assert payload == {
+        "ok": False,
+        "error": "Album Haven could not submit pending scrobbles to Last.fm.",
+        "pending_before": 0,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 0,
+    }
+    assert {key: events[-1][key] for key in (
+        "failure_stage", "pending_before", "attempted", "succeeded", "failed", "pending_after",
+    )} == {
+        "failure_stage": "pending_count_read",
+        "pending_before": 0,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 0,
+    }
+    assert events[-1]["history_scope"].account_id == 1
+    assert events[-1]["history_scope"].library_id == 1
+    assert "private database detail" not in json.dumps(payload)
+    assert "private database detail" not in str(events)
+
+
+def test_lastfm_scrobble_submit_handles_session_read_failure_without_private_detail(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    events = []
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda _config: True)
+    monkeypatch.setattr(
+        routes,
+        "build_listen_history_status_counts",
+        lambda *_args, **_kwargs: {"listen_history_count": 17, "pending_scrobble_count": 3},
+    )
+    monkeypatch.setattr(
+        routes,
+        "get_saved_lastfm_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("private session detail")),
+    )
+    monkeypatch.setattr(
+        routes,
+        "retry_pending_lastfm_scrobbles",
+        lambda *_args, **_kwargs: pytest.fail("retry must not follow a failed session read"),
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    payload = _decode_json(body)
+    assert status == 500
+    assert payload == {
+        "ok": False,
+        "error": "Album Haven could not submit pending scrobbles to Last.fm.",
+        "pending_before": 3,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 3,
+    }
+    assert {key: events[-1][key] for key in (
+        "failure_stage", "pending_before", "attempted", "succeeded", "failed", "pending_after",
+    )} == {
+        "failure_stage": "account_session_read",
+        "pending_before": 3,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "pending_after": 3,
+    }
+    assert events[-1]["history_scope"].account_id == 1
+    assert events[-1]["history_scope"].library_id == 1
+    assert "private session detail" not in json.dumps(payload)
+    assert "private session detail" not in str(events)
+
+
+def test_lastfm_scrobble_submit_preserves_retry_summary_when_status_refresh_fails(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+
+    events = []
+    count_calls = 0
+
+    def counts(_config, *, account_id, library_id):
+        nonlocal count_calls
+        count_calls += 1
+        if count_calls == 1:
+            return {"listen_history_count": 10, "pending_scrobble_count": 2}
+        raise RuntimeError("refresh unavailable")
+
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda _config: True)
+    monkeypatch.setattr(
+        routes, "get_saved_lastfm_session",
+        lambda *_args, **_kwargs: SimpleNamespace(username="listener"),
+    )
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", counts)
+    monkeypatch.setattr(routes, "retry_pending_lastfm_scrobbles", lambda *_args, **_kwargs: {
+        "pending_before": 2, "attempted": 2, "succeeded": 1, "failed": 1, "pending_after": 1,
+    })
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 500
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Album Haven could not submit pending scrobbles to Last.fm.",
+        "pending_before": 2,
+        "attempted": 2,
+        "succeeded": 1,
+        "failed": 1,
+        "pending_after": 1,
+    }
+    assert {key: events[-1][key] for key in (
+        "pending_before", "attempted", "succeeded", "failed", "pending_after",
+    )} == {
+        "pending_before": 2, "attempted": 2, "succeeded": 1, "failed": 1, "pending_after": 1,
     }
 
+
+def test_lastfm_scrobble_submit_reports_partial_batch_progress_without_exception_detail(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.lastfm_retry import LastfmRetryBatchError
+
+    events = []
+    count_calls = 0
+
+    def counts(_config, *, account_id, library_id):
+        nonlocal count_calls
+        count_calls += 1
+        pending = 2 if count_calls == 1 else 1
+        return {"listen_history_count": 10, "pending_scrobble_count": pending}
+
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda _config: True)
+    monkeypatch.setattr(
+        routes, "get_saved_lastfm_session",
+        lambda *_args, **_kwargs: SimpleNamespace(username="listener"),
+    )
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", counts)
+    monkeypatch.setattr(
+        routes,
+        "retry_pending_lastfm_scrobbles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LastfmRetryBatchError({
+            "pending_before": 2, "attempted": 1, "succeeded": 1,
+            "failed": 0, "pending_after": 2,
+        })),
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *args, **kwargs: events.append(kwargs))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 500
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Album Haven could not submit pending scrobbles to Last.fm.",
+        "pending_before": 2, "attempted": 1, "succeeded": 1,
+        "failed": 0, "pending_after": 1,
+    }
+    assert {key: events[-1][key] for key in (
+        "pending_before", "attempted", "succeeded", "failed", "pending_after",
+    )} == {
+        "pending_before": 2, "attempted": 1, "succeeded": 1,
+        "failed": 0, "pending_after": 1,
+    }
+    assert "private" not in str(_decode_json(body)).lower()
+
+
+def test_lastfm_scrobble_submit_preserves_batch_progress_when_recount_fails(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.lastfm_retry import LastfmRetryBatchError
+
+    count_calls = 0
+
+    def counts(_config, *, account_id, library_id):
+        nonlocal count_calls
+        count_calls += 1
+        if count_calls > 1:
+            raise RuntimeError("recount failure")
+        return {"listen_history_count": 10, "pending_scrobble_count": 2}
+
+    monkeypatch.setattr(routes, "lastfm_api_enabled", lambda _config: True)
+    monkeypatch.setattr(
+        routes, "get_saved_lastfm_session",
+        lambda *_args, **_kwargs: SimpleNamespace(username="listener"),
+    )
+    monkeypatch.setattr(routes, "build_listen_history_status_counts", counts)
+    monkeypatch.setattr(
+        routes,
+        "retry_pending_lastfm_scrobbles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(LastfmRetryBatchError({
+            "pending_before": 2,
+            "attempted": 1,
+            "succeeded": 1,
+            "failed": 1,
+            "pending_after": 2,
+        })),
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *_args, **_kwargs: None)
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 500
+    assert _decode_json(body) == {
+        "ok": False,
+        "error": "Album Haven could not submit pending scrobbles to Last.fm.",
+        "pending_before": 2,
+        "attempted": 1,
+        "succeeded": 1,
+        "failed": 1,
+        "pending_after": 2,
+    }
+
+
+def test_lastfm_scrobble_submit_denied_actor_has_no_retry_or_log_side_effect(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as routes
+    from music_app.services.current_actor import ActorState, CurrentActor, LibraryRelationship
+
+    side_effects = []
+    actor = CurrentActor(
+        state=ActorState.ACTIVE,
+        account_id=7,
+        session_id=11,
+        username_display="denied-listener",
+        current_library_id=9,
+        library_relationships=(LibraryRelationship(9, "member", False),),
+    )
+
+    class Resolver:
+        def resolve(self, _raw_token):
+            return actor
+
+    monkeypatch.setattr(
+        routes,
+        "retry_pending_lastfm_scrobbles",
+        lambda *_args, **_kwargs: side_effects.append("retry"),
+    )
+    monkeypatch.setattr(routes, "log_app_event", lambda *_args, **_kwargs: side_effects.append("log"))
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+    asgi_app.state.current_actor_resolver = Resolver()
+    asgi_app.state.media_host_library_id = 9
+
+    status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm/scrobbles/submit", json_body={},
+    )
+
+    assert status == 403
+    assert _decode_json(body) == {"detail": "Action not permitted."}
+    assert side_effects == []
+
+
+def test_asgi_integrations_lastfm_enrichment_uses_route_sources(app, monkeypatch):
+    from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+    from music_app.services import listen_history
+
+    threadpool_calls = []
+    history_count_calls = []
+    statistics_calls = []
+    statistics = {"local_playcount": 12, "total_listening_seconds": 1800.0}
+
+    async def fake_run_in_threadpool(function, *args, **kwargs):
+        threadpool_calls.append((function, args, kwargs))
+        return function(*args, **kwargs)
+
+    def fail_if_retried(*_args, **_kwargs):
+        raise AssertionError("GET /utilities/integrations must not retry pending scrobbles")
+
+    def status(config, *, account_id):
+        assert config is app.config
+        assert account_id == 1
+        return {
+            "key": "lastfm", "title": "Last.fm", "api_configured": True,
+            "connected": True, "username": "demo-user",
+        }
+
+    def counts(config, *, account_id, library_id):
+        history_count_calls.append((config, account_id, library_id))
+        return {"listen_history_count": 42, "pending_scrobble_count": 7}
+
+    def measured_statistics(config, *, account_id, library_id):
+        statistics_calls.append((config, account_id, library_id))
+        return dict(statistics)
+
+    def reject_unscoped_projection(*_args, **_kwargs):
+        raise AssertionError("Scoped Last.fm status must not read global sync summaries")
+
+    monkeypatch.setattr(asgi_routes, "run_in_threadpool", fake_run_in_threadpool)
+    monkeypatch.setattr(asgi_routes, "retry_pending_lastfm_scrobbles", fail_if_retried)
+    monkeypatch.setattr(asgi_routes, "build_lastfm_status", status)
+    monkeypatch.setattr(asgi_routes, "build_listen_history_status_counts", counts)
+    monkeypatch.setattr(listen_history, "build_measured_playback_statistics", measured_statistics)
+    monkeypatch.setattr(asgi_routes, "build_lastfm_integration_status", reject_unscoped_projection)
+    asgi_app = _make_asgi_app()
+    asgi_app.state.config = app.config
+    asgi_app.state.logger = app.logger
+    asgi_app.state.library_state = app.library_state
+
+    response_status, _headers, body = _run_asgi_request(asgi_app, "GET", "/utilities/integrations")
+
+    payload = _decode_json(body)
+    lastfm = next(item for item in payload["integrations"] if item["key"] == "lastfm")
+    assert response_status == 200
+    assert threadpool_calls == [
+        (asgi_routes._build_integrations_payload, (app.config,), {"account_id": 1, "library_id": 1}),
+    ]
+    assert history_count_calls == [(app.config, 1, 1)]
+    assert statistics_calls == [(app.config, 1, 1)]
+    assert payload["playback_statistics"] == statistics
+    assert lastfm == {
+        "key": "lastfm", "title": "Last.fm", "api_configured": True,
+        "connected": True, "username": "demo-user",
+        "listen_history_count": 42, "pending_scrobble_count": 7,
+        "playback_statistics": statistics,
+    }
 
 def test_asgi_local_playlist_import_preserves_missing_file_execute_and_supported_upload_contracts(app):
     upload_body, content_type = _multipart_body(
@@ -494,6 +1026,7 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
     app,
     monkeypatch,
     local_log_history_items,
+    connected_lastfm_session,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmError
@@ -501,9 +1034,16 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
     now_playing_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(asgi_routes, "lastfm_api_enabled", lambda config: False)
-    monkeypatch.setattr(asgi_routes, "update_now_playing", lambda config, payload: now_playing_calls.append(payload))
+    def now_playing(config, payload, *, session):
+        assert config is app.config
+        assert session == connected_lastfm_session
+        now_playing_calls.append(payload)
 
-    def fail_scrobble(config, payload):
+    monkeypatch.setattr(asgi_routes, "update_now_playing", now_playing)
+
+    def fail_scrobble(config, payload, *, session):
+        assert config is app.config
+        assert session == connected_lastfm_session
         raise LastfmError("Scrobble failed")
 
     monkeypatch.setattr(asgi_routes, "scrobble_track", fail_scrobble)
@@ -568,58 +1108,43 @@ def test_asgi_lastfm_and_playback_routes_preserve_validation_side_effects(
     assert local_log_history_items()[0]["action"] == "Last.fm scrobble failed"
 
 
-def test_asgi_lastfm_settings_disconnects_saved_session(app):
+def test_asgi_lastfm_settings_disconnects_saved_session(app, monkeypatch, empty_scoped_lastfm_history):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
-    clear_calls: list[object] = []
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(asgi_routes, "clear_lastfm_settings", lambda config: clear_calls.append(config))
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_status",
-        lambda config: {
-            "key": "lastfm",
-            "connected": False,
-            "user_timezone": "America/Denver",
-        },
-    )
-    monkeypatch.setattr(asgi_routes, "count_scrobbled_listen_history_entries", lambda _config: 0)
-    monkeypatch.setattr(asgi_routes, "pending_scrobble_count", lambda _config: 0)
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_integration_status",
-        lambda config, *, base_status, listen_history_count, pending_scrobble_count: {
-            **dict(base_status),
-            "listen_history_count": listen_history_count,
-            "pending_scrobble_count": pending_scrobble_count,
-            "sync_state_mode": "seeded_test_bridge",
-            "sync_problem_count": 0,
-            "last_retry_summary": {},
-        },
-    )
+    clear_calls = []
+
+    def clear(config, *, account_id):
+        clear_calls.append((config, account_id))
+
+    def status(config, *, account_id):
+        assert config is app.config
+        assert account_id == 1
+        return {"key": "lastfm", "connected": False, "user_timezone": "America/Denver"}
+
+    monkeypatch.setattr(asgi_routes, "clear_lastfm_settings", clear)
+    monkeypatch.setattr(asgi_routes, "build_lastfm_status", status)
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state
-    try:
-        status, _headers, body = _run_asgi_request(
-            asgi_app,
-            "POST",
-            "/utilities/integrations/lastfm",
-            json_body={"disconnect": True},
-        )
-    finally:
-        monkeypatch.undo()
 
-    assert status == 200
-    payload = _decode_json(body)
-    assert payload["ok"] is True
-    assert payload["integration"]["connected"] is False
-    assert payload["integration"]["user_timezone"] == "America/Denver"
-    assert clear_calls == [app.config]
+    response_status, _headers, body = _run_asgi_request(
+        asgi_app, "POST", "/utilities/integrations/lastfm", json_body={"disconnect": True},
+    )
+
+    assert response_status == 200
+    assert _decode_json(body) == {
+        "ok": True,
+        "integration": {
+            "key": "lastfm", "connected": False, "user_timezone": "America/Denver",
+            "listen_history_count": 0, "pending_scrobble_count": 0,
+            "playback_statistics": {"local_playcount": 0, "total_listening_seconds": 0.0},
+        },
+    }
+    assert clear_calls == [(app.config, 1)]
 
 
-def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
+def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch, empty_scoped_lastfm_history):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
     auth_calls: list[dict[str, object]] = []
@@ -628,28 +1153,14 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
     monkeypatch.setattr(
         asgi_routes,
         "retry_pending_lastfm_scrobbles",
-        lambda config, *, reauthenticated=False: retry_calls.append((config, reauthenticated)),
+        lambda config, *, reauthenticated=False, account_id: retry_calls.append((config, reauthenticated, account_id)),
     )
-    monkeypatch.setattr(asgi_routes, "count_scrobbled_listen_history_entries", lambda _config: 0)
-    monkeypatch.setattr(asgi_routes, "pending_scrobble_count", lambda _config: 0)
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_integration_status",
-        lambda config, *, base_status, listen_history_count, pending_scrobble_count: {
-            **dict(base_status),
-            "listen_history_count": listen_history_count,
-            "pending_scrobble_count": pending_scrobble_count,
-            "sync_state_mode": "seeded_test_bridge",
-            "sync_problem_count": 0,
-            "last_retry_summary": {},
-        },
-    )
-
-    def fake_authenticate(config, username, password, connected_at, user_timezone):
+    def fake_authenticate(config, username, password, connected_at, user_timezone, *, account_id):
         auth_calls.append(
             {
                 "config": config,
                 "username": username,
+                "account_id": account_id,
                 "password": password,
                 "connected_at": connected_at,
                 "user_timezone": user_timezone,
@@ -690,7 +1201,9 @@ def test_asgi_lastfm_settings_authenticates_and_saves_session(app, monkeypatch):
     assert payload["integration"]["user_timezone"] == "America/Denver"
     assert auth_calls[0]["password"] == "demo-pass"
     assert auth_calls[0]["user_timezone"] == "America/Denver"
-    assert retry_calls == [(app.config, True)]
+    assert auth_calls[0]["account_id"] == 1
+    assert auth_calls[0]["config"] is app.config
+    assert retry_calls == [(app.config, True, 1)]
 
 
 def test_asgi_lastfm_settings_records_safe_history_when_provider_rejects_connection(
@@ -866,11 +1379,13 @@ def test_asgi_lastfm_settings_preserves_original_error_when_history_and_diagnost
         assert secret not in safe_event_arguments
 
 
-def test_asgi_lastfm_settings_saves_and_validates_timezone(app, monkeypatch):
+def test_asgi_lastfm_settings_saves_and_validates_timezone(app, monkeypatch, empty_scoped_lastfm_history):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmError
 
-    def fake_save_lastfm_user_timezone(_config, timezone_name):
+    def fake_save_lastfm_user_timezone(_config, timezone_name, *, account_id):
+        assert _config is app.config
+        assert account_id == 1
         if timezone_name == "Mars/Olympus_Mons":
             raise LastfmError("Unsupported timezone: Mars/Olympus_Mons")
         return {
@@ -883,20 +1398,6 @@ def test_asgi_lastfm_settings_saves_and_validates_timezone(app, monkeypatch):
         asgi_routes,
         "save_lastfm_user_timezone",
         fake_save_lastfm_user_timezone,
-    )
-    monkeypatch.setattr(asgi_routes, "count_scrobbled_listen_history_entries", lambda _config: 0)
-    monkeypatch.setattr(asgi_routes, "pending_scrobble_count", lambda _config: 0)
-    monkeypatch.setattr(
-        asgi_routes,
-        "build_lastfm_integration_status",
-        lambda config, *, base_status, listen_history_count, pending_scrobble_count: {
-            **dict(base_status),
-            "listen_history_count": listen_history_count,
-            "pending_scrobble_count": pending_scrobble_count,
-            "sync_state_mode": "seeded_test_bridge",
-            "sync_problem_count": 0,
-            "last_retry_summary": {},
-        },
     )
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -995,11 +1496,17 @@ def test_asgi_playback_session_scrobble_logs_success_history_entry(
     app,
     monkeypatch,
     local_log_history_items,
+    connected_lastfm_session,
 ):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(asgi_routes, "scrobble_track", lambda config, payload: calls.append(payload))
+    def scrobble(config, payload, *, session):
+        assert config is app.config
+        assert session == connected_lastfm_session
+        calls.append(payload)
+
+    monkeypatch.setattr(asgi_routes, "scrobble_track", scrobble)
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
@@ -1037,15 +1544,14 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
     from music_app.services.lastfm import LastfmSubmissionOutcome
 
-    monkeypatch.setattr(
-        asgi_routes,
-        "scrobble_track",
-        lambda config, payload: LastfmSubmissionOutcome(
-            sent=False,
-            outcome="not_connected",
-            message="Last.fm account is not connected.",
-        ),
-    )
+    def scrobble(config, payload, *, session):
+        assert config is app.config
+        assert session is None
+        return LastfmSubmissionOutcome(
+            sent=False, outcome="not_connected", message="Last.fm account is not connected.",
+        )
+
+    monkeypatch.setattr(asgi_routes, "scrobble_track", scrobble)
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
@@ -1072,85 +1578,73 @@ def test_asgi_playback_session_scrobble_reports_disconnected_no_send(
     assert local_log_history_items()[0]["action"] == "Last.fm scrobble not submitted"
 
 
-def test_asgi_playback_session_complete_persists_listen_history(app, monkeypatch):
+def test_asgi_playback_session_complete_persists_listen_history(
+    app, monkeypatch, ledger, connected_lastfm_session,
+):
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
-    calls: list[dict[str, object]] = []
-    saved_entries: list[dict[str, object]] = []
-    monkeypatch.setattr(asgi_routes, "scrobble_track", lambda config, payload: calls.append(payload))
-    monkeypatch.setattr(asgi_routes, "append_listen_history_entry", lambda config, entry: saved_entries.append(entry) or entry)
-    monkeypatch.setattr(
-        asgi_routes,
-        "update_listen_history_entry",
-        lambda config, entry_id, updates: saved_entries[0].update(updates) or saved_entries[0],
-    )
-    monkeypatch.setattr(asgi_routes, "get_lastfm_user_timezone", lambda config: "America/Denver")
-    data_dir = Path(app.config["DATA_DIR"])
-    (data_dir / "lastfm_settings.json").write_text(
-        json.dumps({"user_timezone": "America/Denver"}),
-        encoding="utf-8",
+    calls = []
+
+    def scrobble(config, payload, *, session):
+        assert config is app.config
+        assert session == connected_lastfm_session
+        calls.append(payload)
+
+    monkeypatch.setattr(asgi_routes, "scrobble_track", scrobble)
+    owner = ledger["own"]
+    request_origin = {
+        "client_kind": "private_web", "origin_type": "browser_tab", "origin_id": "tab-123",
+    }
+    completion = measured(
+        owner, library_track_id=str(owner["track_id"]), title="Song", album="Album",
+        album_artist="Artist", duration_seconds=240, measured_listened_seconds=180,
+        max_measured_contiguous_seconds=180, total_listened_seconds=180,
+        max_contiguous_seconds=180, ended_at="2026-09-09T12:03:00+00:00",
+        finalized=True, skipped=True, completion_reason="track-change",
+        scrobble_eligible=True, track_number="1", request_origin=request_origin,
+        segments=[{"start_seconds": 0, "end_seconds": 180}],
     )
     asgi_app = _make_asgi_app()
-    asgi_app.state.config = app.config
     asgi_app.state.logger = app.logger
     asgi_app.state.library_state = app.library_state
 
     status, _headers, body = _run_asgi_request(
-        asgi_app,
-        "POST",
-        "/playback/session/complete",
-        json_body={
-            "path": "C:/Music/song.mp3",
-            "title": "Song",
-            "artist": "Artist",
-            "album": "Album",
-            "album_artist": "Artist",
-            "started_at": "2026-05-13T12:00:00+00:00",
-            "ended_at": "2026-05-13T12:04:00+00:00",
-            "started_at_unix": 100,
-            "duration_seconds": 240,
-            "total_listened_seconds": 180,
-            "max_contiguous_seconds": 180,
-            "finished_fully": False,
-            "skipped": True,
-            "completion_reason": "track-change",
-            "scrobble_eligible": True,
-            "scrobbled": False,
-            "segments": [{"start_seconds": 0, "end_seconds": 180}],
-            "track_number": "1",
-            "request_origin": {
-                "client_kind": "private_web",
-                "origin_type": "browser_tab",
-                "origin_id": "tab-123",
-            },
-        },
+        asgi_app, "POST", "/playback/session/complete", json_body=completion,
+    )
+    duplicate_status, _headers, duplicate_body = _run_asgi_request(
+        asgi_app, "POST", "/playback/session/complete", json_body=completion,
     )
 
-    assert status == 200
+    assert status == duplicate_status == 200
     payload = _decode_json(body)
     assert payload["ok"] is True
     assert payload["scrobbled"] is True
+    assert _decode_json(duplicate_body)["entry"]["id"] == payload["entry"]["id"]
+    assert "path" not in payload["entry"]
+    assert "track_ref" not in payload["entry"]
     assert len(calls) == 1
-
-    assert len(saved_entries) == 1
-    assert saved_entries[0]["title"] == "Song"
-    assert saved_entries[0]["total_listened_seconds"] == 180.0
-    assert saved_entries[0]["scrobbled"] is True
-    assert saved_entries[0]["user_timezone"] == "America/Denver"
-    assert saved_entries[0]["request_origin"] == {
-        "client_kind": "private_web",
-        "origin_type": "browser_tab",
-        "origin_id": "tab-123",
-    }
-    assert calls[0]["request_origin"] == {
-        "client_kind": "private_web",
-        "origin_type": "browser_tab",
-        "origin_id": "tab-123",
-    }
+    stored = measured_rows(ledger)
+    assert len(stored) == 1
+    assert stored[0]["track_id"] == owner["track_id"]
+    assert stored[0]["finalized"] is True
+    assert float(stored[0]["measured_listened_seconds"]) == 180.0
+    entry = stored[0]["metadata"]["source_payload"]
+    assert entry["title"] == "Song"
+    assert entry["total_listened_seconds"] == 180.0
+    assert entry["scrobbled"] is True
+    assert entry["user_timezone"] == "UTC"
+    assert entry["request_origin"] == request_origin
+    assert calls[0]["request_origin"] == request_origin
+    assert measured_rows(ledger, ledger["other"]) == []
 
 
 def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "resolve_scoped_source", lambda self, **scope: (11, None))
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "get_scoped_track_cover", lambda self, **scope: "")
+    monkeypatch.setattr(asgi_routes, "probe_loop_source_duration", lambda path: 100)
 
     source_path = Path(app.config["MUSIC_DIR"]) / "Artist" / "Song.mp3"
     source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1160,7 +1654,7 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
 
     monkeypatch.setattr(asgi_routes.uuid, "uuid4", lambda: SimpleNamespace(hex="loop-new"))
 
-    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id):
+    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id, **scope):
         assert resolved_source_path == source_path.resolve()
         assert start_seconds == 1.5
         assert end_seconds == 4.5
@@ -1175,8 +1669,8 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
         lambda config, raw_path: source_path.resolve() if raw_path == str(source_path) else None,
     )
     persisted_loops = []
-    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item: persisted_loops.insert(0, item) or item)
-    monkeypatch.setattr(asgi_routes, "load_loops", lambda config: list(persisted_loops))
+    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item, **scope: persisted_loops.insert(0, item) or item)
+    monkeypatch.setattr(asgi_routes, "load_loops", lambda config, **scope: list(persisted_loops))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1225,10 +1719,11 @@ def test_asgi_loop_mutations_preserve_validation_and_create_side_effects(app, mo
     assert _decode_json(reorder_body) == {"ok": False, "error": "ordered_ids must be a list"}
 
 
-def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
+def test_asgi_loop_pitch_preview_uses_owned_stored_legacy_artifact(
     app,
     monkeypatch,
 ):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
     canonical_loop = Path(app.config["DATA_DIR"]) / "loops" / "legacy-loop.mp3"
@@ -1244,12 +1739,14 @@ def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
     legacy_loop.write_bytes(b"legacy-loop")
     monkeypatch.setattr(
         "music_app.services.loops.load_loops",
-        lambda _config: [{"id": "legacy-loop", "path": str(legacy_loop)}],
+        lambda _config, **scope: [{"id": "legacy-loop", "path": str(canonical_loop)}],
     )
+
+    monkeypatch.setattr("music_app.services.loops.SavedLoopsPostgresAdapter.is_unique_scoped_artifact", lambda self, **scope: True)
 
     captured_sources = []
 
-    def fake_create_pitch_preview_file(config, loop_id, source_path, semitones):
+    def fake_create_pitch_preview_file(config, loop_id, source_path, semitones, **scope):
         captured_sources.append(source_path)
         assert loop_id == "legacy-loop"
         assert semitones == 2
@@ -1283,7 +1780,12 @@ def test_asgi_pitch_preview_uses_current_root_media_for_legacy_saved_loop_path(
 
 
 def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
+    from music_app.services.saved_loops_postgres import SavedLoopsPostgresAdapter
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "resolve_scoped_source", lambda self, **scope: (11, None))
+    monkeypatch.setattr(SavedLoopsPostgresAdapter, "get_scoped_track_cover", lambda self, **scope: "")
+    monkeypatch.setattr(asgi_routes, "probe_loop_source_duration", lambda path: 100)
 
     parent_source_path = Path(app.config["DATA_DIR"]) / "loops" / "parent-loop.mp3"
     parent_source_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1291,6 +1793,7 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     output_path = Path(app.config["DATA_DIR"]) / "loops" / "child-loop.mp3"
     parent_loop = {
         "id": "parent-loop",
+        "start_seconds": 60, "end_seconds": 80,
         "artist": "Parent Artist",
         "title": "Parent Title",
         "album": "Parent Album",
@@ -1301,18 +1804,18 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     monkeypatch.setattr(
         asgi_routes,
         "get_loop",
-        lambda config, loop_id: parent_loop if loop_id == "parent-loop" else None,
+        lambda config, loop_id, **scope: parent_loop if loop_id == "parent-loop" else None,
     )
     monkeypatch.setattr(
         asgi_routes,
         "resolve_loop_media_path",
-        lambda config, loop_id: parent_source_path if loop_id == "parent-loop" else None,
+        lambda config, loop_id, **scope: parent_source_path if loop_id == "parent-loop" else None,
     )
 
     def fail_track_source_resolution(config, raw_path):
         raise AssertionError(f"saved-parent loop creation resolved track source path {raw_path}")
 
-    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id):
+    def fake_create_loop_file(config, resolved_source_path, start_seconds, end_seconds, loop_id, **scope):
         assert resolved_source_path == parent_source_path
         assert start_seconds == 2.0
         assert end_seconds == 5.0
@@ -1323,8 +1826,8 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     persisted_loops = []
     monkeypatch.setattr(asgi_routes, "resolve_configured_media_path", fail_track_source_resolution)
     monkeypatch.setattr(asgi_routes, "create_loop_file", fake_create_loop_file)
-    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item: persisted_loops.insert(0, item) or item)
-    monkeypatch.setattr(asgi_routes, "load_loops", lambda config: list(persisted_loops))
+    monkeypatch.setattr(asgi_routes, "add_loop", lambda config, item, **scope: persisted_loops.insert(0, item) or item)
+    monkeypatch.setattr(asgi_routes, "load_loops", lambda config, **scope: list(persisted_loops))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1352,15 +1855,18 @@ def test_asgi_create_loop_from_saved_parent_uses_parent_metadata_and_media_path(
     assert payload["loop"]["artist"] == "Parent Artist"
     assert payload["loop"]["title"] == "Parent Title"
     assert payload["loop"]["album"] == "Parent Album"
-    assert payload["loop"]["cover_path"] == "C:/covers/parent.jpg"
+    assert payload["loop"]["cover_url"] == "/cover?loop_id=child-loop"
+    assert persisted_loops[0]["cover_path"] == "C:/covers/parent.jpg"
     assert payload["loop"]["parent_loop_id"] == "parent-loop"
+    assert (payload["loop"]["original_start_seconds"], payload["loop"]["original_end_seconds"]) == (62, 65)
     assert payload["loops"][0]["parent_loop_id"] == "parent-loop"
 
 
 def test_asgi_delete_loop_returns_404_when_loop_dependency_reports_missing(app, monkeypatch):
+    _authorize_loop_fixture(monkeypatch)
     from music_app.routes import api_wave_b_asgi_routes as asgi_routes
 
-    monkeypatch.setattr(asgi_routes, "delete_loop", lambda config, loop_id: (False, []))
+    monkeypatch.setattr(asgi_routes, "delete_loop", lambda config, loop_id, **scope: (False, []))
 
     asgi_app = _make_asgi_app()
     asgi_app.state.config = app.config
@@ -1854,3 +2360,11 @@ def test_asgi_playlist_reserved_mutations_and_track_preferences_preserve_contrac
     assert header_preference_payload["ok"] is True
     assert header_preference_payload["track_preference"]["rating"] == 5
     assert header_preference_payload["track_preference"]["allowed_actions"]["client_surface_class"] == "mobile"
+
+def _authorize_loop_fixture(monkeypatch):
+    from music_app.services import current_actor_asgi
+    from types import SimpleNamespace
+    actor = SimpleNamespace(account_id=7, current_library_id=9, is_authenticated=True,
+        library_relationships=(SimpleNamespace(library_id=9, membership_role="owner", is_primary_owner=True),))
+    async def resolve_actor(_request): return actor
+    monkeypatch.setattr(current_actor_asgi, "current_actor_from_request", resolve_actor)

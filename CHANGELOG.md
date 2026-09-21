@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.45 - 2026-09-21
+
+- Reworked Settings around shared navigation, search, rules, suggestions,
+  integrations, log history, appearance, and responsive component contracts.
+- Moved saved-loop ordering and waveform peaks into account-scoped PostgreSQL
+  storage, with migration coverage and cache reuse across later loop playback.
+- Loaded saved-loop waveforms immediately, brightened played peaks, dimmed
+  upcoming peaks, removed interaction outlines, and limited playback to one loop.
+- Added account-scoped Last.fm configuration, retry and status reporting, manual
+  scrobble submission, measured-listen accounting, and provider boundary tests.
+- Refined the Artist Family panel with fixed geometry, reusable filter pills,
+  optional artwork, neutral dropdown motion, and a primary-artist divider.
+- Preserved collaboration identities while rendering their visible album-credit
+  groups, including the IR8 / Sexoturica split release in Devin Townsend results.
+- Kept replacement playback, gallery scroll restoration, warnings, search state,
+  album metadata, and responsive layouts stable through interaction races.
+- Expanded production-path functional, component, performance, and regression
+  coverage for Settings, loops, playback, gallery, search, and artist families.
+
 ## 0.9.44 - 2026-09-12
 
 - Reworked the Gallery bar, artist-family selection, album-type controls, and

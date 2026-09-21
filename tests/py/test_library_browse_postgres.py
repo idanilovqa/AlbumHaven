@@ -11276,6 +11276,30 @@ def test_family_group_filter_uses_relationship_identity_for_collaboration_displa
     assert filter_key == "ir8"
 
 
+def test_family_group_exposes_collaboration_relationship_identity_as_variation():
+    from music_app.services.library_browse_postgres import (
+        _expose_selected_artist_family_group_filter_variations,
+    )
+
+    groups = _expose_selected_artist_family_group_filter_variations(
+        [{
+            "artist": "IR8 / Sexoturica",
+            "artist_display": "IR8 / Sexoturica",
+            "variation_names": ["IR8 / Sexoturica"],
+            "albums": [{"name": "IR8 vs Sexoturica"}],
+        }],
+        {"IR8 / Sexoturica": "IR8"},
+        ["IR8"],
+    )
+
+    assert groups == [{
+        "artist": "IR8 / Sexoturica",
+        "artist_display": "IR8 / Sexoturica",
+        "variation_names": ["IR8 / Sexoturica", "IR8"],
+        "albums": [{"name": "IR8 vs Sexoturica"}],
+    }]
+
+
 def test_postgres_root_browse_batch_loads_private_album_rating_overlays(monkeypatch):
     from music_app.services import library_browse_postgres as browse_module
 

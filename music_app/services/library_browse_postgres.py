@@ -4642,10 +4642,14 @@ def _selected_artist_family_groups_from_preview_rows(
         normalized_family_artists,
         alias_to_canonical=alias_to_canonical,
     )
-    return _decorate_selected_artist_group_payloads(
-        family_artist_groups,
-        alias_to_canonical=alias_to_canonical,
-        canonical_to_aliases=canonical_to_aliases,
+    return _expose_selected_artist_family_group_filter_variations(
+        _decorate_selected_artist_group_payloads(
+            family_artist_groups,
+            alias_to_canonical=alias_to_canonical,
+            canonical_to_aliases=canonical_to_aliases,
+        ),
+        alias_to_canonical,
+        normalized_family_artists,
     )
 
 
@@ -4715,6 +4719,33 @@ def _selected_artist_family_group_filter_key(
         alias_to_canonical.get(group_artist, group_artist) or ""
     ).strip()
     return _artist_display_dedupe_key(canonical_artist)
+
+
+def _expose_selected_artist_family_group_filter_variations(
+    family_artist_groups: list[dict[str, object]],
+    alias_to_canonical: Mapping[str, str],
+    family_artists: list[str],
+) -> list[dict[str, object]]:
+    artists_by_key = {
+        _artist_display_dedupe_key(artist): artist
+        for artist in family_artists
+        if _artist_display_dedupe_key(artist)
+    }
+    for group in family_artist_groups:
+        filter_key = _selected_artist_family_group_filter_key(
+            group,
+            alias_to_canonical,
+            family_artists,
+        )
+        filter_artist = artists_by_key.get(filter_key)
+        if not filter_artist:
+            continue
+        variation_names = group.get("variation_names")
+        group["variation_names"] = list(dict.fromkeys([
+            *(variation_names if isinstance(variation_names, list) else []),
+            filter_artist,
+        ]))
+    return family_artist_groups
 
 
 def _artist_match_rank(query: str, canonical_artist: str, aliases: set[str]) -> tuple[int, int, str]:

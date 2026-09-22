@@ -12,7 +12,7 @@
 
 - The stored field is `docked_compact_player_regular_style`, accepts only booleans, and defaults to `false`.
 - The UI label is “Keep regular player style when docked.”
-- Only `.global-player.is-docked-compact` may consume the enabled style.
+- Only `.global-player.is-docked-compact:not(.is-rail-compact)` may consume the enabled style.
 - Sidebar play-button, sidebar artbox, floating compact, and expanded player surfaces remain unchanged.
 - Stay docked with a collapsed Artist Tree retains its existing rounded geometry.
 - Existing clients that omit the new field preserve saved values.
@@ -184,7 +184,7 @@ Run the Step 2 commands again. Expected: all selected tests pass.
 - Modify: `tests/js/runtime/appearance-workspace.test.js`
 
 **Interfaces:**
-- Consumes: `data-docked-compact-player-regular-style='true'`, `.global-player.is-docked-compact`, and existing `--appearance-player-*` tokens.
+- Consumes: `data-docked-compact-player-regular-style='true'`, `.global-player.is-docked-compact:not(.is-rail-compact)`, and existing `--appearance-player-*` tokens.
 - Produces: the regular surface, ink, top separator, shadow, and blur for the docked presentation only.
 
 - [ ] **Step 1: Write failing rendered surface tests**

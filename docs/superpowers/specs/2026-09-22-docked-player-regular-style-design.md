@@ -15,7 +15,7 @@ Let a user keep the regular player surface while the compact player is docked to
 - When the Artist Tree collapses with Stay docked selected, keep the existing detached geometry and rounded frame while retaining the regular player treatment.
 - The play-button and album-art sidebar presentations keep the sidebar surface and ignore this preference.
 - The floating compact player and expanded player keep their current styling.
-- Changing the checkbox updates the preview immediately and persists through the existing Appearance save flow.
+- Changing the checkbox updates the Appearance draft immediately and persists through the existing Save flow.
 - Resetting Appearance restores the checkbox to `false`.
 
 ## Persistence and data flow
@@ -26,7 +26,7 @@ The Appearance controller normalizes the value, exposes a setter, saves it with 
 
 ## Styling ownership
 
-`music_app/static/css/appearance-backgrounds.css` owns the Appearance surface override. A selector combining the root preference attribute with `.global-player.is-docked-compact` restores the existing regular-player token contract. It does not override dock geometry or border radius, so the Stay docked collapsed state continues to use its current rounded frame.
+`music_app/static/css/appearance-backgrounds.css` owns the Appearance surface override. A selector combining the root preference attribute with `.global-player.is-docked-compact:not(.is-rail-compact)` restores the regular player surface. It uses the native regular-player gradients as the fallback and the saved player surface tokens when a custom surface is active. It does not override dock geometry or border radius, so the Stay docked collapsed state continues to use its current rounded frame.
 
 The rule must target only `.is-docked-compact`. Rail play, rail artbox, floating compact, and expanded presentations therefore retain their current selectors and surfaces without extra JavaScript conditions.
 

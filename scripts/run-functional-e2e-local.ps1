@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 
-$expectedRelease = 'fixtures-v1.0.24'
+$expectedRelease = 'fixtures-v1.0.25'
 $fixtureProfile = 'functional-core'
 $repositoryRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 $contractPath = Join-Path $repositoryRoot 'tests\ci\functional-shards.json'

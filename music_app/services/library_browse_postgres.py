@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 import fnmatch
 import json
 from pathlib import Path
+from os.path import basename
 import re
 from threading import Event, Lock
 from types import SimpleNamespace
@@ -2785,7 +2786,7 @@ def _problematic_album_projection_payloads(rows: list[object]) -> list[dict[str,
                 "disc_number": row_payload.get("disc_number"),
                 "track_number": row_payload.get("track_number"),
                 "duration_seconds": _coerce_duration_seconds(row_payload.get("duration_seconds")),
-                "exception_type": _effective_row_exception_type(row_payload),
+                "exception_type": file_entry["exception_type"],
             }
         )
     projected_albums = list(albums.values())
@@ -3679,9 +3680,12 @@ def _problematic_track_problem_rows(
                 add(_track_order_issue_reason(issue), "track_number")
         if not reasons and not include_complete_repair_scope:
             continue
-        file_path = Path(path)
-        row = {"path": path, "filename": file_path.name, "reasons": reasons}
+        filename = basename(path)
+        if filename in ("", "."):
+            filename = Path(path).name
+        row = {"path": path, "filename": filename, "reasons": reasons}
         if include_repair_metadata:
+            file_path = Path(path)
             row.update({
                 "file_type": file_path.suffix.lstrip(".").upper(),
                 "ignorable_reasons": [
